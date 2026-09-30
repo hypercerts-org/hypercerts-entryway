@@ -1,0 +1,40 @@
+# Dependencies and generated output
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Runtime state and private configuration
+.runtime/
+.state/
+state/
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Worktrees
+.worktrees/
+
+# Browser and test artifacts
+test-results/
+playwright-report/
+blob-report/
+.browser-profile/
+artifacts/
+*.log
+.DS_Store
+
+# Imported managed harness
+.sandbox*/
+tests/artifacts/
+reports/
+tests/reports/

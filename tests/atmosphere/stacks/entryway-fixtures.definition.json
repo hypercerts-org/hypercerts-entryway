@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "id": "entryway-fixtures",
+  "services": [
+    {
+      "service": "mail-capture",
+      "environment": []
+    },
+    {
+      "service": "source-fixture",
+      "environment": []
+    }
+  ],
+  "routes": [
+    {
+      "id": "mailpit",
+      "service": "mail-capture",
+      "host": "mailpit",
+      "port": 8025
+    }
+  ],
+  "secrets": []
+}

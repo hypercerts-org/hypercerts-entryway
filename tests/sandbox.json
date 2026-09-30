@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "project": "hypercerts-entryway",
+  "domain": "atmosbox.test",
+  "subnet": "172.30.252.0/24",
+  "plc": "https://plc.atmosbox.test",
+  "pds": [
+    {
+      "id": "pds3",
+      "hostname": "pds3.atmosbox.test",
+      "url": "https://pds3.atmosbox.test",
+      "users": []
+    }
+  ],
+  "applications": [
+    "hypercerts-entryway",
+    "entryway-fixtures",
+    "entryway-oauth-web-app",
+    "entryway-browser-client"
+  ]
+}

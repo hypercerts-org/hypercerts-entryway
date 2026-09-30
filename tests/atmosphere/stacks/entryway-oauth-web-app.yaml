@@ -1,0 +1,21 @@
+services:
+  entryway-oauth-web-app:
+    build:
+      context: ./examples/entryway-oauth-web-app
+    environment:
+      PDS_URL: https://cluster1.atmosbox.test
+    read_only: true
+    tmpfs: [/tmp]
+    user: '10001:10001'
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    healthcheck:
+      test: [
+        'CMD',
+        'node',
+        '-e',
+        "fetch('http://127.0.0.1:8080/').then(response => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
+      ]
+      interval: 5s
+      timeout: 2s
+      retries: 12

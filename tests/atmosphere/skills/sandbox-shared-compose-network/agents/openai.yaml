@@ -1,0 +1,3 @@
+interface:
+  display_name: 'Sandbox Shared Compose Network'
+  short_description: 'Join an existing sandbox network'

@@ -1,0 +1,3 @@
+interface:
+  display_name: 'Sandbox TLS Browser Trust'
+  short_description: 'Trust the sandbox public root CA'

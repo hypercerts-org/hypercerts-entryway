@@ -1,0 +1,3 @@
+interface:
+  display_name: 'Sandbox Network Extensions'
+  short_description: 'Add private sandbox network services'

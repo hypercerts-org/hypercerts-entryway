@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "id": "entryway-browser-client",
+  "services": [
+    {
+      "service": "entryway-browser-client",
+      "environment": [
+        { "name": "APP_URL", "source": { "kind": "route-url", "route": "browser-sdk" } },
+        { "name": "PLC_URL", "source": { "kind": "plc-url" } }
+      ]
+    }
+  ],
+  "routes": [
+    {
+      "id": "browser-sdk",
+      "service": "entryway-browser-client",
+      "hostname": "browser.atmosbox.internal",
+      "port": 8080
+    }
+  ],
+  "secrets": []
+}

@@ -1,0 +1,67 @@
+{
+  "name": "hypercerts-entryway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/packages/entryway-service/src/compatibility/index.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check": "node scripts/check.mjs",
+    "check:architecture": "node scripts/check-architecture.mjs",
+    "test": "node --test --test-isolation=none --test-reporter=spec tests/contracts/*.test.mjs",
+    "test:architecture": "node --test tests/contracts/architecture.test.mjs",
+    "test:e2e": "playwright test --config tests/playwright.config.mjs",
+    "format": "prettier --write packages scripts tests",
+    "format:check": "prettier --check packages scripts tests",
+    "test:external": "playwright test --config tests/external.playwright.config.mjs",
+    "test:unit": "node --test --test-isolation=none tests/contracts/accounts.test.mjs tests/contracts/oauth-stores.test.mjs tests/contracts/service-auth.test.mjs tests/contracts/legacy.test.mjs tests/contracts/account-security.test.mjs tests/contracts/entryway-extras.test.mjs tests/contracts/migration.test.mjs tests/contracts/xrpc-security.test.mjs",
+    "test:external-workflow": "node --test tests/contracts/external-workflow.test.mjs tests/contracts/migration-domain.test.mjs tests/contracts/migration-custody.test.mjs tests/contracts/migration-payload.test.mjs tests/contracts/migration-target-token.test.mjs",
+    "test:experience": "node --test tests/contracts/experience.test.mjs && playwright test --config tests/playwright.config.mjs tests/browser/experience-browser.spec.mjs",
+    "test:e2e:atmosphere": "bash tests/local.sh fresh"
+  },
+  "dependencies": {
+    "@atproto/common": "0.8.1",
+    "@atproto/crypto": "0.5.4",
+    "@atproto/identity": "0.5.10",
+    "@atproto/lex-cbor": "0.1.6",
+    "@atproto/oauth-client-node": "0.5.4",
+    "@atproto/oauth-provider": "0.22.5",
+    "@atproto/oauth-scopes": "0.5.10",
+    "@atproto/pds": "0.5.31",
+    "@atproto/syntax": "0.7.5",
+    "@atproto/xrpc-server": "0.12.7",
+    "@did-plc/lib": "0.0.4",
+    "@did-plc/server": "0.0.1",
+    "@noble/curves": "1.9.7",
+    "better-auth": "1.7.3",
+    "better-sqlite3": "12.6.2",
+    "express": "4.22.1",
+    "jose": "5.10.0",
+    "nodemailer": "10.0.12",
+    "smtp-server": "3.19.15"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.58.2",
+    "@types/better-sqlite3": "9.6.0",
+    "@types/express": "4.17.25",
+    "@types/node": "24.19.0",
+    "@types/nodemailer": "8.0.2",
+    "@types/smtp-server": "3.5.13",
+    "prettier": "3.8.1",
+    "typescript": "7.0.2",
+    "typescript6": "npm:typescript@6.0.3"
+  },
+  "overrides": {
+    "qs": "6.16.0",
+    "@opentelemetry/propagator-jaeger": "2.9.0"
+  },
+  "workspaces": [
+    "packages/entryway-core",
+    "packages/entryway-service",
+    "packages/entryway-web"
+  ]
+}

@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "id": "hypercerts-entryway",
+  "services": [
+    {
+      "service": "configure",
+      "environment": [
+        {
+          "name": "SPIKE_ISSUER",
+          "source": {
+            "kind": "route-url",
+            "route": "entryway"
+          }
+        },
+        {
+          "name": "SPIKE_CLIENT_URL",
+          "source": {
+            "kind": "route-url",
+            "route": "client"
+          }
+        },
+        {
+          "name": "SPIKE_PDS1_URL",
+          "source": {
+            "kind": "route-url",
+            "route": "cluster1"
+          }
+        },
+        {
+          "name": "SPIKE_PDS2_URL",
+          "source": {
+            "kind": "route-url",
+            "route": "cluster2"
+          }
+        },
+        {
+          "name": "SPIKE_PLC_URL",
+          "source": {
+            "kind": "plc-url"
+          }
+        }
+      ]
+    },
+    {
+      "service": "entryway",
+      "environment": []
+    },
+    {
+      "service": "pds1",
+      "environment": []
+    },
+    {
+      "service": "pds2",
+      "environment": []
+    },
+    {
+      "service": "test",
+      "environment": []
+    },
+    {
+      "service": "browser",
+      "environment": []
+    }
+  ],
+  "routes": [
+    {
+      "id": "entryway",
+      "service": "entryway",
+      "host": "entryway",
+      "port": 3000
+    },
+    {
+      "id": "handles",
+      "service": "entryway",
+      "host": "*.entryway",
+      "port": 3000
+    },
+    {
+      "id": "client",
+      "service": "entryway",
+      "port": 3000,
+      "hostname": "client.entryway.example.com"
+    },
+    {
+      "id": "cluster1",
+      "service": "pds1",
+      "host": "cluster1",
+      "port": 3000
+    },
+    {
+      "id": "cluster2",
+      "service": "pds2",
+      "host": "cluster2",
+      "port": 3000
+    }
+  ],
+  "secrets": []
+}

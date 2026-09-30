@@ -1,0 +1,29 @@
+# Provider setup skeleton. For the verified provisioning/cleanup example,
+# see .github/workflows/ci-example.yml.
+# npm ci prepares consumer packages, not AiaB development tooling.
+# Use the sandbox-ci-e2e CI connection workflow for the separately pinned AiaB
+# checkout, its runtime install, provisioning, public artifacts, and cleanup.
+# Copy into the consumer repository as .tangled/workflows/e2e.yml.
+# Replace ./test/e2e.sh with the consumer project's command.
+when:
+  - event: ['push', 'pull_request', 'manual']
+    branch: ['main']
+
+engine: microvm
+image: nixos
+
+dependencies:
+  - nodejs_24
+  - docker
+  - iproute2
+
+virtualisation:
+  docker: true
+
+steps:
+  - name: Run consumer end-to-end tests
+    command: |
+      set -euo pipefail
+      npm ci
+      docker compose version
+      ./test/e2e.sh

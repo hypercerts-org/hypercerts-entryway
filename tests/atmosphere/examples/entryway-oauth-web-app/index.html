@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Entryway browser client</title>
+    <style>
+      body {
+        font: 16px system-ui, sans-serif;
+        max-width: 44rem;
+        margin: 3rem auto;
+        padding: 0 1rem;
+      }
+      input, textarea, button {
+        font: inherit;
+        margin: 0.3rem 0;
+        width: 100%;
+      }
+      .error {
+        color: #9b1c1c;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Entryway browser client</h1>
+      <button id="logout-nav" hidden>Revoke this client session</button>
+    </header>
+    <main>
+      <section id="loading-spinner">
+        <p>Loading session…</p>
+      </section>
+      <p id="loading-error" class="error" hidden></p>
+      <section id="login-container" hidden>
+        <h2>Sign in</h2>
+        <p>Use an Entryway handle or DID.</p>
+        <form id="login-form">
+          <label>Handle <input
+              id="username"
+              name="username"
+              required
+            ></label><button id="login-button">Continue</button>
+        </form>
+        <p id="login-form-error" class="error"></p>
+      </section>
+      <section id="post-container" hidden>
+        <p>Signed in as <code id="welcome-message"></code></p>
+        <p>Verified DID: <code id="verified-did"></code></p>
+        <p>Authorization server: <code id="issuer"></code></p>
+        <button id="refresh-button" type="button">Refresh authorization</button>
+        <p id="refresh-result" role="status"></p>
+        <form id="reauthorize-form">
+          <label>Authorize another handle or DID <input id="reauthorize-identifier" required></label>
+          <label>Account prompt <select id="reauthorize-prompt"><option value="">Default</option><option value="login">Sign in again</option><option value="select_account">Choose account</option><option value="consent">Ask for consent</option></select></label>
+          <button id="reauthorize-button">Start another authorization</button>
+        </form>
+        <p id="reauthorize-error" class="error"></p>
+        <form id="post-form">
+          <label>Post <textarea
+              id="post-text"
+              required
+            ></textarea></label><button id="post-button">Create post</button>
+        </form>
+        <p id="post-form-error" class="error"></p>
+      </section>
+      <section id="success-container" hidden>
+        <h2>Post created</h2>
+        <p><a id="success-pds" href="#">View the record on this PDS</a></p>
+      </section>
+    </main>
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

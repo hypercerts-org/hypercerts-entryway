@@ -1,0 +1,31 @@
+# Provider setup skeleton. For the verified provisioning/cleanup example,
+# see .github/workflows/ci-example.yml.
+# npm ci prepares consumer packages, not AiaB development tooling.
+# Use the sandbox-ci-e2e CI connection workflow for the separately pinned AiaB
+# checkout, its runtime install, provisioning, public artifacts, and cleanup.
+# Copy into the consumer repository as .github/workflows/e2e.yml.
+# Replace ./test/e2e.sh with the consumer project's command.
+name: End-to-end tests with Atmosphere in a Box
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: docker compose version
+      - name: Run consumer end-to-end tests
+        run: ./test/e2e.sh

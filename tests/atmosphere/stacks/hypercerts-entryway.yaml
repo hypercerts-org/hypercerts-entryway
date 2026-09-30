@@ -1,0 +1,123 @@
+x-runtime: &runtime
+  image: hypercerts-entryway:local
+  build:
+    context: ../..
+    dockerfile: tests/support/Dockerfile
+  init: true
+  environment: &runtime-env
+    SPIKE_CONFIG: /config/config.json
+    NODE_EXTRA_CA_CERTS: /ca/root.crt
+    LOG_LEVEL: warn
+  networks: [atmosinabox]
+services:
+  configure:
+    <<: *runtime
+    command: node tests/support/configure.mjs
+    environment:
+      SPIKE_CONFIG: /config/config.json
+      SPIKE_HANDLE_DOMAINS: .entryway.atmosbox.test
+      SPIKE_CLIENT_URL: https://client.entryway.example.com
+      SOURCE_FIXTURE_PUBLIC_DIR: /run/fixture-public
+      SOURCE_FIXTURE_TOKEN_DIR: /run/secrets
+    volumes:
+      - entryway-config:/config
+      - source-fixture-public:/run/fixture-public
+      - source-fixture-token:/run/secrets
+  entryway:
+    <<: *runtime
+    command: npm start
+    volumes:
+      - ../artifacts:/app/artifacts:z
+      - entryway-config:/config:ro
+      - entryway-data:/data
+      - source-fixture-token:/run/secrets:ro
+    environment:
+      <<: *runtime-env
+      MAIL_SMTP_HOST: mail-capture
+      MAIL_SMTP_PORT: '2525'
+      SPIKE_BROWSER_CLIENT_METADATA_URL: https://browser.atmosbox.internal/oauth-client-metadata.json
+      SOURCE_FIXTURE_URL: http://source-fixture:3313
+      SOURCE_FIXTURE_TOKEN_FILE: /run/secrets/source-fixture-token
+    depends_on:
+      configure: { condition: service_completed_successfully }
+      plc: { condition: service_healthy }
+      mail-capture: { condition: service_healthy }
+    healthcheck:
+      test: [CMD, node, -e, 'fetch("http://localhost:3000/_health").then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))']
+      interval: 3s
+      timeout: 3s
+      retries: 60
+  pds1:
+    <<: *runtime
+    command: node tests/support/start-pds.mjs
+    environment:
+      <<: *runtime-env
+      PDS_ID: pds1
+    volumes:
+      - entryway-config:/config:ro
+      - cluster1-data:/data
+    depends_on:
+      entryway: { condition: service_healthy }
+    healthcheck:
+      test: [CMD, node, -e, 'fetch("http://localhost:3000/xrpc/_health").then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))']
+      interval: 3s
+      timeout: 3s
+      retries: 60
+  pds2:
+    <<: *runtime
+    command: node tests/support/start-pds.mjs
+    environment:
+      <<: *runtime-env
+      PDS_ID: pds2
+    volumes:
+      - entryway-config:/config:ro
+      - cluster2-data:/data
+    depends_on:
+      entryway: { condition: service_healthy }
+    healthcheck:
+      test: [CMD, node, -e, 'fetch("http://localhost:3000/xrpc/_health").then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))']
+      interval: 3s
+      timeout: 3s
+      retries: 60
+  test:
+    <<: *runtime
+    profiles: [test]
+    command: node tests/support/run-contracts.mjs
+    environment:
+      <<: *runtime-env
+      MAILPIT_URL: https://mailpit.atmosbox.test
+    volumes:
+      - entryway-config:/config:ro
+      - entryway-data:/entryway-data:ro
+      - mail-capture-data:/capture:ro
+      - source-fixture-token:/run/secrets:ro
+      - ../artifacts:/app/artifacts:z
+    depends_on:
+      pds1: { condition: service_healthy }
+      pds2: { condition: service_healthy }
+  browser:
+    image: hypercerts-entryway-browser:local
+    build:
+      context: ../..
+      dockerfile: tests/support/Dockerfile.browser
+    profiles: [test]
+    init: true
+    working_dir: /app
+    environment:
+      <<: *runtime-env
+      CI: '1'
+      MAILPIT_URL: https://mailpit.atmosbox.test
+    volumes:
+      - entryway-config:/config:ro
+      - entryway-data:/entryway-data
+      - mail-capture-data:/capture:ro
+      - ../artifacts:/app/artifacts:z
+    depends_on:
+      pds1: { condition: service_healthy }
+      pds2: { condition: service_healthy }
+    shm_size: 1gb
+volumes:
+  entryway-config: {}
+  entryway-data: {}
+  cluster1-data: {}
+  cluster2-data: {}

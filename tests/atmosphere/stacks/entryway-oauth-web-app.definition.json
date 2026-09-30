@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "id": "entryway-oauth-web-app",
+  "services": [
+    {
+      "service": "entryway-oauth-web-app",
+      "environment": [
+        { "name": "APP_URL", "source": { "kind": "route-url", "route": "browser" } },
+        { "name": "PLC_URL", "source": { "kind": "plc-url" } }
+      ]
+    }
+  ],
+  "routes": [
+    {
+      "id": "browser",
+      "service": "entryway-oauth-web-app",
+      "host": "browser",
+      "port": 8080
+    }
+  ],
+  "secrets": []
+}

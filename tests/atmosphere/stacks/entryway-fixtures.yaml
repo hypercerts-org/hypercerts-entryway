@@ -1,0 +1,60 @@
+x-runtime: &runtime
+  image: hypercerts-entryway:local
+  build:
+    context: ../..
+    dockerfile: tests/support/Dockerfile
+  init: true
+  environment: &runtime-env
+    SPIKE_CONFIG: /config/config.json
+    NODE_EXTRA_CA_CERTS: /ca/root.crt
+    LOG_LEVEL: warn
+  networks: [atmosinabox]
+services:
+  mail-capture:
+    image: ghcr.io/axllent/mailpit:v1.31.3@sha256:13de4ffbd28f3089be6dff32afbc8210edb5a593d738fa877ae7272cc73aeb67
+    read_only: true
+    tmpfs: [/tmp]
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:8025/readyz']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    environment:
+      MP_DATABASE: /capture/mailpit.db
+      MP_LISTEN: 0.0.0.0:8025
+      MP_SMTP_BIND_ADDR: 0.0.0.0:2525
+      MP_ALLOWED_HOSTS: mailpit.atmosbox.test
+      MP_MAX_AGE: 1h
+      MP_MAX_MESSAGES: '500'
+      MP_MAX_MESSAGE_SIZE: '1'
+    volumes:
+      - mail-capture-data:/capture
+    networks: [atmosinabox]
+  source-fixture:
+    <<: *runtime
+    command: node tests/support/source-fixture.mjs
+    environment:
+      <<: *runtime-env
+      SOURCE_FIXTURE_TOKEN_FILE: /run/secrets/source-fixture-token
+      ENTRYWAY_ROTATION_DID_FILE: /run/fixture-public/entryway-rotation-did
+      SOURCE_PDS_URL: https://pds3.atmosbox.test
+      PLC_URL: https://plc.atmosbox.test
+      TARGET_PDS_URL: https://cluster1.atmosbox.test
+    volumes:
+      - source-fixture-data:/fixture
+      - source-fixture-token:/run/secrets:ro
+      - source-fixture-public:/run/fixture-public:ro
+    depends_on:
+      configure: { condition: service_completed_successfully }
+      pds3: { condition: service_healthy }
+      ca-export: { condition: service_completed_successfully }
+    healthcheck:
+      test: [CMD, node, -e, "const s=require('node:net').connect(3313,'127.0.0.1');s.on('connect',()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+volumes:
+  mail-capture-data: {}
+  source-fixture-data: {}
+  source-fixture-token: {}
+  source-fixture-public: {}

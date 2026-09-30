@@ -1,0 +1,3 @@
+interface:
+  display_name: 'Sandbox Service Templates'
+  short_description: 'Manage generated Compose templates'

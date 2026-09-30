@@ -1,0 +1,25 @@
+# Install dependencies and compile source inside the sandbox image.
+**/node_modules
+**/dist
+**/.git
+**/.runtime
+**/.sandbox
+**/.sandbox-*
+**/artifacts
+**/test-results
+**/playwright-report
+**/reports
+**/coverage
+**/*.sqlite
+**/*.sqlite-*
+**/*.db
+**/*.db-*
+**/*.car
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*-token.txt
+**/*-secret.txt
