@@ -5,12 +5,12 @@ They distinguish reusable spike code, proposed behaviour and unresolved release 
 
 | Document | Contents |
 | --- | --- |
-| [Architecture](architecture.md) | System overview, four feature domains, ports/adapters, package layout, login sequence and fleet lifecycle |
+| [Architecture](architecture.md) | System overview, vertical feature ownership, three port boundaries, source layout, login sequence and fleet lifecycle |
 | [Project plan](delivery-plan.md) | Glossary, six milestones, acceptance criteria, two-person ownership and check-ins |
 | [Data model and custody](data-custody.md) | DID-based account model, provider boundaries, key custody, transfer cases and observed test migration order |
 | [Reuse assessment](reuse-assessment.md) | Reusable code, required implementation and investigation findings |
 | [Testing](testing.md) | Local Atmosphere in a Box commands, repeatable flows and evidence limits |
-| [Source mapping](source-map.json) | Original spike modules mapped to this repository |
+| [Source mapping](source-map.json) | Original spike modules, imported locations and current ownership |
 
 ## Diagram conventions
 

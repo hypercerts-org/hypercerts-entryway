@@ -39,7 +39,11 @@ and requires no host dependency install:
 | `./tests/local.sh migration-resume` | Resume a reviewed interrupted fixture; inspect state before using |
 | `./tests/local.sh reverify` | Check an already completed migration fixture |
 | `./tests/local.sh resilience` | Disruptive outage/restart checks after other suites finish; run alone |
-| `./tests/local.sh all` | Prepare, up, browser, contracts, migration, resilience sequentially; requires fresh fixture |
+| `./tests/local.sh all` | Prepare, up, browser, contracts, migration, profile, PLC recovery, crash, authority drills, resilience; requires fresh fixture |
+| `./tests/local.sh interop-profile` | Raw product profile; exit 2 retains inherited missing moderation requirement |
+| `./tests/local.sh plc-recovery` | Five named synthetic PLC/cache recovery cases in the selected project |
+| `./tests/local.sh process-crash` | Two actual SIGKILL boundaries, exit 137 and post-recovery PDS writes |
+| `./tests/local.sh authority-drills` | Fresh two-PDS identities, bounded backup/restore and issuer/fleet/restored key checks |
 | `./tests/local.sh down` | Stop this project; retain volumes and state |
 
 For the optional persistent commands, the default generated checkout is
@@ -102,3 +106,36 @@ No tests or builds were executed as part of the documentation import. Report new
 runs with source revision, command, sandbox/dependency versions, result and unrun
 groups. Historical spike reports establish provenance only. Never copy captured
 OTPs, access tokens, private keys or runtime configuration into committed reports.
+
+## Feature tests and operational evidence
+
+Contract discovery executes both tests/contracts/*.test.mjs and recursively
+co-located src/features/**/*.test.mjs, once and sorted, with a shared JUnit report.
+Run browser before contracts in a fresh project: real contracts require the
+verified account created by the browser journey. Pure diagnostic unit runs use
+`npm run test:unit` inside the managed test container and do not need that fixture.
+
+The application images are project-scoped. Source changes require rebuilding the
+selected runtime/test/browser images; test results from an older image cannot
+validate current files. AiaB runtime networks intentionally have no registry
+egress. Lockfile generation uses an isolated managed tooling service with egress
+and no runtime secrets/volumes; it is not performed in the application runtime.
+
+Operational controllers validate the selected manifest/project, share the
+consumer migration lock, use bounded waits and restore only owned services and
+keys on exit. Fresh authority fixtures belong to the current project. Database
+backups and private signing configuration remain in ignored private volumes.
+Reports include candidate source/build digests, image identities and redacted
+named-case results under ENTRYWAY_E2E_REPORT_DIR.
+
+`interop-profile` retains its raw exit 2 for required moderation coordination.
+`all` records that result and independently asserts that the only failure is the
+predeclared missing-moderation finding before proceeding. Any other profile
+failure blocks equivalence. A passing restructuring equivalence run does not
+mean the product profile passed or that release requirements are complete.
+
+The final reviewed candidate runs `TMPDIR="$HOME/temp/tmp"
+ENTRYWAY_E2E_KEEP_FAILED_STATE=1 ./tests/local.sh fresh`. All probes run before
+that disposable project's cleanup, with resilience last. The backup/rotation
+checks establish bounded local restoration, not off-site/full DR, zero-downtime
+key overlap, existing-refresh continuity or production acceptance.

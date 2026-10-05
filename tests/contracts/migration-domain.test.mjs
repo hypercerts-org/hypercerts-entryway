@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { advance, commandFor, reconcileTargetCreation } from '../../dist/packages/entryway-core/src/pds-fleet/migration/domain.js'
+import { advance, commandFor, reconcileTargetCreation } from '../../dist/src/features/external-migration/state-machine.js'
 
 const workflow = (phase = 'owner-confirmed') => ({
   id: 'workflow-1', did: 'did:plc:fixture', ownerUserId: 'user-1', ownerSessionReference: 'session-1',

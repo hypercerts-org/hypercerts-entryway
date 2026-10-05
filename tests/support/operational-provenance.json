@@ -1,0 +1,52 @@
+[
+  {
+    "source": "/home/evelyn/git/hypercerts/entryway/next-spike/app/scripts/interop-profile-probe.mjs",
+    "sha256": "ed288e7f10e1763d31bde0058647b2171bb46f2891d0344a8cfb4d7740e75291",
+    "target": "tests/support/interop-profile-probe.mjs"
+  },
+  {
+    "source": "/home/evelyn/git/hypercerts/entryway/next-spike/app/scripts/plc-recovery-probe.mjs",
+    "sha256": "390acb739fbd37e305074203059d055958486a22920dbd809de883a88ed01bf7",
+    "target": "tests/support/plc-recovery-probe.mjs"
+  },
+  {
+    "source": "/home/evelyn/git/hypercerts/entryway/next-spike/.worktrees/verification-5-8/app/scripts/crash-checkpoint.mjs",
+    "sha256": "7db68b921ab6384862ac29d0e93ff0dabe631e25a4806977d83a8b9a0930295e",
+    "target": "tests/support/crash-checkpoint.mjs"
+  },
+  {
+    "source": "/home/evelyn/git/hypercerts/entryway/next-spike/.worktrees/verification-5-8/app/scripts/operational-state-probe.mjs",
+    "sha256": "ecee3c46f03cbe193957ccaf709f06f6f32430164851f852c444cf6777534d04",
+    "target": "tests/support/operational-state-probe.mjs"
+  },
+  {
+    "source": "/home/evelyn/git/hypercerts/entryway/next-spike/.worktrees/verification-5-8/app/test/process-crash.spec.mjs",
+    "sha256": "37cd4cd43792ff42086e54beced08f66553ed2247269ccfd34d7f87a761427d0",
+    "target": "tests/browser/process-crash.spec.mjs"
+  },
+  {
+    "source": "/home/evelyn/git/hypercerts/entryway/next-spike/.worktrees/verification-5-8/app/test/restored-backup.spec.mjs",
+    "sha256": "f433e6cb52efa2a43e2c4bcb24c33afbb64bb40976f33e39f6521c38c18c5a64",
+    "target": "tests/browser/restored-backup.spec.mjs"
+  },
+  {
+    "source": "/home/evelyn/git/hypercerts/entryway/next-spike/.worktrees/verification-5-8/app/test/rotation-browser.spec.mjs",
+    "sha256": "f1c6c0b3edef51614ff2c3d58fdd55c98241512706525ec63dad776297334480",
+    "target": "tests/browser/rotation-browser.spec.mjs"
+  },
+  {
+    "source": "/home/evelyn/git/hypercerts/entryway/next-spike/.worktrees/verification-5-8/run-process-crash.sh",
+    "sha256": "6cc8b3243abc90d50c6443277e8d2b0adf075f08e1c6ede3a0abcd233b6da23b",
+    "target": "tests/support/run-process-crash.sh"
+  },
+  {
+    "source": "/home/evelyn/git/hypercerts/entryway/next-spike/.worktrees/verification-5-8/run-authority-drills.sh",
+    "sha256": "94c1bd125c57237c2c124c12a6cbe2a80beaa18946226ad53a1007863c30ad17",
+    "target": "tests/support/run-authority-drills.sh"
+  },
+  {
+    "source": "/home/evelyn/git/hypercerts/entryway/next-spike/run-plc-recovery.sh",
+    "sha256": "894415c2623f9804f006374ada13a088d1ff60b6b4d107e4812e4c63799f75d4",
+    "target": "tests/support/run-plc-recovery.sh"
+  }
+]

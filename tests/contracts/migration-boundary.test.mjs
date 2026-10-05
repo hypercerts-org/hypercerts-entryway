@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import Database from 'better-sqlite3'
-import { validateMigrationWorkflow, validateSnapshotManifest } from '../../dist/packages/entryway-core/src/pds-fleet/migration/validation.js'
-import { runSchemaMigrations } from '../../dist/packages/entryway-service/src/infra/storage/migrations.js'
-import { migrationWorkflowSchemaMigration, createMigrationWorkflowStorage } from '../../dist/packages/entryway-service/src/features/pds-fleet/storage/migration-workflow.js'
-import { migrationSnapshotSchemaMigration, createSnapshotManifestStorage } from '../../dist/packages/entryway-service/src/features/pds-fleet/storage/migration-snapshot.js'
-import { SourceFixtureClient } from '../../dist/packages/entryway-service/src/features/pds-fleet/adapters/source-fixture-client.js'
-import { PdsHttpMigrationAdapter } from '../../dist/packages/entryway-service/src/features/pds-fleet/adapters/pds-http-adapter.js'
-import { MigrationPayloadStore } from '../../dist/packages/entryway-service/src/features/pds-fleet/storage/migration-payload.js'
+import { validateMigrationWorkflow, validateSnapshotManifest } from '../../dist/src/features/external-migration/validation.js'
+import { runSchemaMigrations } from '../../dist/src/database/migrations/migrations.js'
+import { migrationWorkflowSchemaMigration, createMigrationWorkflowStorage } from '../../dist/src/database/sqlite/migration-workflow.js'
+import { migrationSnapshotSchemaMigration, createSnapshotManifestStorage } from '../../dist/src/database/sqlite/migration-snapshot.js'
+import { SourceFixtureClient } from '../../dist/tests/fixtures/source-client.js'
+import { PdsMigrationClient } from '../../dist/src/pds/migration-client.js'
+import { MigrationPayloadStore } from '../../dist/src/database/sqlite/migration-payload.js'
 
 const cid = char => 'bafyreih' + char.repeat(52)
 const didKey = char => 'did:key:zQ3sh' + char.repeat(44)
@@ -78,7 +78,7 @@ test('fixture transport rejects malformed public status and frozen responses', a
 test('target PDS transport rejects malformed signing key and account status', async t => {
   const originalFetch = globalThis.fetch
   t.after(() => { globalThis.fetch = originalFetch })
-  const adapter = new PdsHttpMigrationAdapter({ origin: 'https://target.test', plcUrl: 'https://plc.test',
+  const adapter = new PdsMigrationClient({ origin: 'https://target.test', plcUrl: 'https://plc.test',
     token: async () => 'test-token', adminAuthorization: 'Basic test',
     snapshots: { getManifest: async () => null }, payloads: new MigrationPayloadStore('/tmp/unused-migration-boundary') })
   globalThis.fetch = async () => Response.json({ signingKey: 'secret' })

@@ -1,0 +1,400 @@
+{
+  "note": "MJS ownership, not a claim of full strict typed conversion",
+  "files": [
+    {
+      "path": "src/accounts/challenges.mjs",
+      "owner": "accounts",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/accounts/change-email-authority.mjs",
+      "owner": "accounts",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/accounts/input.mjs",
+      "owner": "accounts",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/accounts/primitives.mjs",
+      "owner": "accounts",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/accounts/security-primitives.mjs",
+      "owner": "accounts",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/app.mjs",
+      "owner": "application composition/lifecycle",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/authentication/better-auth.mjs",
+      "owner": "authentication",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/authentication/password-crypto.mjs",
+      "owner": "authentication",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/compose-account-security.mjs",
+      "owner": "application composition/lifecycle",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/compose-account-ui.mjs",
+      "owner": "application composition/lifecycle",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/compose-accounts.mjs",
+      "owner": "application composition/lifecycle",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/compose-authentication.mjs",
+      "owner": "application composition/lifecycle",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/compose-protocol-operations.mjs",
+      "owner": "application composition/lifecycle",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/compose-protocol.mjs",
+      "owner": "application composition/lifecycle",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/config.mjs",
+      "owner": "application composition/lifecycle",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/database/sqlite/account-authority.mjs",
+      "owner": "database",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/database/sqlite/connection.mjs",
+      "owner": "database",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/database/sqlite/oauth-stores.mjs",
+      "owner": "database",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/account-deletion/actions.mjs",
+      "owner": "account-deletion",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/account-deletion/authorize-deletion.mjs",
+      "owner": "account-deletion",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/account-deletion/delete-account.mjs",
+      "owner": "account-deletion",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/account-deletion/delete-account.test.mjs",
+      "owner": "account-deletion",
+      "kind": "co-located contract test"
+    },
+    {
+      "path": "src/features/account-deletion/page.mjs",
+      "owner": "account-deletion",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/account-deletion/xrpc-routes.mjs",
+      "owner": "account-deletion",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/account-recovery/page.mjs",
+      "owner": "account-recovery",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/account-recovery/recover-account.mjs",
+      "owner": "account-recovery",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/account-recovery/xrpc-routes.mjs",
+      "owner": "account-recovery",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/account-registration/create-account.mjs",
+      "owner": "account-registration",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/account-registration/invites.mjs",
+      "owner": "account-registration",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/account-registration/page.mjs",
+      "owner": "account-registration",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/account-registration/provisioning.test.mjs",
+      "owner": "account-registration",
+      "kind": "co-located contract test"
+    },
+    {
+      "path": "src/features/account-registration/signup-proof.mjs",
+      "owner": "account-registration",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/account-registration/signup-routes.mjs",
+      "owner": "account-registration",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/account-registration/xrpc-routes.mjs",
+      "owner": "account-registration",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/account-settings/actions.mjs",
+      "owner": "account-settings",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/account-settings/change-status.mjs",
+      "owner": "account-settings",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/account-settings/page.mjs",
+      "owner": "account-settings",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/account-settings/security.mjs",
+      "owner": "account-settings",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/account-settings/status.test.mjs",
+      "owner": "account-settings",
+      "kind": "co-located contract test"
+    },
+    {
+      "path": "src/features/account-settings/xrpc-routes.mjs",
+      "owner": "account-settings",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/connected-apps/actions.mjs",
+      "owner": "connected-apps",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/connected-apps/page.mjs",
+      "owner": "connected-apps",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/connected-apps/xrpc-routes.mjs",
+      "owner": "connected-apps",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/email-login/page.mjs",
+      "owner": "email-login",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/email-login/routes.mjs",
+      "owner": "email-login",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/email-login/xrpc-routes.mjs",
+      "owner": "email-login",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/handle-change/actions.mjs",
+      "owner": "handle-change",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/handle-change/change-handle.mjs",
+      "owner": "handle-change",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/handle-change/change-handle.test.mjs",
+      "owner": "handle-change",
+      "kind": "co-located contract test"
+    },
+    {
+      "path": "src/features/handle-change/page.mjs",
+      "owner": "handle-change",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/handle-change/xrpc-routes.mjs",
+      "owner": "handle-change",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/oauth-authorization/authorization-routes.mjs",
+      "owner": "oauth-authorization",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/oauth-authorization/consent.mjs",
+      "owner": "oauth-authorization",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/oauth-authorization/provider.mjs",
+      "owner": "oauth-authorization",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/oauth-authorization/redirect.mjs",
+      "owner": "oauth-authorization",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/oauth-authorization/scope-reference.mjs",
+      "owner": "oauth-authorization",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/oauth-authorization/xrpc-routes.mjs",
+      "owner": "oauth-authorization",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/pds-migration/actions.mjs",
+      "owner": "pds-migration",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/pds-migration/move-between-pds.mjs",
+      "owner": "pds-migration",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/pds-migration/page.mjs",
+      "owner": "pds-migration",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/pds-migration/proof.mjs",
+      "owner": "pds-migration",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/pds-migration/xrpc-routes.mjs",
+      "owner": "pds-migration",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/http/account-console.mjs",
+      "owner": "http",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/http/browser-flow.mjs",
+      "owner": "http",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/http/http-error.mjs",
+      "owner": "http",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/http/protocol-authentication.mjs",
+      "owner": "http",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/http/xrpc-routes.mjs",
+      "owner": "http",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/mail/admin-message.mjs",
+      "owner": "mail",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/mail/xrpc-routes.mjs",
+      "owner": "mail",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/main.mjs",
+      "owner": "application composition/lifecycle",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/oauth/legacy-credentials.mjs",
+      "owner": "oauth",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/pds/account-client.mjs",
+      "owner": "pds",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/pds/client.mjs",
+      "owner": "pds",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/plc/operations.mjs",
+      "owner": "plc",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/plc/xrpc-routes.mjs",
+      "owner": "plc",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/reconcile-accounts.mjs",
+      "owner": "application composition/lifecycle",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/ui/account-forms.mjs",
+      "owner": "ui",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/ui/forms.mjs",
+      "owner": "ui",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/ui/html.mjs",
+      "owner": "ui",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    }
+  ]
+}

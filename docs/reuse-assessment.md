@@ -8,11 +8,11 @@ spike/replay runtime sources were found identical and are historical references.
 
 | Component | Why it is useful | Remaining work |
 | --- | --- | --- |
-| Upstream OAuth provider wiring | Supported middleware handles protocol functions | Typed Access adapter and configuration boundary |
+| Upstream OAuth provider wiring | Supported middleware handles protocol functions | Concrete provider feature and validated composition |
 | Better Auth OTP integration | Uses public server API, verified email and browser proof | ePDS behaviour parity and adapter isolation |
 | Account reader/transactor and SQL constraints | DID authority, claims and identity binding already explicit | Remove cross-domain orchestration from persistence |
-| Indexed DID/device lookup | Account device retrieval is already implemented | Expose through owned Access ports |
-| Transactional provider stores | Replay/code/refresh operations have existing semantics | Typed interfaces, retention and contract coverage |
+| Indexed DID/device lookup | Account device retrieval is already implemented | Database-owned indexed membership reader |
+| Transactional provider stores | Replay/code/refresh operations have existing semantics | Database interfaces, retention and contract coverage |
 | Browser and lifecycle scenarios | Independent browser client exercises PDS access and grant/session distinctions | Rerun in imported harness; complete parity cases |
 | Brand tokens and secure page shell | Server-selected styling, escaping, CSP and responsive layout | Product account-page composition |
 | Mail ports/outbox and sandbox delivery | Retry, expiry and superseding are represented | Production sender adapter and remove capture dependency |
@@ -22,7 +22,7 @@ spike/replay runtime sources were found identical and are historical references.
 
 | Area | Required change |
 | --- | --- |
-| MJS orchestration | Extract domain services and thin handlers; existing runtime is outside strict TS coverage |
+| MJS orchestration | Feature operation bodies and thin handlers are extracted; retained MJS remains outside strict TS coverage |
 | ePDS consent behaviour | Preserve approved returning-client and eligible trusted-signup behaviour |
 | Account UI composition | Consume domain APIs instead of direct grant/store mutations |
 | Better Auth table integration | Encapsulate pinned-schema transactions; do not lose atomic email binding |
@@ -73,3 +73,17 @@ historical incomplete baseline.
 These line references describe the pre-import checkout and may differ after
 extraction. Historical spike test reports remain historical; use current sandbox
 runs for release evidence. Do not import captured credentials or old runtime state.
+
+## October source parity and restructuring
+
+The follow-up import restores the hosted-handle pre-publication guard, five account
+regressions, three real PDS integration tests and two service-auth rejection inputs.
+Reference PDS aligns to 0.5.36. Exact selected source hashes and pre/post-import
+managed results are recorded in plans/evidence; the later operational snapshot was
+test-only and did not supersede the newer production guard.
+
+The current source map preserves original/imported locations alongside current
+feature owners. Operational probes have consumer-owned guards, locks and cleanup;
+the raw interop profile still reports the inherited moderation requirement as a
+product failure. No production/DR/zero-downtime/real-provider qualification is
+inferred from these synthetic local checks.

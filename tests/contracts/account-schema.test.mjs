@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import Sqlite from 'better-sqlite3'
-import { openDatabase } from '../../dist/packages/entryway-service/src/compatibility/db.mjs'
-import { ACCOUNT_SCHEMA_MIGRATION } from '../../dist/packages/entryway-service/src/features/accounts/storage/account-schema.js'
-import { createSqliteAccountStorage } from '../../dist/packages/entryway-service/src/features/accounts/storage/sqlite-account-storage.js'
-import { createMigrationStartTransactor } from '../../dist/packages/entryway-service/src/features/pds-fleet/storage/migration-workflow.js'
-import { runSchemaMigrations } from '../../dist/packages/entryway-service/src/infra/storage/migrations.js'
+import { openDatabase } from '../../dist/src/database/sqlite/connection.mjs'
+import { ACCOUNT_SCHEMA_MIGRATION } from '../../dist/src/database/migrations/account-schema.js'
+import { createSqliteAccountStorage } from '../../dist/src/database/sqlite/sqlite-account-storage.js'
+import { createMigrationStartTransactor } from '../../dist/src/database/sqlite/migration-workflow.js'
+import { runSchemaMigrations } from '../../dist/src/database/migrations/migrations.js'
 
 const pds = [{ id: 'pds1', url: 'https://pds1.atmosbox.test' }]
 const alice = {

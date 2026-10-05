@@ -12,54 +12,61 @@ Read [architecture](docs/architecture.md), [custody](docs/data-custody.md),
 [reuse assessment](docs/reuse-assessment.md), and [testing](docs/testing.md)
 before changing cross-domain behaviour.
 
-## Repository layout
+## Repository layout and ownership
 
 ```text
-packages/
-  entryway-core/src/{accounts,identity,access,pds-fleet}/
-  entryway-service/src/             Adapters, infrastructure and workflows
-  entryway-service/src/compatibility/  Transitional MJS runtime
-  entryway-web/src/features/        Accounts and Access page composition
-tests/
-  atmosphere/                      Consumer-owned sandbox orchestration/templates
-  contracts/                       Contract/unit scenarios
-  browser/                         Browser scenarios
-  fixtures/                        Synthetic clients/source fixtures
-  plans/                           Acceptance plans and evidence expectations
-  flows/                           Cross-component flow definitions
-  local.sh                         Local sandbox entry point
-scripts/                           Build and structural checks
-docs/                              Architecture, custody and delivery guidance
+src/
+  features/          One operation, its routes, pages and tests in each feature
+  authentication/    Browser proof/session port and Better Auth implementation
+  mail/              Sending port, SMTP, templates and durable delivery
+  database/          Persistence ports, SQLite adapters and ordered migrations
+  accounts/          Shared account values, validation and proof primitives
+  pds/               Concrete PDS clients
+  plc/               Concrete PLC clients and authorized signing
+  oauth/             Shared concrete protocol/legacy-credential helpers
+  http/              Shared credential verification and HTTP helpers
+  ui/                Shared rendering, forms and branding
+  compose-*.mjs       Explicit feature assembly; no business workflows
+  app.mjs            Middleware and route registration
+  main.mjs           Startup, workers and shutdown
+  config.mjs         Process configuration
 ```
 
-Read the applicable `tests/plans/` and flow definition before changing behaviour.
-Preserve the small single-process deployment and durable database/worker model;
-domain boundaries do not require separate deployed services.
+A feature owns its operation, HTTP/XRPC handlers, page and co-located tests.
+Features do not import another feature's internals. Composition passes the
+specific shared operations needed by multiple journeys. Start at the feature
+named for the change: email-login, account-registration, account-settings,
+account-deletion, handle-change, account-recovery, oauth-authorization,
+connected-apps, external-migration or pds-migration.
 
-## Domain and adapter rules
+Keep ports/adapters only for browser authentication, mail sending and database.
+Use concrete PDS/PLC/provider clients, not additional renamed service ports.
+Mail retry/outbox state belongs to delivery/database; its transport port sends a
+fully formed message. Better Auth never becomes the AT Protocol identity model.
+Features receive normalized browser principals, never provider session objects.
 
-- Slice by Accounts, Identity, Access and PDS fleet. Registration and migration
-  coordinate domains; they are not a reason to duplicate account authority.
-- Core owns domain types, pure rules and ports. Service owns HTTP/XRPC handlers,
-  provider integrations, signing and storage adapters. Core must not import
-  Express, Better Auth internals, OAuth-provider persistence or SQL clients.
-- Use port/domain modules for policy; focused reader/transactor interfaces for
-  stored resources. Keep public exports small and dependencies explicit.
-- Use strict TypeScript for new code, `unknown` for untrusted input and stable
-  domain error codes translated at the HTTP boundary. Existing MJS is transitional
-  runtime code, not a completed typed architecture.
-- Validate configuration at composition. Prefer distinct named operations over
-  boolean mode flags. Keep handlers thin and dependency direction visible.
-- The DID is the primary account identifier. Better Auth user IDs and browser
-  sessions are separate identifiers. Do not add an account UUID without a
-  documented need and migration design.
-- Preserve atomic identity/email binding and claim updates. Do not replace an
-  atomic adapter operation with several unrelated provider API calls. Isolate
-  pinned Better Auth schema access behind an explicit adapter and contract tests.
-- Keep repository signing keys in the PDS. Identity signing goes through a port;
-  private key material does not belong in domain objects, logs or HTTP payloads.
-- Never identify incoming DID ownership from email alone. Custody and repository
-  placement are separate decisions.
+New TypeScript is strict and uses unknown for untrusted input and stable error
+codes. Preserved MJS is deliberately not a claim of completed TypeScript coverage;
+its owner inventory is docs/source-ownership.json. Do not add matching domain,
+port, adapter and index scaffolding to every feature.
+
+The DID is the primary account identity. Keep email claims, identity mapping and
+Better Auth schema changes atomic in the reviewed SQLite authority helper.
+Never replace a transaction with sequential provider API calls. Shared account
+facts have one owner; another feature cannot mutate a private workflow journal.
+Private signing material stays in concrete signing closures, never account
+objects, pages, logs or HTTP payloads. Never infer DID ownership from email alone.
+
+Pure rules/state machines cannot import HTTP or SQL. The architecture checker
+resolves TS/MJS, aliases, static/dynamic imports and require, rejects cross-feature
+imports and cycles, and enforces the three boundaries. The two type-only concrete
+source-fixture references in external migration and synthetic client composition
+are explicit test integration exceptions; they establish no standard-tool support.
+
+Two engineers take separate feature slices end to end. Coordinate shared contract,
+transaction, identity custody and schema-migration changes through one integrator.
+Do not assign both engineers the same composition or shared boundary file.
+Read applicable tests/plans and tests/flows before changing behavior.
 
 ## Runtime and validation
 

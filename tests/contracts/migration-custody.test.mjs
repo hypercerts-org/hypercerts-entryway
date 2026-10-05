@@ -2,8 +2,8 @@ import assert from 'node:assert/strict'
 const didKey = char => 'did:key:zQ3sh' + char.repeat(44)
 import test from 'node:test'
 import Database from 'better-sqlite3'
-import { runSchemaMigrations } from '../../dist/packages/entryway-service/src/infra/storage/migrations.js'
-import { migrationCustodySchemaMigration, createCustodyInventoryStorage } from '../../dist/packages/entryway-service/src/features/identity/storage/migration-custody.js'
+import { runSchemaMigrations } from '../../dist/src/database/migrations/migrations.js'
+import { migrationCustodySchemaMigration, createCustodyInventoryStorage } from '../../dist/src/database/sqlite/migration-custody.js'
 const fingerprint=`sha256:${'a'.repeat(64)}`
 const key=(purpose,custodian,keyReference)=>({purpose,custodian,keyReference,algorithm:purpose==='oauth-issuer'?'ES256K':'secp256k1',fingerprint,lifecycle:'active'})
 const inventory={did:`did:plc:${'a'.repeat(24)}`,keys:[key('source-recovery','user',didKey('a')),key('entryway-plc','entryway',didKey('b')),key('pds-repository','pds',didKey('c')),key('oauth-issuer','oauth-issuer',`jwk-thumbprint:${'a'.repeat(43)}`)]}

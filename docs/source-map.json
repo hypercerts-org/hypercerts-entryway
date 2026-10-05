@@ -1,64 +1,445 @@
 {
-  "accounts.mjs": "packages/entryway-service/src/compatibility/accounts.mjs",
-  "legacy.mjs": "packages/entryway-service/src/compatibility/legacy.mjs",
-  "entryway-extras.mjs": "packages/entryway-service/src/compatibility/entryway-extras.mjs",
-  "xrpc.mjs": "packages/entryway-service/src/compatibility/xrpc.mjs",
-  "provider.mjs": "packages/entryway-service/src/compatibility/provider.mjs",
-  "account-security.mjs": "packages/entryway-service/src/compatibility/account-security.mjs",
-  "account-migration.mjs": "packages/entryway-service/src/compatibility/account-migration.mjs",
-  "account-ui.mjs": "packages/entryway-web/src/features/accounts/compatibility/account-ui.mjs",
-  "client.mjs": "packages/entryway-service/src/compatibility/client.mjs",
-  "oauth-stores.mjs": "packages/entryway-service/src/compatibility/oauth-stores.mjs",
-  "auth.mjs": "packages/entryway-service/src/compatibility/auth.mjs",
-  "index.mjs": "packages/entryway-service/src/compatibility/index.mjs",
-  "db.mjs": "packages/entryway-service/src/compatibility/db.mjs",
-  "shared/errors.ts": "packages/entryway-core/src/shared/errors.ts",
-  "core/mail/domain.ts": "packages/entryway-core/src/access/mail/domain.ts",
-  "core/mail/types.ts": "packages/entryway-core/src/access/mail/types.ts",
-  "core/mail/port.ts": "packages/entryway-core/src/access/mail/port.ts",
-  "core/mail/index.ts": "packages/entryway-core/src/access/mail/index.ts",
-  "core/custody/domain.ts": "packages/entryway-core/src/identity/custody/domain.ts",
-  "core/custody/types.ts": "packages/entryway-core/src/identity/custody/types.ts",
-  "core/custody/port.ts": "packages/entryway-core/src/identity/custody/port.ts",
-  "core/custody/index.ts": "packages/entryway-core/src/identity/custody/index.ts",
-  "core/migration/domain.ts": "packages/entryway-core/src/pds-fleet/migration/domain.ts",
-  "core/migration/types.ts": "packages/entryway-core/src/pds-fleet/migration/types.ts",
-  "core/migration/port.ts": "packages/entryway-core/src/pds-fleet/migration/port.ts",
-  "core/migration/index.ts": "packages/entryway-core/src/pds-fleet/migration/index.ts",
-  "core/migration/validation.ts": "packages/entryway-core/src/pds-fleet/migration/validation.ts",
-  "core/migration/errors.ts": "packages/entryway-core/src/pds-fleet/migration/errors.ts",
-  "core/branding/domain.ts": "packages/entryway-core/src/access/branding/domain.ts",
-  "core/branding/types.ts": "packages/entryway-core/src/access/branding/types.ts",
-  "core/branding/index.ts": "packages/entryway-core/src/access/branding/index.ts",
-  "core/oauth/port.ts": "packages/entryway-core/src/access/oauth/port.ts",
-  "core/accounts/domain.ts": "packages/entryway-core/src/accounts/domain.ts",
-  "core/accounts/types.ts": "packages/entryway-core/src/accounts/types.ts",
-  "core/accounts/port.ts": "packages/entryway-core/src/accounts/port.ts",
-  "core/accounts/index.ts": "packages/entryway-core/src/accounts/index.ts",
-  "features/mail/service.ts": "packages/entryway-service/src/features/access/mail/service.ts",
-  "features/mail/index.ts": "packages/entryway-service/src/features/access/mail/index.ts",
-  "features/migration/port.ts": "packages/entryway-service/src/workflows/migration/port.ts",
-  "features/migration/pds-http-adapter.ts": "packages/entryway-service/src/features/pds-fleet/adapters/pds-http-adapter.ts",
-  "features/migration/adapter.ts": "packages/entryway-service/src/workflows/migration/adapter.ts",
-  "features/migration/index.ts": "packages/entryway-service/src/workflows/migration/index.ts",
-  "features/migration/source-fixture-client.ts": "packages/entryway-service/src/features/pds-fleet/adapters/source-fixture-client.ts",
-  "features/experience/index.ts": "packages/entryway-web/src/features/access/index.ts",
-  "features/experience/page.ts": "packages/entryway-web/src/features/access/page.ts",
-  "infra/mail/smtp-transport.ts": "packages/entryway-service/src/features/access/mail/smtp-transport.ts",
-  "infra/migration/adapter-contract.ts": "packages/entryway-service/src/workflows/migration/adapter-contract.ts",
-  "infra/signing/plc-signer.ts": "packages/entryway-service/src/features/identity/signing/plc-signer.ts",
-  "infra/signing/target-access-token.ts": "packages/entryway-service/src/features/identity/signing/target-access-token.ts",
-  "infra/signing/fixture-source-handoff.ts": "packages/entryway-service/src/features/identity/signing/fixture-source-handoff.ts",
-  "infra/logging/request-event.ts": "packages/entryway-service/src/infra/logging/request-event.ts",
-  "infra/storage/migration-workflow.ts": "packages/entryway-service/src/features/pds-fleet/storage/migration-workflow.ts",
-  "infra/storage/migration-snapshot.ts": "packages/entryway-service/src/features/pds-fleet/storage/migration-snapshot.ts",
-  "infra/storage/oauth-device-accounts.ts": "packages/entryway-service/src/features/access/storage/oauth-device-accounts.ts",
-  "infra/storage/mail-schema.ts": "packages/entryway-service/src/features/access/storage/mail-schema.ts",
-  "infra/storage/migration-payload.ts": "packages/entryway-service/src/features/pds-fleet/storage/migration-payload.ts",
-  "infra/storage/migration.ts": "packages/entryway-service/src/features/pds-fleet/storage/migration.ts",
-  "infra/storage/migration-custody.ts": "packages/entryway-service/src/features/identity/storage/migration-custody.ts",
-  "infra/storage/sqlite-account-storage.ts": "packages/entryway-service/src/features/accounts/storage/sqlite-account-storage.ts",
-  "infra/storage/account-schema.ts": "packages/entryway-service/src/features/accounts/storage/account-schema.ts",
-  "infra/storage/migrations.ts": "packages/entryway-service/src/infra/storage/migrations.ts",
-  "infra/storage/mail-outbox.ts": "packages/entryway-service/src/features/access/storage/mail-outbox.ts"
+  "accounts.mjs": {
+    "imported": "packages/entryway-service/src/compatibility/accounts.mjs",
+    "current": [
+      "src/compose-accounts.mjs",
+      "src/accounts/primitives.mjs",
+      "src/features/account-registration/create-account.mjs",
+      "src/features/handle-change/change-handle.mjs",
+      "src/features/account-settings/change-status.mjs",
+      "src/features/account-deletion/delete-account.mjs",
+      "src/reconcile-accounts.mjs",
+      "src/http/http-error.mjs",
+      "src/pds/client.mjs"
+    ]
+  },
+  "legacy.mjs": {
+    "imported": "packages/entryway-service/src/compatibility/legacy.mjs",
+    "current": [
+      "src/oauth/legacy-credentials.mjs"
+    ]
+  },
+  "entryway-extras.mjs": {
+    "imported": "packages/entryway-service/src/compatibility/entryway-extras.mjs",
+    "current": [
+      "src/compose-protocol-operations.mjs",
+      "src/accounts/input.mjs",
+      "src/accounts/challenges.mjs",
+      "src/pds/account-client.mjs",
+      "src/features/account-registration/signup-proof.mjs",
+      "src/plc/operations.mjs",
+      "src/features/account-registration/invites.mjs",
+      "src/features/oauth-authorization/scope-reference.mjs",
+      "src/mail/admin-message.mjs"
+    ]
+  },
+  "xrpc.mjs": {
+    "imported": "packages/entryway-service/src/compatibility/xrpc.mjs",
+    "current": [
+      "src/compose-protocol.mjs",
+      "src/http/protocol-authentication.mjs",
+      "src/http/xrpc-routes.mjs",
+      "src/mail/xrpc-routes.mjs",
+      "src/plc/xrpc-routes.mjs",
+      "src/features/email-login/xrpc-routes.mjs",
+      "src/features/pds-migration/xrpc-routes.mjs",
+      "src/features/handle-change/xrpc-routes.mjs",
+      "src/features/oauth-authorization/xrpc-routes.mjs",
+      "src/features/connected-apps/xrpc-routes.mjs",
+      "src/features/account-registration/xrpc-routes.mjs",
+      "src/features/account-deletion/xrpc-routes.mjs",
+      "src/features/account-recovery/xrpc-routes.mjs",
+      "src/features/account-settings/xrpc-routes.mjs"
+    ]
+  },
+  "provider.mjs": {
+    "imported": "packages/entryway-service/src/compatibility/provider.mjs",
+    "current": [
+      "src/features/oauth-authorization/provider.mjs"
+    ]
+  },
+  "account-security.mjs": {
+    "imported": "packages/entryway-service/src/compatibility/account-security.mjs",
+    "current": [
+      "src/compose-account-security.mjs",
+      "src/accounts/security-primitives.mjs",
+      "src/accounts/change-email-authority.mjs",
+      "src/database/authentication-state.port.ts",
+      "src/database/sqlite/account-authority.mjs",
+      "src/features/account-settings/security.mjs",
+      "src/features/account-recovery/recover-account.mjs",
+      "src/features/account-deletion/authorize-deletion.mjs",
+      "src/features/pds-migration/proof.mjs"
+    ]
+  },
+  "account-migration.mjs": {
+    "imported": "packages/entryway-service/src/compatibility/account-migration.mjs",
+    "current": [
+      "src/features/pds-migration/move-between-pds.mjs"
+    ]
+  },
+  "account-ui.mjs": {
+    "imported": "packages/entryway-web/src/features/accounts/compatibility/account-ui.mjs",
+    "current": [
+      "src/compose-account-ui.mjs",
+      "src/http/account-console.mjs",
+      "src/ui/account-forms.mjs",
+      "src/features/pds-migration/page.mjs",
+      "src/features/handle-change/page.mjs",
+      "src/features/connected-apps/page.mjs",
+      "src/features/account-deletion/page.mjs",
+      "src/features/account-recovery/page.mjs",
+      "src/features/account-settings/page.mjs",
+      "src/features/pds-migration/actions.mjs",
+      "src/features/handle-change/actions.mjs",
+      "src/features/connected-apps/actions.mjs",
+      "src/features/account-deletion/actions.mjs",
+      "src/features/account-settings/actions.mjs"
+    ]
+  },
+  "client.mjs": {
+    "imported": "packages/entryway-service/src/compatibility/client.mjs",
+    "current": [
+      "tests/fixtures/synthetic-client.mjs"
+    ]
+  },
+  "oauth-stores.mjs": {
+    "imported": "packages/entryway-service/src/compatibility/oauth-stores.mjs",
+    "current": [
+      "src/database/sqlite/oauth-stores.mjs"
+    ]
+  },
+  "auth.mjs": {
+    "imported": "packages/entryway-service/src/compatibility/auth.mjs",
+    "current": [
+      "src/authentication/better-auth.mjs",
+      "src/authentication/port.ts",
+      "src/compose-authentication.mjs",
+      "src/http/browser-flow.mjs",
+      "src/ui/html.mjs",
+      "src/features/email-login/routes.mjs",
+      "src/features/email-login/page.mjs",
+      "src/features/account-registration/page.mjs",
+      "src/features/account-registration/signup-routes.mjs",
+      "src/features/oauth-authorization/consent.mjs",
+      "src/features/oauth-authorization/redirect.mjs",
+      "src/features/oauth-authorization/authorization-routes.mjs"
+    ]
+  },
+  "index.mjs": {
+    "imported": "packages/entryway-service/src/compatibility/index.mjs",
+    "current": [
+      "src/main.mjs",
+      "src/app.mjs",
+      "src/config.mjs"
+    ]
+  },
+  "db.mjs": {
+    "imported": "packages/entryway-service/src/compatibility/db.mjs",
+    "current": [
+      "src/database/sqlite/connection.mjs"
+    ]
+  },
+  "shared/errors.ts": {
+    "imported": "packages/entryway-core/src/shared/errors.ts",
+    "current": [
+      "src/accounts/errors.ts"
+    ]
+  },
+  "core/mail/domain.ts": {
+    "imported": "packages/entryway-core/src/access/mail/domain.ts",
+    "current": [
+      "src/mail/templates.ts"
+    ]
+  },
+  "core/mail/types.ts": {
+    "imported": "packages/entryway-core/src/access/mail/types.ts",
+    "current": [
+      "src/mail/types.ts",
+      "src/mail/port.ts",
+      "src/database/mail-outbox.port.ts"
+    ]
+  },
+  "core/mail/port.ts": {
+    "imported": "packages/entryway-core/src/access/mail/port.ts",
+    "current": [
+      "src/mail/port.ts"
+    ]
+  },
+  "core/mail/index.ts": {
+    "imported": "packages/entryway-core/src/access/mail/index.ts",
+    "current": [
+      "src/mail/messages.ts"
+    ]
+  },
+  "core/custody/domain.ts": {
+    "imported": "packages/entryway-core/src/identity/custody/domain.ts",
+    "current": [
+      "src/plc/custody.ts"
+    ]
+  },
+  "core/custody/types.ts": {
+    "imported": "packages/entryway-core/src/identity/custody/types.ts",
+    "current": [
+      "src/plc/types.ts"
+    ]
+  },
+  "core/custody/port.ts": {
+    "imported": "packages/entryway-core/src/identity/custody/port.ts",
+    "current": [
+      "src/database/custody.port.ts",
+      "src/plc/signing.ts",
+      "tests/fixtures/source-handoff.ts"
+    ]
+  },
+  "core/custody/index.ts": {
+    "imported": "packages/entryway-core/src/identity/custody/index.ts",
+    "current": [
+      "src/plc/custody-values.ts"
+    ]
+  },
+  "core/migration/domain.ts": {
+    "imported": "packages/entryway-core/src/pds-fleet/migration/domain.ts",
+    "current": [
+      "src/features/external-migration/state-machine.ts"
+    ]
+  },
+  "core/migration/types.ts": {
+    "imported": "packages/entryway-core/src/pds-fleet/migration/types.ts",
+    "current": [
+      "src/features/external-migration/types.ts"
+    ]
+  },
+  "core/migration/port.ts": {
+    "imported": "packages/entryway-core/src/pds-fleet/migration/port.ts",
+    "current": [
+      "src/database/migration-journal.port.ts"
+    ]
+  },
+  "core/migration/index.ts": {
+    "imported": "packages/entryway-core/src/pds-fleet/migration/index.ts",
+    "current": [
+      "src/features/external-migration/values.ts"
+    ]
+  },
+  "core/migration/validation.ts": {
+    "imported": "packages/entryway-core/src/pds-fleet/migration/validation.ts",
+    "current": [
+      "src/features/external-migration/validation.ts"
+    ]
+  },
+  "core/migration/errors.ts": {
+    "imported": "packages/entryway-core/src/pds-fleet/migration/errors.ts",
+    "current": [
+      "src/features/external-migration/errors.ts"
+    ]
+  },
+  "core/branding/domain.ts": {
+    "imported": "packages/entryway-core/src/access/branding/domain.ts",
+    "current": [
+      "src/ui/branding.ts"
+    ]
+  },
+  "core/branding/types.ts": {
+    "imported": "packages/entryway-core/src/access/branding/types.ts",
+    "current": [
+      "src/ui/branding-types.ts"
+    ]
+  },
+  "core/branding/index.ts": {
+    "imported": "packages/entryway-core/src/access/branding/index.ts",
+    "current": [
+      "src/ui/brand.ts"
+    ]
+  },
+  "core/oauth/port.ts": {
+    "imported": "packages/entryway-core/src/access/oauth/port.ts",
+    "current": [
+      "src/database/oauth-state.port.ts"
+    ]
+  },
+  "core/accounts/domain.ts": {
+    "imported": "packages/entryway-core/src/accounts/domain.ts",
+    "current": [
+      "src/accounts/rules.ts"
+    ]
+  },
+  "core/accounts/types.ts": {
+    "imported": "packages/entryway-core/src/accounts/types.ts",
+    "current": [
+      "src/accounts/types.ts"
+    ]
+  },
+  "core/accounts/port.ts": {
+    "imported": "packages/entryway-core/src/accounts/port.ts",
+    "current": [
+      "src/database/accounts.port.ts"
+    ]
+  },
+  "core/accounts/index.ts": {
+    "imported": "packages/entryway-core/src/accounts/index.ts",
+    "current": [
+      "src/accounts/values.ts"
+    ]
+  },
+  "features/mail/service.ts": {
+    "imported": "packages/entryway-service/src/features/access/mail/service.ts",
+    "current": [
+      "src/mail/delivery.ts"
+    ]
+  },
+  "features/mail/index.ts": {
+    "imported": "packages/entryway-service/src/features/access/mail/index.ts",
+    "current": [
+      "src/mail/create-mail.ts"
+    ]
+  },
+  "features/migration/port.ts": {
+    "imported": "packages/entryway-service/src/workflows/migration/port.ts",
+    "current": [
+      "src/features/external-migration/import-account.ts",
+      "src/pds/migration-client.ts",
+      "tests/fixtures/source-client.ts"
+    ]
+  },
+  "features/migration/pds-http-adapter.ts": {
+    "imported": "packages/entryway-service/src/features/pds-fleet/adapters/pds-http-adapter.ts",
+    "current": [
+      "src/pds/migration-client.ts"
+    ]
+  },
+  "features/migration/adapter.ts": {
+    "imported": "packages/entryway-service/src/workflows/migration/adapter.ts",
+    "current": [
+      "src/features/external-migration/import-account.ts"
+    ]
+  },
+  "features/migration/index.ts": {
+    "imported": "packages/entryway-service/src/workflows/migration/index.ts",
+    "current": [
+      "src/features/external-migration/create-migration.ts"
+    ]
+  },
+  "features/migration/source-fixture-client.ts": {
+    "imported": "packages/entryway-service/src/features/pds-fleet/adapters/source-fixture-client.ts",
+    "current": [
+      "tests/fixtures/source-client.ts"
+    ]
+  },
+  "features/experience/index.ts": {
+    "imported": "packages/entryway-web/src/features/access/index.ts",
+    "current": [
+      "src/ui/experience.ts"
+    ]
+  },
+  "features/experience/page.ts": {
+    "imported": "packages/entryway-web/src/features/access/page.ts",
+    "current": [
+      "src/ui/page.ts"
+    ]
+  },
+  "infra/mail/smtp-transport.ts": {
+    "imported": "packages/entryway-service/src/features/access/mail/smtp-transport.ts",
+    "current": [
+      "src/mail/smtp.ts"
+    ]
+  },
+  "infra/migration/adapter-contract.ts": {
+    "imported": "packages/entryway-service/src/workflows/migration/adapter-contract.ts",
+    "current": [
+      "src/features/external-migration/import-account.ts",
+      "src/pds/migration-client.ts",
+      "tests/fixtures/source-client.ts"
+    ]
+  },
+  "infra/signing/plc-signer.ts": {
+    "imported": "packages/entryway-service/src/features/identity/signing/plc-signer.ts",
+    "current": [
+      "src/plc/signing.ts"
+    ]
+  },
+  "infra/signing/target-access-token.ts": {
+    "imported": "packages/entryway-service/src/features/identity/signing/target-access-token.ts",
+    "current": [
+      "src/pds/access-token.ts"
+    ]
+  },
+  "infra/signing/fixture-source-handoff.ts": {
+    "imported": "packages/entryway-service/src/features/identity/signing/fixture-source-handoff.ts",
+    "current": [
+      "tests/fixtures/source-handoff.ts"
+    ]
+  },
+  "infra/logging/request-event.ts": {
+    "imported": "packages/entryway-service/src/infra/logging/request-event.ts",
+    "current": [
+      "src/logging/request-event.ts"
+    ]
+  },
+  "infra/storage/migration-workflow.ts": {
+    "imported": "packages/entryway-service/src/features/pds-fleet/storage/migration-workflow.ts",
+    "current": [
+      "src/database/sqlite/migration-workflow.ts"
+    ]
+  },
+  "infra/storage/migration-snapshot.ts": {
+    "imported": "packages/entryway-service/src/features/pds-fleet/storage/migration-snapshot.ts",
+    "current": [
+      "src/database/sqlite/migration-snapshot.ts"
+    ]
+  },
+  "infra/storage/oauth-device-accounts.ts": {
+    "imported": "packages/entryway-service/src/features/access/storage/oauth-device-accounts.ts",
+    "current": [
+      "src/database/sqlite/oauth-device-accounts.ts"
+    ]
+  },
+  "infra/storage/mail-schema.ts": {
+    "imported": "packages/entryway-service/src/features/access/storage/mail-schema.ts",
+    "current": [
+      "src/database/migrations/mail-schema.ts"
+    ]
+  },
+  "infra/storage/migration-payload.ts": {
+    "imported": "packages/entryway-service/src/features/pds-fleet/storage/migration-payload.ts",
+    "current": [
+      "src/database/sqlite/migration-payload.ts"
+    ]
+  },
+  "infra/storage/migration.ts": {
+    "imported": "packages/entryway-service/src/features/pds-fleet/storage/migration.ts",
+    "current": [
+      "src/database/sqlite/migration.ts"
+    ]
+  },
+  "infra/storage/migration-custody.ts": {
+    "imported": "packages/entryway-service/src/features/identity/storage/migration-custody.ts",
+    "current": [
+      "src/database/sqlite/migration-custody.ts"
+    ]
+  },
+  "infra/storage/sqlite-account-storage.ts": {
+    "imported": "packages/entryway-service/src/features/accounts/storage/sqlite-account-storage.ts",
+    "current": [
+      "src/database/sqlite/sqlite-account-storage.ts"
+    ]
+  },
+  "infra/storage/account-schema.ts": {
+    "imported": "packages/entryway-service/src/features/accounts/storage/account-schema.ts",
+    "current": [
+      "src/database/migrations/account-schema.ts"
+    ]
+  },
+  "infra/storage/migrations.ts": {
+    "imported": "packages/entryway-service/src/infra/storage/migrations.ts",
+    "current": [
+      "src/database/migrations/migrations.ts"
+    ]
+  },
+  "infra/storage/mail-outbox.ts": {
+    "imported": "packages/entryway-service/src/features/access/storage/mail-outbox.ts",
+    "current": [
+      "src/database/sqlite/mail-outbox.ts"
+    ]
+  }
 }

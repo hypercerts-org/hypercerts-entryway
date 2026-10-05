@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
-import { MigrationPayloadStore } from '../../dist/packages/entryway-service/src/features/pds-fleet/storage/migration-payload.js'
+import { MigrationPayloadStore } from '../../dist/src/database/sqlite/migration-payload.js'
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex')
 test('durable CAR and blob bytes reject truncation, deletion, and digest corruption',async t=>{
   const root=await mkdtemp(join(tmpdir(),'entryway-payload-'));t.after(()=>rm(root,{recursive:true,force:true}))

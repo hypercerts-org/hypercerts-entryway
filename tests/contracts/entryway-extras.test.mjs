@@ -5,8 +5,8 @@ import { Secp256k1Keypair } from '@atproto/crypto'
 import * as plc from '@did-plc/lib'
 import { cidForLex } from '@atproto/lex-cbor'
 import { decodeJwt, decodeProtectedHeader } from 'jose'
-import { openDatabase } from '../../dist/packages/entryway-service/src/compatibility/db.mjs'
-import { createEntrywayExtras } from '../../dist/packages/entryway-service/src/compatibility/entryway-extras.mjs'
+import { openDatabase } from '../../dist/src/database/sqlite/connection.mjs'
+import { createEntrywayExtras } from '../../dist/src/compose-protocol-operations.mjs'
 
 async function fixture(t) {
   const db = openDatabase(':memory:')

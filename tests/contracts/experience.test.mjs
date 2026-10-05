@@ -1,10 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { ENTRYWAY_BRAND, renderExperiencePage, resolveBrand } from '../../dist/packages/entryway-web/src/features/access/index.js'
-import { createMailFeature } from '../../dist/packages/entryway-service/src/features/access/mail/index.js'
-import { MAIL_SCHEMA_MIGRATION } from '../../dist/packages/entryway-service/src/features/access/storage/mail-schema.js'
-import { createSqliteMailOutbox } from '../../dist/packages/entryway-service/src/features/access/storage/mail-outbox.js'
+import { ENTRYWAY_BRAND, renderExperiencePage, resolveBrand } from '../../dist/src/ui/experience.js'
+import { createMailFeature } from '../../dist/src/mail/create-mail.js'
+import { MAIL_SCHEMA_MIGRATION } from '../../dist/src/database/migrations/mail-schema.js'
+import { createSqliteMailOutbox } from '../../dist/src/database/sqlite/mail-outbox.js'
 
 function fixture() {
   const sqlite = new Database(':memory:')
@@ -60,7 +60,7 @@ test('mail capture projection is written only after SMTP accepts delivery', asyn
   const fakeClock = clock()
   const mail = createMailFeature({
     outbox,
-    clock: fakeClock,
+    currentTime: fakeClock.now, wait: fakeClock.wait,
     transport: { deliver: async () => {} },
   })
   await mail.sendOtp({ email: 'Person@example.com', otp: '12345678', type: 'sign-in' })
@@ -79,7 +79,7 @@ test('mail retries a transient SMTP failure within a bounded attempt budget', as
   let attempts = 0
   const mail = createMailFeature({
     outbox,
-    clock: fakeClock,
+    currentTime: fakeClock.now, wait: fakeClock.wait,
     transport: {
       async deliver() {
         attempts++
@@ -113,7 +113,7 @@ test('pending delivery survives service restart', async (t) => {
   let attempts = 0
   const restarted = createMailFeature({
     outbox,
-    clock: fakeClock,
+    currentTime: fakeClock.now, wait: fakeClock.wait,
     transport: {
       async deliver() {
         attempts++
@@ -154,7 +154,7 @@ test('expired and superseded queued codes are never sent by recovery retry', asy
   outbox.enqueue(expired)
   outbox.enqueue(stale)
   let sent = 0
-  const mail = createMailFeature({ outbox, clock: fakeClock, transport: { deliver: async () => { sent++ } } })
+  const mail = createMailFeature({ outbox, currentTime: fakeClock.now, wait: fakeClock.wait, transport: { deliver: async () => { sent++ } } })
   await mail.sendOtp({ email: stale.recipient, otp: '33333333', type: stale.purpose })
   const result = await mail.retryPending()
   assert.equal(sent, 1)
@@ -177,7 +177,7 @@ test('retry worker skips a message while its SMTP attempt is active', async (t) 
       await new Promise((resolve) => { release = resolve })
     },
   }
-  const mail = createMailFeature({ outbox, clock: fakeClock, transport })
+  const mail = createMailFeature({ outbox, currentTime: fakeClock.now, wait: fakeClock.wait, transport })
   const delivery = mail.sendOtp({ email: 'person@example.com', otp: '12345678', type: 'sign-in' })
   await startedPromise
   const retry = await mail.retryPending()
@@ -195,7 +195,7 @@ test('late SMTP acknowledgement after code expiry never projects a usable code',
   const fakeClock = clock()
   const mail = createMailFeature({
     outbox,
-    clock: fakeClock,
+    currentTime: fakeClock.now, wait: fakeClock.wait,
     transport: {
       async deliver() {
         fakeClock.advance(600_001)
@@ -213,7 +213,7 @@ test('outbox and fixture projections expire on bounded retention windows', async
   const { sqlite, outbox } = fixture()
   t.after(() => sqlite.close())
   const fakeClock = clock()
-  const mail = createMailFeature({ outbox, clock: fakeClock, transport: { deliver: async () => {} } })
+  const mail = createMailFeature({ outbox, currentTime: fakeClock.now, wait: fakeClock.wait, transport: { deliver: async () => {} } })
   await mail.sendProof({
     email: 'person@example.com',
     token: `${'a'.repeat(24)}.12345678`,
@@ -231,9 +231,10 @@ test('outbox and fixture projections expire on bounded retention windows', async
 test('exhausted delivery stores no fixture message or code and returns a safe error', async (t) => {
   const { sqlite, outbox } = fixture()
   t.after(() => sqlite.close())
+  const fakeClock = clock()
   const mail = createMailFeature({
     outbox,
-    clock: clock(),
+    currentTime: fakeClock.now, wait: fakeClock.wait,
     transport: { deliver: async () => { throw Error('do not leak this SMTP response') } },
   })
   await assert.rejects(

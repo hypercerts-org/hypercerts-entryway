@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { openDatabase } from '../../dist/packages/entryway-service/src/compatibility/db.mjs'
-import { createOAuthStores } from '../../dist/packages/entryway-service/src/compatibility/oauth-stores.mjs'
+import { openDatabase } from '../../dist/src/database/sqlite/connection.mjs'
+import { createOAuthStores } from '../../dist/src/database/sqlite/oauth-stores.mjs'
 
 function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'entryway-oauth-store-'))

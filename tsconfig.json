@@ -24,12 +24,14 @@
     "checkJs": false
   },
   "include": [
-    "packages/**/*.ts",
-    "packages/**/*.mjs"
+    "src/**/*.ts",
+    "src/**/*.mjs",
+    "tests/fixtures/**/*.ts",
+    "tests/fixtures/**/*.mjs"
   ],
   "exclude": [
     "dist",
     "node_modules",
-    "tests"
+    "src/**/*.test.mjs"
   ]
 }

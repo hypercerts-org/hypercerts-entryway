@@ -1,7 +1,7 @@
 # Mini Entryway architecture
 
-Status: proposed delivery architecture, based on the imported spike review.
-Updated: 2026-09-30. This document distinguishes target behaviour from implemented behaviour.
+Status: vertical feature structure; product requirements and gaps below remain explicit.
+Updated: 2026-10-05. This document distinguishes target behaviour from implemented behaviour.
 
 Read alongside the [project plan](delivery-plan.md), [data and custody design](data-custody.md),
 [reuse assessment](reuse-assessment.md), and [local test guide](testing.md).
@@ -37,7 +37,7 @@ flowchart TB
   client["ATProto application<br/>OAuth client"]
   subgraph entryway["Mini Entryway — one process"]
     api["Web and XRPC adapters"]
-    domains["Accounts · Identity<br/>Access · PDS fleet"]
+    domains["Vertical features<br/>Accounts · Login · Authorization · Migration"]
     ba["Better Auth<br/>Email proof and browser sessions"]
     oauth["ATProto OAuth provider<br/>Authorization and tokens"]
     store[("SQLite<br/>Domain and provider state")]
@@ -71,109 +71,68 @@ The provider and Better Auth also persist their own state through their adapters
 The overview groups persistence for readability; domain ownership is defined below.
 Arrows describe interactions, not direct permission to read another component's tables.
 
-## 3. Feature domains
+## 3. Feature ownership
 
-| Domain | Owns | Does not own |
+One process contains vertical features. Each feature owns the operation that a
+user performs, its HTTP/XRPC handlers, feature-specific page and tests.
+
+| Feature | Owns |
+| --- | --- |
+| email-login | Email proof, login flow and browser-session ending |
+| account-registration | Reservation/provisioning, signup proof, invitations and signup page |
+| account-settings | Email/backup/password changes, status and account summary |
+| account-deletion | Deletion proof and durable PDS deletion completion |
+| handle-change | Hosted-handle validation, PLC publication and PDS callback |
+| account-recovery | Backup proof and replacement email recovery |
+| oauth-authorization | Provider configuration, authorization/consent and scope references |
+| connected-apps | Grants, device memberships, browser sessions and app passwords |
+| pds-migration | Existing-account movement and its proof/progress |
+| external-migration | Typed import journal/state machine and synthetic import orchestration |
+
+A feature does not import another feature. Short root compose modules wire explicit
+operations together. Shared accounts code owns common facts, validation and proof
+primitives. A shared account summary can display feature-owned panels supplied by
+composition without importing those features.
+
+The two engineers can change separate feature files end to end. Changes to shared
+transaction contracts, browser identity, signing custody and migration numbering
+still require coordination. See AGENTS.md for enforceable source rules.
+
+## 4. Three boundaries
+
+| Boundary | Port | Implementation |
 | --- | --- | --- |
-| Accounts | DID-primary account, login identity binding, email/handle claims, account status and settings | OAuth grants, private repository keys or fleet policy |
-| Identity | Handle/DID changes, PLC authority, custody policy, recovery and signing authorization | Repository storage or browser sessions |
-| Access | Email proof, browser sessions, devices, account-device membership, consent, grants and credential policy | Public DID ownership inferred from email |
-| PDS fleet | PDS registry, placement eligibility, hosting assignments, transfer execution and retirement | Email authentication or identity recovery policy |
+| Browser authentication | Normalized verified identity/session operations | Better Auth |
+| Mail sending | Deliver a fully formed message | SMTP |
+| Database | Focused readers and atomic state operations | SQLite |
 
-Accounts reserves a handle; Identity coordinates its public change.
-Accounts owns account status; fleet adapters apply the corresponding PDS operation.
-Fleet owns placement transitions; Accounts exposes the committed current placement in account reads.
-There must be one authoritative placement write path.
+PDS, PLC, OAuth provider and signing operations are concrete modules. They do not
+have parallel interchangeable port hierarchies. Provider state storage belongs to
+the database boundary. Mail templates/retry/expiry remain concrete delivery logic;
+its persistent outbox contracts live under database.
 
-Registration and migration coordinate domains through ports.
-Mail delivery and branding support Access and the web experience.
-They do not require separate top-level domains or deployed services.
+`src/features/<feature>/` is the starting point for a feature change.
+`src/main.mjs` owns startup/shutdown and workers; `src/app.mjs` owns middleware and
+route ordering; `src/compose-*.mjs` assembles features. Shared HTTP/UI helpers are
+under `src/http` and `src/ui`. Database schema migrations have one ordered registry.
+The build emits `dist/src`; preserved MJS ownership is inventoried in
+[source ownership](source-ownership.json). TS remains strict; MJS extraction is
+not a claim of full typed conversion.
 
-## 4. Ports and adapters
+The SQLite account-authority helper retains pinned Better Auth schema knowledge.
+Email authority, claims, identity mappings and invalidation remain one synchronous
+transaction, with rollback contracts. Browser authentication proves a browser
+identity; PLC custody and DID authority remain separate.
 
-The dependency direction points toward domain contracts.
-Core modules must not import HTTP frameworks, SQL clients or provider internals.
-Use domain/port modules for policy and focused reader/transactor interfaces for stored resources.
+Synthetic source migration clients/signers live in tests/fixtures. The current
+external-import service has two explicit type-only references to these concrete
+classes because its only current invocation is the managed synthetic harness;
+those imports are erased from runtime output. They are not a public source
+implementation. Standard-tool migration and general custody remain release gates.
 
-```mermaid
-%%{init: {"theme":"base","themeVariables":{"primaryTextColor":"#172B4D","lineColor":"#45556C","edgeLabelBackground":"#FFFFFF","fontFamily":"Arial"},"flowchart":{"nodeSpacing":35,"rankSpacing":50,"curve":"linear"}}}%%
-flowchart TB
-  inbound["Inbound adapters<br/>Web · XRPC · operator commands"]
-  workflows["Application workflows<br/>Registration · migration"]
-  subgraph core["Core contracts and domain rules"]
-    accounts["Accounts"]
-    identity["Identity"]
-    access["Access"]
-    fleet["PDS fleet"]
-  end
-  storage["Storage adapters<br/>Readers and transactors"]
-  auth["Access adapters<br/>Better Auth · OAuth · email"]
-  network["Identity and hosting adapters<br/>PLC · signer · PDS XRPC"]
-  inbound -->|"Invoke application operations"| workflows
-  workflows -->|"Bind and update accounts"| accounts
-  workflows -->|"Authorize identity changes"| identity
-  workflows -->|"Require actor proof"| access
-  workflows -->|"Place or transfer accounts"| fleet
-  storage -.->|"Implement persistence ports"| core
-  auth -.->|"Implement Access ports"| access
-  network -.->|"Implement identity ports"| identity
-  network -.->|"Implement hosting ports"| fleet
-  classDef blue fill:#DBEAFE,stroke:#315582,color:#172B4D,stroke-width:2px;
-  classDef violet fill:#EDE9FE,stroke:#65538A,color:#172B4D,stroke-width:2px;
-  classDef mint fill:#DCFCE7,stroke:#32694D,color:#172B4D,stroke-width:2px;
-  class inbound blue;
-  class workflows,accounts,identity,access,fleet violet;
-  class storage,auth,network mint;
-  style core fill:#FAF5FF,stroke:#65538A,color:#172B4D
-```
-
-Solid arrows mean invocation. Dashed arrows mean an adapter implements a port.
-Composition supplies adapters to application operations at startup.
-Cross-domain coordination belongs in explicit workflows, not cyclic domain imports.
-
-### Repository mapping
-
-```text
-packages/
-  entryway-core/src/
-    accounts/                   Account rules, types and reader/transactor ports
-    identity/custody/           Public custody model and signing contracts
-    access/{oauth,mail,branding}/
-    pds-fleet/migration/        Transfer rules and operation contracts
-    shared/                    Small shared domain primitives
-  entryway-service/src/
-    features/{accounts,identity,access,pds-fleet}/
-    workflows/migration/       Cross-domain transfer coordinator
-    infra/                     Composition support and shared infrastructure
-    compatibility/             Inherited MJS runtime awaiting extraction
-  entryway-web/src/features/
-    accounts/                  Account page adapter
-    access/                    Login and authorization page rendering
-tests/{atmosphere,contracts,browser,fixtures,plans,flows,support}/
-docs/
-```
-
-Do not create empty feature facades to imply completed extraction.
-There is no standalone registration workflow in the import yet.
-The root build emits `dist/packages/...`; `allowJs` preserves MJS execution, not strict JavaScript type coverage.
-
-### Shared contract checklist
-
-Each contract records input/output types, stable errors, actor proof, authorization,
-transaction boundaries, concurrency, idempotency and executable examples.
-
-Agree these contracts first:
-
-1. Verified browser identity and freshness to account binding.
-2. DID to committed placement and any active transfer.
-3. Authorized identity change to a signed PLC operation.
-4. Account status to PDS administration and reconciliation.
-5. Migration ownership proof to destination account reservation.
-6. Account DID to devices, browser sessions and application grants.
-
-Preserve atomic email authority and identity-binding changes.
-Encapsulate the current pinned Better Auth schema integration in a documented adapter.
-Independent API calls must not replace a shared transaction without equivalent race protection.
+The architecture checker resolves real imports, including TS/MJS aliases, dynamic
+imports and require. It rejects extra ports, raw SQL/SMTP/Better Auth access outside
+owned boundaries, feature-internal imports, runtime cycles and impure rule modules.
 
 ## 5. Login and application authorization
 
@@ -250,11 +209,11 @@ Removing a configuration entry is not retirement.
 
 Reuse provider wiring, OTP integration, account constraints, indexed device lookup,
 PDS call sequences, journals, branding, mail ports and regression scenarios.
-Extract legacy orchestration incrementally behind typed boundaries.
+Keep shared contracts narrow while features own their operation bodies.
 
 Still required: ePDS consent/freshness parity, complete XRPC adapters, production email delivery,
 fleet lifecycle, general custody policy and standard-tool migration.
-The typed external workflow is invoked separately; service startup still uses compatibility migration code.
+The typed external workflow is invoked by the synthetic harness; managed account moves live in pds-migration.
 The existing fixture proves useful mechanics but uses its own source-control API.
 
 See [data and custody](data-custody.md) for actual cutover ordering and unresolved decisions.

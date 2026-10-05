@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { requestFailureEvent } from '../../dist/packages/entryway-service/src/infra/logging/request-event.js'
+import { requestFailureEvent } from '../../dist/src/logging/request-event.js'
 
 test('unexpected transport failure logs only a stable code and status', () => {
   const marker = 'synthetic-private-token-marker'

@@ -5,10 +5,10 @@ const heads = { initial: cid('a'), handoff: cid('b'), moved: cid('c'), foreign: 
 const signed = prev => ({ type: 'plc_operation', prev, sig: 'fixture-signature-of-sufficient-length' })
 import test from 'node:test'
 import Database from 'better-sqlite3'
-import { runSchemaMigrations } from '../../dist/packages/entryway-service/src/infra/storage/migrations.js'
-import { migrationWorkflowSchemaMigration, createMigrationWorkflowStorage } from '../../dist/packages/entryway-service/src/features/pds-fleet/storage/migration-workflow.js'
-import { migrationSnapshotSchemaMigration, createSnapshotManifestStorage } from '../../dist/packages/entryway-service/src/features/pds-fleet/storage/migration-snapshot.js'
-import { ExternalMigrationService, FixtureCheckpointPause } from '../../dist/packages/entryway-service/src/workflows/migration/adapter.js'
+import { runSchemaMigrations } from '../../dist/src/database/migrations/migrations.js'
+import { migrationWorkflowSchemaMigration, createMigrationWorkflowStorage } from '../../dist/src/database/sqlite/migration-workflow.js'
+import { migrationSnapshotSchemaMigration, createSnapshotManifestStorage } from '../../dist/src/database/sqlite/migration-snapshot.js'
+import { ExternalMigrationService, FixtureCheckpointPause } from '../../dist/src/features/external-migration/import-account.js'
 
 function fixture() {
   const sqlite=new Database(':memory:'); sqlite.pragma('foreign_keys = ON')
@@ -40,7 +40,7 @@ function fixture() {
   const custody={async save(inventory){calls.push('save-custody');assert.equal(inventory.did,'did:plc:'+'a'.repeat(24));assert.equal(inventory.keys.length,4)}}
   const oauthIssuerKey={keyReference:`jwk-thumbprint:${'a'.repeat(43)}`,purpose:'oauth-issuer',custodian:'oauth-issuer',algorithm:'ES256K',fingerprint:`sha256:${'a'.repeat(64)}`,lifecycle:'active'}
   const start={async createReservedWorkflow({reservation,workflow}){await accounts.reserveExternalMigration(reservation);await workflows.create(workflow)}}
-  const make=(stopAt)=>new ExternalMigrationService({workflows,snapshots,start,accounts,source,target,sourceHandoffSigner:handoff,entrywayPlcSigner:signer,custody,oauthIssuerKey,audit:{record(){}},checkpointObserver:stopAt?async w=>{if(w.phase===stopAt)throw new FixtureCheckpointPause(w.phase)}:undefined})
+  const make=(stopAt)=>new ExternalMigrationService({workflows,snapshots,start,accounts,source,target,sourceHandoffSigner:handoff,entrywayPlcSigner:signer,custody,oauthIssuerKey,audit(){},checkpointObserver:stopAt?async w=>{if(w.phase===stopAt)throw new FixtureCheckpointPause(w.phase)}:undefined})
   const input={workflowId:'workflow-1',did:'did:plc:'+'a'.repeat(24),ownerUserId:'user-1',ownerSessionId:'session-1',sourceEmail:'owner@example.test',handle:'moved.entryway.test',sourcePdsUrl:'https://source.test',targetPdsId:'pds1',targetPdsUrl:'https://target.test',authority:{sourceRecoveryKey:didKey('a'),entrywayRotationKey:didKey('b'),sourceRepositoryKey:didKey('d'),sourcePlcHead:heads.initial}}
   return {sqlite,workflows,snapshots,calls,state,make,input,actor:{userId:'user-1',sessionId:'session-1'}}
 }

@@ -444,3 +444,115 @@ integration('stock PDS event stream publishes an authenticated repository write'
   assert.ok(event.seq > 0)
   assert.ok(event.blocks.byteLength > 0)
 })
+
+integration(
+  'stock PDS dereferences a scope CID and enforces its collection permissions',
+  async () => {
+    const scope = 'atproto repo:org.hypercerts.spike.note?action=create'
+    const registration = await fetch(`${config.issuer}/admin/scope-reference`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Basic ${Buffer.from(`admin:${config.adminPassword}`).toString('base64')}`,
+      },
+      body: JSON.stringify({ scope }),
+    })
+    assert.equal(registration.status, 200)
+    const { ref } = await registration.json()
+    const token = await access({ scope: ref })
+    const write = (collection) =>
+      request(endpoint(pds.url, 'com.atproto.repo.createRecord'), token, {
+        method: 'POST',
+        body: {
+          repo: account.did,
+          collection,
+          validate: false,
+          record: { $type: collection, text: 'Scope reference probe' },
+        },
+      })
+    const accepted = await write('org.hypercerts.spike.note')
+    assert.equal(accepted.status, 200, await accepted.clone().text())
+    assert.ok((await accepted.json()).uri.startsWith(`at://${account.did}/`))
+    const denied = await write('org.hypercerts.spike.denied')
+    assert.equal(denied.status, 403, await denied.clone().text())
+    assert.equal((await denied.json()).error, 'ScopeMissingError')
+  },
+)
+
+integration(
+  'handle callback emits a PDS identity event after bidirectional resolution',
+  async (t) => {
+    const { decodeAll } = await import('@atproto/lex-cbor')
+    const handle = `i-${randomBytes(4).toString('hex')}.entryway.atmosbox.test`
+    const ws = new WebSocket(
+      pds.url.replace('https:', 'wss:') + '/xrpc/com.atproto.sync.subscribeRepos',
+    )
+    ws.binaryType = 'arraybuffer'
+    t.after(() => ws.close())
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Identity stream did not open')), 10000)
+      ws.addEventListener(
+        'open',
+        () => {
+          clearTimeout(timer)
+          resolve()
+        },
+        { once: true },
+      )
+      ws.addEventListener(
+        'error',
+        () => {
+          clearTimeout(timer)
+          reject(new Error('Identity stream failed'))
+        },
+        { once: true },
+      )
+    })
+    const event = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Identity event missing')), 15000)
+      t.after(() => clearTimeout(timer))
+      ws.addEventListener('message', ({ data }) => {
+        const [header, body] = decodeAll(new Uint8Array(data))
+        if (header.t === '#identity' && body.did === account.did && body.handle === handle) {
+          clearTimeout(timer)
+          resolve(body)
+        }
+      })
+    })
+    // Observe both failures together so a failed callback cannot leave an unhandled timeout.
+    await Promise.all([
+      event,
+      (async () => {
+        const response = await request(
+          endpoint(pds.url, 'com.atproto.identity.updateHandle'),
+          await access(),
+          {
+            method: 'POST',
+            body: { handle },
+          },
+        )
+        assert.equal(response.status, 200, await response.clone().text())
+      })(),
+    ])
+    const doc = await fetch(`${config.plcUrl}/${account.did}`).then((r) => r.json())
+    assert.ok(doc.alsoKnownAs.includes(`at://${handle}`))
+    assert.equal(
+      await fetch(`https://${handle}/.well-known/atproto-did`).then((r) => r.text()),
+      account.did,
+    )
+    const session = await request(sessionUrl(), await access())
+    assert.equal((await session.json()).handle, handle)
+  },
+)
+
+integration('PDS admin callbacks reject an incorrect credential', async () => {
+  const response = await fetch(endpoint(pds.url, 'com.atproto.admin.updateAccountHandle'), {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Basic ${Buffer.from('admin:incorrect').toString('base64')}`,
+    },
+    body: JSON.stringify({ did: account.did, handle: account.handle }),
+  })
+  assert.equal(response.status, 401)
+})

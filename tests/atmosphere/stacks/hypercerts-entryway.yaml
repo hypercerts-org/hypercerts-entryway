@@ -1,5 +1,5 @@
 x-runtime: &runtime
-  image: hypercerts-entryway:local
+  image: ${ENTRYWAY_E2E_PROJECT:-hypercerts-entryway}:local
   build:
     context: ../..
     dockerfile: tests/support/Dockerfile
@@ -96,7 +96,7 @@ services:
       pds1: { condition: service_healthy }
       pds2: { condition: service_healthy }
   browser:
-    image: hypercerts-entryway-browser:local
+    image: ${ENTRYWAY_E2E_PROJECT:-hypercerts-entryway}-browser:local
     build:
       context: ../..
       dockerfile: tests/support/Dockerfile.browser

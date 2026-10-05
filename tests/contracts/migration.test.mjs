@@ -8,8 +8,8 @@ import { exportJWK, generateKeyPair, importJWK, jwtVerify } from 'jose'
 import * as plc from '@did-plc/lib'
 import { Secp256k1Keypair } from '@atproto/crypto'
 import { cidForCbor } from '@atproto/common'
-import { openDatabase } from '../../dist/packages/entryway-service/src/compatibility/db.mjs'
-import { createAccountMigration } from '../../dist/packages/entryway-service/src/compatibility/account-migration.mjs'
+import { openDatabase } from '../../dist/src/database/sqlite/connection.mjs'
+import { createAccountMigration } from '../../dist/src/features/pds-migration/move-between-pds.mjs'
 
 async function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'entryway-migration-'))

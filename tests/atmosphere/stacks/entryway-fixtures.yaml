@@ -1,5 +1,5 @@
 x-runtime: &runtime
-  image: hypercerts-entryway:local
+  image: ${ENTRYWAY_E2E_PROJECT:-hypercerts-entryway}:local
   build:
     context: ../..
     dockerfile: tests/support/Dockerfile

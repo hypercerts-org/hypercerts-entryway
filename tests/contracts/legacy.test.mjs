@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { decodeJwt, decodeProtectedHeader, importJWK, jwtVerify, SignJWT } from 'jose'
-import { createLegacy, LEGACY_SCOPES } from '../../dist/packages/entryway-service/src/compatibility/legacy.mjs'
-import { openDatabase } from '../../dist/packages/entryway-service/src/compatibility/db.mjs'
+import { createLegacy, LEGACY_SCOPES } from '../../dist/src/oauth/legacy-credentials.mjs'
+import { openDatabase } from '../../dist/src/database/sqlite/connection.mjs'
 
 const PASSWORD = 'safely-test-the-password'
 async function fixture(t, { persistent = false } = {}) {

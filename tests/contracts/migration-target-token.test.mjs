@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { generateKeyPair, exportJWK, jwtVerify } from 'jose'
-import { createTargetAccessTokenSigner } from '../../dist/packages/entryway-service/src/features/identity/signing/target-access-token.js'
+import { createTargetAccessTokenSigner } from '../../dist/src/pds/access-token.js'
 test('target token signer exposes only public custody metadata and pins audience',async()=>{
   const {privateKey,publicKey}=await generateKeyPair('ES256K',{extractable:true})
   const privateJwk=await exportJWK(privateKey)

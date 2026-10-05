@@ -4,10 +4,10 @@ A mini Entryway for multiple unchanged Bluesky reference PDS instances. It moves
 ePDS email OTP authentication into the PDS's supported Entryway boundary and
 provides account management, authorization and identity operations.
 
-**Status:** imported spike baseline with domain-oriented packages. Transitional
-MJS is preserved; the TypeScript/domain extraction, standard-tool migration and
-fleet registry are not complete. No current test pass is claimed by this import.
-Google and GitHub authentication are out of scope.
+**Status:** one application organized by vertical features. Ports/adapters are
+limited to browser authentication, mail sending and database. Preserved MJS is
+owned by its feature; standard-tool migration, moderation coordination and fleet
+registry remain product gaps. Google/GitHub sign-in is out of scope.
 
 ## Start the sandbox
 
@@ -38,28 +38,26 @@ ENTRYWAY_E2E_KEEP_FAILED_STATE=1 ./tests/local.sh fresh
 Reports go to `tests/artifacts/<project>`. Migration in this suite exercises a
 private synthetic source helper; it is **not** standard-tool migration acceptance.
 For persistent development and selective commands, read [testing](docs/testing.md).
-The harness and imported code have not been executed as part of this import.
+Current refactor verification is recorded in plans/evidence/execution-ledger.md; historical spike passes are not current acceptance.
 
 ## Layout
 
 ```text
-packages/
-  entryway-core/       Domain rules and ports
-  entryway-service/    Integrations, persistence, HTTP/XRPC and transitional runtime
-  entryway-web/        Account and authorization page rendering
-tests/
-  atmosphere/         Consumer-owned installer and stack definitions
-  contracts/          Imported contract/unit scenarios
-  browser/            Browser acceptance scenarios
-  fixtures/           Synthetic source and client fixtures
-  plans/              Acceptance plans and required evidence
-  flows/              Cross-component flow definitions
-  local.sh            Sandbox orchestration entry point
-docs/                  Architecture, custody, reuse and delivery guidance
+src/features/<feature>/   Operation, routes, pages and co-located tests
+src/authentication/       Better Auth browser proof/session boundary
+src/mail/                 SMTP sending boundary and delivery
+src/database/             Persistence ports, SQLite and migrations
+src/accounts/             Common account facts and proof primitives
+src/pds/, src/plc/         Concrete protocol clients and authorized signing
+src/http/, src/ui/        Shared HTTP and presentation helpers
+src/app.mjs               Explicit composition and route registration
+src/main.mjs              Startup, workers and shutdown
+tests/                    Contracts, browser journeys, fixtures and AiaB harness
 ```
 
-New code follows Accounts, Identity, Access and PDS fleet ownership. Existing
-migration and account orchestration is not yet fully extracted into those domains.
+Two engineers own separate feature slices end to end. Shared authentication,
+transactions and custody changes are coordinated; features never import each
+other's internals. The source boundary checker enforces this structure.
 
 ## Read next
 

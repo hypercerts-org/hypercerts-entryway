@@ -121,12 +121,31 @@ case "$command" in
     migration_command verify
     external_browser complete
     ;;
+  interop-profile)
+    require_state
+    # This child owns the shared lock; all never holds a parent lock here.
+    source "$root/tests/support/operational-common.sh"
+    record_candidate interop-profile
+    compose exec -T entryway node tests/support/interop-profile-probe.mjs > "$artifacts/interop-profile.json"
+    ;;
+  plc-recovery|process-crash|authority-drills)
+    require_state
+    bash "$root/tests/support/run-$command.sh"
+    ;;
   all)
     "$root/tests/local.sh" prepare
     "$root/tests/local.sh" up
     "$root/tests/local.sh" browser
     "$root/tests/local.sh" contracts
     "$root/tests/local.sh" migration
+    # Profile remains exit 2; record and assert exactly the predeclared product gap.
+    profile_status=0
+    "$root/tests/local.sh" interop-profile || profile_status=$?
+    printf '%s\n' "$profile_status" > "$artifacts/interop-profile-exit.txt"
+    compose run --rm --no-deps test node tests/support/assert-interop-profile.mjs /app/artifacts/interop-profile.json "$profile_status" /app/artifacts/interop-profile-acceptance.json
+    "$root/tests/local.sh" plc-recovery
+    "$root/tests/local.sh" process-crash
+    "$root/tests/local.sh" authority-drills
     "$root/tests/local.sh" resilience
     ;;
   down)
@@ -138,7 +157,7 @@ case "$command" in
     deno task sandbox status
     ;;
   *)
-    echo 'Usage: ./tests/local.sh fresh|prepare|up|browser|contracts|migration|migration-resume|reverify|resilience|all|status|down'
+    echo 'Usage: ./tests/local.sh fresh|prepare|up|browser|contracts|migration|migration-resume|reverify|interop-profile|plc-recovery|process-crash|authority-drills|resilience|all|status|down'
     echo 'all requires a fresh project fixture; down retains state and volumes. No implicit reset.'
     ;;
 esac

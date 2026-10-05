@@ -8,17 +8,17 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/packages/entryway-service/src/compatibility/index.mjs",
+    "start": "node dist/src/main.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "check": "node scripts/check.mjs",
     "check:architecture": "node scripts/check-architecture.mjs",
-    "test": "node --test --test-isolation=none --test-reporter=spec tests/contracts/*.test.mjs",
+    "test": "node tests/support/run-contracts.mjs",
     "test:architecture": "node --test tests/contracts/architecture.test.mjs",
     "test:e2e": "playwright test --config tests/playwright.config.mjs",
-    "format": "prettier --write packages scripts tests",
-    "format:check": "prettier --check packages scripts tests",
+    "format": "prettier --write src scripts tests",
+    "format:check": "prettier --check src scripts tests",
     "test:external": "playwright test --config tests/external.playwright.config.mjs",
-    "test:unit": "node --test --test-isolation=none tests/contracts/accounts.test.mjs tests/contracts/oauth-stores.test.mjs tests/contracts/service-auth.test.mjs tests/contracts/legacy.test.mjs tests/contracts/account-security.test.mjs tests/contracts/entryway-extras.test.mjs tests/contracts/migration.test.mjs tests/contracts/xrpc-security.test.mjs",
+    "test:unit": "node tests/support/run-contracts.mjs --unit",
     "test:external-workflow": "node --test tests/contracts/external-workflow.test.mjs tests/contracts/migration-domain.test.mjs tests/contracts/migration-custody.test.mjs tests/contracts/migration-payload.test.mjs tests/contracts/migration-target-token.test.mjs",
     "test:experience": "node --test tests/contracts/experience.test.mjs && playwright test --config tests/playwright.config.mjs tests/browser/experience-browser.spec.mjs",
     "test:e2e:atmosphere": "bash tests/local.sh fresh"
@@ -31,7 +31,7 @@
     "@atproto/oauth-client-node": "0.5.4",
     "@atproto/oauth-provider": "0.22.5",
     "@atproto/oauth-scopes": "0.5.10",
-    "@atproto/pds": "0.5.31",
+    "@atproto/pds": "0.5.36",
     "@atproto/syntax": "0.7.5",
     "@atproto/xrpc-server": "0.12.7",
     "@did-plc/lib": "0.0.4",
@@ -58,10 +58,5 @@
   "overrides": {
     "qs": "6.16.0",
     "@opentelemetry/propagator-jaeger": "2.9.0"
-  },
-  "workspaces": [
-    "packages/entryway-core",
-    "packages/entryway-service",
-    "packages/entryway-web"
-  ]
+  }
 }

@@ -2,19 +2,19 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { readFile, writeFile } from 'node:fs/promises'
-import { openDatabase } from '../../dist/packages/entryway-service/src/compatibility/db.mjs'
-import { createAccounts } from '../../dist/packages/entryway-service/src/compatibility/accounts.mjs'
-import { createMigrationWorkflowStorage, createMigrationStartTransactor } from '../../dist/packages/entryway-service/src/features/pds-fleet/storage/migration-workflow.js'
-import { createSnapshotManifestStorage } from '../../dist/packages/entryway-service/src/features/pds-fleet/storage/migration-snapshot.js'
-import { MigrationPayloadStore } from '../../dist/packages/entryway-service/src/features/pds-fleet/storage/migration-payload.js'
-import { createCustodyInventoryStorage } from '../../dist/packages/entryway-service/src/features/identity/storage/migration-custody.js'
-import { SourceFixtureClient } from '../../dist/packages/entryway-service/src/features/pds-fleet/adapters/source-fixture-client.js'
-import { PdsHttpMigrationAdapter } from '../../dist/packages/entryway-service/src/features/pds-fleet/adapters/pds-http-adapter.js'
-import { BoundFixtureSourceHandoffSigner } from '../../dist/packages/entryway-service/src/features/identity/signing/fixture-source-handoff.js'
-import { Secp256k1MigrationPlcSigner } from '../../dist/packages/entryway-service/src/features/identity/signing/plc-signer.js'
-import { createTargetAccessTokenSigner } from '../../dist/packages/entryway-service/src/features/identity/signing/target-access-token.js'
-import { FixtureCheckpointPause } from '../../dist/packages/entryway-service/src/workflows/migration/adapter.js'
-import { ExternalMigrationService } from '../../dist/packages/entryway-service/src/workflows/migration/adapter.js'
+import { openDatabase } from '../../dist/src/database/sqlite/connection.mjs'
+import { createAccounts } from '../../dist/src/compose-accounts.mjs'
+import { createMigrationWorkflowStorage, createMigrationStartTransactor } from '../../dist/src/database/sqlite/migration-workflow.js'
+import { createSnapshotManifestStorage } from '../../dist/src/database/sqlite/migration-snapshot.js'
+import { MigrationPayloadStore } from '../../dist/src/database/sqlite/migration-payload.js'
+import { createCustodyInventoryStorage } from '../../dist/src/database/sqlite/migration-custody.js'
+import { SourceFixtureClient } from '../../dist/tests/fixtures/source-client.js'
+import { PdsMigrationClient } from '../../dist/src/pds/migration-client.js'
+import { BoundFixtureSourceHandoffSigner } from '../../dist/tests/fixtures/source-handoff.js'
+import { Secp256k1MigrationPlcSigner } from '../../dist/src/plc/signing.js'
+import { createTargetAccessTokenSigner } from '../../dist/src/pds/access-token.js'
+import { FixtureCheckpointPause } from '../../dist/src/features/external-migration/import-account.js'
+import { ExternalMigrationService } from '../../dist/src/features/external-migration/import-account.js'
 
 const mode = process.argv[2]
 assert.ok(['prepare','run','verify','recover-source-freeze'].includes(mode), 'Expected prepare, run, verify or recover-source-freeze')
@@ -37,8 +37,8 @@ const signer = await Secp256k1MigrationPlcSigner.fromHex(config.plcRotationKeyHe
 const accessSigner = await createTargetAccessTokenSigner({ privateJwk: config.jwtJwk, issuer: config.issuer, audience: target.did })
 const oauthIssuerKey = accessSigner.publicInventoryItem
 const token = did => accessSigner.sign(did)
-const targetPds = new PdsHttpMigrationAdapter({ origin: target.url, plcUrl: config.plcUrl, token, adminAuthorization: `Basic ${Buffer.from(`admin:${target.adminPassword}`).toString('base64')}`, snapshots, payloads })
-const audit = { record: ({ workflowId, event, phase }) => console.log(JSON.stringify({ workflowId, event, phase })) }
+const targetPds = new PdsMigrationClient({ origin: target.url, plcUrl: config.plcUrl, token, adminAuthorization: `Basic ${Buffer.from(`admin:${target.adminPassword}`).toString('base64')}`, snapshots, payloads })
+const audit = ({ workflowId, event, phase }) => console.log(JSON.stringify({ workflowId, event, phase }))
 const service = new ExternalMigrationService({ workflows, start, snapshots, accounts: accounts.storage, source, target: targetPds, sourceHandoffSigner: new BoundFixtureSourceHandoffSigner(source, { did: (await source.status().catch(() => ({ did: '' }))).did, entrywayRotationKey: signer.publicKey(), targetPdsUrl: target.url }), entrywayPlcSigner: signer, custody, oauthIssuerKey, audit, checkpointObserver: stopAt ? async workflow => { if (workflow.phase === stopAt) throw new FixtureCheckpointPause(workflow.phase) } : undefined })
 async function report(patch) { let old={}; try { old=JSON.parse(await readFile(reportPath,'utf8')) } catch {} await writeFile(reportPath, JSON.stringify({ ...old, ...patch, updatedAt:new Date().toISOString() },null,2)+'\n') }
 async function actorFor(email) {

@@ -1,0 +1,8 @@
+import { escapeHtml } from "../../ui/html.mjs";
+export function createLoginForms({ fields }) {
+  const loginForm = (flow, browser) =>
+    `<form method="post" action="/auth/email">${fields(flow, browser)}<label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" required><button>Send sign-in code</button></form>`;
+  const otpForm = (flow, browser, error = "", changeEmail = flow.email) =>
+    `${error ? `<p id="otp-error" role="alert" aria-live="polite">${escapeHtml(error)}</p>` : ""}<p id="otp-help" role="status" aria-live="polite">Enter the code sent to <strong>${escapeHtml(flow.email)}</strong>. Codes expire after ten minutes.</p><form method="post" action="/auth/verify">${fields(flow, browser)}<label for="otp">Sign-in code</label><input id="otp" name="otp" inputmode="numeric" autocomplete="one-time-code" minlength="8" maxlength="8" aria-describedby="${error ? "otp-error " : ""}otp-help" required><button>Verify code</button></form><div class="account"><form method="post" action="/auth/resend">${fields(flow, browser)}<button class="secondary">Send a new code</button></form><p class="muted">Wait five seconds between code requests. Each email address has a ten-minute request limit.</p><form method="post" action="/auth/email">${fields(flow, browser)}<label for="change-email">Use a different email address</label><input id="change-email" name="email" type="email" autocomplete="email" value="${escapeHtml(changeEmail)}" required><button class="secondary">Change email and send a new code</button></form></div>`;
+  return { loginForm, otpForm };
+}

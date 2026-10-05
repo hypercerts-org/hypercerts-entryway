@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite'
 import BetterSqlite3 from 'better-sqlite3'
 import { mkdirSync, readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { createSqliteAccountStorage } from '../../dist/packages/entryway-service/src/features/accounts/storage/sqlite-account-storage.js'
+import { createSqliteAccountStorage } from '../../dist/src/database/sqlite/sqlite-account-storage.js'
 import { waitForMailpitCode } from '../support/helpers/mailpit.mjs'
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' })

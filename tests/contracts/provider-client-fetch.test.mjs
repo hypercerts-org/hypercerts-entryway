@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createClientMetadataFetch } from '../../dist/packages/entryway-service/src/compatibility/provider.mjs'
+import { createClientMetadataFetch } from '../../dist/src/features/oauth-authorization/provider.mjs'
 
 const config = {
   clientUrl: 'https://client.entryway.example.com',

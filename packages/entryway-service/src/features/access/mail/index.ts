@@ -1,5 +1,0 @@
-export { createMailFeature, MailDeliveryError } from './service.js'
-export type { MailFeatureDependencies, MailPort, OtpMailRequest, ProofMailRequest } from '../../../../../entryway-core/src/access/mail/port.js'
-export { MAIL_SCHEMA_MIGRATION } from '../storage/mail-schema.js'
-export { createSqliteMailOutbox } from '../storage/mail-outbox.js'
-export { createSmtpMailTransport } from './smtp-transport.js'

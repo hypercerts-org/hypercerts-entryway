@@ -4,8 +4,8 @@ import { generateKeyPairSync } from 'node:crypto'
 import { Secp256k1Keypair } from '@atproto/crypto'
 import { createServiceJwt } from '@atproto/xrpc-server'
 import * as plc from '@did-plc/lib'
-import { mountXrpc } from '../../dist/packages/entryway-service/src/compatibility/xrpc.mjs'
-import { openDatabase } from '../../dist/packages/entryway-service/src/compatibility/db.mjs'
+import { mountXrpc } from '../../dist/src/compose-protocol.mjs'
+import { openDatabase } from '../../dist/src/database/sqlite/connection.mjs'
 
 test('entryway verifies real service JWT signature, audience, method, subject and replay', async () => {
   const db = openDatabase(':memory:')
@@ -47,6 +47,8 @@ test('entryway verifies real service JWT signature, audience, method, subject an
     const req = (jwt, body) => ({ headers: { authorization: `Bearer ${jwt}` }, body })
     for (const claims of [
       { aud: 'did:web:wrong.test' },
+      { iss: 'did:plc:aaaaaaaaaaaaaaaaaaaaaaaa' },
+      { iat: Math.floor(Date.now() / 1000) - 120, exp: Math.floor(Date.now() / 1000) - 60 },
       { lxm: 'com.atproto.identity.updateHandle' },
       { iat: Math.floor(Date.now() / 1000) + 120 },
     ]) {

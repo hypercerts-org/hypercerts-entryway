@@ -1,0 +1,54 @@
+{
+  "source_log": "tests/artifacts/advisor-final-acceptance.log",
+  "source_log_sha256": "852ec99fe39fa614fd41a9f918b7ac3f2f86a401c83d5839183fb26db7d8ea0f",
+  "process_exit": 0,
+  "extraction": "Browser segment from first Running31 header to31passed; Node contiguous spec summary lines. Full all command uses set-e so success establishes each component exited0.",
+  "results": {
+    "browser": {
+      "schema_version": 1,
+      "format": "playwright-text",
+      "process_exit_code": 0,
+      "expected_tests": 31,
+      "input_sha256": "a8baeace56de675977464276a63294c5fba0d3e7e6981156050aa715bbe15512",
+      "counts": {
+        "total": 31,
+        "passed": 31,
+        "failed": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "flaky": 0,
+        "interrupted": 0,
+        "did_not_run": 0,
+        "global_errors": 0
+      },
+      "status": "pass",
+      "reasons": [
+        "accepted"
+      ]
+    },
+    "contracts": {
+      "schema_version": 1,
+      "format": "node",
+      "process_exit_code": 0,
+      "expected_tests": 169,
+      "input_sha256": "0203812f16621dead94137c92e3f19466b0bedf62b88c0e1a7a6cfaf95b8bea3",
+      "counts": {
+        "total": 169,
+        "passed": 169,
+        "failed": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "flaky": 0,
+        "interrupted": 0,
+        "did_not_run": 0,
+        "global_errors": 0
+      },
+      "status": "pass",
+      "reasons": [
+        "accepted"
+      ]
+    }
+  }
+}

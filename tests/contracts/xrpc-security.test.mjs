@@ -4,9 +4,9 @@ import { test } from 'node:test'
 import { Secp256k1Keypair } from '@atproto/crypto'
 import { createServiceJwt } from '@atproto/xrpc-server'
 import * as plc from '@did-plc/lib'
-import { createLegacy } from '../../dist/packages/entryway-service/src/compatibility/legacy.mjs'
-import { mountXrpc } from '../../dist/packages/entryway-service/src/compatibility/xrpc.mjs'
-import { openDatabase } from '../../dist/packages/entryway-service/src/compatibility/db.mjs'
+import { createLegacy } from '../../dist/src/oauth/legacy-credentials.mjs'
+import { mountXrpc } from '../../dist/src/compose-protocol.mjs'
+import { openDatabase } from '../../dist/src/database/sqlite/connection.mjs'
 
 async function fixture(t) {
   const db = openDatabase(':memory:')
