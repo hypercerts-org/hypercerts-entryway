@@ -25,7 +25,10 @@ spike/replay runtime sources were found identical and are historical references.
 | MJS orchestration | Feature operation bodies and thin handlers are extracted; retained MJS remains outside strict TS coverage |
 | ePDS consent behaviour | Preserve approved returning-client and eligible trusted-signup behaviour |
 | Account UI composition | Consume domain APIs instead of direct grant/store mutations |
-| Better Auth table integration | Encapsulate pinned-schema transactions; do not lose atomic email binding |
+| Better Auth table integration | Share the Drizzle transaction context; preserve atomic email binding on SQLite and PostgreSQL |
+| Database boundary | Pin Drizzle ORM `1.0.0-rc.4`, replace raw SQLite coupling with asynchronous operations and fresh schemas for both dialects |
+| Replica coordination | Replace local locks with durable ownership, atomic counters/challenges and mail claims |
+| Resilience deployment | Add readiness/draining, shared state and two-instance failover verification |
 | Production mail | Configure real transport/sender; some extra XRPC email paths only record captured mail and report sent |
 | Fleet registry | Replace static-only configuration with add, placement exclusion, drain and retirement operations |
 | Migration journal | Allow multiple operations per DID; do not reject valid empty repositories solely for zero indexed records |
@@ -82,7 +85,7 @@ runs for release evidence. Do not import captured credentials or old runtime sta
 The follow-up import restores the hosted-handle pre-publication guard, five account
 regressions, three real PDS integration tests and two service-auth rejection inputs.
 Reference PDS aligns to 0.5.36. Exact selected source hashes and pre/post-import
-managed results are recorded in plans/evidence; the later operational snapshot was
+managed results are recorded in [the retained evidence](evidence/feature-slices/); the later operational snapshot was
 test-only and did not supersede the newer production guard.
 
 The current source map preserves original/imported locations alongside current

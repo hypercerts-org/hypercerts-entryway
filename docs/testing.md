@@ -82,7 +82,7 @@ It prepares a synthetic external source, verifies the destination owner's email,
 pauses after authority handoff and repository import, restarts Entryway between
 steps, completes and checks the result with browser OAuth. It uses private source
 fixture APIs and assumed recovery custody. It does not prove migration from an
-arbitrary live provider or interoperability with an unmodified migration tool.
+arbitrary live provider or interoperability with an existing migration tool.
 
 Standard-tool migration remains a separate release gate. Its acceptance must use
 normal account credentials and public XRPC endpoints, preserve DID/repository/blob
@@ -109,10 +109,10 @@ measure the complete expiry interval.
 ## Evidence reporting
 
 No tests or builds were executed as part of the original documentation import.
-The [October 5 baseline](../tests/plans/baseline-2026-10-05.md) now records two
+The [October 5 baseline](evidence/baseline-2026-10-05.md) now records two
 isolated runs at `89589ca6`; [M1 matrices](../tests/plans/README.md) distinguish
 their bounded coverage from unresolved requirements. The October 6 documentation publication
-did not claim a new runtime result. The later [naming-change verification](../tests/plans/naming-2026-10-06.md)
+did not claim a new runtime result. The later [naming-change verification](evidence/naming-2026-10-06.md)
 records fresh execution after the rename. Report new runs with source revision,
 command, sandbox/dependency versions, result and unrun groups.
 Historical spike reports establish provenance only. Never copy captured
@@ -150,3 +150,19 @@ KEEP_FAILED_SANDBOX=1 ./tests/local.sh fresh`. All probes run before
 that disposable project's cleanup, with resilience last. The backup/rotation
 checks establish bounded local restoration, not off-site/full DR, zero-downtime
 key overlap, existing-refresh continuity or production acceptance.
+
+## Target database and replica coverage
+
+The retained baseline uses one Entryway instance and SQLite. The target requires
+Drizzle ORM `1.0.0-rc.4` on single-node SQLite and multi-node PostgreSQL,
+including balanced application instances and failover. Those profiles and their tests are not implemented yet.
+Existing restart and backup probes do not establish shared-database concurrency,
+worker takeover, rolling removal or multi-instance availability. The PostgreSQL
+service in the current sandbox supports other components; it is not evidence of
+a PostgreSQL Entryway adapter.
+
+The [implementation assessment](implementation-assessment.md) describes the required fixtures
+and code changes. Future database refactor verification uses fresh state without
+old-schema upgrades; product account migration and existing ePDS conversion remain
+separate required journeys. Preserve the current tests and their known moderation
+blocker while adding the new profiles.

@@ -12,7 +12,11 @@ are references, not runtime or documentation dependencies.
 **Status:** one application organized by vertical features. Ports/adapters are
 limited to browser authentication, mail sending and database. Preserved MJS is
 owned by its feature; standard-tool migration, moderation coordination and fleet
-registry remain product gaps. Google/GitHub sign-in is out of scope.
+registry remain product gaps. The target also requires Drizzle ORM `1.0.0-rc.4`
+with SQLite for single-node operation, PostgreSQL for multi-node operation, and
+scaling, balancing and failover for resilience; these
+are not implemented by the current SQLite baseline. Google/GitHub OIDC is roadmap
+work excluded from initial delivery.
 
 ## Start the sandbox
 
@@ -61,7 +65,7 @@ src/main.mjs              Startup, workers and shutdown
 tests/                    Contracts, browser journeys, fixtures and AiaB harness
 ```
 
-Two engineers own separate feature slices end to end. Shared authentication,
+Features own their operations end to end. Shared authentication,
 transactions and custody changes are coordinated; features never import each
 other's internals. The source boundary checker enforces this structure.
 
@@ -70,7 +74,7 @@ other's internals. The source boundary checker enforces this structure.
 - [Architecture and boundaries](docs/architecture.md)
 - [Data model and identity custody](docs/data-custody.md)
 - [Reusable code, required work and investigations](docs/reuse-assessment.md)
-- [Two-person six-week delivery plan](docs/delivery-plan.md)
+- [Delivery planning in Linear](docs/delivery-plan.md)
 - [Testing and evidence limits](docs/testing.md)
 - [Agent and contributor rules](AGENTS.md)
 

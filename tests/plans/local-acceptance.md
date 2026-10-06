@@ -1,6 +1,6 @@
 # Local acceptance plan
 
-Status: the [October 5 baseline](baseline-2026-10-05.md) records two isolated runs
+Status: the [October 5 baseline](../../docs/evidence/baseline-2026-10-05.md) records two isolated runs
 at `89589ca6`, including the inherited raw moderation failure. No new application
 run is claimed by the October 6 matrix publication. Unchanged baseline evidence
 does not close the [outstanding acceptance cases](README.md).

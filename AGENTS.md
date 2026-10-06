@@ -10,10 +10,16 @@ Project-specific acceptance matrices belong in the linked Linear document; keep
 a reference in the repository instead of a duplicate ticket-linked matrix.
 
 Build a small Entryway for multiple unchanged Bluesky reference PDS instances.
-Email OTP and ePDS login behaviour are in scope; Google/GitHub sign-in is not.
+Email OTP and ePDS login behaviour are in scope. Google/GitHub OIDC is roadmap
+work excluded from initial delivery. Scaling, balancing and failover are in scope
+for resilience. The database target is SQLite and PostgreSQL through Drizzle ORM
+`1.0.0-rc.4`: SQLite only for single-node operation, PostgreSQL for multi-node
+operation. Current direct SQLite access is a baseline, not the target boundary.
+Code refactors require neither backward compatibility nor existing-data upgrades.
+Public account migration and existing ePDS deployment conversion remain in scope.
 Use the existing PDS Entryway hooks and XRPC contracts. Do not fork, patch, or
 replace PDS behaviour to make an Entryway test pass. Independent migration with
-existing unmodified tools is a release requirement, not an operator-only fallback.
+existing tools is a release requirement, not an operator-only fallback.
 
 Read [architecture](docs/architecture.md), [custody](docs/data-custody.md),
 [reuse assessment](docs/reuse-assessment.md), and [testing](docs/testing.md)
@@ -61,7 +67,8 @@ its owner inventory is docs/source-ownership.json. Do not add matching domain,
 port, adapter and index scaffolding to every feature.
 
 The DID is the primary account identity. Keep email claims, identity mapping and
-Better Auth schema changes atomic in the reviewed SQLite authority helper.
+Better Auth schema changes atomic in the reviewed database authority helper.
+Support asynchronous transactions without dividing authority changes into separate commits.
 Never replace a transaction with sequential provider API calls. Shared account
 facts have one owner; another feature cannot mutate a private workflow journal.
 Private signing material stays in concrete signing closures, never account
@@ -73,9 +80,8 @@ imports and cycles, and enforces the three boundaries. The two type-only concret
 source-fixture references in external migration and synthetic client composition
 are explicit test integration exceptions; they establish no standard-tool support.
 
-Two engineers take separate feature slices end to end. Coordinate shared contract,
-transaction, identity custody and schema-migration changes through one integrator.
-Do not assign both engineers the same composition or shared boundary file.
+Coordinate shared contract, transaction, identity custody and schema changes.
+Use explicit ownership for shared composition and boundary files.
 Read applicable tests/plans and tests/flows before changing behavior.
 
 ## Runtime and validation

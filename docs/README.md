@@ -1,6 +1,7 @@
 # Project design and delivery documents
 
-These documents capture the Entryway architecture and six-week delivery proposal agreed in this session.
+These documents capture the Entryway architecture, implementation context and
+recorded technical evidence. Linear owns delivery planning and acceptance criteria.
 They distinguish reusable spike code, proposed behaviour and unresolved release requirements.
 This repository is self-contained: use the source, harness, documentation and
 baseline records here. Project-specific acceptance matrices live in [Linear](https://linear.app/hypercerts/document/m1-acceptance-matrices-epds-parity-protocol-and-migration-196f21e01e71), referenced from the repository’s test plans. Public design/source references do not require a sibling
@@ -9,7 +10,10 @@ checkout. The [test-plan index](../tests/plans/README.md) links the baseline and
 | Document | Contents |
 | --- | --- |
 | [Architecture](architecture.md) | System overview, vertical feature ownership, three port boundaries, source layout, login sequence and fleet lifecycle |
-| [Project plan](delivery-plan.md) | Glossary, six milestones, acceptance criteria, two-person ownership and check-ins |
+| [Delivery planning](delivery-plan.md) | Links to the maintained Linear project and document |
+| [Terminology](glossary.md) | Shared vocabulary and protocol references |
+| [Implementation assessment](implementation-assessment.md) | Source-grounded database, coordination and resilience gaps |
+| [Evidence](evidence/README.md) | Retained baseline, verification and source-parity receipts |
 | [Data model and custody](data-custody.md) | DID-based account model, provider boundaries, key custody, transfer cases and observed test migration order |
 | [Reuse assessment](reuse-assessment.md) | Reusable code, required implementation and investigation findings |
 | [Testing](testing.md) | Local Atmosphere in a Box commands, repeatable flows and evidence limits |
@@ -17,7 +21,8 @@ checkout. The [test-plan index](../tests/plans/README.md) links the baseline and
 
 ## Diagram conventions
 
-Mermaid diagrams use pastel fills, dark text, dark outlines and labeled connectors.
+Process flowcharts run horizontally (`flowchart LR`); sequence diagrams retain
+their normal time axis. Mermaid diagrams use pastel fills, dark text, dark outlines and labeled connectors.
 Blue identifies clients or inputs; violet identifies Entryway policy; green identifies data or hosting;
 peach identifies external authority or a decision-sensitive transition.
 Text labels carry the meaning so readers do not need to distinguish colors.
@@ -37,4 +42,4 @@ The documents contain Mermaid source, not exported images or a new Lexidraw scen
 - [Layered OAuth Provider: Cross-Section](https://lexidraw.app/s/did%3Aplc%3Alrphxvv25aibthe7xoc2eeyy/3mvrtkdnr732i).
 - [Spike architecture, data model and custody](https://lexidraw.app/s/did%3Aplc%3Alrphxvv25aibthe7xoc2eeyy/3mwlv6d5ddp23).
 
-Use the project plan for the glossary and supporting ATProto documentation. The diagrams describe design; current acceptance reports establish what works.
+Use the [glossary](glossary.md) for terminology and supporting ATProto documentation. The diagrams describe design; current acceptance reports establish what works.

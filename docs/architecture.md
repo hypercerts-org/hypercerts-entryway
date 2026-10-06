@@ -1,56 +1,71 @@
 # Entryway architecture
 
 Status: vertical feature structure; product requirements and gaps below remain explicit.
-Updated: 2026-10-05. This document distinguishes target behaviour from implemented behaviour.
+Updated: 2026-10-06. This document distinguishes target behaviour from implemented behaviour.
 
-Read alongside the [project plan](delivery-plan.md), [data and custody design](data-custody.md),
+Read alongside the [delivery reference](delivery-plan.md), [data and custody design](data-custody.md),
 [reuse assessment](reuse-assessment.md), and [local test guide](testing.md).
 
 ## 1. Purpose and fixed boundaries
 
-Build one small TypeScript Entryway for several unchanged Bluesky reference PDS instances.
+Build an Entryway for several unchanged Bluesky reference PDS instances.
 Move ePDS email OTP authentication into the supported Entryway integration boundary.
 Preserve ePDS login behaviour and provide a styled account page.
 
 The complete service must meet applicable ATProto, OAuth and XRPC contracts.
-Users must migrate in using existing, unmodified migration tools and normal account credentials.
+Users must migrate in using existing migration tools and normal account credentials.
 Public migration must not require operator database edits or private fixture APIs.
 
 Use the reference PDS hooks, lexicons and tests as the integration contract.
 Do not fork or patch the PDS. Keep the upstream ATProto OAuth provider.
 Better Auth supplies browser authentication and email proof; it does not replace that provider.
 
-Google/GitHub login, automatic balancing, autoscaling and a general cluster scheduler are out of scope.
-Start with one Entryway process, SQLite and an in-process durable-operation runner.
-This deployment choice still requires recovery, backups and explicit transaction boundaries.
+Google/GitHub OIDC is on the roadmap and excluded from initial delivery.
+Scaling, request balancing and failover are in scope for resilience. Recovery,
+backups and explicit transaction boundaries remain required.
+
+The database boundary must support SQLite and PostgreSQL through Drizzle ORM,
+pinned to `1.0.0-rc.4`. SQLite is supported only for single-node operation;
+PostgreSQL is required for multi-node operation. The current implementation uses direct SQLite access; the
+Drizzle and PostgreSQL paths remain implementation work. These code changes start
+from fresh state: no backward-compatibility layer or existing-data conversion is
+required. This does not remove public account migration or conversion of an
+existing ePDS deployment from product scope.
 
 ## 2. System overview
 
 This is the target responsibility map. Fleet administration and independent-tool migration remain incomplete.
-The account page is part of Entryway. Better Auth and the provider run within its process.
+The account page is part of Entryway. Better Auth and the provider run inside each
+application instance; feature boundaries do not prescribe separately deployed services.
 PDS instances own repository data and repository signing keys.
 
 ```mermaid
 %%{init: {"theme":"base","themeVariables":{"background":"#FFFFFF","primaryTextColor":"#172B4D","lineColor":"#45556C","edgeLabelBackground":"#FFFFFF","fontFamily":"Arial"},"flowchart":{"nodeSpacing":40,"rankSpacing":55,"curve":"linear"}}}%%
-flowchart TB
+flowchart LR
   browser["Browser<br/>Login and account pages"]
   client["ATProto application<br/>OAuth client"]
-  subgraph entryway["Entryway — one process"]
+  ingress["Request balancing<br/>Readiness and failover"]
+  subgraph entryway["Entryway application instances"]
     api["Web and XRPC adapters"]
     domains["Vertical features<br/>Accounts · Login · Authorization · Migration"]
     ba["Better Auth<br/>Email proof and browser sessions"]
     oauth["ATProto OAuth provider<br/>Authorization and tokens"]
-    store[("SQLite<br/>Domain and provider state")]
+    storage["Database boundary<br/>Drizzle ORM 1.0.0-rc.4"]
   end
+  store[("Single node: SQLite<br/>Multiple nodes: PostgreSQL")]
   pds["Unchanged reference PDS instances<br/>Repositories, blobs and repository keys"]
   plc["PLC directory<br/>Public identity operations"]
   mail["Email transport<br/>Mailpit in local tests"]
-  browser -->|"OTP, account actions and consent"| api
-  client -->|"Discovery, PAR and token requests"| api
+  browser -->|"OTP, account actions and consent"| ingress
+  client -->|"Discovery, PAR and token requests"| ingress
+  ingress -->|"Ready application instance"| api
   api -->|"Invoke owned policy"| domains
   domains -->|"Verify browser identity"| ba
   domains -->|"Apply authorization decisions"| oauth
-  domains -->|"Commit local state"| store
+  domains -->|"Atomic state operations"| storage
+  ba -->|"Authentication persistence"| storage
+  oauth -->|"Protocol persistence"| storage
+  storage -->|"Read and commit"| store
   domains -->|"Deliver email"| mail
   domains -->|"Provision and administer hosts"| pds
   pds -->|"Delegate account and identity requests"| api
@@ -61,7 +76,7 @@ flowchart TB
   classDef mint fill:#DCFCE7,stroke:#32694D,color:#172B4D,stroke-width:2px;
   classDef peach fill:#FFEDD5,stroke:#8A5A2B,color:#172B4D,stroke-width:2px;
   class browser,client blue;
-  class api,domains,ba,oauth violet;
+  class ingress,api,domains,ba,oauth,storage violet;
   class pds,store mint;
   class plc,mail peach;
   style entryway fill:#F8FAFC,stroke:#64748B,color:#172B4D
@@ -73,7 +88,7 @@ Arrows describe interactions, not direct permission to read another component's 
 
 ## 3. Feature ownership
 
-One process contains vertical features. Each feature owns the operation that a
+Each application instance contains the same vertical features. Each feature owns the operation that a
 user performs, its HTTP/XRPC handlers, feature-specific page and tests.
 
 | Feature | Owns |
@@ -93,10 +108,8 @@ A feature does not import another feature. Short root compose modules wire expli
 operations together. Shared accounts code owns common facts, validation and proof
 primitives. A shared account summary can display feature-owned panels supplied by
 composition without importing those features.
-
-The two engineers can change separate feature files end to end. Changes to shared
-transaction contracts, browser identity, signing custody and migration numbering
-still require coordination. See AGENTS.md for enforceable source rules.
+Changes to shared transaction contracts, browser identity, signing custody and
+schema initialization require coordinated review. See AGENTS.md for enforceable source rules.
 
 ## 4. Three boundaries
 
@@ -104,7 +117,7 @@ still require coordination. See AGENTS.md for enforceable source rules.
 | --- | --- | --- |
 | Browser authentication | Normalized verified identity/session operations | Better Auth |
 | Mail sending | Deliver a fully formed message | SMTP |
-| Database | Focused readers and atomic state operations | SQLite |
+| Database | Focused asynchronous readers and atomic state operations | Target: Drizzle ORM `1.0.0-rc.4`; SQLite for single node, PostgreSQL for multiple nodes. Current: direct SQLite |
 
 PDS, PLC, OAuth provider and signing operations are concrete modules. They do not
 have parallel interchangeable port hierarchies. Provider state storage belongs to
@@ -114,14 +127,17 @@ its persistent outbox contracts live under database.
 `src/features/<feature>/` is the starting point for a feature change.
 `src/main.mjs` owns startup/shutdown and workers; `src/app.mjs` owns middleware and
 route ordering; `src/compose-*.mjs` assembles features. Shared HTTP/UI helpers are
-under `src/http` and `src/ui`. Database schema migrations have one ordered registry.
+under `src/http` and `src/ui`. Fresh schema initialization belongs to the database boundary; the current runtime
+still uses an ordered SQLite schema registry.
 The build emits `dist/src`; preserved MJS ownership is inventoried in
 [source ownership](source-ownership.json). TS remains strict; MJS extraction is
 not a claim of full typed conversion.
 
-The SQLite account-authority helper retains pinned Better Auth schema knowledge.
-Email authority, claims, identity mappings and invalidation remain one synchronous
-transaction, with rollback contracts. Browser authentication proves a browser
+The database account-authority helper retains pinned Better Auth schema knowledge.
+Email authority, claims, identity mappings and invalidation remain one atomic
+transaction, with rollback contracts. PostgreSQL requires asynchronous operations;
+callers must await completion without splitting the authority transaction into
+unrelated provider calls. Browser authentication proves a browser
 identity; PLC custody and DID authority remain separate.
 
 Synthetic source migration clients/signers live in tests/fixtures. The current
@@ -212,13 +228,39 @@ PDS call sequences, journals, branding, mail ports and regression scenarios.
 Keep shared contracts narrow while features own their operation bodies.
 
 Still required: ePDS consent/freshness parity, complete XRPC adapters, production email delivery,
-fleet lifecycle, general custody policy and standard-tool migration.
+fleet lifecycle, general custody policy and standard-tool migration. Drizzle-backed
+SQLite/PostgreSQL, shared operation ownership, replica-safe mail and authentication
+state, and verified request balancing/failover are also still required.
 The typed external workflow is invoked by the synthetic harness; managed account moves live in pds-migration.
 The existing fixture proves useful mechanics but uses its own source-control API.
 
 See [data and custody](data-custody.md) for actual cutover ordering and unresolved decisions.
 No current build, runtime or conformance result is asserted by these diagrams.
 
-## Decisions required before implementation
+## Resilience and shared state
 
-The operator-ownership decision in [TECH-698](https://linear.app/hypercerts/issue/TECH-698) records operator ownership and the relationship to TECH-547 email discovery. The current design shares authentication across its PDS fleet; independent authentication and a discovery router require separate decisions. [TECH-697](https://linear.app/hypercerts/issue/TECH-697) defines conversion of an existing ePDS deployment without moving its repositories, including old URLs and rollback. These decisions do not authorize changes to the reference PDS.
+Request balancing must preserve one issuer and consistent signing configuration.
+Multi-node application instances use PostgreSQL for shared durable account,
+authentication and operation state. SQLite is a single-node option only, with
+restart and restore coverage; it is not a multi-node failover store. Configuration
+must reject SQLite in multi-node mode. Each deployment profile must state database
+availability, readiness, draining, worker ownership and recovery behavior explicitly.
+
+A worker must claim an operation durably before issuing external side effects.
+Versioned updates and bounded ownership prevent another instance or a stale worker
+from completing the same transition. A lost SMTP acknowledgement can still mean
+mail was delivered; do not promise exactly-once delivery. PDS/PLC outcomes must be
+observed before retrying ambiguous mutations.
+
+Balancing Entryway requests does not relocate a repository or replicate PDS data.
+PDS placement, drain, transfer and disaster recovery retain their own authority,
+data-integrity and recovery requirements.
+
+## Open design decisions
+
+Operator ownership, independent authentication, email discovery, account
+cardinality, custody and deployment-conversion decisions are maintained in the
+[Linear project](https://linear.app/hypercerts/project/epds-entryway-888a35a63fe4) and [project document](https://linear.app/hypercerts/document/m1-acceptance-matrices-epds-parity-protocol-and-migration-196f21e01e71). Scaling does not imply
+independent authentication operators. These decisions do not authorize reference
+PDS changes. See [implementation assessment](implementation-assessment.md) for source-grounded
+work required by the current architecture.

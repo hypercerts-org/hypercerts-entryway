@@ -4,7 +4,7 @@
 
 Target: this repository. Source labels below refer to the historical pre-import
 spike snapshot, not a required sibling checkout. Current baseline and acceptance
-inventories are [self-contained in this repository](../tests/plans/README.md).
+inventories are [self-contained in this repository](../../tests/plans/README.md).
 
 ## Application inventory
 
@@ -19,7 +19,7 @@ All **62** entries in target `docs/source-map.json` exist.
 All 90 rewritten static import/export specifiers were checked against the mapping and resolve to corresponding modules after TS `.js`/`.ts` and spike `app/dist`/`app/src` normalization. This supports relocation equivalence. Separate source inspection identified the sole substantive application omission: the hosted-handle guard.
 
 The historical comparison helper `plans/evidence/compare-spike.py` produced
-[spike-source-inventory.json](evidence/spike-source-inventory.json), recording SHA-256
+[spike-source-inventory.json](feature-slices/spike-source-inventory.json), recording SHA-256
 for every mapped file in each snapshot. That one-off helper depends on the original
 source snapshots; it is not a current setup or acceptance command. The committed
 inventory preserves the result without requiring those snapshots. It did not inspect

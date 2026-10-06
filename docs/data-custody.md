@@ -1,7 +1,7 @@
 # Data model, identity custody and migration
 
-Status: current storage facts plus proposed domain contracts. Updated: 2026-09-30.
-See [architecture](architecture.md) for domain ownership and [project plan](delivery-plan.md) for delivery gates.
+Status: current storage facts plus proposed domain contracts. Updated: 2026-10-06.
+See [architecture](architecture.md) for domain ownership and [delivery reference](delivery-plan.md) for delivery gates.
 
 ## 1. Account identity and ownership
 
@@ -10,7 +10,8 @@ Better Auth user IDs, browser-session IDs, devices, grants and migration-operati
 
 The current schema enforces one unique email and one bound Better Auth user per DID.
 Multiple accounts on a device do not imply multiple DIDs under one email identity.
-Changing that cardinality requires an explicit product decision and schema migration.
+Changing that cardinality requires an explicit product decision and a revised schema.
+The current code refactor does not require upgrading existing databases.
 
 | State | Domain or system owner | Current representation |
 | --- | --- | --- |
@@ -25,7 +26,7 @@ Changing that cardinality requires an explicit product decision and schema migra
 | Public custody evidence | Identity | Import-time custody inventory; not a complete key lifecycle registry |
 | Repository, blobs and repository key | Hosting PDS | Reference PDS-managed storage |
 
-The service stores account authority, browser authentication, OAuth state, mail
+The current SQLite implementation stores account authority, browser authentication, OAuth state, mail
 and workflow journals in `account-authority.sqlite` under `STATE_DIRECTORY`
 (default `/data`). Table and variable names describe their purpose, without
 project prefixes. `accounts` stores DID authority; `account_bindings` links a DID
@@ -39,6 +40,13 @@ old-name alias or automatic upgrade from the earlier schema. New installs and
 sandbox runs initialize the renamed schema directly. Backups must come from the
 same schema generation. Upstream PDS configuration keys retain their mandated
 names.
+
+The target database boundary uses Drizzle ORM `1.0.0-rc.4` for SQLite and
+PostgreSQL. SQLite is only for single-node operation; PostgreSQL is required for
+multi-node operation. Both must preserve the same identity, uniqueness and atomicity rules;
+dialect-specific indexes, JSON queries, timestamps and error translation stay
+inside the database adapter. Fresh schemas replace old layouts without a data
+conversion path. The existing ePDS deployment-conversion requirement is separate.
 
 ## 2. Logical model
 
@@ -126,7 +134,11 @@ The target allows many historical transfers per DID, with at most one active tra
 
 ## 3. Transaction and storage rules
 
-- Keep identity binding, email authority and claim changes atomic.
+- Keep identity binding, email authority and claim changes atomic on both databases.
+- Await database operations and carry one transaction context through all authority changes.
+- Use database-backed ownership and conditional updates across application instances.
+- Claim mail attempts and workflow execution atomically; reject stale completion.
+- Increment rate counters and supersede challenges atomically across instances.
 - Isolate pinned Better Auth table knowledge in an adapter with upgrade contract coverage.
 - Do not distribute the existing transaction across unrelated API calls without equivalent consistency guarantees.
 - Journal an operation before issuing its external side effect.
@@ -148,10 +160,10 @@ The destination PDS owns its repository signing key. Entryway uses its public re
 
 ```mermaid
 %%{init: {"theme":"base","themeVariables":{"primaryTextColor":"#172B4D","lineColor":"#45556C","edgeLabelBackground":"#FFFFFF","fontFamily":"Arial"},"flowchart":{"nodeSpacing":40,"rankSpacing":50,"curve":"linear"}}}%%
-flowchart TB
+flowchart LR
   user["User or recovery custodian<br/>Authority depends on agreed policy"]
-  identity["Identity domain<br/>Authorize PLC changes"]
-  signer["Entryway signer adapter<br/>Protected rotation key"]
+  identity["Owning feature<br/>Authorize PLC changes"]
+  signer["PLC signing module<br/>Protected rotation key"]
   plc["PLC directory<br/>Public operation history"]
   host["Hosting PDS<br/>Private repository signing key"]
   inventory["Custody inventory<br/>Public references and history only"]
@@ -186,9 +198,9 @@ A specific production key-management product has not been selected.
 
 ## 5. Three migration cases
 
-| Case | Stable state | Changing state | Acceptance requirement |
+| Case | Stable state | Changing state | Required behavior |
 | --- | --- | --- | --- |
-| External PDS into Entryway | DID and user data | Account binding, host and permitted custody | Existing unmodified tool, normal credentials, no operator database edits |
+| External PDS into Entryway | DID and user data | Account binding, host and permitted custody | Existing tool, normal credentials, no operator database edits |
 | PDS A to PDS B within Entryway | DID, account binding and Entryway relationship | Placement, repository key reference and hosting endpoint | Resumable move with record/blob integrity and working client access |
 | Entryway to external PDS | DID and user data | Host and custody relationship | User can leave through supported public protocol operations |
 
@@ -203,7 +215,7 @@ Each checkpoint must describe observed state, not merely that an HTTP request wa
 
 ```mermaid
 %%{init: {"theme":"base","themeVariables":{"primaryTextColor":"#172B4D","lineColor":"#45556C","edgeLabelBackground":"#FFFFFF","fontFamily":"Arial"},"flowchart":{"nodeSpacing":35,"rankSpacing":45,"curve":"linear"}}}%%
-flowchart TB
+flowchart LR
   owner["Verify destination owner<br/>Reserve DID and destination"]
   snapshot["Freeze synthetic source<br/>Capture CAR and blobs"]
   handoff["Publish authority handoff<br/>Keep source host in DID document"]
@@ -235,21 +247,28 @@ No PDS modification is proposed.
 
 ## 6. Decisions and corrections required
 
-| Item | Required outcome | Owner |
-| --- | --- | --- |
-| Incoming tool contract | Pin tools and prove their public endpoint/credential sequence | Both developers |
-| Custody policy | Define supported recovery authorities, priority and departure rules | Identity owner; joint approval |
-| Cutover recovery | Reconcile partial PLC publication, target creation and import | Identity / fleet owner |
-| Repeated moves | Many operations per DID; one active operation; safe return to an earlier host | Fleet owner |
-| Empty repositories | Accept valid zero-record and zero-blob accounts | Fleet owner |
-| Active client sessions during movement | Define refresh, audience and reauthorization behaviour | Access / fleet owners |
-| Retention and retirement | Keep source data until the agreed deletion conditions hold | Fleet / Accounts owners |
+| Item | Required outcome |
+| --- | --- |
+| Incoming tool contract | Pin tools and prove their public endpoint/credential sequence |
+| Custody policy | Define supported recovery authorities, priority and departure rules |
+| Cutover recovery | Reconcile partial PLC publication, target creation and import |
+| Repeated moves | Many operations per DID; one active operation; safe return to an earlier host |
+| Empty repositories | Accept valid zero-record and zero-blob accounts |
+| Active client sessions during movement | Define refresh, audience and reauthorization behaviour |
+| Retention and retirement | Keep source data until the agreed deletion conditions hold |
 
 The independent-tool contract is an early delivery gate.
 The private source fixture remains valuable for deterministic failures, but cannot substitute for that gate.
 
 ## Required account and recovery decisions
 
-The current unique-email schema is a starting implementation, not a settled product requirement. [TECH-699](https://linear.app/hypercerts/issue/TECH-699) must decide multiple-DID email binding and duplicate-email incoming migration before I04 is accepted. Email verification must never merge identities or substitute for proof of DID control.
+The current unique-email schema is a starting implementation, not a settled
+product requirement. Multiple-DID email binding and duplicate-email incoming
+migration need an explicit decision. Email verification must never merge
+identities or substitute for proof of DID control.
 
-I03 defines recovery authority and available data when the old Entryway is offline or refuses assistance; I15 must exercise those conditions. Accounts without independent recovery authority must have explicit limitations. I22 separately covers the transfer of existing ePDS account authority and protected keys during deployment conversion.
+Recovery policy must define authority and available data when the old Entryway is
+offline or refuses assistance. Accounts without independent recovery authority
+need explicit limitations. Existing ePDS deployment conversion separately covers
+transferring account authority and protected keys. Decisions and their acceptance
+criteria live in the [Linear project](https://linear.app/hypercerts/project/epds-entryway-888a35a63fe4) and [project document](https://linear.app/hypercerts/document/m1-acceptance-matrices-epds-parity-protocol-and-migration-196f21e01e71).
