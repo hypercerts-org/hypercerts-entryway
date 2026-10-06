@@ -13,7 +13,8 @@ are references, not runtime or documentation dependencies.
 limited to browser authentication, mail sending and database. Preserved MJS is
 owned by its feature; standard-tool migration, moderation coordination and fleet
 registry remain product gaps. The target also requires Drizzle ORM `1.0.0-rc.4`
-with SQLite for single-node operation, PostgreSQL for multi-node operation, and
+with SQLite or PostgreSQL for single-node operation, PostgreSQL required for
+multi-node operation, and
 scaling, balancing and failover for resilience; these
 are not implemented by the current SQLite baseline. Google/GitHub OIDC is roadmap
 work excluded from initial delivery.

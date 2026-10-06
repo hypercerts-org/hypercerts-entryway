@@ -4,8 +4,8 @@ The improve assessment was refreshed on 2026-10-06 against `122e72d`, using the
 owner's edited architecture prose as authoritative. Source code was inspected,
 not changed. Drizzle/PostgreSQL and multi-node behavior remain unimplemented.
 
-The target is Drizzle ORM **`1.0.0-rc.4`**, SQLite only for single-node operation,
-and PostgreSQL for multi-node operation. Scaling, balancing and failover serve
+The target is Drizzle ORM **`1.0.0-rc.4`**. Single-node operation supports SQLite
+or PostgreSQL; multi-node operation requires PostgreSQL. Scaling, balancing and failover serve
 resilience. No old-data migration or backward compatibility is required for these
 code changes; public account migration and existing ePDS conversion remain required.
 
@@ -41,7 +41,7 @@ single-node tests remain useful regression evidence.
 3. **Resilience and placement.** Add database-aware readiness, bounded request and
    worker shutdown, shared fleet eligibility and placement reservations. Exercise
    two PostgreSQL-backed application processes behind one issuer/balancer, plus
-   SQLite single-node restart/restore. Request balancing does not replicate PDS data.
+   single-node restart/restore on both SQLite and PostgreSQL. Request balancing does not replicate PDS data.
 
 Build backend fixtures and concurrency checks alongside these changes. The
 [Linear project](https://linear.app/hypercerts/project/epds-entryway-888a35a63fe4)

@@ -42,8 +42,8 @@ same schema generation. Upstream PDS configuration keys retain their mandated
 names.
 
 The target database boundary uses Drizzle ORM `1.0.0-rc.4` for SQLite and
-PostgreSQL. SQLite is only for single-node operation; PostgreSQL is required for
-multi-node operation. Both must preserve the same identity, uniqueness and atomicity rules;
+PostgreSQL. Single-node operation supports either database; multi-node operation
+requires PostgreSQL. Both must preserve the same identity, uniqueness and atomicity rules;
 dialect-specific indexes, JSON queries, timestamps and error translation stay
 inside the database adapter. Fresh schemas replace old layouts without a data
 conversion path. The existing ePDS deployment-conversion requirement is separate.

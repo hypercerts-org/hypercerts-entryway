@@ -13,8 +13,8 @@ Build a small Entryway for multiple unchanged Bluesky reference PDS instances.
 Email OTP and ePDS login behaviour are in scope. Google/GitHub OIDC is roadmap
 work excluded from initial delivery. Scaling, balancing and failover are in scope
 for resilience. The database target is SQLite and PostgreSQL through Drizzle ORM
-`1.0.0-rc.4`: SQLite only for single-node operation, PostgreSQL for multi-node
-operation. Current direct SQLite access is a baseline, not the target boundary.
+`1.0.0-rc.4`: single-node operation supports SQLite or PostgreSQL; multi-node
+operation requires PostgreSQL. Current direct SQLite access is a baseline, not the target boundary.
 Code refactors require neither backward compatibility nor existing-data upgrades.
 Public account migration and existing ePDS deployment conversion remain in scope.
 Use the existing PDS Entryway hooks and XRPC contracts. Do not fork, patch, or

@@ -154,8 +154,11 @@ key overlap, existing-refresh continuity or production acceptance.
 ## Target database and replica coverage
 
 The retained baseline uses one Entryway instance and SQLite. The target requires
-Drizzle ORM `1.0.0-rc.4` on single-node SQLite and multi-node PostgreSQL,
-including balanced application instances and failover. Those profiles and their tests are not implemented yet.
+Drizzle ORM `1.0.0-rc.4` in three configurations: single-node SQLite, single-node
+PostgreSQL and multi-node PostgreSQL. Test restart/restore for both single-node
+backends and balancing/failover for multiple application instances. SQLite in
+multi-node mode must be rejected. These profiles and their tests are not
+implemented yet.
 Existing restart and backup probes do not establish shared-database concurrency,
 worker takeover, rolling removal or multi-instance availability. The PostgreSQL
 service in the current sandbox supports other components; it is not evidence of

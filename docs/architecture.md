@@ -25,8 +25,8 @@ Scaling, request balancing and failover are in scope for resilience. Recovery,
 backups and explicit transaction boundaries remain required.
 
 The database boundary must support SQLite and PostgreSQL through Drizzle ORM,
-pinned to `1.0.0-rc.4`. SQLite is supported only for single-node operation;
-PostgreSQL is required for multi-node operation. The current implementation uses direct SQLite access; the
+pinned to `1.0.0-rc.4`. Single-node operation supports SQLite or PostgreSQL;
+multi-node operation requires PostgreSQL. The current implementation uses direct SQLite access; the
 Drizzle and PostgreSQL paths remain implementation work. These code changes start
 from fresh state: no backward-compatibility layer or existing-data conversion is
 required. This does not remove public account migration or conversion of an
@@ -52,7 +52,7 @@ flowchart LR
     oauth["ATProto OAuth provider<br/>Authorization and tokens"]
     storage["Database boundary<br/>Drizzle ORM 1.0.0-rc.4"]
   end
-  store[("Single node: SQLite<br/>Multiple nodes: PostgreSQL")]
+  store[("Single node: SQLite or PostgreSQL<br/>Multiple nodes: PostgreSQL")]
   pds["Unchanged reference PDS instances<br/>Repositories, blobs and repository keys"]
   plc["PLC directory<br/>Public identity operations"]
   mail["Email transport<br/>Mailpit in local tests"]
@@ -117,7 +117,7 @@ schema initialization require coordinated review. See AGENTS.md for enforceable 
 | --- | --- | --- |
 | Browser authentication | Normalized verified identity/session operations | Better Auth |
 | Mail sending | Deliver a fully formed message | SMTP |
-| Database | Focused asynchronous readers and atomic state operations | Target: Drizzle ORM `1.0.0-rc.4`; SQLite for single node, PostgreSQL for multiple nodes. Current: direct SQLite |
+| Database | Focused asynchronous readers and atomic state operations | Target: Drizzle ORM `1.0.0-rc.4`; SQLite or PostgreSQL for single node; PostgreSQL only for multiple nodes. Current: direct SQLite |
 
 PDS, PLC, OAuth provider and signing operations are concrete modules. They do not
 have parallel interchangeable port hierarchies. Provider state storage belongs to
@@ -241,8 +241,9 @@ No current build, runtime or conformance result is asserted by these diagrams.
 
 Request balancing must preserve one issuer and consistent signing configuration.
 Multi-node application instances use PostgreSQL for shared durable account,
-authentication and operation state. SQLite is a single-node option only, with
-restart and restore coverage; it is not a multi-node failover store. Configuration
+authentication and operation state. A single-node deployment can use SQLite or
+PostgreSQL; both need restart and restore coverage. SQLite is not a multi-node
+failover store. Configuration
 must reject SQLite in multi-node mode. Each deployment profile must state database
 availability, readiness, draining, worker ownership and recovery behavior explicitly.
 
