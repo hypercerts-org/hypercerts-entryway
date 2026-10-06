@@ -1,6 +1,6 @@
 # Hypercerts Entryway
 
-A mini Entryway for multiple unchanged Bluesky reference PDS instances. It moves
+An Entryway for multiple unchanged Bluesky reference PDS instances. It moves
 ePDS email OTP authentication into the PDS's supported Entryway boundary and
 provides account management, authorization and identity operations.
 

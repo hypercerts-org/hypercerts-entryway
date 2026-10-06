@@ -1,4 +1,4 @@
-# Mini Entryway architecture
+# Entryway architecture
 
 Status: vertical feature structure; product requirements and gaps below remain explicit.
 Updated: 2026-10-05. This document distinguishes target behaviour from implemented behaviour.
@@ -35,7 +35,7 @@ PDS instances own repository data and repository signing keys.
 flowchart TB
   browser["Browser<br/>Login and account pages"]
   client["ATProto application<br/>OAuth client"]
-  subgraph entryway["Mini Entryway — one process"]
+  subgraph entryway["Entryway — one process"]
     api["Web and XRPC adapters"]
     domains["Vertical features<br/>Accounts · Login · Authorization · Migration"]
     ba["Better Auth<br/>Email proof and browser sessions"]

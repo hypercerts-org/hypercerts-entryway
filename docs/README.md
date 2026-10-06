@@ -1,6 +1,6 @@
 # Project design and delivery documents
 
-These documents capture the mini Entryway architecture and six-week delivery proposal agreed in this session.
+These documents capture the Entryway architecture and six-week delivery proposal agreed in this session.
 They distinguish reusable spike code, proposed behaviour and unresolved release requirements.
 This repository is self-contained: use the source, harness, documentation and
 baseline records here. Project-specific acceptance matrices live in [Linear](https://linear.app/hypercerts/document/m1-acceptance-matrices-epds-parity-protocol-and-migration-196f21e01e71), referenced from the repository’s test plans. Public design/source references do not require a sibling

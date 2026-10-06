@@ -1,4 +1,4 @@
-# Linear project plan: Mini Entryway
+# Linear project plan: Entryway
 
 Status: delivery plan recorded in Linear. Updated: 2026-09-30.
 The existing Linear project is ePDS Entryway (project ID `1d246d97-8a80-441f-b78a-27ef007480e2`). TECH-565 and TECH-547 already belong to it. The six delivery milestones and 24 issues below have been created.
@@ -50,7 +50,7 @@ The expanded work must be estimated after the M1 decisions; the original forecas
 
 | Term | Meaning in this project |
 | --- | --- |
-| Mini Entryway | Account authority and OAuth authorization server for a small fleet of PDS instances. |
+| Entryway | Account authority and OAuth authorization server for a small fleet of PDS instances. |
 | ePDS parity | Matching the agreed email OTP login behaviour and account experience, without carrying over PDS overrides. |
 | PDS | Personal Data Server. Hosts repositories, blobs and repository signing keys. |
 | PDS fleet | Domain that manages host registration, placement, transfers, draining and retirement. |
