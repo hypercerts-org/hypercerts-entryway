@@ -20,12 +20,12 @@ const mode = process.argv[2]
 assert.ok(['prepare','run','verify','recover-source-freeze'].includes(mode), 'Expected prepare, run, verify or recover-source-freeze')
 const stopAt = process.argv.find(arg => arg.startsWith('--stop-at='))?.slice('--stop-at='.length)
 if (stopAt && !['authority-handed-off','repo-imported'].includes(stopAt)) throw new Error('Unsupported fixture checkpoint')
-const config = JSON.parse(await readFile(process.env.SPIKE_CONFIG, 'utf8'))
+const config = JSON.parse(await readFile(process.env.SERVICE_CONFIG_PATH, 'utf8'))
 const target = config.pds[0]
 const fixtureToken = (await readFile(process.env.SOURCE_FIXTURE_TOKEN_FILE ?? '/run/secrets/source-fixture-token', 'utf8')).trim()
 const fixtureUrl = process.env.SOURCE_FIXTURE_URL ?? 'http://source-fixture:3313'
 const reportPath = '/app/artifacts/external-migration.json'
-const db = openDatabase('/data/entryway.sqlite')
+const db = openDatabase('/data/account-authority.sqlite')
 const accounts = await createAccounts({ db, config })
 const workflows = createMigrationWorkflowStorage(db.sqlite)
 const start = createMigrationStartTransactor(db.sqlite, accounts.storage)
@@ -39,7 +39,7 @@ const oauthIssuerKey = accessSigner.publicInventoryItem
 const token = did => accessSigner.sign(did)
 const targetPds = new PdsMigrationClient({ origin: target.url, plcUrl: config.plcUrl, token, adminAuthorization: `Basic ${Buffer.from(`admin:${target.adminPassword}`).toString('base64')}`, snapshots, payloads })
 const audit = ({ workflowId, event, phase }) => console.log(JSON.stringify({ workflowId, event, phase }))
-const service = new ExternalMigrationService({ workflows, start, snapshots, accounts: accounts.storage, source, target: targetPds, sourceHandoffSigner: new BoundFixtureSourceHandoffSigner(source, { did: (await source.status().catch(() => ({ did: '' }))).did, entrywayRotationKey: signer.publicKey(), targetPdsUrl: target.url }), entrywayPlcSigner: signer, custody, oauthIssuerKey, audit, checkpointObserver: stopAt ? async workflow => { if (workflow.phase === stopAt) throw new FixtureCheckpointPause(workflow.phase) } : undefined })
+const service = new ExternalMigrationService({ workflows, start, snapshots, accounts: accounts.storage, source, target: targetPds, sourceHandoffSigner: new BoundFixtureSourceHandoffSigner(source, { did: (await source.status().catch(() => ({ did: '' }))).did, rotationAuthorityKey: signer.publicKey(), targetPdsUrl: target.url }), plcRotationSigner: signer, custody, oauthIssuerKey, audit, checkpointObserver: stopAt ? async workflow => { if (workflow.phase === stopAt) throw new FixtureCheckpointPause(workflow.phase) } : undefined })
 async function report(patch) { let old={}; try { old=JSON.parse(await readFile(reportPath,'utf8')) } catch {} await writeFile(reportPath, JSON.stringify({ ...old, ...patch, updatedAt:new Date().toISOString() },null,2)+'\n') }
 async function actorFor(email) {
   const user = db.sqlite.prepare('SELECT id FROM user WHERE lower(email)=? AND emailVerified=1').get(email)
@@ -51,7 +51,7 @@ async function actorFor(email) {
 async function publicEvidence(status, requireUnhosted) {
   assert.equal(status.sourcePdsUrl, 'https://pds3.atmosbox.test')
   assert.equal(status.targetPdsUrl, target.url)
-  assert.equal(status.entrywayRotationKey, signer.publicKey())
+  assert.equal(status.rotationAuthorityKey, signer.publicKey())
   if (requireUnhosted) assert.equal(accounts.storage.getByDid(status.did), null)
   return status
 }
@@ -96,7 +96,7 @@ try {
     }
     if (mode === 'run') {
       let workflow = await workflows.getById(id)
-      if (!workflow) workflow = await service.start({ workflowId:id,did:status.did,ownerUserId:actor.userId,ownerSessionId:actor.sessionId,sourceEmail:status.email,handle:identity.handle,sourcePdsUrl:status.sourcePdsUrl,targetPdsId:target.id,targetPdsUrl:target.url,authority:{ sourceRecoveryKey:status.sourceRecoveryKey,entrywayRotationKey:status.entrywayRotationKey,sourceRepositoryKey:status.sourceRepositoryKey,sourcePlcHead:status.sourcePlcHead } })
+      if (!workflow) workflow = await service.start({ workflowId:id,did:status.did,ownerUserId:actor.userId,ownerSessionId:actor.sessionId,sourceEmail:status.email,handle:identity.handle,sourcePdsUrl:status.sourcePdsUrl,targetPdsId:target.id,targetPdsUrl:target.url,authority:{ sourceRecoveryKey:status.sourceRecoveryKey,rotationAuthorityKey:status.rotationAuthorityKey,sourceRepositoryKey:status.sourceRepositoryKey,sourcePlcHead:status.sourcePlcHead } })
       try { workflow = await service.resume(id,actor) } catch (error) { if (!(error instanceof FixtureCheckpointPause)) throw error; workflow = await workflows.getById(id) }
       await report({ status:workflow.phase === 'complete' ? 'passed' : 'paused', identity, source:status.sourcePdsUrl,target:target.url,record:status.record,blobCid:status.blobCid,blobSha256:status.blobSha256,workflowId:id,phase:workflow.phase,checks:[{name:'Durable external migration workflow',status:workflow.phase === 'complete' ? 'passed':'paused',phase:workflow.phase}] })
       console.log(JSON.stringify({ workflowId:id, phase:workflow.phase }))

@@ -1,14 +1,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import { ENTRYWAY_BRAND, renderExperiencePage, resolveBrand } from '../../dist/src/ui/experience.js'
+import { DEFAULT_BRAND, renderExperiencePage, resolveBrand } from '../../dist/src/ui/experience.js'
 import { createMailFeature } from '../../dist/src/mail/create-mail.js'
 import { MAIL_SCHEMA_MIGRATION } from '../../dist/src/database/migrations/mail-schema.js'
 import { createSqliteMailOutbox } from '../../dist/src/database/sqlite/mail-outbox.js'
 
 function fixture() {
   const sqlite = new Database(':memory:')
-  sqlite.exec(`CREATE TABLE mini_kv (
+  sqlite.exec(`CREATE TABLE key_value_state (
     namespace TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(namespace,key)
   )`)
   MAIL_SCHEMA_MIGRATION.up(sqlite)
@@ -35,7 +35,7 @@ test('brand selection uses only exact trusted client ids and falls back to Entry
   assert.equal(resolveBrand(`${ids.primary}?x=1`, ids).id, 'entryway')
   assert.equal(resolveBrand('https://attacker.example/client-metadata.json', ids).id, 'entryway')
   assert.equal(resolveBrand({ toString: () => ids.primary }, ids).id, 'entryway')
-  assert.equal(resolveBrand(undefined, ids), ENTRYWAY_BRAND)
+  assert.equal(resolveBrand(undefined, ids), DEFAULT_BRAND)
 })
 
 test('page renderer escapes titles and preserves security policy without external assets', () => {
@@ -64,7 +64,7 @@ test('mail capture projection is written only after SMTP accepts delivery', asyn
     transport: { deliver: async () => {} },
   })
   await mail.sendOtp({ email: 'Person@example.com', otp: '12345678', type: 'sign-in' })
-  const projected = JSON.parse(sqlite.prepare("SELECT value FROM mini_kv WHERE namespace='outbox'").get().value)
+  const projected = JSON.parse(sqlite.prepare("SELECT value FROM key_value_state WHERE namespace='outbox'").get().value)
   assert.equal(projected.email, 'person@example.com')
   assert.equal(projected.otp, '12345678')
   assert.equal(projected.type, 'sign-in')
@@ -206,7 +206,7 @@ test('late SMTP acknowledgement after code expiry never projects a usable code',
   const row = sqlite.prepare('SELECT state,code FROM mail_outbox').get()
   assert.equal(row.state, 'expired')
   assert.equal(row.code, null)
-  assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM mini_kv WHERE namespace='outbox'").get().count, 0)
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM key_value_state WHERE namespace='outbox'").get().count, 0)
 })
 
 test('outbox and fixture projections expire on bounded retention windows', async (t) => {
@@ -221,7 +221,7 @@ test('outbox and fixture projections expire on bounded retention windows', async
   })
   fakeClock.advance(10 * 60_000 + 1)
   assert.equal(mail.pruneExpired() >= 1, true)
-  assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM mini_kv WHERE namespace=\'outbox\'').get().count, 0)
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM key_value_state WHERE namespace=\'outbox\'').get().count, 0)
   assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM mail_outbox').get().count, 1)
   fakeClock.advance(24 * 60 * 60_000)
   mail.pruneExpired()
@@ -247,5 +247,5 @@ test('exhausted delivery stores no fixture message or code and returns a safe er
   )
   assert.equal(sqlite.prepare('SELECT state,code,projection_token FROM mail_outbox').get().state, 'failed')
   assert.equal(sqlite.prepare('SELECT code,projection_token FROM mail_outbox').get().code, null)
-  assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM mini_kv WHERE namespace='outbox'").get().count, 0)
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM key_value_state WHERE namespace='outbox'").get().count, 0)
 })

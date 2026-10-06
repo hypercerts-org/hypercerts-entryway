@@ -10,7 +10,7 @@ const path = `artifacts/crash-${run}`
 test('real HTTP signup survives SIGKILL before or after PDS commit', async ({ page }) => {
   const label = `crash-${randomBytes(5).toString('hex')}`
   const identity = { email: `${label}@example.test`, handle: `${label}.entryway.atmosbox.test` }
-  const db = new DatabaseSync('/entryway-data/entryway.sqlite', { readOnly: true })
+  const db = new DatabaseSync('/entryway-data/account-authority.sqlite', { readOnly: true })
   try {
     await page.goto(`${config.issuer}/login`)
     await page.getByLabel('Email address').fill(identity.email)
@@ -26,7 +26,7 @@ test('real HTTP signup survives SIGKILL before or after PDS commit', async ({ pa
     await expect.poll(() => existsSync(`${path}-ready.json`), { timeout: 30000 }).toBe(true)
     const ready = JSON.parse(readFileSync(`${path}-ready.json`))
     identity.did = ready.did
-    const get = () => db.prepare('SELECT * FROM mini_accounts WHERE did=?').get(identity.did)
+    const get = () => db.prepare('SELECT * FROM accounts WHERE did=?').get(identity.did)
     expect(get().status).toBe('provisioning')
     const originalOperation = JSON.parse(get().data).op
     const operationHash = createHash('sha256').update(JSON.stringify(originalOperation)).digest('hex')
@@ -34,7 +34,7 @@ test('real HTTP signup survives SIGKILL before or after PDS commit', async ({ pa
     await expect.poll(() => existsSync(`${path}-restarted`), { timeout: 90000 }).toBe(true)
     // Let the normal background reconciliation timer perform recovery, with no operator repair.
     await expect.poll(() => get().status, { timeout: 60000 }).toBe('active')
-    const journal = JSON.parse(db.prepare('SELECT value FROM mini_kv WHERE namespace=? AND key=?').get('operations', `create:${identity.did}`).value)
+    const journal = JSON.parse(db.prepare('SELECT value FROM key_value_state WHERE namespace=? AND key=?').get('operations', `create:${identity.did}`).value)
     expect(journal.phase).toBe('complete')
     const audit = await (await fetch(`${config.plcUrl}/${identity.did}/log/audit`)).json()
     expect(audit).toHaveLength(1)

@@ -62,7 +62,7 @@ export class ExternalMigrationService {
       readonly source: SourceFixtureClient;
       readonly target: PdsMigrationClient;
       readonly sourceHandoffSigner: BoundFixtureSourceHandoffSigner;
-      readonly entrywayPlcSigner: Secp256k1MigrationPlcSigner;
+      readonly plcRotationSigner: Secp256k1MigrationPlcSigner;
       readonly audit: (input: {
         workflowId: string;
         event: string;
@@ -202,7 +202,7 @@ export class ExternalMigrationService {
                 workflowId: w.id,
                 did: w.did,
                 expectedPreviousCid: w.expectedPlcHead ?? "",
-                entrywayRotationKey: w.authority.entrywayRotationKey,
+                rotationAuthorityKey: w.authority.rotationAuthorityKey,
                 targetPdsUrl: w.targetPdsUrl,
               });
               const n = advance(w, "handoff-journaled", {
@@ -241,7 +241,7 @@ export class ExternalMigrationService {
             {
               await this.assertHead(w);
               const k = await this.d.target.reserveTargetRepositoryKey(w.did);
-              const s = await this.d.entrywayPlcSigner.signMigrationMove({
+              const s = await this.d.plcRotationSigner.signMigrationMove({
                 workflowId: w.id,
                 did: w.did,
                 handoffOperation: w.handoffOperation,
@@ -444,7 +444,7 @@ export class ExternalMigrationService {
           "user",
         ),
         publicKey(
-          workflow.authority.entrywayRotationKey,
+          workflow.authority.rotationAuthorityKey,
           "entryway-plc",
           "entryway",
         ),

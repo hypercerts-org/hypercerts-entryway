@@ -5,7 +5,7 @@ import { advance, commandFor, reconcileTargetCreation } from '../../dist/src/fea
 const workflow = (phase = 'owner-confirmed') => ({
   id: 'workflow-1', did: 'did:plc:fixture', ownerUserId: 'user-1', ownerSessionReference: 'session-1',
   handle: 'fixture.example.test', sourcePdsUrl: 'https://source.test', targetPdsId: 'target', targetPdsUrl: 'https://target.test',
-  authority: { sourceRecoveryKey: 'did:key:source', entrywayRotationKey: 'did:key:entryway', sourceRepositoryKey: 'did:key:repo', sourcePlcHead: 'head-0' },
+  authority: { sourceRecoveryKey: 'did:key:source', rotationAuthorityKey: 'did:key:entryway', sourceRepositoryKey: 'did:key:repo', sourcePlcHead: 'head-0' },
   phase, expectedPlcHead: 'head-0', version: 0, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
 })
 

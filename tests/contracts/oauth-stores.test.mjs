@@ -111,10 +111,10 @@ test('device-account lookups use indexed DID and device membership without names
   second.status = 'active'
   assert.equal(enumerations, 0)
 
-  const didPlan = f.db.sqlite.prepare("EXPLAIN QUERY PLAN SELECT key FROM mini_kv WHERE namespace='oauth:device-accounts' AND json_extract(value,'$.did')=? ORDER BY key").all(f.row.did)
-  const devicePlan = f.db.sqlite.prepare("EXPLAIN QUERY PLAN SELECT key FROM mini_kv WHERE namespace='oauth:device-accounts' AND json_extract(value,'$.deviceId')=? ORDER BY key").all('bob-device')
-  assert.match(didPlan.map(({ detail }) => detail).join(' '), /mini_kv_oauth_device_account_did_idx/)
-  assert.match(devicePlan.map(({ detail }) => detail).join(' '), /mini_kv_oauth_device_account_device_id_idx/)
+  const didPlan = f.db.sqlite.prepare("EXPLAIN QUERY PLAN SELECT key FROM key_value_state WHERE namespace='oauth:device-accounts' AND json_extract(value,'$.did')=? ORDER BY key").all(f.row.did)
+  const devicePlan = f.db.sqlite.prepare("EXPLAIN QUERY PLAN SELECT key FROM key_value_state WHERE namespace='oauth:device-accounts' AND json_extract(value,'$.deviceId')=? ORDER BY key").all('bob-device')
+  assert.match(didPlan.map(({ detail }) => detail).join(' '), /oauth_device_account_did_idx/)
+  assert.match(devicePlan.map(({ detail }) => detail).join(' '), /oauth_device_account_device_id_idx/)
 
   f.store.removeDeviceAccount('shared-device', f.row.did)
   assert.deepEqual(f.store.listDeviceAccounts({ deviceId: 'shared-device' }).map(({ account }) => account.did), [second.did])
@@ -126,16 +126,16 @@ test('device-account lookups use indexed DID and device membership without names
   f.store.upsertDeviceAccount('alice-device', f.row.did)
   // Simulate a pre-303 database: membership rows exist before the new indexes.
   f.db.sqlite.exec(`
-    DROP INDEX mini_kv_oauth_device_account_did_idx;
-    DROP INDEX mini_kv_oauth_device_account_device_id_idx;
-    DELETE FROM entryway_schema_migrations WHERE version=303;
+    DROP INDEX oauth_device_account_did_idx;
+    DROP INDEX oauth_device_account_device_id_idx;
+    DELETE FROM schema_migrations WHERE version=303;
   `)
   f.reopen()
   assert.equal(f.db.schema.version, 303)
-  const indexNames = f.db.sqlite.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'mini_kv_oauth_device_account_%_idx'").all().map(({ name }) => name)
+  const indexNames = f.db.sqlite.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'oauth_device_account_%_idx'").all().map(({ name }) => name)
   assert.deepEqual(indexNames.sort(), [
-    'mini_kv_oauth_device_account_device_id_idx',
-    'mini_kv_oauth_device_account_did_idx',
+    'oauth_device_account_device_id_idx',
+    'oauth_device_account_did_idx',
   ])
   const restored = f.store.listDeviceAccounts({ did: f.row.did })
   assert.equal(restored.length, 1)

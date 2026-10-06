@@ -45,7 +45,7 @@ export async function createProtocolRouting({
   oauth,
   legacy,
   security,
-  extras,
+  protocolOperations,
   migration,
   reconcile,
 }) {

@@ -41,7 +41,7 @@ export async function createLegacy({ db, config, accounts }) {
   // A keyed digest supports constant-work lookup of high-entropy app passwords.
   // Domain separation prevents reuse of the JWT private-key bytes as a raw hash.
   const appHashKey = createHmac("sha256", Buffer.from(d, "base64url"))
-    .update("mini-entryway/legacy-app-password/v1")
+    .update("legacy-app-password/v1")
     .digest();
   const dummyPasswordHash = await hashPassword(randomBytes(32).toString("hex"));
   const get = (namespace, key) => db.get(`legacy:${namespace}`, key);

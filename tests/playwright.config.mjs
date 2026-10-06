@@ -1,6 +1,6 @@
 import { defineConfig } from '@playwright/test'
 
-const publicRun = process.env.SPIKE_PUBLIC === 'true'
+const publicRun = process.env.PUBLIC_BROWSER_TESTS === 'true'
 const artifactPrefix = publicRun ? 'public-browser' : 'browser'
 export default defineConfig({
   testDir: './browser',

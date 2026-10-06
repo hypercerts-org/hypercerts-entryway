@@ -6,13 +6,13 @@ import { randomBytes } from 'node:crypto'
 import { Secp256k1Keypair } from '@atproto/crypto'
 import * as plc from '@did-plc/lib'
 
-const integration = process.env.SPIKE_CONFIG ? test : test.skip
+const integration = process.env.SERVICE_CONFIG_PATH ? test : test.skip
 let config, db, main, identity, adminAccount
 const password = `spike-${randomBytes(20).toString('hex')}`
 const unique = randomBytes(6).toString('hex')
 const mail = (email, namespace = 'outbox') => {
   const row = db
-    .prepare('SELECT value FROM mini_kv WHERE namespace=? AND key=?')
+    .prepare('SELECT value FROM key_value_state WHERE namespace=? AND key=?')
     .get(namespace, email)
   return row && JSON.parse(row.value)
 }
@@ -68,9 +68,9 @@ async function signup(label, pdsId = 'pds1', extra = {}) {
   return { ...session, email, handle, pds: config.pds.find((p) => p.id === pdsId) }
 }
 before(async () => {
-  if (!process.env.SPIKE_CONFIG) return
-  config = JSON.parse(readFileSync(process.env.SPIKE_CONFIG, 'utf8'))
-  db = new DatabaseSync('/entryway-data/entryway.sqlite', { readOnly: true })
+  if (!process.env.SERVICE_CONFIG_PATH) return
+  config = JSON.parse(readFileSync(process.env.SERVICE_CONFIG_PATH, 'utf8'))
+  db = new DatabaseSync('/entryway-data/account-authority.sqlite', { readOnly: true })
   main = await signup('legacy')
   identity = await signup('identity')
   adminAccount = await signup('admin', 'pds2')
@@ -91,7 +91,7 @@ integration(
       { status: 400 },
     )
     assert.equal(rejected.error, 'InvalidPassword')
-    assert.equal(db.prepare('SELECT did FROM mini_accounts WHERE email=?').get(email), undefined)
+    assert.equal(db.prepare('SELECT did FROM accounts WHERE email=?').get(email), undefined)
     const accepted = await call('server.createAccount', {
       email,
       handle,
@@ -343,7 +343,7 @@ integration(
       { origin: adminAccount.pds.url },
     )
     const messages = db
-      .prepare("SELECT value FROM mini_kv WHERE namespace='mail-outbox'")
+      .prepare("SELECT value FROM key_value_state WHERE namespace='mail-outbox'")
       .all()
       .map((r) => JSON.parse(r.value))
     assert.ok(
@@ -357,7 +357,7 @@ integration(
       { origin: adminAccount.pds.url },
     )
     const row = JSON.parse(
-      db.prepare('SELECT data FROM mini_accounts WHERE did=?').get(adminAccount.did).data,
+      db.prepare('SELECT data FROM accounts WHERE did=?').get(adminAccount.did).data,
     )
     assert.equal(row.email, newEmail)
     assert.equal(row.emailVerified, false)
@@ -427,7 +427,7 @@ integration(
     await call('server.deleteAccount', { did: a.did, token, password }, undefined, {
       origin: a.pds.url,
     })
-    const row = JSON.parse(db.prepare('SELECT data FROM mini_accounts WHERE did=?').get(a.did).data)
+    const row = JSON.parse(db.prepare('SELECT data FROM accounts WHERE did=?').get(a.did).data)
     assert.equal(row.status, 'deleted')
     await call('server.createSession', { identifier: a.email, password }, undefined, {
       status: 403,
@@ -478,7 +478,7 @@ integration(
     })
     assert.equal(status.phase, 'complete')
     assert.equal(
-      db.prepare('SELECT pds_id FROM mini_accounts WHERE did=?').get(a.did).pds_id,
+      db.prepare('SELECT pds_id FROM accounts WHERE did=?').get(a.did).pds_id,
       'pds2',
     )
   },

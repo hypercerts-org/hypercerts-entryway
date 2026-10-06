@@ -8,11 +8,11 @@ import { waitForMailpitCode } from '../support/helpers/mailpit.mjs'
 
 test.use({ trace: 'off', screenshot: 'off', video: 'off' })
 
-const config = JSON.parse(readFileSync(process.env.SPIKE_CONFIG ?? './.runtime/config.json', 'utf8'))
-const databasePath = process.env.SPIKE_TEST_DATABASE ?? '/entryway-data/entryway.sqlite'
+const config = JSON.parse(readFileSync(process.env.SERVICE_CONFIG_PATH ?? './.runtime/config.json', 'utf8'))
+const databasePath = process.env.TEST_ACCOUNT_DATABASE_PATH ?? '/entryway-data/account-authority.sqlite'
 const mailbox = new DatabaseSync(databasePath, { readOnly: true })
 const fixtureDb = new DatabaseSync(databasePath)
-const readValue = mailbox.prepare('SELECT value FROM mini_kv WHERE namespace=? AND key=?')
+const readValue = mailbox.prepare('SELECT value FROM key_value_state WHERE namespace=? AND key=?')
 const readMail = (email) => {
   const row = readValue.get('outbox', email)
   return row ? JSON.parse(row.value) : null
@@ -21,17 +21,17 @@ const runId = Date.now().toString(36)
 const origin = new URL(config.issuer).origin
 
 function updateFlow(flowId, update) {
-  const row = fixtureDb.prepare("SELECT value FROM mini_kv WHERE namespace='auth-flows' AND key=?").get(flowId)
+  const row = fixtureDb.prepare("SELECT value FROM key_value_state WHERE namespace='auth-flows' AND key=?").get(flowId)
   if (!row) throw new Error('The browser flow was not saved')
   const flow = JSON.parse(row.value)
   update(flow)
-  fixtureDb.prepare("UPDATE mini_kv SET value=? WHERE namespace='auth-flows' AND key=?")
+  fixtureDb.prepare("UPDATE key_value_state SET value=? WHERE namespace='auth-flows' AND key=?")
     .run(JSON.stringify(flow), flowId)
 }
 
 function ageFlow(flowId) {
   updateFlow(flowId, (flow) => {
-    flow.createdAt = { $miniDate: new Date(Date.now() - 16 * 60_000).toISOString() }
+    flow.createdAt = { $date: new Date(Date.now() - 16 * 60_000).toISOString() }
     flow.lastOtpSentAt = Date.now() - 6_000
   })
 }
@@ -116,7 +116,7 @@ test('resend invalidates the previous OTP and email correction binds the same fl
     expect(readMail(replacementEmail)?.otp === replacementCapture).toBe(true)
     expect(readMail(originalEmail)).toBeNull()
     const savedFlow = JSON.parse(
-      fixtureDb.prepare("SELECT value FROM mini_kv WHERE namespace='auth-flows' AND key=?")
+      fixtureDb.prepare("SELECT value FROM key_value_state WHERE namespace='auth-flows' AND key=?")
         .get(flowId).value,
     )
     expect(savedFlow.email).toBe(replacementEmail)
@@ -170,7 +170,7 @@ test('expired OAuth flow restarts from the stored PAR and preserves trusted requ
     await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible()
     const flowId = await page.locator('form[action="/auth/verify"] input[name="flow"]').inputValue()
     const before = JSON.parse(
-      fixtureDb.prepare("SELECT value FROM mini_kv WHERE namespace='auth-flows' AND key=?")
+      fixtureDb.prepare("SELECT value FROM key_value_state WHERE namespace='auth-flows' AND key=?")
         .get(flowId).value,
     )
     ageFlow(flowId)
@@ -183,7 +183,7 @@ test('expired OAuth flow restarts from the stored PAR and preserves trusted requ
     const restartedId = await page.locator('form[action="/auth/email"] input[name="flow"]').inputValue()
     expect(restartedId).not.toBe(flowId)
     const restarted = JSON.parse(
-      fixtureDb.prepare("SELECT value FROM mini_kv WHERE namespace='auth-flows' AND key=?")
+      fixtureDb.prepare("SELECT value FROM key_value_state WHERE namespace='auth-flows' AND key=?")
         .get(restartedId).value,
     )
     expect(restarted.clientId).toBe(before.clientId)
@@ -259,12 +259,12 @@ test('reserved external migration email remains usable by its verified owner', a
     await returningPage.getByRole('button', { name: 'Verify code' }).click()
     await expect(returningPage.getByRole('heading', { name: 'Create your account' })).toBeVisible()
     await expect(returningPage.getByRole('alert')).toHaveCount(0)
-    expect(db.prepare('SELECT state FROM entryway_external_reservations WHERE workflow_id=?')
+    expect(db.prepare('SELECT state FROM migration_reservations WHERE workflow_id=?')
       .get(workflowId)?.state).toBe('reserved')
     await returningContext.close()
   } finally {
     if (reservationCreated)
-      db.prepare("DELETE FROM entryway_external_reservations WHERE workflow_id=? AND state='reserved'")
+      db.prepare("DELETE FROM migration_reservations WHERE workflow_id=? AND state='reserved'")
         .run(workflowId)
     db.close()
   }

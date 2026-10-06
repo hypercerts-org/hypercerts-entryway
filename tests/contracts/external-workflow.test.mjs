@@ -40,8 +40,8 @@ function fixture() {
   const custody={async save(inventory){calls.push('save-custody');assert.equal(inventory.did,'did:plc:'+'a'.repeat(24));assert.equal(inventory.keys.length,4)}}
   const oauthIssuerKey={keyReference:`jwk-thumbprint:${'a'.repeat(43)}`,purpose:'oauth-issuer',custodian:'oauth-issuer',algorithm:'ES256K',fingerprint:`sha256:${'a'.repeat(64)}`,lifecycle:'active'}
   const start={async createReservedWorkflow({reservation,workflow}){await accounts.reserveExternalMigration(reservation);await workflows.create(workflow)}}
-  const make=(stopAt)=>new ExternalMigrationService({workflows,snapshots,start,accounts,source,target,sourceHandoffSigner:handoff,entrywayPlcSigner:signer,custody,oauthIssuerKey,audit(){},checkpointObserver:stopAt?async w=>{if(w.phase===stopAt)throw new FixtureCheckpointPause(w.phase)}:undefined})
-  const input={workflowId:'workflow-1',did:'did:plc:'+'a'.repeat(24),ownerUserId:'user-1',ownerSessionId:'session-1',sourceEmail:'owner@example.test',handle:'moved.entryway.test',sourcePdsUrl:'https://source.test',targetPdsId:'pds1',targetPdsUrl:'https://target.test',authority:{sourceRecoveryKey:didKey('a'),entrywayRotationKey:didKey('b'),sourceRepositoryKey:didKey('d'),sourcePlcHead:heads.initial}}
+  const make=(stopAt)=>new ExternalMigrationService({workflows,snapshots,start,accounts,source,target,sourceHandoffSigner:handoff,plcRotationSigner:signer,custody,oauthIssuerKey,audit(){},checkpointObserver:stopAt?async w=>{if(w.phase===stopAt)throw new FixtureCheckpointPause(w.phase)}:undefined})
+  const input={workflowId:'workflow-1',did:'did:plc:'+'a'.repeat(24),ownerUserId:'user-1',ownerSessionId:'session-1',sourceEmail:'owner@example.test',handle:'moved.entryway.test',sourcePdsUrl:'https://source.test',targetPdsId:'pds1',targetPdsUrl:'https://target.test',authority:{sourceRecoveryKey:didKey('a'),rotationAuthorityKey:didKey('b'),sourceRepositoryKey:didKey('d'),sourcePlcHead:heads.initial}}
   return {sqlite,workflows,snapshots,calls,state,make,input,actor:{userId:'user-1',sessionId:'session-1'}}
 }
 

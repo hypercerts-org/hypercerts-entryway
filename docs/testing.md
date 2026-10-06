@@ -58,10 +58,16 @@ Review `resilience.json` and per-phase reports if interrupted. See
 
 | Environment variable | Meaning |
 | --- | --- |
-| `ENTRYWAY_E2E_KEEP_FAILED_STATE=1` | Keep a failed disposable run for investigation |
-| `ENTRYWAY_SANDBOX_ROOT` | Explicit runtime checkout location for controlled use |
-| `ENTRYWAY_E2E_PROJECT` | Explicit owned project name |
-| `ENTRYWAY_E2E_REPORT_DIR` | Report directory override |
+| `KEEP_FAILED_SANDBOX=1` | Keep a failed disposable run for investigation |
+| `SANDBOX_CHECKOUT` | Explicit runtime checkout location for controlled use |
+| `SANDBOX_PROJECT` | Explicit owned project name |
+| `ACCEPTANCE_REPORT_DIR` | Report directory override |
+
+Runtime configuration uses `SERVICE_CONFIG_PATH` (default `./.runtime/config.json`)
+and `STATE_DIRECTORY` (default `/data`); the database is `account-authority.sqlite`.
+Harness templates and current commands use the purpose-based variables above.
+Historical evidence keeps its original command names. The naming change requires
+fresh state; do not resume a sandbox or restore a database from the older schema.
 
 `fresh` generates its own runtime path, project name and report directory; the
 explicit location/name overrides apply to persistent commands.
@@ -105,8 +111,9 @@ measure the complete expiry interval.
 No tests or builds were executed as part of the original documentation import.
 The [October 5 baseline](../tests/plans/baseline-2026-10-05.md) now records two
 isolated runs at `89589ca6`; [M1 matrices](../tests/plans/README.md) distinguish
-their bounded coverage from unresolved requirements. The October 6 publication
-does not claim a new runtime result. Report new runs with source revision,
+their bounded coverage from unresolved requirements. The October 6 documentation publication
+did not claim a new runtime result. The later [naming-change verification](../tests/plans/naming-2026-10-06.md)
+records fresh execution after the rename. Report new runs with source revision,
 command, sandbox/dependency versions, result and unrun groups.
 Historical spike reports establish provenance only. Never copy captured
 OTPs, access tokens, private keys or runtime configuration into committed reports.
@@ -130,7 +137,7 @@ consumer migration lock, use bounded waits and restore only owned services and
 keys on exit. Fresh authority fixtures belong to the current project. Database
 backups and private signing configuration remain in ignored private volumes.
 Reports include candidate source/build digests, image identities and redacted
-named-case results under ENTRYWAY_E2E_REPORT_DIR.
+named-case results under ACCEPTANCE_REPORT_DIR.
 
 `interop-profile` retains its raw exit 2 for required moderation coordination.
 `all` records that result and independently asserts that the only failure is the
@@ -139,7 +146,7 @@ failure blocks equivalence. A passing restructuring equivalence run does not
 mean the product profile passed or that release requirements are complete.
 
 The final reviewed candidate runs `TMPDIR="$HOME/temp/tmp"
-ENTRYWAY_E2E_KEEP_FAILED_STATE=1 ./tests/local.sh fresh`. All probes run before
+KEEP_FAILED_SANDBOX=1 ./tests/local.sh fresh`. All probes run before
 that disposable project's cleanup, with resilience last. The backup/rotation
 checks establish bounded local restoration, not off-site/full DR, zero-downtime
 key overlap, existing-refresh continuity or production acceptance.

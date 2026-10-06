@@ -6,7 +6,7 @@ import { createInvites } from "./features/account-registration/invites.mjs";
 import { createScopeReferences } from "./features/oauth-authorization/scope-reference.mjs";
 import { createAdminMessage } from "./mail/admin-message.mjs";
 
-export async function createEntrywayExtras({ db, config, accounts }) {
+export async function createProtocolOperations({ db, config, accounts }) {
   const operations = {};
   Object.assign(
     operations,

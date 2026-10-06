@@ -12,7 +12,7 @@ Use Docker with Compose v2 (`up --wait` support), Deno 2.8.3, Node 24, Git, Pyth
 The main repeatable command is `./tests/local.sh fresh`. It clones pinned AiaB
 into a unique temporary directory, uses an automatically selected subnet and
 a unique project name, runs the complete ordered flow, then removes that exact
-project and its volumes. Set `ENTRYWAY_E2E_KEEP_FAILED_STATE=1` to retain failed
+project and its volumes. Set `KEEP_FAILED_SANDBOX=1` to retain failed
 state for diagnosis. Reports stay under `tests/artifacts/<project>/`.
 
 For persistent debugging:

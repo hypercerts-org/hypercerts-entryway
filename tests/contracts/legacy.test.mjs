@@ -11,7 +11,7 @@ import { openDatabase } from '../../dist/src/database/sqlite/connection.mjs'
 const PASSWORD = 'safely-test-the-password'
 async function fixture(t, { persistent = false } = {}) {
   const directory = persistent ? mkdtempSync(join(tmpdir(), 'entryway-legacy-')) : null
-  const path = directory ? join(directory, 'entryway.sqlite') : ':memory:'
+  const path = directory ? join(directory, 'account-authority.sqlite') : ':memory:'
   let db = openDatabase(path)
   const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'secp256k1' })
   const config = {
@@ -89,7 +89,7 @@ test('legacy passwords use durable hashes and main-password verification exclude
   const app = legacy.createAppPassword(alice.did, { name: 'automation' })
   assert.equal(await legacy.verifyPassword(alice.did, app.password), false)
   assert.match(app.password, /^[a-z]{4}(?:-[a-z]{4}){3}$/)
-  const persisted = JSON.stringify(db.sqlite.prepare('SELECT * FROM mini_kv').all())
+  const persisted = JSON.stringify(db.sqlite.prepare('SELECT * FROM key_value_state').all())
   assert.ok(!persisted.includes(PASSWORD))
   assert.ok(!persisted.includes(app.password))
   assert.ok(!persisted.includes(app.password.replaceAll('-', '')))

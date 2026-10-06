@@ -2,7 +2,7 @@
 set -euo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 root=$(cd "$here/../.." && pwd)
-sandbox=${ENTRYWAY_SANDBOX_ROOT:-"$root/tests/.runtime/atmosphereinabox"}
+sandbox=${SANDBOX_CHECKOUT:-"$root/tests/.runtime/atmosphereinabox"}
 pin=$(cat "$here/PIN")
 if ! test -d "$sandbox/.git"; then
   git clone --quiet --filter=blob:none https://tangled.org/kandake.africa/atmosphereinabox.git "$sandbox"

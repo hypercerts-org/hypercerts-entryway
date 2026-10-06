@@ -17,7 +17,7 @@ import { createSqliteMailOutbox } from "../../dist/src/database/sqlite/mail-outb
 
 async function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), "entryway-account-security-"));
-  const path = join(directory, "entryway.sqlite");
+  const path = join(directory, "account-authority.sqlite");
   const { privateKey } = await generateKeyPair("ES256K", { extractable: true });
   const config = {
     issuer: "https://entryway.atmosbox.test",
@@ -670,7 +670,7 @@ test("forced email claim failure rolls back account, binding, Better Auth and se
     version: authority.version(f.alice.did),
   };
   f.db.sqlite
-    .exec(`CREATE TRIGGER fail_email_claim BEFORE INSERT ON mini_email_claims
+    .exec(`CREATE TRIGGER fail_email_claim BEFORE INSERT ON email_claims
     WHEN NEW.email='rollback@example.com'
     BEGIN SELECT RAISE(ABORT, 'synthetic email claim failure'); END;`);
   const mutation = {

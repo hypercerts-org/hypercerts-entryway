@@ -6,16 +6,16 @@ export function createDeviceAccountMembershipReader(
   sqlite: Database.Database,
 ): DeviceAccountMembershipReader {
   const all = sqlite.prepare(
-    "SELECT key FROM mini_kv WHERE namespace='oauth:device-accounts' ORDER BY key",
+    "SELECT key FROM key_value_state WHERE namespace='oauth:device-accounts' ORDER BY key",
   );
   const byDid = sqlite.prepare(
-    "SELECT key FROM mini_kv WHERE namespace='oauth:device-accounts' AND json_extract(value,'$.did')=? ORDER BY key",
+    "SELECT key FROM key_value_state WHERE namespace='oauth:device-accounts' AND json_extract(value,'$.did')=? ORDER BY key",
   );
   const byDeviceId = sqlite.prepare(
-    "SELECT key FROM mini_kv WHERE namespace='oauth:device-accounts' AND json_extract(value,'$.deviceId')=? ORDER BY key",
+    "SELECT key FROM key_value_state WHERE namespace='oauth:device-accounts' AND json_extract(value,'$.deviceId')=? ORDER BY key",
   );
   const byDidAndDeviceId = sqlite.prepare(
-    "SELECT key FROM mini_kv WHERE namespace='oauth:device-accounts' AND json_extract(value,'$.did')=? AND json_extract(value,'$.deviceId')=? ORDER BY key",
+    "SELECT key FROM key_value_state WHERE namespace='oauth:device-accounts' AND json_extract(value,'$.did')=? AND json_extract(value,'$.deviceId')=? ORDER BY key",
   );
   return {
     findKeys(filter) {
@@ -37,11 +37,11 @@ export const oauthDeviceAccountIndexesMigration: SchemaMigration = {
   name: "oauth_device_account_membership_indexes",
   up(sqlite) {
     sqlite.exec(`
-      CREATE INDEX IF NOT EXISTS mini_kv_oauth_device_account_did_idx
-        ON mini_kv(json_extract(value,'$.did'), key)
+      CREATE INDEX IF NOT EXISTS oauth_device_account_did_idx
+        ON key_value_state(json_extract(value,'$.did'), key)
         WHERE namespace='oauth:device-accounts';
-      CREATE INDEX IF NOT EXISTS mini_kv_oauth_device_account_device_id_idx
-        ON mini_kv(json_extract(value,'$.deviceId'), key)
+      CREATE INDEX IF NOT EXISTS oauth_device_account_device_id_idx
+        ON key_value_state(json_extract(value,'$.deviceId'), key)
         WHERE namespace='oauth:device-accounts';
     `);
   },

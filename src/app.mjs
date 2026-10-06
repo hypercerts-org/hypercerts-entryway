@@ -7,7 +7,7 @@ import { mountAccountUi } from "./compose-account-ui.mjs";
 import { page } from "./ui/html.mjs";
 import { createLegacy } from "./oauth/legacy-credentials.mjs";
 import { createAccountSecurity } from "./compose-account-security.mjs";
-import { createEntrywayExtras } from "./compose-protocol-operations.mjs";
+import { createProtocolOperations } from "./compose-protocol-operations.mjs";
 import { createAccountMigration } from "./features/pds-migration/move-between-pds.mjs";
 import { requestFailureEvent } from "./logging/request-event.js";
 
@@ -70,10 +70,14 @@ export async function createApp({ config, db, mail }) {
     legacy,
     mail,
   });
-  const extras = await createEntrywayExtras({ db, config, accounts });
+  const protocolOperations = await createProtocolOperations({
+    db,
+    config,
+    accounts,
+  });
   accounts.setProvisionPolicy({
-    reserve: extras.reserveInvite,
-    complete: extras.completeInvite,
+    reserve: protocolOperations.reserveInvite,
+    complete: protocolOperations.completeInvite,
   });
   const migration = await createAccountMigration({
     db,
@@ -139,7 +143,7 @@ export async function createApp({ config, db, mail }) {
     oauth,
     legacy,
     security,
-    extras,
+    protocolOperations,
     migration,
     reconcile,
   });

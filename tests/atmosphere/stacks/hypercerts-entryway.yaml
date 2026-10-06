@@ -1,11 +1,11 @@
 x-runtime: &runtime
-  image: ${ENTRYWAY_E2E_PROJECT:-hypercerts-entryway}:local
+  image: ${SANDBOX_PROJECT:-hypercerts-entryway}:local
   build:
     context: ../..
     dockerfile: tests/support/Dockerfile
   init: true
   environment: &runtime-env
-    SPIKE_CONFIG: /config/config.json
+    SERVICE_CONFIG_PATH: /config/config.json
     NODE_EXTRA_CA_CERTS: /ca/root.crt
     LOG_LEVEL: warn
   networks: [atmosinabox]
@@ -14,9 +14,9 @@ services:
     <<: *runtime
     command: node tests/support/configure.mjs
     environment:
-      SPIKE_CONFIG: /config/config.json
-      SPIKE_HANDLE_DOMAINS: .entryway.atmosbox.test
-      SPIKE_CLIENT_URL: https://client.entryway.example.com
+      SERVICE_CONFIG_PATH: /config/config.json
+      SERVICE_HANDLE_DOMAINS: .entryway.atmosbox.test
+      OAUTH_CLIENT_URL: https://client.entryway.example.com
       SOURCE_FIXTURE_PUBLIC_DIR: /run/fixture-public
       SOURCE_FIXTURE_TOKEN_DIR: /run/secrets
     volumes:
@@ -35,7 +35,7 @@ services:
       <<: *runtime-env
       MAIL_SMTP_HOST: mail-capture
       MAIL_SMTP_PORT: '2525'
-      SPIKE_BROWSER_CLIENT_METADATA_URL: https://browser.atmosbox.internal/oauth-client-metadata.json
+      BROWSER_CLIENT_METADATA_URL: https://browser.atmosbox.internal/oauth-client-metadata.json
       SOURCE_FIXTURE_URL: http://source-fixture:3313
       SOURCE_FIXTURE_TOKEN_FILE: /run/secrets/source-fixture-token
     depends_on:
@@ -96,7 +96,7 @@ services:
       pds1: { condition: service_healthy }
       pds2: { condition: service_healthy }
   browser:
-    image: ${ENTRYWAY_E2E_PROJECT:-hypercerts-entryway}-browser:local
+    image: ${SANDBOX_PROJECT:-hypercerts-entryway}-browser:local
     build:
       context: ../..
       dockerfile: tests/support/Dockerfile.browser

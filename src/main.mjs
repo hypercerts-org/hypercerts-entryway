@@ -7,9 +7,9 @@ import { createSqliteMailOutbox } from "./database/sqlite/mail-outbox.js";
 import { createSmtpMailTransport } from "./mail/smtp.js";
 
 const config = loadConfig();
-const dataDir = process.env.SPIKE_DATA ?? "/data";
+const dataDir = process.env.STATE_DIRECTORY ?? "/data";
 mkdirSync(dataDir, { recursive: true });
-const db = openDatabase(`${dataDir}/entryway.sqlite`);
+const db = openDatabase(`${dataDir}/account-authority.sqlite`);
 const mail = createMailFeature({
   outbox: createSqliteMailOutbox(db.sqlite),
   transport: createSmtpMailTransport({

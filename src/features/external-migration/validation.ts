@@ -134,7 +134,7 @@ export function validateMigrationWorkflow(value: unknown): MigrationWorkflow {
   if (
     !isRecord(authority) ||
     !isDidKey(authority.sourceRecoveryKey) ||
-    !isDidKey(authority.entrywayRotationKey) ||
+    !isDidKey(authority.rotationAuthorityKey) ||
     !isDidKey(authority.sourceRepositoryKey) ||
     !isCid(authority.sourcePlcHead) ||
     !isCid(value.expectedPlcHead)

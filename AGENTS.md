@@ -52,6 +52,9 @@ Mail retry/outbox state belongs to delivery/database; its transport port sends a
 fully formed message. Better Auth never becomes the AT Protocol identity model.
 Features receive normalized browser principals, never provider session objects.
 
+Name tables, database files and variables for their purpose, without project-name
+prefixes. Preserve names mandated by upstream protocol or provider contracts.
+
 New TypeScript is strict and uses unknown for untrusted input and stable error
 codes. Preserved MJS is deliberately not a claim of completed TypeScript coverage;
 its owner inventory is docs/source-ownership.json. Do not add matching domain,

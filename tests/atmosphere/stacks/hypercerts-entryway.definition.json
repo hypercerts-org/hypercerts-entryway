@@ -6,35 +6,35 @@
       "service": "configure",
       "environment": [
         {
-          "name": "SPIKE_ISSUER",
+          "name": "OAUTH_ISSUER_URL",
           "source": {
             "kind": "route-url",
             "route": "entryway"
           }
         },
         {
-          "name": "SPIKE_CLIENT_URL",
+          "name": "OAUTH_CLIENT_URL",
           "source": {
             "kind": "route-url",
             "route": "client"
           }
         },
         {
-          "name": "SPIKE_PDS1_URL",
+          "name": "PDS1_URL",
           "source": {
             "kind": "route-url",
             "route": "cluster1"
           }
         },
         {
-          "name": "SPIKE_PDS2_URL",
+          "name": "PDS2_URL",
           "source": {
             "kind": "route-url",
             "route": "cluster2"
           }
         },
         {
-          "name": "SPIKE_PLC_URL",
+          "name": "PLC_DIRECTORY_URL",
           "source": {
             "kind": "plc-url"
           }

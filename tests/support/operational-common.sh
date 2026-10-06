@@ -2,9 +2,9 @@
 # Sourced only by target-owned host lifecycle controllers.
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
-sandbox=${ENTRYWAY_SANDBOX_ROOT:-"$root/tests/.runtime/atmosphereinabox"}
-project=${ENTRYWAY_E2E_PROJECT:-hypercerts-entryway}
-artifacts=${ENTRYWAY_E2E_REPORT_DIR:-"$root/tests/artifacts"}
+sandbox=${SANDBOX_CHECKOUT:-"$root/tests/.runtime/atmosphereinabox"}
+project=${SANDBOX_PROJECT:-hypercerts-entryway}
+artifacts=${ACCEPTANCE_REPORT_DIR:-"$root/tests/artifacts"}
 [[ "$project" =~ ^hypercerts-entryway(-[a-z0-9_-]+)?$ ]] || exit 2
 node --input-type=module - "$sandbox/state/manifest.json" "$project" <<'JS'
 import { readFileSync } from 'node:fs'

@@ -78,7 +78,7 @@ async function fixture(t) {
       return {}
     },
   }
-  await mountXrpc({ app, db, config, accounts, legacy, security, oauth: {}, extras: {} })
+  await mountXrpc({ app, db, config, accounts, legacy, security, oauth: {}, protocolOperations: {} })
   const invoke = (name, { method = 'post', body, authorization } = {}) =>
     new Promise((resolve, reject) => {
       const path = `/xrpc/com.atproto.${name}`

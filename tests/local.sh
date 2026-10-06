@@ -2,10 +2,10 @@
 # Only this project's sandbox is controlled; application execution stays in containers.
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-sandbox=${ENTRYWAY_SANDBOX_ROOT:-"$root/tests/.runtime/atmosphereinabox"}
-project=${ENTRYWAY_E2E_PROJECT:-hypercerts-entryway}
-artifacts=${ENTRYWAY_E2E_REPORT_DIR:-"$root/tests/artifacts"}
-export ENTRYWAY_SANDBOX_ROOT="$sandbox" ENTRYWAY_E2E_PROJECT="$project" ENTRYWAY_E2E_REPORT_DIR="$artifacts"
+sandbox=${SANDBOX_CHECKOUT:-"$root/tests/.runtime/atmosphereinabox"}
+project=${SANDBOX_PROJECT:-hypercerts-entryway}
+artifacts=${ACCEPTANCE_REPORT_DIR:-"$root/tests/artifacts"}
+export SANDBOX_CHECKOUT="$sandbox" SANDBOX_PROJECT="$project" ACCEPTANCE_REPORT_DIR="$artifacts"
 [[ "$project" =~ ^hypercerts-entryway(-[a-z0-9_-]+)?$ ]] || { echo "Invalid Entryway project name" >&2; exit 2; }
 mkdir -p "$sandbox"
 cd "$sandbox"
@@ -30,25 +30,25 @@ migration_command() { compose exec -T entryway node tests/support/external-migra
 case "$command" in
   fresh)
     temp=$(mktemp -d "${TMPDIR:-/tmp}/hypercerts-entryway-e2e.XXXXXX")
-    export ENTRYWAY_SANDBOX_ROOT="$temp/atmosphereinabox"
-    export ENTRYWAY_E2E_PROJECT="hypercerts-entryway-$(date +%s)-$$"
-    export ENTRYWAY_E2E_REPORT_DIR="$root/tests/artifacts/$ENTRYWAY_E2E_PROJECT"
+    export SANDBOX_CHECKOUT="$temp/atmosphereinabox"
+    export SANDBOX_PROJECT="hypercerts-entryway-$(date +%s)-$$"
+    export ACCEPTANCE_REPORT_DIR="$root/tests/artifacts/$SANDBOX_PROJECT"
     cleanup() {
       result=$?
-      if (( result != 0 )) && [[ "${ENTRYWAY_E2E_KEEP_FAILED_STATE:-0}" == 1 ]]; then
-        echo "Preserved project $ENTRYWAY_E2E_PROJECT at $temp" >&2
+      if (( result != 0 )) && [[ "${KEEP_FAILED_SANDBOX:-0}" == 1 ]]; then
+        echo "Preserved project $SANDBOX_PROJECT at $temp" >&2
       else
-        if test -f "$ENTRYWAY_SANDBOX_ROOT/compose.yaml"; then
-          if ! docker compose --project-name "$ENTRYWAY_E2E_PROJECT" -f "$ENTRYWAY_SANDBOX_ROOT/compose.yaml" down --volumes --remove-orphans; then
-            echo "Scoped cleanup failed; preserved $temp for project $ENTRYWAY_E2E_PROJECT" >&2
+        if test -f "$SANDBOX_CHECKOUT/compose.yaml"; then
+          if ! docker compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" down --volumes --remove-orphans; then
+            echo "Scoped cleanup failed; preserved $temp for project $SANDBOX_PROJECT" >&2
             (( result != 0 )) || result=1
-            echo "Run exit: $result; reports: $ENTRYWAY_E2E_REPORT_DIR"
+            echo "Run exit: $result; reports: $ACCEPTANCE_REPORT_DIR"
             exit "$result"
           fi
         fi
         rm -rf -- "$temp"
       fi
-      echo "Run exit: $result; reports: $ENTRYWAY_E2E_REPORT_DIR"
+      echo "Run exit: $result; reports: $ACCEPTANCE_REPORT_DIR"
       exit "$result"
     }
     trap cleanup EXIT

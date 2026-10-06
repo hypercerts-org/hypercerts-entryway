@@ -14,8 +14,8 @@ Changing that cardinality requires an explicit product decision and schema migra
 
 | State | Domain or system owner | Current representation |
 | --- | --- | --- |
-| Account identity and status | Accounts | `mini_accounts`, keyed by DID |
-| Login identity binding | Accounts | `mini_account_identities`, unique DID and Better Auth user |
+| Account identity and status | Accounts | `accounts`, keyed by DID |
+| Login identity binding | Accounts | `account_bindings`, unique DID and Better Auth user |
 | Email and handle claims | Accounts | Transactional claim tables with uniqueness constraints |
 | Verified browser identity and sessions | Access / Better Auth adapter | Better Auth-owned tables |
 | Device-to-account membership | Access | Indexed provider membership by DID and device ID |
@@ -24,6 +24,21 @@ Changing that cardinality requires an explicit product decision and schema migra
 | Transfer progress | PDS fleet workflow | Legacy operation store and newer versioned workflow/checkpoint tables |
 | Public custody evidence | Identity | Import-time custody inventory; not a complete key lifecycle registry |
 | Repository, blobs and repository key | Hosting PDS | Reference PDS-managed storage |
+
+The service stores account authority, browser authentication, OAuth state, mail
+and workflow journals in `account-authority.sqlite` under `STATE_DIRECTORY`
+(default `/data`). Table and variable names describe their purpose, without
+project prefixes. `accounts` stores DID authority; `account_bindings` links a DID
+to a verified Better Auth user, while Better Auth owns the distinct `account`
+table. `email_claims`, `handle_claims` and `backup_emails` hold account claims;
+`migration_reservations` holds destination reservations; `key_value_state` holds
+namespaced JSON state; `schema_migrations` records schema initialization.
+
+This naming change starts from a fresh database. There is no data conversion,
+old-name alias or automatic upgrade from the earlier schema. New installs and
+sandbox runs initialize the renamed schema directly. Backups must come from the
+same schema generation. Upstream PDS configuration keys retain their mandated
+names.
 
 ## 2. Logical model
 

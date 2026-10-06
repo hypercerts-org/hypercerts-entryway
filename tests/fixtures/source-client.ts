@@ -6,17 +6,17 @@ import { MigrationPayloadStore } from '../../src/database/sqlite/migration-paylo
 
 export interface SourceFixtureStatus {
   did: string; email: string; sourceHandle: string; sourcePdsUrl: string; targetPdsUrl: string
-  sourceRecoveryKey: string; entrywayRotationKey: string; sourceRepositoryKey: string
+  sourceRecoveryKey: string; rotationAuthorityKey: string; sourceRepositoryKey: string
   sourcePlcHead: string; head: string; record: { uri: string; cid: string; commit: { cid: string } }
   blobCid: string; blobSha256: string; frozen: boolean; sourceCommit?: string
 }
 const invalid = (): never => { throw new MigrationError('SourceChanged', 'Source fixture response is invalid') }
 function fixtureStatus(value: unknown): SourceFixtureStatus {
-  if (!isRecord(value) || !isPlcDid(value.did) || typeof value.email !== 'string' || !value.email.includes('@') || typeof value.sourceHandle !== 'string' || typeof value.sourcePdsUrl !== 'string' || !value.sourcePdsUrl.startsWith('https://') || typeof value.targetPdsUrl !== 'string' || !value.targetPdsUrl.startsWith('https://') || !isDidKey(value.sourceRecoveryKey) || !isDidKey(value.entrywayRotationKey) || !isDidKey(value.sourceRepositoryKey) || !isCid(value.sourcePlcHead) || (value.head !== undefined && !isCid(value.head)) || !isCid(value.blobCid) || !isDigest(value.blobSha256) || typeof value.frozen !== 'boolean' || (value.sourceCommit !== undefined && !isCid(value.sourceCommit)) || !isRecord(value.record) || typeof value.record.uri !== 'string' || !value.record.uri.startsWith(`at://${value.did}/`) || !isCid(value.record.cid) || !isRecord(value.record.commit) || !isCid(value.record.commit.cid)) return invalid()
+  if (!isRecord(value) || !isPlcDid(value.did) || typeof value.email !== 'string' || !value.email.includes('@') || typeof value.sourceHandle !== 'string' || typeof value.sourcePdsUrl !== 'string' || !value.sourcePdsUrl.startsWith('https://') || typeof value.targetPdsUrl !== 'string' || !value.targetPdsUrl.startsWith('https://') || !isDidKey(value.sourceRecoveryKey) || !isDidKey(value.rotationAuthorityKey) || !isDidKey(value.sourceRepositoryKey) || !isCid(value.sourcePlcHead) || (value.head !== undefined && !isCid(value.head)) || !isCid(value.blobCid) || !isDigest(value.blobSha256) || typeof value.frozen !== 'boolean' || (value.sourceCommit !== undefined && !isCid(value.sourceCommit)) || !isRecord(value.record) || typeof value.record.uri !== 'string' || !value.record.uri.startsWith(`at://${value.did}/`) || !isCid(value.record.cid) || !isRecord(value.record.commit) || !isCid(value.record.commit.cid)) return invalid()
   return {
     did: value.did, email: value.email, sourceHandle: value.sourceHandle,
     sourcePdsUrl: value.sourcePdsUrl, targetPdsUrl: value.targetPdsUrl,
-    sourceRecoveryKey: value.sourceRecoveryKey, entrywayRotationKey: value.entrywayRotationKey,
+    sourceRecoveryKey: value.sourceRecoveryKey, rotationAuthorityKey: value.rotationAuthorityKey,
     sourceRepositoryKey: value.sourceRepositoryKey, sourcePlcHead: value.sourcePlcHead,
     head: typeof value.head === 'string' ? value.head : value.sourcePlcHead,
     record: { uri: value.record.uri, cid: value.record.cid, commit: { cid: value.record.commit.cid } },
@@ -69,7 +69,7 @@ export class SourceFixtureClient {
     await this.payloads.save(workflowId, { manifest, car: Buffer.from(response.carBase64, 'base64'), blobs })
     return manifest
   }
-  public async signBoundHandoff(input: { did: string; expectedPreviousCid: string; entrywayRotationKey: string; targetPdsUrl: string }): Promise<{ operation: unknown; cid: string }> {
+  public async signBoundHandoff(input: { did: string; expectedPreviousCid: string; rotationAuthorityKey: string; targetPdsUrl: string }): Promise<{ operation: unknown; cid: string }> {
     const value = await this.call('/sign-handoff', input)
     if (!isRecord(value)) return invalid()
     validateJournaledOperation(value.operation, value.cid)

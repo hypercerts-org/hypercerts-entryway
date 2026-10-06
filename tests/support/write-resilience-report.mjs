@@ -12,6 +12,6 @@ if (!report || !['passed', 'failed'].includes(report.status) ||
     typeof report.finishedAt !== 'string') {
   throw new Error('Invalid resilience report')
 }
-const directory = process.env.SPIKE_ARTIFACTS ?? '/app/artifacts'
+const directory = process.env.ARTIFACT_DIRECTORY ?? '/app/artifacts'
 await mkdir(directory, { recursive: true })
 await writeFile(`${directory}/resilience.json`, JSON.stringify(report, null, 2) + '\n', { mode: 0o600 })

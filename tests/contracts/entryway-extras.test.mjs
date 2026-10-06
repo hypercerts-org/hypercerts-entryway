@@ -6,7 +6,7 @@ import * as plc from '@did-plc/lib'
 import { cidForLex } from '@atproto/lex-cbor'
 import { decodeJwt, decodeProtectedHeader } from 'jose'
 import { openDatabase } from '../../dist/src/database/sqlite/connection.mjs'
-import { createEntrywayExtras } from '../../dist/src/compose-protocol-operations.mjs'
+import { createProtocolOperations } from '../../dist/src/compose-protocol-operations.mjs'
 
 async function fixture(t) {
   const db = openDatabase(':memory:')
@@ -16,7 +16,7 @@ async function fixture(t) {
   const repo = await Secp256k1Keypair.create()
   const config = {
     issuer: 'https://entryway.atmosbox.test',
-    betterAuthSecret: 'entryway-extras-test-secret-at-least-32-characters',
+    betterAuthSecret: 'protocol-operations-test-secret-at-least-32-characters',
     jwtJwk: { ...privateKey.export({ format: 'jwk' }), alg: 'ES256K' },
     pds: [
       {
@@ -55,58 +55,58 @@ async function fixture(t) {
       },
     },
   }
-  const extras = await createEntrywayExtras({ db, config, accounts })
-  return { db, config, accounts, row, op, rotation, extras }
+  const protocolOperations = await createProtocolOperations({ db, config, accounts })
+  return { db, config, accounts, row, op, rotation, protocolOperations }
 }
 
 test('signup and phone proofs are purpose-bound, single-use, expire and exhaust attempts', async (t) => {
-  const { extras, db } = await fixture(t)
-  extras.requestSignup({ email: ' Alice@Example.COM ' })
+  const { protocolOperations, db } = await fixture(t)
+  protocolOperations.requestSignup({ email: ' Alice@Example.COM ' })
   const emailToken = db.get('outbox', 'alice@example.com').otp
-  extras.requestPhoneVerification({ phoneNumber: '+491234567890' })
+  protocolOperations.requestPhoneVerification({ phoneNumber: '+491234567890' })
   const phoneToken = db.get('sms-outbox', '+491234567890').otp
-  assert.throws(() => extras.verifyPhone({ phoneNumber: '+491234567890', token: emailToken }), {
+  assert.throws(() => protocolOperations.verifyPhone({ phoneNumber: '+491234567890', token: emailToken }), {
     error: 'InvalidToken',
   })
-  extras.verifySignup({ email: 'alice@example.com', token: emailToken })
-  assert.throws(() => extras.verifySignup({ email: 'alice@example.com', token: emailToken }), {
+  protocolOperations.verifySignup({ email: 'alice@example.com', token: emailToken })
+  assert.throws(() => protocolOperations.verifySignup({ email: 'alice@example.com', token: emailToken }), {
     error: 'InvalidToken',
   })
-  extras.verifyPhone({ phoneNumber: '+491234567890', token: phoneToken })
-  assert.throws(() => extras.verifyPhone({ phoneNumber: '+491234567890', token: phoneToken }), {
+  protocolOperations.verifyPhone({ phoneNumber: '+491234567890', token: phoneToken })
+  assert.throws(() => protocolOperations.verifyPhone({ phoneNumber: '+491234567890', token: phoneToken }), {
     error: 'InvalidToken',
   })
-  extras.requestSignup({ email: 'attempts@example.com' })
+  protocolOperations.requestSignup({ email: 'attempts@example.com' })
   const exhausted = db.get('outbox', 'attempts@example.com').otp
   for (let i = 0; i < 5; i++)
     assert.throws(
-      () => extras.verifySignup({ email: 'attempts@example.com', token: 'incorrect' }),
+      () => protocolOperations.verifySignup({ email: 'attempts@example.com', token: 'incorrect' }),
       { error: 'InvalidToken' },
     )
-  assert.throws(() => extras.verifySignup({ email: 'attempts@example.com', token: exhausted }), {
+  assert.throws(() => protocolOperations.verifySignup({ email: 'attempts@example.com', token: exhausted }), {
     error: 'InvalidToken',
   })
-  extras.requestSignup({ email: 'expired@example.com' })
+  protocolOperations.requestSignup({ email: 'expired@example.com' })
   const token = db.get('outbox', 'expired@example.com').otp
   const key = 'signup:expired@example.com'
   db.set('entryway:challenges', key, {
     ...db.get('entryway:challenges', key),
     expiresAt: Date.now() - 1,
   })
-  assert.throws(() => extras.verifySignup({ email: 'expired@example.com', token }), {
+  assert.throws(() => protocolOperations.verifySignup({ email: 'expired@example.com', token }), {
     error: 'InvalidToken',
   })
 })
 
 test('PLC operation signing requires current authority and a single-use account email proof', async (t) => {
-  const { extras, db, row, rotation, op } = await fixture(t)
-  extras.requestPlcOperationSignature(row)
+  const { protocolOperations, db, row, rotation, op } = await fixture(t)
+  protocolOperations.requestPlcOperationSignature(row)
   const token = db.get('outbox', row.email).otp
-  await assert.rejects(extras.signPlcOperation(row, { token, services: {} }), {
+  await assert.rejects(protocolOperations.signPlcOperation(row, { token, services: {} }), {
     error: 'InvalidPlcOperation',
   })
   const userRecovery = await Secp256k1Keypair.create()
-  const { operation } = await extras.signPlcOperation(row, {
+  const { operation } = await protocolOperations.signPlcOperation(row, {
     token,
     rotationKeys: [userRecovery.did()],
     services: {
@@ -117,15 +117,15 @@ test('PLC operation signing requires current authority and a single-use account 
   assert.deepEqual(operation.rotationKeys, [userRecovery.did()])
   assert.equal(operation.services.atproto_pds.endpoint, 'https://new-pds.example.com')
   assert.equal(operation.prev, String(await cidForLex(op)))
-  await assert.rejects(extras.signPlcOperation(row, { token }), { error: 'InvalidToken' })
+  await assert.rejects(protocolOperations.signPlcOperation(row, { token }), { error: 'InvalidToken' })
   assert.equal(db.list('events').length, 1)
 })
 
 test('PLC signing rejects unknown fields, invalid endpoint URLs and keys without consuming a valid proof', async (t) => {
-  const { extras, db, row } = await fixture(t)
-  extras.requestPlcOperationSignature(row)
+  const { protocolOperations, db, row } = await fixture(t)
+  protocolOperations.requestPlcOperationSignature(row)
   const token = db.get('outbox', row.email).otp
-  await assert.rejects(extras.signPlcOperation(row, { token, did: 'did:plc:other' }), {
+  await assert.rejects(protocolOperations.signPlcOperation(row, { token, did: 'did:plc:other' }), {
     error: 'InvalidRequest',
   })
   for (const endpoint of [
@@ -134,44 +134,44 @@ test('PLC signing rejects unknown fields, invalid endpoint URLs and keys without
     'https://new-pds.example/#fragment',
   ])
     await assert.rejects(
-      extras.signPlcOperation(row, {
+      protocolOperations.signPlcOperation(row, {
         token,
         services: { atproto_pds: { type: 'AtprotoPersonalDataServer', endpoint } },
       }),
       { error: 'InvalidPlcOperation' },
     )
-  await assert.rejects(extras.signPlcOperation(row, { token, rotationKeys: ['did:key:invalid'] }), {
+  await assert.rejects(protocolOperations.signPlcOperation(row, { token, rotationKeys: ['did:key:invalid'] }), {
     error: 'InvalidPlcOperation',
   })
-  await extras.signPlcOperation(row, { token })
+  await protocolOperations.signPlcOperation(row, { token })
 })
 
 test('password reset invalidates outstanding PLC signatures even through fresh PDS service authorization', async (t) => {
-  const { extras, db, row } = await fixture(t)
-  extras.requestPlcOperationSignature(row)
+  const { protocolOperations, db, row } = await fixture(t)
+  protocolOperations.requestPlcOperationSignature(row)
   const staleCode = db.get('outbox', row.email).otp
   // account-security increments this durable epoch on recovery/reset/revocation.
   // A PDS can still issue a fresh service JWT from a stateless old access token.
   db.set('security:versions', row.did, 1)
-  await assert.rejects(extras.signPlcOperation(row, { token: staleCode }), {
+  await assert.rejects(protocolOperations.signPlcOperation(row, { token: staleCode }), {
     error: 'InvalidToken',
   })
   assert.equal(db.list('events').length, 0)
-  extras.requestPlcOperationSignature(row)
+  protocolOperations.requestPlcOperationSignature(row)
   const key = `plc-operation:${row.did}:${row.email}`
   const current = db.get('entryway:challenges', key)
   const { did, version, ...unversioned } = current
   db.set('entryway:challenges', key, unversioned)
-  await assert.rejects(extras.signPlcOperation(row, { token: db.get('outbox', row.email).otp }), {
+  await assert.rejects(protocolOperations.signPlcOperation(row, { token: db.get('outbox', row.email).otp }), {
     error: 'InvalidToken',
   })
   db.set('entryway:challenges', key, current)
-  await extras.signPlcOperation(row, { token: db.get('outbox', row.email).otp })
+  await protocolOperations.signPlcOperation(row, { token: db.get('outbox', row.email).otp })
 })
 
 test('PLC signing rechecks email authority and deletion after asynchronous directory resolution', async (t) => {
-  const { extras, accounts, db, row, op } = await fixture(t)
-  extras.requestPlcOperationSignature(row)
+  const { protocolOperations, accounts, db, row, op } = await fixture(t)
+  protocolOperations.requestPlcOperationSignature(row)
   const token = db.get('outbox', row.email).otp
   const authenticatedSnapshot = { ...row }
   let release
@@ -179,7 +179,7 @@ test('PLC signing rechecks email authority and deletion after asynchronous direc
     new Promise((resolve) => {
       release = resolve
     })
-  const signing = extras.signPlcOperation(authenticatedSnapshot, { token })
+  const signing = protocolOperations.signPlcOperation(authenticatedSnapshot, { token })
   row.email = 'new-owner@example.com'
   release(op)
   await assert.rejects(signing, { error: 'InvalidToken' })
@@ -187,11 +187,11 @@ test('PLC signing rechecks email authority and deletion after asynchronous direc
   accounts.plcClient.getLastOp = async () => op
   row.email = authenticatedSnapshot.email
   row.status = 'deleted'
-  await assert.rejects(extras.signPlcOperation(row, { token }), { error: 'InvalidToken' })
+  await assert.rejects(protocolOperations.signPlcOperation(row, { token }), { error: 'InvalidToken' })
 })
 
 test('pending migration blocks PLC request, signing and submission including work already awaiting the directory', async (t) => {
-  const { extras, accounts, db, row, op } = await fixture(t)
+  const { protocolOperations, accounts, db, row, op } = await fixture(t)
   let migrationPending = false
   accounts.assertNoMigration = (did) => {
     assert.equal(did, row.did)
@@ -201,37 +201,37 @@ test('pending migration blocks PLC request, signing and submission including wor
         status: 409,
       })
   }
-  extras.requestPlcOperationSignature(row)
+  protocolOperations.requestPlcOperationSignature(row)
   const token = db.get('outbox', row.email).otp
   let release
   accounts.plcClient.getLastOp = () =>
     new Promise((resolve) => {
       release = resolve
     })
-  const signing = extras.signPlcOperation(row, { token })
+  const signing = protocolOperations.signPlcOperation(row, { token })
   migrationPending = true
   release(op)
   await assert.rejects(signing, { error: 'MigrationPending' })
-  assert.throws(() => extras.requestPlcOperationSignature(row), { error: 'MigrationPending' })
-  await assert.rejects(extras.signPlcOperation(row, { token }), { error: 'MigrationPending' })
-  await assert.rejects(extras.submitPlcOperation(row, { operation: op }), {
+  assert.throws(() => protocolOperations.requestPlcOperationSignature(row), { error: 'MigrationPending' })
+  await assert.rejects(protocolOperations.signPlcOperation(row, { token }), { error: 'MigrationPending' })
+  await assert.rejects(protocolOperations.submitPlcOperation(row, { operation: op }), {
     error: 'MigrationPending',
   })
   assert.equal(db.list('events').length, 0)
   assert.ok(db.get('entryway:challenges', `plc-operation:${row.did}:${row.email}`))
   migrationPending = false
   accounts.plcClient.getLastOp = async () => op
-  await extras.signPlcOperation(row, { token })
+  await protocolOperations.signPlcOperation(row, { token })
 })
 
 test('stock invite available is total capacity; used and disabled codes are filtered consistently', async (t) => {
-  const { extras, db, row } = await fixture(t)
-  const { code } = extras.createInviteCode({ useCount: 2, forAccount: row.did })
-  extras.reserveInvite(code, 'first@example.com')
-  extras.reserveInvite(undefined, ' First@Example.COM ')
-  extras.completeInvite({ email: 'first@example.com', did: row.did })
-  extras.completeInvite({ email: 'first@example.com', did: row.did })
-  let result = extras.getAccountInviteCodes(row, { includeUsed: false }).codes
+  const { protocolOperations, db, row } = await fixture(t)
+  const { code } = protocolOperations.createInviteCode({ useCount: 2, forAccount: row.did })
+  protocolOperations.reserveInvite(code, 'first@example.com')
+  protocolOperations.reserveInvite(undefined, ' First@Example.COM ')
+  protocolOperations.completeInvite({ email: 'first@example.com', did: row.did })
+  protocolOperations.completeInvite({ email: 'first@example.com', did: row.did })
+  let result = protocolOperations.getAccountInviteCodes(row, { includeUsed: false }).codes
   assert.equal(result.length, 1)
   assert.equal(
     result[0].available,
@@ -239,15 +239,15 @@ test('stock invite available is total capacity; used and disabled codes are filt
     'available denotes total uses allowed in the stock PDS contract',
   )
   assert.equal(result[0].uses.length, 1)
-  extras.reserveInvite(code, 'second@example.com')
-  extras.completeInvite({ email: 'second@example.com', did: 'did:plc:bbbbbbbbbbbbbbbbbbbbbbbb' })
-  assert.equal(extras.getAccountInviteCodes(row, { includeUsed: false }).codes.length, 0)
-  assert.throws(() => extras.reserveInvite(code, 'third@example.com'), {
+  protocolOperations.reserveInvite(code, 'second@example.com')
+  protocolOperations.completeInvite({ email: 'second@example.com', did: 'did:plc:bbbbbbbbbbbbbbbbbbbbbbbb' })
+  assert.equal(protocolOperations.getAccountInviteCodes(row, { includeUsed: false }).codes.length, 0)
+  assert.throws(() => protocolOperations.reserveInvite(code, 'third@example.com'), {
     error: 'InvalidInviteCode',
   })
-  const disabled = extras.createInviteCode({ useCount: 1, forAccount: row.did }).code
+  const disabled = protocolOperations.createInviteCode({ useCount: 1, forAccount: row.did }).code
   db.set('entryway:invites', disabled, { ...db.get('entryway:invites', disabled), disabled: true })
-  result = extras.getAccountInviteCodes(row, { includeUsed: true }).codes
+  result = protocolOperations.getAccountInviteCodes(row, { includeUsed: true }).codes
   assert.equal(
     result.some((invite) => invite.code === disabled),
     false,
@@ -255,20 +255,20 @@ test('stock invite available is total capacity; used and disabled codes are filt
 })
 
 test('scope references are content-addressed, stable and cannot silently fall back on missing scopes', async (t) => {
-  const { extras } = await fixture(t)
+  const { protocolOperations } = await fixture(t)
   const scope = 'atproto repo:org.hypercerts.spike.note?action=create'
-  const first = await extras.registerScope(scope)
-  const second = await extras.registerScope(scope)
+  const first = await protocolOperations.registerScope(scope)
+  const second = await protocolOperations.registerScope(scope)
   assert.equal(first.ref, second.ref)
   assert.equal(first.ref, `ref:${await cidForLex(scope)}`)
-  assert.deepEqual(extras.dereferenceScope(first.ref), { scope })
-  assert.throws(() => extras.dereferenceScope('ref:missing'), { error: 'InvalidScopeReference' })
-  await assert.rejects(extras.registerScope('transition:generic'), { error: 'InvalidScope' })
-  await assert.rejects(extras.registerScope('ref:some atproto'), { error: 'InvalidScope' })
+  assert.deepEqual(protocolOperations.dereferenceScope(first.ref), { scope })
+  assert.throws(() => protocolOperations.dereferenceScope('ref:missing'), { error: 'InvalidScopeReference' })
+  await assert.rejects(protocolOperations.registerScope('transition:generic'), { error: 'InvalidScope' })
+  await assert.rejects(protocolOperations.registerScope('ref:some atproto'), { error: 'InvalidScope' })
 })
 
 test('account inspection and PLC submission use short target-PDS tokens and propagate stock rejections', async (t) => {
-  const { extras, row, config } = await fixture(t)
+  const { protocolOperations, row, config } = await fixture(t)
   const original = globalThis.fetch
   const calls = []
   globalThis.fetch = async (url, init) => {
@@ -283,8 +283,8 @@ test('account inspection and PLC submission use short target-PDS tokens and prop
   t.after(() => {
     globalThis.fetch = original
   })
-  assert.deepEqual(await extras.checkAccountStatus(row), { activated: true, validDid: true })
-  await assert.rejects(extras.submitPlcOperation(row, { operation: { services: {} } }), {
+  assert.deepEqual(await protocolOperations.checkAccountStatus(row), { activated: true, validDid: true })
+  await assert.rejects(protocolOperations.submitPlcOperation(row, { operation: { services: {} } }), {
     error: 'InvalidRequest',
   })
   for (const { url, init } of calls) {

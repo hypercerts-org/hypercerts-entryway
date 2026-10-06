@@ -3,7 +3,7 @@ import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { SMTPServer } from 'smtp-server'
 
-const captureDirectory = process.env.ENTRYWAY_MAIL_CAPTURE_DIR ?? '/capture'
+const captureDirectory = process.env.MAIL_CAPTURE_DIR ?? '/capture'
 const port = Number(process.env.MAIL_CAPTURE_PORT ?? 2525)
 const retentionMs = 15 * 60_000
 

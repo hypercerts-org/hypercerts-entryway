@@ -8,9 +8,9 @@ import { SignJWT, calculateJwkThumbprint, exportJWK, generateKeyPair, importJWK 
 const phase = process.env.OUTAGE_PHASE
 if (!['before', 'outage', 'after', 'restart'].includes(phase))
   throw new Error('OUTAGE_PHASE must be before, outage, after or restart')
-const config = JSON.parse(await readFile(process.env.SPIKE_CONFIG ?? '/config/config.json', 'utf8'))
+const config = JSON.parse(await readFile(process.env.SERVICE_CONFIG_PATH ?? '/config/config.json', 'utf8'))
 const statePath = '/resilience-private/state.json'
-const artifactDir = process.env.SPIKE_ARTIFACTS ?? '/app/artifacts'
+const artifactDir = process.env.ARTIFACT_DIRECTORY ?? '/app/artifacts'
 const report = { phase, status: 'running', startedAt: new Date().toISOString(), checks: [] }
 const sha = (value) => createHash('sha256').update(value).digest('base64url')
 const nsidUrl = (pds, nsid) => `${pds.url}/xrpc/${nsid}`
@@ -39,7 +39,7 @@ async function check(name, fn) {
   }
 }
 function database(fn) {
-  const db = new DatabaseSync(process.env.ENTRYWAY_DB ?? '/entryway-data/entryway.sqlite', {
+  const db = new DatabaseSync(process.env.TEST_ACCOUNT_DATABASE_PATH ?? '/entryway-data/account-authority.sqlite', {
     readOnly: true,
   })
   try {
@@ -51,7 +51,7 @@ function database(fn) {
 function kv(namespace, key) {
   return database((db) => {
     const row = db
-      .prepare('SELECT value FROM mini_kv WHERE namespace=? AND key=?')
+      .prepare('SELECT value FROM key_value_state WHERE namespace=? AND key=?')
       .get(namespace, key)
     return row ? JSON.parse(row.value) : null
   })
@@ -155,7 +155,7 @@ async function refreshOfficialClient() {
     before?.tokenSet?.refresh_token,
     'Stored official OAuth client refresh token is required',
   )
-  const cookie = `__Host-mini-client=${state.browser.id}`
+  const cookie = `__Host-client-session=${state.browser.id}`
   const result = await getJson(`${config.clientUrl}/client/refresh`, {
     method: 'POST',
     headers: {
@@ -186,7 +186,7 @@ async function refreshOfficialClient() {
 async function verifySnapshots() {
   const rows = database((db) =>
     db
-      .prepare('SELECT data FROM mini_accounts')
+      .prepare('SELECT data FROM accounts')
       .all()
       .map((row) => JSON.parse(row.data)),
   )
@@ -218,15 +218,15 @@ try {
       async () => {
         const selection = database((db) => {
           const accounts = db
-            .prepare("SELECT data FROM mini_accounts WHERE status='active' ORDER BY rowid")
+            .prepare("SELECT data FROM accounts WHERE status='active' ORDER BY rowid")
             .all()
             .map((row) => JSON.parse(row.data))
           const browsers = db
-            .prepare("SELECT key,value FROM mini_kv WHERE namespace='client:browsers'")
+            .prepare("SELECT key,value FROM key_value_state WHERE namespace='client:browsers'")
             .all()
             .map((row) => JSON.parse(row.value))
           const tokens = db
-            .prepare("SELECT value FROM mini_kv WHERE namespace='oauth:tokens'")
+            .prepare("SELECT value FROM key_value_state WHERE namespace='oauth:tokens'")
             .all()
             .map((row) => JSON.parse(row.value))
           for (const browser of browsers) {
@@ -235,7 +235,7 @@ try {
               const account = accounts.find((row) => row.did === did)
               if (!account) continue
               const saved = db
-                .prepare('SELECT value FROM mini_kv WHERE namespace=? AND key=?')
+                .prepare('SELECT value FROM key_value_state WHERE namespace=? AND key=?')
                 .get(`client:${client}:sessions`, did)
               const tokenSet = saved && JSON.parse(saved.value).tokenSet
               if (
@@ -333,7 +333,7 @@ try {
         Date.now() < state.tokenExpiresAt - 5000,
         'Pre-issued access token must still be valid during outage',
       )
-      return { entrywayHttpStatus: response.status }
+      return { authorizationServerHttpStatus: response.status }
     })
     await check('PDS accepts a repository write with a token issued before entryway stopped', () =>
       writeNote('outage'),

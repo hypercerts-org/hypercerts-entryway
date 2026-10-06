@@ -37,7 +37,7 @@ last. It removes its own project and
 volumes afterward. Keep failed state for investigation with:
 
 ```sh
-ENTRYWAY_E2E_KEEP_FAILED_STATE=1 ./tests/local.sh fresh
+KEEP_FAILED_SANDBOX=1 ./tests/local.sh fresh
 ```
 
 Reports go to `tests/artifacts/<project>`. Migration in this suite exercises a

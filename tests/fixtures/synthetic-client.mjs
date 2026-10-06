@@ -4,7 +4,7 @@ import { JoseKey, NodeOAuthClient, requestLocalLock } from '@atproto/oauth-clien
 import { escapeHtml, page } from '../../src/ui/html.mjs'
 
 const DEFAULT_SCOPE = 'atproto transition:generic transition:email identity:handle'
-const COOKIE = '__Host-mini-client'
+const COOKIE = '__Host-client-session'
 const BROWSER_LIFETIME = 24 * 60 * 60_000
 const FLOW_LIFETIME = 15 * 60_000
 const opaque = () => randomBytes(32).toString('base64url')
@@ -385,7 +385,7 @@ export async function mountClient({ app, config, db }) {
     '/client/blob',
     route(async (req, res) => {
       const { session } = await authorized(req, res, true)
-      const bytes = Buffer.from('Mini entryway authenticated blob fixture\n')
+      const bytes = Buffer.from('Authenticated blob fixture\n')
       const result = await xrpc(session, 'com.atproto.repo.uploadBlob', {
         method: 'POST',
         headers: { 'content-type': 'text/plain' },

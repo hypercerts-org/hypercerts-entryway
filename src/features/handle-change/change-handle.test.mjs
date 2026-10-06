@@ -25,7 +25,7 @@ test("handle callback failure is journaled and reconciliation completes without 
   assert.equal(db.get("operations", `handle:${a.did}`).phase, "complete");
   assert.equal(
     db.sqlite
-      .prepare("SELECT * FROM mini_handle_claims WHERE handle=?")
+      .prepare("SELECT * FROM handle_claims WHERE handle=?")
       .get(alice.handle),
     undefined,
   );

@@ -33,7 +33,7 @@ export function runSchemaMigrations(
       );
     }
   }
-  sqlite.exec(`CREATE TABLE IF NOT EXISTS entryway_schema_migrations (
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
     applied_at TEXT NOT NULL
@@ -41,7 +41,7 @@ export function runSchemaMigrations(
   const applied = new Map(
     (
       sqlite
-        .prepare("SELECT version,name FROM entryway_schema_migrations")
+        .prepare("SELECT version,name FROM schema_migrations")
         .all() as {
         version: number;
         name: string;
@@ -71,7 +71,7 @@ export function runSchemaMigrations(
     sqlite.transaction(() => {
       migration.up(sqlite);
       sqlite
-        .prepare("INSERT INTO entryway_schema_migrations VALUES (?,?,?)")
+        .prepare("INSERT INTO schema_migrations VALUES (?,?,?)")
         .run(migration.version, migration.name, new Date().toISOString());
     })();
   }

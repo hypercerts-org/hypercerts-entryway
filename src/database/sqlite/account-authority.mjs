@@ -34,7 +34,7 @@ export function createAccountAuthority({ db, accounts }) {
   const releasePending = (did) => {
     db.sqlite
       .prepare(
-        "DELETE FROM mini_email_claims WHERE did=? AND purpose='pending'",
+        "DELETE FROM email_claims WHERE did=? AND purpose='pending'",
       )
       .run(did);
     db.delete("security:pending-email", did);
@@ -115,11 +115,11 @@ export function createAccountAuthority({ db, accounts }) {
   };
   const backupCount = (did) =>
     db.sqlite
-      .prepare("SELECT count(*) AS n FROM mini_backup_emails WHERE did=?")
+      .prepare("SELECT count(*) AS n FROM backup_emails WHERE did=?")
       .get(did).n;
   const backupOwner = (email) =>
     db.sqlite
-      .prepare("SELECT did FROM mini_backup_emails WHERE email=?")
+      .prepare("SELECT did FROM backup_emails WHERE email=?")
       .get(email);
   return {
     account,
@@ -172,14 +172,14 @@ export function createAccountAuthority({ db, accounts }) {
         accounts.save({ ...row, email, emailVerified: verified });
         db.sqlite
           .prepare(
-            "DELETE FROM mini_email_claims WHERE did=? AND purpose='primary'",
+            "DELETE FROM email_claims WHERE did=? AND purpose='primary'",
           )
           .run(did);
         db.sqlite
-          .prepare("DELETE FROM mini_backup_emails WHERE email=? AND did=?")
+          .prepare("DELETE FROM backup_emails WHERE email=? AND did=?")
           .run(email, did);
         db.sqlite
-          .prepare("DELETE FROM mini_email_claims WHERE email=? AND did=?")
+          .prepare("DELETE FROM email_claims WHERE email=? AND did=?")
           .run(email, did);
         reserve(email, did, "primary");
         db.set("security:events", randomUUID(), {
@@ -270,7 +270,7 @@ export function createAccountAuthority({ db, accounts }) {
     listBackupEmails(did) {
       return db.sqlite
         .prepare(
-          "SELECT email,created_at AS createdAt FROM mini_backup_emails WHERE did=? ORDER BY created_at",
+          "SELECT email,created_at AS createdAt FROM backup_emails WHERE did=? ORDER BY created_at",
         )
         .all(did)
         .map((item) => ({ ...item, verified: true }));
@@ -287,7 +287,7 @@ export function createAccountAuthority({ db, accounts }) {
           );
         reserve(email, did, "backup");
         db.sqlite
-          .prepare("INSERT INTO mini_backup_emails VALUES (?,?,?)")
+          .prepare("INSERT INTO backup_emails VALUES (?,?,?)")
           .run(email, did, new Date().toISOString());
         return {};
       });
@@ -295,11 +295,11 @@ export function createAccountAuthority({ db, accounts }) {
     removeBackupEmail(did, email) {
       tx(() => {
         db.sqlite
-          .prepare("DELETE FROM mini_backup_emails WHERE did=? AND email=?")
+          .prepare("DELETE FROM backup_emails WHERE did=? AND email=?")
           .run(did, email);
         db.sqlite
           .prepare(
-            "DELETE FROM mini_email_claims WHERE did=? AND email=? AND purpose='backup'",
+            "DELETE FROM email_claims WHERE did=? AND email=? AND purpose='backup'",
           )
           .run(did, email);
         for (const { key, value } of db.list("security:challenges"))
@@ -309,10 +309,10 @@ export function createAccountAuthority({ db, accounts }) {
       });
     },
     clearDeletedAccountRecovery(did) {
-      db.sqlite.prepare("DELETE FROM mini_backup_emails WHERE did=?").run(did);
+      db.sqlite.prepare("DELETE FROM backup_emails WHERE did=?").run(did);
       db.sqlite
         .prepare(
-          "DELETE FROM mini_email_claims WHERE did=? AND purpose!='primary'",
+          "DELETE FROM email_claims WHERE did=? AND purpose!='primary'",
         )
         .run(did);
     },

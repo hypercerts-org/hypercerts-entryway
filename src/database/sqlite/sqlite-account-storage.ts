@@ -93,13 +93,13 @@ export function createSqliteAccountStorage(
   configuredPds: readonly ConfiguredPds[],
 ): AccountTransactor {
   const lookup = sqlite.prepare(
-    "SELECT did,email,handle,pds_id,status,data FROM mini_accounts WHERE did=?",
+    "SELECT did,email,handle,pds_id,status,data FROM accounts WHERE did=?",
   );
   const byEmail = sqlite.prepare(
-    "SELECT did,email,handle,pds_id,status,data FROM mini_accounts WHERE lower(email)=?",
+    "SELECT did,email,handle,pds_id,status,data FROM accounts WHERE lower(email)=?",
   );
   const byHandle = sqlite.prepare(
-    "SELECT did,email,handle,pds_id,status,data FROM mini_accounts WHERE lower(handle)=?",
+    "SELECT did,email,handle,pds_id,status,data FROM accounts WHERE lower(handle)=?",
   );
   const getByDid = (did: string) =>
     parseAccount(lookup.get(did) as IndexedAccount | undefined);
@@ -116,11 +116,11 @@ export function createSqliteAccountStorage(
   ): { did: string; purpose: string } | null => {
     const normalized = email.trim().toLowerCase();
     const hosted = sqlite
-      .prepare("SELECT did,purpose FROM mini_email_claims WHERE email=?")
+      .prepare("SELECT did,purpose FROM email_claims WHERE email=?")
       .get(normalized) as { did: string; purpose: string } | undefined;
     if (hosted) return hosted;
     const external = sqlite
-      .prepare("SELECT did FROM entryway_external_reservations WHERE email=?")
+      .prepare("SELECT did FROM migration_reservations WHERE email=?")
       .get(normalized) as { did: string } | undefined;
     return external ? { did: external.did, purpose: "external" } : null;
   };
@@ -129,7 +129,7 @@ export function createSqliteAccountStorage(
   ): { did: string; userId: string } | null =>
     (sqlite
       .prepare(
-        "SELECT did,user_id AS userId FROM entryway_external_reservations WHERE email=?",
+        "SELECT did,user_id AS userId FROM migration_reservations WHERE email=?",
       )
       .get(normalizeEmail(email)) as
       | { did: string; userId: string }
@@ -151,14 +151,14 @@ export function createSqliteAccountStorage(
   const getHandleClaim = (handle: string): string | null =>
     (
       sqlite
-        .prepare("SELECT did FROM mini_handle_claims WHERE handle=?")
+        .prepare("SELECT did FROM handle_claims WHERE handle=?")
         .get(handle.trim().toLowerCase()) as { did: string } | undefined
     )?.did ?? null;
   const getVerifiedBinding = (did: string): VerifiedBinding | null => {
     const row = sqlite
       .prepare(
         `SELECT i.user_id AS userId,a.email
-      FROM mini_account_identities i JOIN mini_accounts a ON a.did=i.did WHERE i.did=?`,
+      FROM account_bindings i JOIN accounts a ON a.did=i.did WHERE i.did=?`,
       )
       .get(did) as { userId: string; email: string } | undefined;
     return row ? { did, userId: row.userId, email: row.email } : null;
@@ -203,7 +203,7 @@ export function createSqliteAccountStorage(
   const reserveEmail = (email: string, did: string, purpose: string): void => {
     email = normalizeEmail(email);
     const external = sqlite
-      .prepare("SELECT did FROM entryway_external_reservations WHERE email=?")
+      .prepare("SELECT did FROM migration_reservations WHERE email=?")
       .get(email) as { did: string } | undefined;
     if (external && external.did !== did) {
       throw new DomainError(
@@ -213,7 +213,7 @@ export function createSqliteAccountStorage(
       );
     }
     const existing = sqlite
-      .prepare("SELECT did,purpose FROM mini_email_claims WHERE email=?")
+      .prepare("SELECT did,purpose FROM email_claims WHERE email=?")
       .get(email) as { did: string; purpose: string } | undefined;
     if (existing && (existing.did !== did || existing.purpose !== purpose)) {
       throw new DomainError(
@@ -224,25 +224,25 @@ export function createSqliteAccountStorage(
     }
     if (!existing)
       sqlite
-        .prepare("INSERT INTO mini_email_claims VALUES (?,?,?)")
+        .prepare("INSERT INTO email_claims VALUES (?,?,?)")
         .run(email, did, purpose);
   };
   const reserveHandle = (handle: string, did: string): void => {
     const external = sqlite
-      .prepare("SELECT did FROM entryway_external_reservations WHERE handle=?")
+      .prepare("SELECT did FROM migration_reservations WHERE handle=?")
       .get(handle) as { did: string } | undefined;
     if (external && external.did !== did) {
       throw new DomainError("HandleNotAvailable", 409, "Handle is reserved");
     }
     const existing = sqlite
-      .prepare("SELECT did FROM mini_handle_claims WHERE handle=?")
+      .prepare("SELECT did FROM handle_claims WHERE handle=?")
       .get(handle) as { did: string } | undefined;
     if (existing && existing.did !== did) {
       throw new DomainError("HandleNotAvailable", 409, "Handle is reserved");
     }
     if (!existing)
       sqlite
-        .prepare("INSERT INTO mini_handle_claims VALUES (?,?)")
+        .prepare("INSERT INTO handle_claims VALUES (?,?)")
         .run(handle, did);
   };
   const assertPds = (row: AccountRow): void => {
@@ -257,7 +257,7 @@ export function createSqliteAccountStorage(
     try {
       sqlite.transaction(() => {
         sqlite
-          .prepare("INSERT INTO mini_accounts VALUES (?,?,?,?,?,?)")
+          .prepare("INSERT INTO accounts VALUES (?,?,?,?,?,?)")
           .run(
             row.did,
             row.email,
@@ -282,7 +282,7 @@ export function createSqliteAccountStorage(
         if (!existing)
           throw new DomainError("AccountNotFound", 404, "Account not found");
         const emailClaim = sqlite
-          .prepare("SELECT did FROM mini_email_claims WHERE email=?")
+          .prepare("SELECT did FROM email_claims WHERE email=?")
           .get(row.email) as { did: string } | undefined;
         if (emailClaim && emailClaim.did !== row.did) {
           throw new DomainError(
@@ -293,7 +293,7 @@ export function createSqliteAccountStorage(
         }
         const externalEmail = sqlite
           .prepare(
-            "SELECT did FROM entryway_external_reservations WHERE email=?",
+            "SELECT did FROM migration_reservations WHERE email=?",
           )
           .get(row.email) as { did: string } | undefined;
         if (externalEmail && externalEmail.did !== row.did) {
@@ -304,7 +304,7 @@ export function createSqliteAccountStorage(
           );
         }
         const handleClaim = sqlite
-          .prepare("SELECT did FROM mini_handle_claims WHERE handle=?")
+          .prepare("SELECT did FROM handle_claims WHERE handle=?")
           .get(row.handle) as { did: string } | undefined;
         if (handleClaim && handleClaim.did !== row.did) {
           throw new DomainError(
@@ -315,7 +315,7 @@ export function createSqliteAccountStorage(
         }
         const external = sqlite
           .prepare(
-            "SELECT did FROM entryway_external_reservations WHERE handle=?",
+            "SELECT did FROM migration_reservations WHERE handle=?",
           )
           .get(row.handle) as { did: string } | undefined;
         if (external && external.did !== row.did) {
@@ -327,7 +327,7 @@ export function createSqliteAccountStorage(
         }
         sqlite
           .prepare(
-            `UPDATE mini_accounts
+            `UPDATE accounts
           SET email=?,handle=?,pds_id=?,status=?,data=? WHERE did=?`,
           )
           .run(
@@ -365,7 +365,7 @@ export function createSqliteAccountStorage(
         );
       }
       const other = sqlite
-        .prepare("SELECT did FROM mini_account_identities WHERE user_id=?")
+        .prepare("SELECT did FROM account_bindings WHERE user_id=?")
         .get(user.id) as { did: string } | undefined;
       if (other && other.did !== row.did) {
         throw new DomainError(
@@ -376,7 +376,7 @@ export function createSqliteAccountStorage(
       }
       reserveEmail(row.email, row.did, "primary");
       sqlite
-        .prepare("INSERT OR IGNORE INTO mini_account_identities VALUES (?,?)")
+        .prepare("INSERT OR IGNORE INTO account_bindings VALUES (?,?)")
         .run(row.did, user.id);
       return user.id;
     })();
@@ -432,7 +432,7 @@ export function createSqliteAccountStorage(
       }
       const email = normalizeEmail(owner.email);
       const emailClaim = sqlite
-        .prepare("SELECT did FROM mini_email_claims WHERE lower(email)=?")
+        .prepare("SELECT did FROM email_claims WHERE lower(email)=?")
         .get(email) as { did: string } | undefined;
       if (getByEmail(email) || emailClaim) {
         throw new DomainError(
@@ -456,7 +456,7 @@ export function createSqliteAccountStorage(
         );
       }
       const existingOwner = sqlite
-        .prepare("SELECT did FROM mini_account_identities WHERE user_id=?")
+        .prepare("SELECT did FROM account_bindings WHERE user_id=?")
         .get(input.userId) as { did: string } | undefined;
       if (existingOwner) {
         throw new DomainError(
@@ -475,7 +475,7 @@ export function createSqliteAccountStorage(
       }
       const existing = sqlite
         .prepare(
-          "SELECT * FROM entryway_external_reservations WHERE workflow_id=?",
+          "SELECT * FROM migration_reservations WHERE workflow_id=?",
         )
         .get(input.workflowId) as ReservationRow | undefined;
       if (existing) {
@@ -499,7 +499,7 @@ export function createSqliteAccountStorage(
       try {
         sqlite
           .prepare(
-            `INSERT INTO entryway_external_reservations
+            `INSERT INTO migration_reservations
           VALUES (?,?,?,?,?,?,?,?,?,?)`,
           )
           .run(
@@ -525,7 +525,7 @@ export function createSqliteAccountStorage(
     sqlite.transaction(() => {
       const reservation = sqlite
         .prepare(
-          "SELECT * FROM entryway_external_reservations WHERE workflow_id=?",
+          "SELECT * FROM migration_reservations WHERE workflow_id=?",
         )
         .get(input.workflowId) as ReservationRow | undefined;
       if (
@@ -593,7 +593,7 @@ export function createSqliteAccountStorage(
       };
       insertAccount(row);
       const other = sqlite
-        .prepare("SELECT did FROM mini_account_identities WHERE user_id=?")
+        .prepare("SELECT did FROM account_bindings WHERE user_id=?")
         .get(input.userId) as { did: string } | undefined;
       if (other)
         throw new DomainError(
@@ -602,11 +602,11 @@ export function createSqliteAccountStorage(
           "Verified user already owns an account",
         );
       sqlite
-        .prepare("INSERT INTO mini_account_identities VALUES (?,?)")
+        .prepare("INSERT INTO account_bindings VALUES (?,?)")
         .run(input.did, input.userId);
       sqlite
         .prepare(
-          "UPDATE entryway_external_reservations SET state='placed' WHERE workflow_id=?",
+          "UPDATE migration_reservations SET state='placed' WHERE workflow_id=?",
         )
         .run(input.workflowId);
       return row;
@@ -617,7 +617,7 @@ export function createSqliteAccountStorage(
     sqlite.transaction(() => {
       const reservation = sqlite
         .prepare(
-          "SELECT * FROM entryway_external_reservations WHERE workflow_id=?",
+          "SELECT * FROM migration_reservations WHERE workflow_id=?",
         )
         .get(input.workflowId) as ReservationRow | undefined;
       if (
@@ -651,7 +651,7 @@ export function createSqliteAccountStorage(
       saveAccount(activated);
       sqlite
         .prepare(
-          "UPDATE entryway_external_reservations SET state='complete' WHERE workflow_id=?",
+          "UPDATE migration_reservations SET state='complete' WHERE workflow_id=?",
         )
         .run(input.workflowId);
       return activated;
@@ -670,7 +670,7 @@ export function createSqliteAccountStorage(
       Boolean(
         sqlite
           .prepare(
-            "SELECT 1 FROM entryway_external_reservations WHERE did=? AND state!='complete'",
+            "SELECT 1 FROM migration_reservations WHERE did=? AND state!='complete'",
           )
           .get(did),
       ),
@@ -678,7 +678,7 @@ export function createSqliteAccountStorage(
       (
         sqlite
           .prepare(
-            "SELECT did,email,handle,pds_id,status,data FROM mini_accounts ORDER BY rowid",
+            "SELECT did,email,handle,pds_id,status,data FROM accounts ORDER BY rowid",
           )
           .all() as IndexedAccount[]
       ).map((row) => parseAccount(row)!),
@@ -693,14 +693,14 @@ export function createSqliteAccountStorage(
     releaseEmail: (email, did, purpose) => {
       sqlite
         .prepare(
-          "DELETE FROM mini_email_claims WHERE email=? AND did=? AND purpose=?",
+          "DELETE FROM email_claims WHERE email=? AND did=? AND purpose=?",
         )
         .run(email, did, purpose);
     },
     reserveHandle,
     releaseHandle: (handle, did) => {
       sqlite
-        .prepare("DELETE FROM mini_handle_claims WHERE handle=? AND did=?")
+        .prepare("DELETE FROM handle_claims WHERE handle=? AND did=?")
         .run(handle, did);
     },
   };

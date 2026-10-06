@@ -10,7 +10,7 @@ const [mode, run] = process.argv.slice(2)
 assert.ok(['lost-response', 'plc-outage', 'restart-outage', 'cache-miss-outage', 'plc-outage-before-create'].includes(mode))
 assert.match(run ?? '', /^[a-z0-9-]+$/)
 const prefix = `/app/artifacts/plc-recovery-${run}`
-const config = JSON.parse(await readFile(process.env.SPIKE_CONFIG, 'utf8'))
+const config = JSON.parse(await readFile(process.env.SERVICE_CONFIG_PATH, 'utf8'))
 const pds = config.pds.find((p) => p.id === 'pds1')
 assert.ok(pds)
 const input = { email: `plc-${randomBytes(8).toString('hex')}@example.test`,

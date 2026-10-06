@@ -43,8 +43,8 @@ cp "$artifacts/operations-$run-backup.json" "$out/backup.json"
 restored=true
 compose stop --timeout 10 entryway >/dev/null
 compose run -d --no-deps --use-aliases --name "$name" \
-  -e SPIKE_DATA="/data/verification-$run/restored" \
-  -e SPIKE_CONFIG="/data/verification-$run/config.json" entryway node dist/src/main.mjs >/dev/null
+  -e STATE_DIRECTORY="/data/verification-$run/restored" \
+  -e SERVICE_CONFIG_PATH="/data/verification-$run/config.json" entryway node dist/src/main.mjs >/dev/null
 health
 compose run --rm --no-deps --name "${project}-operational-browser" -e OPERATIONAL_RUN="$run" browser npx --no-install playwright test restored-backup.spec.mjs --config tests/operational.playwright.config.mjs > "$out/restored-browser.log" 2>&1
 cp "$artifacts/operations-$run-restored-browser.json" "$out/restored-browser.json"

@@ -19,7 +19,7 @@ for app in ['hypercerts-entryway','entryway-fixtures','entryway-oauth-web-app','
         text = (source / 'stacks' / (app + suffix)).read_text()
         # Compose paths resolve relative to the generated file in the clone.
         text = text.replace('context: ../..', 'context: ' + json.dumps(str(root)))
-        text = text.replace('../artifacts:/app/artifacts:z', os.environ.get('ENTRYWAY_E2E_REPORT_DIR', str(root / 'tests/artifacts')) + ':/app/artifacts:z')
+        text = text.replace('../artifacts:/app/artifacts:z', os.environ.get('ACCEPTANCE_REPORT_DIR', str(root / 'tests/artifacts')) + ':/app/artifacts:z')
         target = sandbox / 'stacks' / (app + suffix)
         if target.exists() and target.read_text() != text and (sandbox / 'state/manifest.json').exists():
             raise SystemExit(f'Template drift in existing state: {app}; review and use a fresh runtime, not silent overwrite')

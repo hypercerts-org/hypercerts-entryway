@@ -2,7 +2,7 @@ import { HttpError } from "../http/http-error.mjs";
 
 export function mountMailXrpc({
   accounts,
-  extras,
+  protocolOperations,
   authenticate,
   route,
   admin,
@@ -27,6 +27,6 @@ export function mountMailXrpc({
         "AccountNotFound",
         "Recipient account not found",
       );
-    return extras.sendEmail(a, req.body);
+    return protocolOperations.sendEmail(a, req.body);
   });
 }

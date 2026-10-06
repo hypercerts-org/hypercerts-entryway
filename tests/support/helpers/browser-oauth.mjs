@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { expect } from '@playwright/test'
 import { waitForMailpitCode } from './mailpit.mjs'
 
-export const config = JSON.parse(readFileSync(process.env.SPIKE_CONFIG ?? './.runtime/config.json', 'utf8'))
+export const config = JSON.parse(readFileSync(process.env.SERVICE_CONFIG_PATH ?? './.runtime/config.json', 'utf8'))
 export const browserUrl = 'https://browser.atmosbox.internal'
 
 export async function createAccount(page, label = 'browser') {

@@ -1,7 +1,7 @@
 import { mkdir, readFile } from 'node:fs/promises'
 import { PDS, envToCfg, envToSecrets, readEnv } from '@atproto/pds'
 
-const config = JSON.parse(await readFile(process.env.SPIKE_CONFIG || '/config/config.json', 'utf8'))
+const config = JSON.parse(await readFile(process.env.SERVICE_CONFIG_PATH || '/config/config.json', 'utf8'))
 const pds = config.pds.find(({ id }) => id === process.env.PDS_ID)
 if (!pds) throw new Error(`Unknown PDS_ID: ${process.env.PDS_ID}`)
 await mkdir('/data/blobs', { recursive: true })

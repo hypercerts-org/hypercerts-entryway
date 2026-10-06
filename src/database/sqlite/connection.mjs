@@ -10,10 +10,10 @@ import {
 import { MAIL_SCHEMA_MIGRATION } from "../migrations/mail-schema.js";
 import { runSchemaMigrations } from "../migrations/migrations.js";
 
-// A small persistent adapter for the spike. Namespaces keep provider stores
+// Namespaces keep provider stores
 // independent; tagged values round-trip Dates used by upstream interfaces.
 function encode(value) {
-  if (value instanceof Date) return { $miniDate: value.toISOString() };
+  if (value instanceof Date) return { $date: value.toISOString() };
   if (Array.isArray(value)) return value.map(encode);
   if (value && typeof value === "object")
     return Object.fromEntries(
@@ -24,8 +24,8 @@ function encode(value) {
 function decode(value) {
   if (Array.isArray(value)) return value.map(decode);
   if (value && typeof value === "object") {
-    if (Object.keys(value).length === 1 && typeof value.$miniDate === "string")
-      return new Date(value.$miniDate);
+    if (Object.keys(value).length === 1 && typeof value.$date === "string")
+      return new Date(value.$date);
     return Object.fromEntries(
       Object.entries(value).map(([k, v]) => [k, decode(v)]),
     );
@@ -38,7 +38,7 @@ export function openDatabase(path) {
   sqlite.pragma("foreign_keys = ON");
   sqlite.pragma("busy_timeout = 5000");
   sqlite.exec(
-    "CREATE TABLE IF NOT EXISTS mini_kv (namespace TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(namespace,key))",
+    "CREATE TABLE IF NOT EXISTS key_value_state (namespace TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(namespace,key))",
   );
   const schema = runSchemaMigrations(sqlite, [
     ACCOUNT_SCHEMA_MIGRATION,
@@ -50,16 +50,16 @@ export function openDatabase(path) {
   ]);
   const deviceAccountMemberships = createDeviceAccountMembershipReader(sqlite);
   const read = sqlite.prepare(
-    "SELECT value FROM mini_kv WHERE namespace=? AND key=?",
+    "SELECT value FROM key_value_state WHERE namespace=? AND key=?",
   );
   const write = sqlite.prepare(
-    "INSERT INTO mini_kv(namespace,key,value) VALUES (?,?,?) ON CONFLICT(namespace,key) DO UPDATE SET value=excluded.value",
+    "INSERT INTO key_value_state(namespace,key,value) VALUES (?,?,?) ON CONFLICT(namespace,key) DO UPDATE SET value=excluded.value",
   );
   const remove = sqlite.prepare(
-    "DELETE FROM mini_kv WHERE namespace=? AND key=?",
+    "DELETE FROM key_value_state WHERE namespace=? AND key=?",
   );
   const list = sqlite.prepare(
-    "SELECT key,value FROM mini_kv WHERE namespace=? ORDER BY key",
+    "SELECT key,value FROM key_value_state WHERE namespace=? ORDER BY key",
   );
   return {
     sqlite,
@@ -74,7 +74,7 @@ export function openDatabase(path) {
     pendingCounts() {
       const kv = sqlite
         .prepare(
-          `SELECT namespace,count(*) AS count FROM mini_kv
+          `SELECT namespace,count(*) AS count FROM key_value_state
         WHERE namespace IN ('operations','migration:operations')
           AND coalesce(json_extract(value,'$.phase'),'unknown') != 'complete'
         GROUP BY namespace`,
@@ -84,7 +84,7 @@ export function openDatabase(path) {
         kv.find((row) => row.namespace === namespace)?.count ?? 0;
       const external = sqlite
         .prepare(
-          "SELECT count(*) AS count FROM entryway_external_reservations WHERE state!='complete'",
+          "SELECT count(*) AS count FROM migration_reservations WHERE state!='complete'",
         )
         .get().count;
       const workflow = sqlite

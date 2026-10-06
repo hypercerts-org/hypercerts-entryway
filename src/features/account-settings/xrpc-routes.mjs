@@ -3,7 +3,7 @@ import { HttpError } from "../../http/http-error.mjs";
 export function mountAccountSettingsXrpc({
   accounts,
   security,
-  extras,
+  protocolOperations,
   route,
   authenticatedRoute,
   admin,
@@ -41,7 +41,7 @@ export function mountAccountSettingsXrpc({
       return {};
     });
   authenticatedRoute("get", "server.checkAccountStatus", (_req, a) =>
-    extras.checkAccountStatus(a),
+    protocolOperations.checkAccountStatus(a),
   );
   route("post", "admin.updateAccountEmail", (req) => {
     const did = accounts.get(req.body.account)?.did;

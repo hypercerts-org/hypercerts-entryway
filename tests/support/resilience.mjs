@@ -15,9 +15,9 @@ if (process.argv.length !== 3 || process.argv[2] !== '--run') {
   process.exit(2)
 }
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-const cwd = process.env.ENTRYWAY_SANDBOX_ROOT ?? resolve(root, 'tests/.runtime/atmosphereinabox')
-const artifactDir = process.env.ENTRYWAY_E2E_REPORT_DIR ?? resolve(root, 'tests/artifacts')
-const project = process.env.ENTRYWAY_E2E_PROJECT ?? 'hypercerts-entryway'
+const cwd = process.env.SANDBOX_CHECKOUT ?? resolve(root, 'tests/.runtime/atmosphereinabox')
+const artifactDir = process.env.ACCEPTANCE_REPORT_DIR ?? resolve(root, 'tests/artifacts')
+const project = process.env.SANDBOX_PROJECT ?? 'hypercerts-entryway'
 assert.match(project, /^hypercerts-entryway(-[a-z0-9_-]+)?$/)
 const groups = [['postgres', 'dns', 'gateway'], ['plc'], ['entryway'], ['pds1', 'pds2']]
 const services = groups.flat()

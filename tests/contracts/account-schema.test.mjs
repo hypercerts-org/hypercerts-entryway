@@ -3,7 +3,6 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import Sqlite from 'better-sqlite3'
 import { openDatabase } from '../../dist/src/database/sqlite/connection.mjs'
 import { ACCOUNT_SCHEMA_MIGRATION } from '../../dist/src/database/migrations/account-schema.js'
 import { createSqliteAccountStorage } from '../../dist/src/database/sqlite/sqlite-account-storage.js'
@@ -21,9 +20,9 @@ const alice = {
 }
 
 function fixture(t) {
-  const dir = mkdtempSync(join(tmpdir(), 'entryway-schema-'))
+  const dir = mkdtempSync(join(tmpdir(), 'account-schema-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
-  return { dir, path: join(dir, 'entryway.sqlite') }
+  return { dir, path: join(dir, 'account-authority.sqlite') }
 }
 
 function foreignKeyTables(sqlite, table) {
@@ -35,10 +34,10 @@ test('fresh account schema has versioned DID foreign keys and rejects future ver
   const db = openDatabase(path)
   try {
     assert.equal(db.schema.version, 303)
-    for (const table of ['mini_handle_claims', 'mini_email_claims', 'mini_account_identities', 'mini_backup_emails']) {
-      assert.ok(foreignKeyTables(db.sqlite, table).includes('mini_accounts'), table)
+    for (const table of ['handle_claims', 'email_claims', 'account_bindings', 'backup_emails']) {
+      assert.ok(foreignKeyTables(db.sqlite, table).includes('accounts'), table)
     }
-    db.sqlite.prepare('INSERT INTO entryway_schema_migrations VALUES (?,?,?)')
+    db.sqlite.prepare('INSERT INTO schema_migrations VALUES (?,?,?)')
       .run(999, 'future-schema', new Date().toISOString())
     assert.throws(
       () => runSchemaMigrations(db.sqlite, [ACCOUNT_SCHEMA_MIGRATION]),
@@ -47,20 +46,15 @@ test('fresh account schema has versioned DID foreign keys and rejects future ver
   } finally { db.close() }
 })
 
-test('legacy seed upgrades claims and binding to constrained tables without changing owner', (t) => {
+test('reopening the database preserves account ownership, claims and stored dates', (t) => {
   const { path } = fixture(t)
-  const legacy = new Sqlite(path)
-  legacy.exec(`
-    CREATE TABLE mini_accounts (did TEXT PRIMARY KEY,email TEXT NOT NULL UNIQUE,handle TEXT NOT NULL UNIQUE,pds_id TEXT NOT NULL,status TEXT NOT NULL,data TEXT NOT NULL);
-    CREATE TABLE mini_email_claims (email TEXT PRIMARY KEY,did TEXT NOT NULL,purpose TEXT NOT NULL);
-    CREATE TABLE mini_handle_claims (handle TEXT PRIMARY KEY,did TEXT NOT NULL);
-    CREATE TABLE mini_account_identities (did TEXT PRIMARY KEY,user_id TEXT NOT NULL UNIQUE);
-    CREATE TABLE mini_backup_emails (email TEXT PRIMARY KEY,did TEXT NOT NULL,created_at TEXT NOT NULL);
-  `)
-  legacy.prepare('INSERT INTO mini_accounts VALUES (?,?,?,?,?,?)')
-    .run(alice.did, alice.email, alice.handle, alice.pdsId, alice.status, JSON.stringify(alice))
-  legacy.prepare('INSERT INTO mini_account_identities VALUES (?,?)').run(alice.did, 'verified-user')
-  legacy.close()
+  const initial = openDatabase(path)
+  const expiresAt = new Date('2030-01-02T03:04:05.000Z')
+  try {
+    createSqliteAccountStorage(initial.sqlite, pds).insertAccount(alice)
+    initial.sqlite.prepare('INSERT INTO account_bindings VALUES (?,?)').run(alice.did, 'verified-user')
+    initial.set('oauth:fixture', 'session', { nested: [{ expiresAt }] })
+  } finally { initial.close() }
   const db = openDatabase(path)
   try {
     const storage = createSqliteAccountStorage(db.sqlite, pds)
@@ -68,10 +62,11 @@ test('legacy seed upgrades claims and binding to constrained tables without chan
     assert.equal(storage.getVerifiedBinding(alice.did)?.userId, 'verified-user')
     assert.equal(storage.getEmailClaim(alice.email)?.did, alice.did)
     assert.equal(storage.getHandleClaim(alice.handle), alice.did)
-    for (const table of ['mini_handle_claims', 'mini_email_claims', 'mini_account_identities', 'mini_backup_emails']) {
-      assert.ok(foreignKeyTables(db.sqlite, table).includes('mini_accounts'), table)
+    assert.deepEqual(db.get('oauth:fixture', 'session'), { nested: [{ expiresAt }] })
+    for (const table of ['handle_claims', 'email_claims', 'account_bindings', 'backup_emails']) {
+      assert.ok(foreignKeyTables(db.sqlite, table).includes('accounts'), table)
     }
-    assert.throws(() => db.sqlite.prepare('INSERT INTO mini_email_claims VALUES (?,?,?)')
+    assert.throws(() => db.sqlite.prepare('INSERT INTO email_claims VALUES (?,?,?)')
       .run('orphan@example.test', 'did:plc:missing', 'backup'), /FOREIGN KEY/)
   } finally { db.close() }
 })
@@ -145,7 +140,7 @@ test('synthetic imported DID binds only a recent verified owner then activates a
     db.sqlite.prepare('UPDATE user SET email=? WHERE id=?').run(alice.email, 'owner')
     assert.throws(() => storage.reserveExternalMigration(reservation),
       (error) => error.code === 'IdentityConflict')
-    db.sqlite.prepare('DELETE FROM mini_account_identities WHERE did=?').run(hosted.did)
+    db.sqlite.prepare('DELETE FROM account_bindings WHERE did=?').run(hosted.did)
     storage.reserveExternalMigration(reservation)
     assert.throws(() => storage.insertAccount({
       ...alice, did: 'did:plc:eeeeeeeeeeeeeeeeeeeeeeee', email: 'other@example.test',
@@ -239,20 +234,20 @@ test('failed workflow insert rolls back identity reservation and permits retry',
       ownerEmail: alice.email, ownerSessionReference: reservation.sessionId,
       handle: reservation.handle, sourcePdsUrl: 'https://source.test',
       targetPdsId: reservation.targetPdsId, targetPdsUrl: reservation.targetPdsUrl,
-      authority: { sourceRecoveryKey: key, entrywayRotationKey: key, sourceRepositoryKey: key, sourcePlcHead: head },
+      authority: { sourceRecoveryKey: key, rotationAuthorityKey: key, sourceRepositoryKey: key, sourcePlcHead: head },
       phase: 'owner-confirmed', expectedPlcHead: head, version: 0, createdAt: timestamp, updatedAt: timestamp,
     }
     db.sqlite.exec(`CREATE TRIGGER reject_journal BEFORE INSERT ON migration_workflow
       BEGIN SELECT RAISE(ABORT, 'synthetic journal failure'); END;`)
     await assert.rejects(start.createReservedWorkflow({ reservation, workflow }), /synthetic journal failure/)
     assert.equal(db.sqlite.prepare('SELECT count(*) AS count FROM migration_workflow').get().count, 0)
-    assert.equal(db.sqlite.prepare('SELECT count(*) AS count FROM entryway_external_reservations').get().count, 0)
+    assert.equal(db.sqlite.prepare('SELECT count(*) AS count FROM migration_reservations').get().count, 0)
     assert.equal(accounts.getEmailClaim(alice.email), null)
     assert.equal(accounts.getHandleClaim(alice.handle), null)
     db.sqlite.exec('DROP TRIGGER reject_journal')
     await start.createReservedWorkflow({ reservation, workflow })
     assert.equal(db.sqlite.prepare('SELECT count(*) AS count FROM migration_workflow').get().count, 1)
-    assert.equal(db.sqlite.prepare('SELECT count(*) AS count FROM entryway_external_reservations').get().count, 1)
+    assert.equal(db.sqlite.prepare('SELECT count(*) AS count FROM migration_reservations').get().count, 1)
     assert.deepEqual(accounts.getEmailClaim(alice.email), { did: alice.did, purpose: 'external' })
   } finally { db.close() }
 })

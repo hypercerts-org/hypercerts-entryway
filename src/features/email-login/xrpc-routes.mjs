@@ -2,7 +2,7 @@ export function mountEmailLoginXrpc({
   app,
   accounts,
   legacy,
-  extras,
+  protocolOperations,
   authenticate,
   route,
 }) {
@@ -25,7 +25,7 @@ export function mountEmailLoginXrpc({
     }
   });
   route("post", "server.createSession", (req) => {
-    extras.rateLimit(`login-ip:${req.ip}`, 60);
+    protocolOperations.rateLimit(`login-ip:${req.ip}`, 60);
     return legacy.createSession(req.body);
   });
   route("post", "server.refreshSession", (req) =>

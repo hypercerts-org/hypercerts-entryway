@@ -143,7 +143,7 @@ export function createSqliteMailOutbox(
         )
         .run(recipient, purpose, now).changes;
       const projected = sqlite
-        .prepare("SELECT value FROM mini_kv WHERE namespace='outbox' AND key=?")
+        .prepare("SELECT value FROM key_value_state WHERE namespace='outbox' AND key=?")
         .get(recipient) as { value: string } | undefined;
       if (projected) {
         try {
@@ -152,7 +152,7 @@ export function createSqliteMailOutbox(
               changed +
               sqlite
                 .prepare(
-                  "DELETE FROM mini_kv WHERE namespace='outbox' AND key=?",
+                  "DELETE FROM key_value_state WHERE namespace='outbox' AND key=?",
                 )
                 .run(recipient).changes
             );
@@ -160,7 +160,7 @@ export function createSqliteMailOutbox(
           return (
             changed +
             sqlite
-              .prepare("DELETE FROM mini_kv WHERE namespace='outbox' AND key=?")
+              .prepare("DELETE FROM key_value_state WHERE namespace='outbox' AND key=?")
               .run(recipient).changes
           );
         }
@@ -183,7 +183,7 @@ export function createSqliteMailOutbox(
       };
       sqlite
         .prepare(
-          `INSERT INTO mini_kv(namespace,key,value) VALUES ('outbox',?,?)
+          `INSERT INTO key_value_state(namespace,key,value) VALUES ('outbox',?,?)
         ON CONFLICT(namespace,key) DO UPDATE SET value=excluded.value`,
         )
         .run(entry.recipient, JSON.stringify(value));
@@ -198,13 +198,13 @@ export function createSqliteMailOutbox(
     },
     pruneCapturedProjection(now) {
       const rows = sqlite
-        .prepare("SELECT key,value FROM mini_kv WHERE namespace='outbox'")
+        .prepare("SELECT key,value FROM key_value_state WHERE namespace='outbox'")
         .all() as {
         key: string;
         value: string;
       }[];
       const remove = sqlite.prepare(
-        "DELETE FROM mini_kv WHERE namespace='outbox' AND key=?",
+        "DELETE FROM key_value_state WHERE namespace='outbox' AND key=?",
       );
       let removed = 0;
       for (const row of rows) {

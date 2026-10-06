@@ -16,7 +16,7 @@ const workflow = {
   ownerEmail: 'owner@example.test', ownerSessionReference: 'session-1',
   sourcePdsUrl: 'https://source.test', targetPdsId: 'pds1',
   targetPdsUrl: 'https://target.test', handle: 'moved.entryway.test',
-  authority: { sourceRecoveryKey: didKey('a'), entrywayRotationKey: didKey('b'),
+  authority: { sourceRecoveryKey: didKey('a'), rotationAuthorityKey: didKey('b'),
     sourceRepositoryKey: didKey('c'), sourcePlcHead: cid('a') },
   expectedPlcHead: cid('a'), phase: 'owner-confirmed', version: 0,
   createdAt: '2026-09-28T10:00:00.000Z', updatedAt: '2026-09-28T10:00:00.000Z',
