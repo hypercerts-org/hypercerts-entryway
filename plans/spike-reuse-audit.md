@@ -2,7 +2,9 @@
 
 **Result: substantially imported, but not up to date.** This is read-only source validation against target commit `41568b27dc1c0bf7133bc66b11beb21d0c493c23`. No application installation, build, test, sandbox startup or acceptance run was performed. Source inspection confirms presence/equivalence and omissions, not that the target works at runtime.
 
-Target: `/home/evelyn/git/hypercerts/hypercerts-entryway`. Spike root: `/home/evelyn/git/hypercerts/entryway/next-spike`. Paths below use these roots.
+Target: this repository. Source labels below refer to the historical pre-import
+spike snapshot, not a required sibling checkout. Current baseline and acceptance
+inventories are [self-contained in this repository](../tests/plans/README.md).
 
 ## Application inventory
 
@@ -16,7 +18,13 @@ All **62** entries in target `docs/source-map.json` exist.
 
 All 90 rewritten static import/export specifiers were checked against the mapping and resolve to corresponding modules after TS `.js`/`.ts` and spike `app/dist`/`app/src` normalization. This supports relocation equivalence. Separate source inspection identified the sole substantive application omission: the hosted-handle guard.
 
-Reproduce the content/hash inventory from this plan worktree with `python plans/evidence/compare-spike.py`; compare stdout with [spike-source-inventory.json](evidence/spike-source-inventory.json). It records SHA-256 for every mapped file in each snapshot. It does not inspect or copy authentication state, configuration secrets or databases. The automated normalization is a triage aid; the semantic diff was inspected manually.
+The historical comparison helper `plans/evidence/compare-spike.py` produced
+[spike-source-inventory.json](evidence/spike-source-inventory.json), recording SHA-256
+for every mapped file in each snapshot. That one-off helper depends on the original
+source snapshots; it is not a current setup or acceptance command. The committed
+inventory preserves the result without requiring those snapshots. It did not inspect
+or copy authentication state, configuration secrets or databases. Automated
+normalization was a triage aid; the semantic diff was inspected manually.
 
 The latest usable source is **composite**, not one commit or tree. Main spike and interop contain the October handle fix and interop tests. The detached verification worktree supplies later process-crash/backup/rotation probes, but its application source predates the fix. Spike HEAD `f7d3572499efc759f0329330a63010464189ba01` alone excludes working changes and therefore does not identify the tested runtime. Target HEAD alone also cannot certify its imported behavior.
 

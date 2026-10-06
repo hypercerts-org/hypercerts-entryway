@@ -4,6 +4,11 @@ A mini Entryway for multiple unchanged Bluesky reference PDS instances. It moves
 ePDS email OTP authentication into the PDS's supported Entryway boundary and
 provides account management, authorization and identity operations.
 
+This repository is self-contained. Application source, sandbox orchestration,
+architecture and acceptance documentation live here; no sibling Entryway checkout
+is required. External repositories and [Lexidraw designs](docs/README.md#core-design-references)
+are references, not runtime or documentation dependencies.
+
 **Status:** one application organized by vertical features. Ports/adapters are
 limited to browser authentication, mail sending and database. Preserved MJS is
 owned by its feature; standard-tool migration, moderation coordination and fleet
@@ -38,7 +43,8 @@ ENTRYWAY_E2E_KEEP_FAILED_STATE=1 ./tests/local.sh fresh
 Reports go to `tests/artifacts/<project>`. Migration in this suite exercises a
 private synthetic source helper; it is **not** standard-tool migration acceptance.
 For persistent development and selective commands, read [testing](docs/testing.md).
-Current refactor verification is recorded in plans/evidence/execution-ledger.md; historical spike passes are not current acceptance.
+The [published baseline and acceptance matrices](tests/plans/README.md) describe
+current evidence and remaining gaps; historical spike passes are not new acceptance.
 
 ## Layout
 
@@ -70,11 +76,10 @@ other's internals. The source boundary checker enforces this structure.
 
 ## Provenance
 
-The baseline comes from `~/git/hypercerts/entryway/next-spike/app`, with the
-Atmosphere in a Box harness adapted from the same workspace. The sibling
-`~/git/hypercerts/ePDS/e2e/atmosphere` is the design reference for disposable
-pinned checkouts, consumer-owned stacks, access metadata and scoped cleanup.
-Earlier `spike` and
-`replay/spike` trees are historical references, not additional runtime packages.
+The application and Atmosphere in a Box harness were imported from the Entryway
+spike. The ePDS harness supplied the design pattern for disposable pinned checkouts,
+consumer-owned stacks, access metadata and scoped cleanup. Imported implementation
+and the required templates are now owned by this repository; earlier spike/replay
+trees are historical provenance, not additional runtime packages.
 Reference PDS behaviour is grounded in Bluesky's source and Entryway tests; no PDS
 fork is part of this repository. See the reuse assessment for source evidence.

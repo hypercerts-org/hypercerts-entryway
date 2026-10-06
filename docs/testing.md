@@ -102,9 +102,13 @@ measure the complete expiry interval.
 
 ## Evidence reporting
 
-No tests or builds were executed as part of the documentation import. Report new
-runs with source revision, command, sandbox/dependency versions, result and unrun
-groups. Historical spike reports establish provenance only. Never copy captured
+No tests or builds were executed as part of the original documentation import.
+The [October 5 baseline](../tests/plans/baseline-2026-10-05.md) now records two
+isolated runs at `89589ca6`; [M1 matrices](../tests/plans/README.md) distinguish
+their bounded coverage from unresolved requirements. The October 6 publication
+does not claim a new runtime result. Report new runs with source revision,
+command, sandbox/dependency versions, result and unrun groups.
+Historical spike reports establish provenance only. Never copy captured
 OTPs, access tokens, private keys or runtime configuration into committed reports.
 
 ## Feature tests and operational evidence

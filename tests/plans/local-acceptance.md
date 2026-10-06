@@ -1,6 +1,9 @@
 # Local acceptance plan
 
-Status: imported and adapted; execution has not been performed in this repository.
+Status: the [October 5 baseline](baseline-2026-10-05.md) records two isolated runs
+at `89589ca6`, including the inherited raw moderation failure. No new application
+run is claimed by the October 6 matrix publication. Unchanged baseline evidence
+does not close the [outstanding acceptance cases](README.md).
 
 ## Preparation
 
@@ -31,7 +34,15 @@ No host port or DNS changes are required. Mailpit captures sandbox SMTP.
 3. `./tests/local.sh migration`: fresh synthetic external source, verified
    destination owner, custody handoff, journal pauses/restarts, target checks
    and post-migration OAuth.
-4. `./tests/local.sh resilience`: explicitly disrupt Entryway, then restart the
+4. `./tests/local.sh interop-profile`: record the raw exit 2 and required missing
+   moderation coordination. `all` checks that this is exactly the predeclared
+   inherited gap before continuing; it does not turn it into a product pass.
+5. `./tests/local.sh plc-recovery`: five provisioning reconciliation cases.
+6. `./tests/local.sh process-crash`: actual signup process kills before and after
+   PDS success, followed by same-DID reconciliation.
+7. `./tests/local.sh authority-drills`: bounded local authority backup/restore,
+   issuer-only skew and coordinated key replacement/restoration.
+8. `./tests/local.sh resilience`: explicitly disrupt Entryway, then restart the
    core stack with volumes retained. Run alone and last; verify token/resource
    behavior during outage, restore service and check persistent identity/data.
 
@@ -47,7 +58,9 @@ Reports/screenshots are under `tests/artifacts/`. Keep generated configuration,
 private credentials, CA keys and volume data out of commits. The external flow
 uses a privileged synthetic source adapter; it does not prove compatibility
 with goat or PDS MOOver. Earlier browser cases read the test outbox directly;
-newer experience cases use Mailpit. No imported prior results are included.
+newer experience cases use Mailpit. The linked baseline reports runs performed in
+this repository at the recorded revision; older spike reports establish provenance
+only. It distinguishes wrapper equivalence from the failing moderation requirement.
 
 Use `fresh` for a clean replay. Persistent lifecycle commands never reset existing
 accounts implicitly. Only the explicitly disposable `fresh` command removes its

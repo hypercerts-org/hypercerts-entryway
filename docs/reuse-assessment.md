@@ -49,7 +49,10 @@ spike/replay runtime sources were found identical and are historical references.
 
 The imported file mapping is preserved in [source-map.json](source-map.json).
 
-Source root at review: `~/git/hypercerts/entryway/`.
+The following historical source labels describe the pre-import spike; they are
+provenance, not paths needed to use this repository. Use [source-map.json](source-map.json)
+for current modules and the [self-contained acceptance inventories](../tests/plans/README.md)
+for the retained findings and source pins.
 
 | Evidence in source checkout | Observation |
 | --- | --- |

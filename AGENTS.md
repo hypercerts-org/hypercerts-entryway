@@ -2,6 +2,13 @@
 
 ## Product boundaries
 
+This repository is self-contained. Keep source, harness instructions, architecture
+and acceptance evidence usable without sibling checkouts. Link the published
+Lexidraw diagrams for original product-design references; retain relevant findings
+in repository-owned documents rather than pointing readers at local spike paths.
+Project-specific acceptance matrices belong in the linked Linear document; keep
+a reference in the repository instead of a duplicate ticket-linked matrix.
+
 Build a small Entryway for multiple unchanged Bluesky reference PDS instances.
 Email OTP and ePDS login behaviour are in scope; Google/GitHub sign-in is not.
 Use the existing PDS Entryway hooks and XRPC contracts. Do not fork, patch, or
@@ -100,4 +107,3 @@ runtime configuration, databases, sandbox state or browser profiles. Log stable
 operation IDs and safe error codes rather than request bodies or personal data.
 Record provenance for imported code and distinguish reusable code, unfinished
 implementation and unresolved integration behaviour.
-

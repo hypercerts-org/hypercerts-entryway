@@ -2,6 +2,9 @@
 
 These documents capture the mini Entryway architecture and six-week delivery proposal agreed in this session.
 They distinguish reusable spike code, proposed behaviour and unresolved release requirements.
+This repository is self-contained: use the source, harness, documentation and
+baseline records here. Project-specific acceptance matrices live in [Linear](https://linear.app/hypercerts/document/m1-acceptance-matrices-epds-parity-protocol-and-migration-196f21e01e71), referenced from the repository’s test plans. Public design/source references do not require a sibling
+checkout. The [test-plan index](../tests/plans/README.md) links the baseline and the maintained Linear inventory of source provenance and unresolved cases.
 
 | Document | Contents |
 | --- | --- |
@@ -28,7 +31,10 @@ The documents contain Mermaid source, not exported images or a new Lexidraw scen
 
 ## Core design references
 
-- [Entryway architecture and authorization flows](https://lexidraw.app/s/kandake.africa/3mvrtiqigo32i).
+- [Original architecture: Trust Territories](https://lexidraw.app/s/did%3Aplc%3Alrphxvv25aibthe7xoc2eeyy/3mvrtfvnwu32i).
+- [Original login flow: A Journey](https://lexidraw.app/s/did%3Aplc%3Alrphxvv25aibthe7xoc2eeyy/3mvrthkln3t2i).
+- [Better Auth integration](https://lexidraw.app/s/did%3Aplc%3Alrphxvv25aibthe7xoc2eeyy/3mvrtiqigo32i).
+- [Layered OAuth Provider: Cross-Section](https://lexidraw.app/s/did%3Aplc%3Alrphxvv25aibthe7xoc2eeyy/3mvrtkdnr732i).
 - [Spike architecture, data model and custody](https://lexidraw.app/s/did%3Aplc%3Alrphxvv25aibthe7xoc2eeyy/3mwlv6d5ddp23).
 
 Use the project plan for the glossary and supporting ATProto documentation. The diagrams describe design; current acceptance reports establish what works.
