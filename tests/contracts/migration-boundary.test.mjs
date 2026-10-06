@@ -1,3 +1,5 @@
+import { createOperationOwnership } from "../../dist/src/accounts/operation-ownership.js";
+import { createOperationOwnershipStore } from "../../dist/src/database/drizzle/operation-ownership.js";
 import { query } from "../support/database-fixture.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -174,7 +176,13 @@ test("target PDS transport rejects malformed signing key and account status", as
   t.after(() => {
     globalThis.fetch = originalFetch;
   });
+  const database = await openTestDatabase(":memory:");
+  t.after(() => database.close());
+  const ownership = createOperationOwnership({
+    store: createOperationOwnershipStore(database),
+  });
   const adapter = new PdsMigrationClient({
+    ownership,
     origin: "https://target.test",
     plcUrl: "https://plc.test",
     token: async () => "test-token",
@@ -183,17 +191,40 @@ test("target PDS transport rejects malformed signing key and account status", as
     payloads: new MigrationPayloadStore("/tmp/unused-migration-boundary"),
   });
   globalThis.fetch = async () => Response.json({ signingKey: "secret" });
-  await assert.rejects(adapter.reserveTargetRepositoryKey(workflow.did), {
-    code: "TargetConflict",
-  });
+  await assert.rejects(
+    ownership.run(workflow.did, { kind: "transport-test", request: {} }, () =>
+      adapter.reserveTargetRepositoryKey(workflow.did),
+    ),
+    {
+      code: "TargetConflict",
+    },
+  );
   globalThis.fetch = async () =>
     Response.json({ activated: "false", validDid: true });
-  await assert.rejects(adapter.activateTarget(workflow.did), {
-    code: "TargetConflict",
-  });
+  await assert.rejects(
+    adapter.verifyInactiveTarget({
+      did: workflow.did,
+      manifest: { sourceCommit: "unused", blobs: [] },
+      expectedRepositoryKey: "unused",
+      expectedPlcHead: "unused",
+      workflowId: "unused",
+    }),
+    {
+      code: "TargetConflict",
+    },
+  );
   globalThis.fetch = async () =>
     Response.json({ activated: true, validDid: true, importedBlobs: -1 });
-  await assert.rejects(adapter.activateTarget(workflow.did), {
-    code: "TargetConflict",
-  });
+  await assert.rejects(
+    adapter.verifyInactiveTarget({
+      did: workflow.did,
+      manifest: { sourceCommit: "unused", blobs: [] },
+      expectedRepositoryKey: "unused",
+      expectedPlcHead: "unused",
+      workflowId: "unused",
+    }),
+    {
+      code: "TargetConflict",
+    },
+  );
 });

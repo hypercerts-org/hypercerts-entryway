@@ -1,13 +1,14 @@
 import { fail, normalizeEmail } from "../../accounts/security-primitives.mjs";
 
 export function createAccountRecovery({
+  db,
   proofs,
   authority,
   accounts,
   legacy,
   changeEmailAuthority,
 }) {
-  const { pendingEmail, rate, issue, consume, revokeAccount, serialized } =
+  const { pendingEmail, rate, issue, commitProof, revokeAccount, serialized } =
     proofs;
   const operations = {
     async requestPasswordReset({ email }) {
@@ -31,9 +32,10 @@ export function createAccountRecovery({
           "InvalidPassword",
           "Password must contain 12 to 256 characters",
         );
-      const proof = await consume(token, "password-reset");
-      await legacy.setPassword(proof.did, password);
-      await revokeAccount(proof.did, { credentials: true });
+      await commitProof(token, "password-reset", {}, async (proof) => {
+        await legacy.setPassword(proof.did, password);
+        await revokeAccount(proof.did, { credentials: true });
+      });
       return {};
     },
     async requestRecovery({ email }) {
@@ -51,37 +53,43 @@ export function createAccountRecovery({
       return await issue("recovery-backup", row, email);
     },
     async completeRecovery({ token, newEmail }) {
-      const proof = await consume(token, "recovery-backup");
-      const backup = await authority.backupOwner(proof.email);
-      if (backup?.did !== proof.did)
-        throw fail(400, "InvalidToken", "Backup email is no longer valid");
-      return (async () => {
-        const pending = await authority.reservePendingEmail({
-          did: proof.did,
-          email: normalizeEmail(newEmail),
-          recovery: true,
-          backupEmail: proof.email,
-          expiresAt: Date.now() + 600_000,
-        });
-        await issue("recovery-new-email", pending.row, pending.email);
-        return { pending: true };
-      })();
+      const pending = await commitProof(
+        token,
+        "recovery-backup",
+        {},
+        async (proof) => {
+          const backup = await authority.backupOwner(proof.email);
+          if (backup?.did !== proof.did)
+            throw fail(400, "InvalidToken", "Backup email is no longer valid");
+          return authority.reservePendingEmail({
+            did: proof.did,
+            email: normalizeEmail(newEmail),
+            recovery: true,
+            backupEmail: proof.email,
+            expiresAt: Date.now() + 600_000,
+          });
+        },
+      );
+      await issue("recovery-new-email", pending.row, pending.email);
+      return { pending: true };
     },
     async completeRecoveryEmail({ token }) {
-      const proof = await consume(token, "recovery-new-email");
-      const pending = await pendingEmail(proof.did);
-      if (!pending?.recovery || pending.email !== proof.email)
-        throw fail(
-          400,
-          "InvalidToken",
-          "Recovery request has expired or changed",
-        );
-      const backup = await authority.backupOwner(pending.backupEmail);
-      if (backup?.did !== proof.did)
-        throw fail(400, "InvalidToken", "Backup email is no longer valid");
-      return changeEmailAuthority(proof.did, proof.email, { recovery: true });
+      return commitProof(token, "recovery-new-email", {}, async (proof) => {
+        const pending = await pendingEmail(proof.did);
+        if (!pending?.recovery || pending.email !== proof.email)
+          throw fail(
+            400,
+            "InvalidToken",
+            "Recovery request has expired or changed",
+          );
+        const backup = await authority.backupOwner(pending.backupEmail);
+        if (backup?.did !== proof.did)
+          throw fail(400, "InvalidToken", "Backup email is no longer valid");
+        return changeEmailAuthority(proof.did, proof.email, { recovery: true });
+      });
     },
   };
+  operations.completeRecovery = serialized(operations.completeRecovery);
   operations.resetPassword = serialized(operations.resetPassword);
   operations.completeRecoveryEmail = serialized(
     operations.completeRecoveryEmail,

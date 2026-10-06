@@ -1,6 +1,7 @@
 import { fail, normalizeEmail } from "../../accounts/security-primitives.mjs";
 
 export function createAccountSettingsSecurity({
+  db,
   proofs,
   authority,
   accounts,
@@ -16,7 +17,7 @@ export function createAccountSettingsSecurity({
     bindVerifiedIdentity,
     requireAdmin,
     issue,
-    consume,
+    commitProof,
     revokeAccount,
     currentPassword,
     serialized,
@@ -73,14 +74,21 @@ export function createAccountSettingsSecurity({
       email = normalizeEmail(email);
       const pending = await pendingEmail(row.did);
       if (pending?.email === email && !pending.recovery) {
-        await consume(token, "email-new", { did: row.did, email });
-        return changeEmailAuthority(row.did, email);
+        return commitProof(token, "email-new", { did: row.did, email }, () =>
+          changeEmailAuthority(row.did, email),
+        );
       }
       if (row.email !== email)
         throw fail(400, "InvalidEmail", "Email does not match account");
-      await consume(token, "email-confirm", { did: row.did, email });
-      await authority.confirmEmail({ did: row.did, email });
-      return {};
+      return commitProof(
+        token,
+        "email-confirm",
+        { did: row.did, email },
+        async () => {
+          await authority.confirmEmail({ did: row.did, email });
+          return {};
+        },
+      );
     },
     async requestEmailUpdate(actor) {
       const row = await principal(actor);
@@ -98,17 +106,20 @@ export function createAccountSettingsSecurity({
       if (!token)
         throw fail(400, "TokenRequired", "Verify the current email first");
       email = await assertEmailAvailable(email, row.did);
-      await consume(token, "email-old", { did: row.did, email: row.email });
-      return (async () => {
-        const proof = await authority.reservePendingEmail({
-          did: row.did,
-          email,
-          recovery: false,
-          expiresAt: Date.now() + 600_000,
-        });
-        await issue("email-new", proof.row, proof.email);
-        return { pending: true };
-      })();
+      const proof = await commitProof(
+        token,
+        "email-old",
+        { did: row.did, email: row.email },
+        () =>
+          authority.reservePendingEmail({
+            did: row.did,
+            email,
+            recovery: false,
+            expiresAt: Date.now() + 600_000,
+          }),
+      );
+      await issue("email-new", proof.row, proof.email);
+      return { pending: true };
     },
     async requestBackupEmail(actor, { email }) {
       const row = await principal(actor, true);
@@ -130,8 +141,9 @@ export function createAccountSettingsSecurity({
     async confirmBackupEmail(actor, { email, token }) {
       const row = await principal(actor, true);
       email = await assertEmailAvailable(email, row.did);
-      await consume(token, "backup-add", { did: row.did, email });
-      return await authority.addBackupEmail(row.did, email);
+      return commitProof(token, "backup-add", { did: row.did, email }, () =>
+        authority.addBackupEmail(row.did, email),
+      );
     },
     async removeBackupEmail(actor, { email }) {
       const row = await principal(actor, true);
@@ -141,16 +153,20 @@ export function createAccountSettingsSecurity({
     },
     async setPassword(actor, { password, currentPassword: previous }) {
       const row = await principal(actor, true);
-      await currentPassword(row, previous);
-      await legacy.setPassword(row.did, password);
-      await revokeAccount(row.did, { credentials: true });
+      await db.transact(async () => {
+        await currentPassword(row, previous);
+        await legacy.setPassword(row.did, password);
+        await revokeAccount(row.did, { credentials: true });
+      });
       return { reauthenticationRequired: true };
     },
     async removePassword(actor, { currentPassword: previous } = {}) {
       const row = await principal(actor, true);
-      await currentPassword(row, previous);
-      await legacy.removePassword(row.did);
-      await revokeAccount(row.did, { credentials: true });
+      await db.transact(async () => {
+        await currentPassword(row, previous);
+        await legacy.removePassword(row.did);
+        await revokeAccount(row.did, { credentials: true });
+      });
       return { reauthenticationRequired: true };
     },
     async adminUpdateEmail(actor, { did, email }) {
@@ -163,12 +179,16 @@ export function createAccountSettingsSecurity({
     },
     async adminUpdatePassword(actor, { did, password }) {
       requireAdmin(actor);
-      await account(did);
-      await legacy.setPassword(did, password);
-      await revokeAccount(did, { credentials: true });
+      await db.transact(async () => {
+        await account(did);
+        await legacy.setPassword(did, password);
+        await revokeAccount(did, { credentials: true });
+      });
       return {};
     },
   };
+  for (const name of ["updateEmail", "confirmBackupEmail", "removeBackupEmail"])
+    operations[name] = serialized(operations[name]);
   operations.confirmEmail = serialized(operations.confirmEmail);
   operations.setPassword = serialized(operations.setPassword);
   operations.removePassword = serialized(operations.removePassword);

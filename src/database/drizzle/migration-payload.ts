@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { MigrationError } from "../../features/external-migration/errors.js";
 import type { SnapshotManifest } from "../../features/external-migration/types.js";
 import { verifySnapshotDigest } from "./migration-snapshot.js";
@@ -15,23 +15,28 @@ export interface SnapshotPayload {
   readonly blobs: readonly { cid: string; bytes: Uint8Array }[];
 }
 
-/** Bounded durable bytes. Only the manifest is stored in SQLite. */
+/** Content-addressed immutable snapshots prevent an expired reader from replacing
+ * a newer admitted snapshot. Concurrent writes under the same manifest contain
+ * identical verified bytes. Only the manifest is stored in the authority DB. */
 export class MigrationPayloadStore {
   public constructor(private readonly root: string) {}
-  private directory(workflowId: string): string {
+  private directory(workflowId: string, manifest: SnapshotManifest): string {
     if (!/^[a-zA-Z0-9_-]{1,100}$/.test(workflowId))
       throw new MigrationError(
         "MissingSnapshot",
         "Invalid workflow identifier",
       );
-    return join(this.root, workflowId);
+    const digest = createHash("sha256")
+      .update(JSON.stringify(validateSnapshotManifest(manifest)))
+      .digest("hex");
+    return join(this.root, workflowId, digest);
   }
   public async save(
     workflowId: string,
     payload: SnapshotPayload,
   ): Promise<void> {
     this.verify(payload);
-    const directory = this.directory(workflowId);
+    const directory = this.directory(workflowId, payload.manifest);
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const files: [string, Uint8Array][] = [
       ["repo.car", payload.car],
@@ -55,7 +60,7 @@ export class MigrationPayloadStore {
     workflowId: string,
     expected: SnapshotManifest,
   ): Promise<SnapshotPayload> {
-    const directory = this.directory(workflowId);
+    const directory = this.directory(workflowId, expected);
     try {
       const stored = validateSnapshotManifest(
         parseMigrationJson(

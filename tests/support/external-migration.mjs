@@ -64,6 +64,7 @@ const accessSigner = await createTargetAccessTokenSigner({
 const oauthIssuerKey = accessSigner.publicInventoryItem;
 const token = (did) => accessSigner.sign(did);
 const targetPds = new PdsMigrationClient({
+  ownership: accounts.ownership,
   origin: target.url,
   plcUrl: config.plcUrl,
   token,
@@ -74,6 +75,8 @@ const targetPds = new PdsMigrationClient({
 const audit = ({ workflowId, event, phase }) =>
   console.log(JSON.stringify({ workflowId, event, phase }));
 const service = new ExternalMigrationService({
+  ownership: accounts.ownership,
+  transact: (operation) => db.transact(operation),
   workflows,
   start,
   snapshots,

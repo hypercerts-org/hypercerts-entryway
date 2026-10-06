@@ -22,7 +22,13 @@ const admin = (pds) =>
 async function request(
   origin,
   path,
-  { body, auth, status = 200, method = body === undefined ? 'GET' : 'POST' } = {},
+  {
+    body,
+    auth,
+    status = 200,
+    strictJson = false,
+    method = body === undefined ? 'GET' : 'POST',
+  } = {},
 ) {
   const r = await fetch(new URL(path, origin), {
     method,
@@ -33,7 +39,9 @@ async function request(
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: AbortSignal.timeout(15000),
   })
-  const data = await r.json().catch(() => ({}))
+  const data = strictJson
+    ? JSON.parse(await r.text())
+    : await r.json().catch(() => ({}))
   assert.equal(r.status, status, `${method} ${path}: ${data.error ?? ''} ${data.message ?? ''}`)
   return data
 }
@@ -284,7 +292,18 @@ integration(
     await call('identity.submitPlcOperation', { operation }, bearer(identity))
     const updated = await new plc.Client(config.plcUrl).getLastOp(identity.did)
     assert.deepEqual(updated.rotationKeys, operation.rotationKeys)
-    await call('identity.submitPlcOperation', { operation }, bearer(identity), { status: 400 })
+    const duplicate = await call(
+      'identity.submitPlcOperation',
+      { operation },
+      bearer(identity),
+      { status: 400, strictJson: true },
+    )
+    assert.equal(duplicate.error, 'InvalidRequest')
+    assert.equal(
+      duplicate.message === `Invalid signature on op: ${JSON.stringify(operation)}`,
+      true,
+      'Duplicate must preserve the exact unchanged PLC rejection',
+    )
     await call('identity.requestPlcOperationSignature', {}, bearer(identity))
     const migration = await call(
       'identity.signPlcOperation',
@@ -298,7 +317,22 @@ integration(
     )
     assert.equal(migration.operation.services.atproto_pds.endpoint, config.pds[1].url)
     // A hosting PDS must not accept a migration-away operation through its local submit API.
-    await call('identity.submitPlcOperation', migration, bearer(identity), { status: 400 })
+    const rejectedMigration = await call(
+      'identity.submitPlcOperation',
+      migration,
+      bearer(identity),
+      { status: 400, strictJson: true },
+    )
+    assert.equal(rejectedMigration.error, 'InvalidRequest')
+    assert.equal(rejectedMigration.message, 'Incorrect endpoint on atproto_pds service')
+    // Both definitively rejected requests preserve the next ordinary action.
+    await call('identity.requestPlcOperationSignature', undefined, bearer(identity))
+    const afterRejections = await new plc.Client(config.plcUrl).getLastOp(identity.did)
+    assert.equal(
+      JSON.stringify(afterRejections) === JSON.stringify(updated),
+      true,
+      'Both rejections preserve the published operation',
+    )
   },
 )
 integration('entryway resource-status and reserve-key APIs return actual PDS state', async () => {

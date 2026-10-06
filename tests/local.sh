@@ -11,7 +11,8 @@ mkdir -p "$sandbox"
 cd "$sandbox"
 command=${1:-help}
 mkdir -p "$artifacts"
-compose() { docker compose --project-name "$project" -f "$sandbox/compose.yaml" "$@"; }
+source "$root/tests/support/rootless-docker.sh"
+compose() { docker --context rootless compose --project-name "$project" -f "$sandbox/compose.yaml" "$@"; }
 guard_project() {
   node --input-type=module - "$sandbox/state/manifest.json" "$project" <<'JS'
 import { readFileSync } from 'node:fs'
@@ -39,7 +40,7 @@ case "$command" in
         echo "Preserved project $SANDBOX_PROJECT at $temp" >&2
       else
         if test -f "$SANDBOX_CHECKOUT/compose.yaml"; then
-          if ! docker compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" down --volumes --remove-orphans; then
+          if ! docker --context rootless compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" down --volumes --remove-orphans; then
             echo "Scoped cleanup failed; preserved $temp for project $SANDBOX_PROJECT" >&2
             (( result != 0 )) || result=1
             echo "Run exit: $result; reports: $ACCEPTANCE_REPORT_DIR"
@@ -146,7 +147,7 @@ case "$command" in
     record_candidate interop-profile
     compose exec -T entryway node tests/support/interop-profile-probe.mjs > "$artifacts/interop-profile.json"
     ;;
-  plc-recovery|process-crash|authority-drills)
+  plc-recovery|process-crash|managed-recovery|authority-drills)
     require_state
     bash "$root/tests/support/run-$command.sh"
     ;;
@@ -163,6 +164,7 @@ case "$command" in
     compose run --rm --no-deps test node tests/support/assert-interop-profile.mjs /app/artifacts/interop-profile.json "$profile_status" /app/artifacts/interop-profile-acceptance.json
     "$root/tests/local.sh" plc-recovery
     "$root/tests/local.sh" process-crash
+    "$root/tests/local.sh" managed-recovery
     "$root/tests/local.sh" authority-drills
     "$root/tests/local.sh" resilience
     ;;
@@ -175,7 +177,7 @@ case "$command" in
     deno task sandbox status
     ;;
   *)
-    echo 'Usage: ./tests/local.sh fresh|prepare|up|browser|contracts|database-contracts|database-profile|migration|migration-resume|reverify|interop-profile|plc-recovery|process-crash|authority-drills|resilience|all|status|down'
+    echo 'Usage: ./tests/local.sh fresh|prepare|up|browser|contracts|database-contracts|database-profile|migration|migration-resume|reverify|interop-profile|plc-recovery|process-crash|managed-recovery|authority-drills|resilience|all|status|down'
     echo 'all requires a fresh project fixture; down retains state and volumes. No implicit reset.'
     ;;
 esac

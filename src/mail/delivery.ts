@@ -8,7 +8,7 @@ import type {
   MailOutboxEntry,
   MailOutboxTransactor,
 } from "../database/mail-outbox.port.js";
-import type { MailTransport } from "./port.js";
+import { MailTransportError, type MailTransport } from "./port.js";
 import type { OtpMailRequest, ProofMailRequest } from "./types.js";
 
 const MAX_ATTEMPTS = 3;
@@ -53,84 +53,88 @@ function createEntry(
 export function createMailFeature({
   outbox,
   transport,
+  workerId = randomUUID(),
+  leaseMs = 30_000,
   currentTime = () => Date.now(),
   wait = (milliseconds: number) =>
     new Promise<void>((resolve) => setTimeout(resolve, milliseconds)),
 }: {
   outbox: MailOutboxTransactor;
   transport: MailTransport;
+  workerId?: string;
+  leaseMs?: number;
   currentTime?: () => number;
   wait?: (milliseconds: number) => Promise<void>;
 }) {
-  const inFlight = new Set<string>();
-
+  if (!workerId || !Number.isSafeInteger(leaseMs) || leaseMs < 1)
+    throw new Error("InvalidMailClaim");
   async function deliverEntry(entry: MailOutboxEntry): Promise<boolean | null> {
-    if (inFlight.has(entry.id)) return null;
-    inFlight.add(entry.id);
-    try {
-      for (
-        let attempt = entry.attemptCount;
-        attempt < MAX_ATTEMPTS;
-        attempt++
-      ) {
-        const now = currentTime();
-        if (now >= entry.expiresAt) {
-          await outbox.expire(now);
-          return false;
-        }
-        const delay =
-          attempt === entry.attemptCount ? 0 : (RETRY_DELAYS_MS[attempt] ?? 0);
-        if (delay) await wait(delay);
-        const attemptedAt = currentTime();
-        if (
-          attemptedAt >= entry.expiresAt ||
-          !(await outbox.beginAttempt(entry.id, attemptedAt))
-        ) {
-          await outbox.expire(attemptedAt);
-          return false;
-        }
-        try {
-          const message = createOtpMessage(
-            entry.recipient,
-            entry.code,
-            entry.purpose,
-          );
-          await transport.deliver(message);
-          const deliveredAt = currentTime();
-          const delivered = await outbox.markDelivered(entry.id, deliveredAt);
-          if (!delivered) {
-            await outbox.expire(deliveredAt);
-            return false;
-          }
-          await outbox.projectCaptured(entry, deliveredAt);
-          return true;
-        } catch {
-          const failedAt = currentTime();
-          const nextAttempt = attempt + 1;
-          const retryDelay = RETRY_DELAYS_MS[nextAttempt];
-          const retryAt =
-            retryDelay === undefined ? null : failedAt + retryDelay;
-          await outbox.markFailure(entry.id, failedAt, retryAt);
-          if (retryAt === null || retryAt >= entry.expiresAt) return false;
-        }
+    for (let attempt = entry.attemptCount; attempt < MAX_ATTEMPTS; attempt++) {
+      const now = currentTime();
+      if (now >= entry.expiresAt) {
+        await outbox.expire(now);
+        return false;
       }
-      return false;
-    } finally {
-      inFlight.delete(entry.id);
+      const delay =
+        attempt === entry.attemptCount ? 0 : (RETRY_DELAYS_MS[attempt] ?? 0);
+      if (delay) await wait(delay);
+      const attemptedAt = currentTime();
+      if (attemptedAt >= entry.expiresAt) {
+        await outbox.expire(attemptedAt);
+        return false;
+      }
+      const claim = await outbox.claimAttempt(
+        entry.id,
+        workerId,
+        leaseMs,
+        attemptedAt,
+      );
+      if (!claim) return null;
+      // Only the claimed row supplies transport data. No SQL transaction spans
+      // SMTP, and the claim's version protects completion after supersession.
+      try {
+        await transport.deliver(
+          createOtpMessage(
+            claim.entry.recipient,
+            claim.entry.code,
+            claim.entry.purpose,
+          ),
+        );
+      } catch (error) {
+        const failedAt = currentTime();
+        const retryDelay = RETRY_DELAYS_MS[claim.entry.attemptCount];
+        const retryAt = retryDelay === undefined ? null : failedAt + retryDelay;
+        const outcome =
+          error instanceof MailTransportError ? error.outcome : "unknown";
+        const changed = await outbox.markFailure(
+          claim,
+          failedAt,
+          retryAt,
+          outcome,
+        );
+        if (!changed || retryAt === null || retryAt >= entry.expiresAt)
+          return false;
+        continue;
+      }
+      const deliveredAt = currentTime();
+      if (!(await outbox.markDelivered(claim, deliveredAt))) {
+        await outbox.expire(deliveredAt);
+        return false;
+      }
+      return true;
     }
+    return false;
   }
 
-  async function send(
+  async function queue(
     recipientValue: string,
     code: string,
     purpose: string,
     projectionField: "otp" | "token",
     projectionToken?: string,
-  ): Promise<void> {
+  ): Promise<{ deliver(): Promise<void> }> {
     const recipient = validateMailAddress(recipientValue);
     const now = currentTime();
-    await outbox.expire(now);
-    await outbox.supersede(recipient, purpose, now);
     const entry = createEntry(
       recipient,
       code,
@@ -140,7 +144,11 @@ export function createMailFeature({
       now,
     );
     await outbox.enqueue(entry);
-    if ((await deliverEntry(entry)) !== true) throw new MailDeliveryError();
+    return {
+      async deliver() {
+        if ((await deliverEntry(entry)) !== true) throw new MailDeliveryError();
+      },
+    };
   }
 
   async function prune(now: number): Promise<number> {
@@ -153,10 +161,20 @@ export function createMailFeature({
 
   return {
     async sendOtp({ email, otp, type }: OtpMailRequest) {
-      await send(email, otp, type, "otp");
+      await (await queue(email, otp, type, "otp")).deliver();
     },
     async sendProof({ email, token, purpose }: ProofMailRequest) {
-      await send(email, proofCode(token), purpose, "token", token);
+      await (
+        await queue(email, proofCode(token), purpose, "token", token)
+      ).deliver();
+    },
+    async queueOtp({ email, otp, type }: OtpMailRequest) {
+      return queue(email, otp, type, "otp");
+    },
+    /** Queue within the challenge transaction; invoke delivery only after commit.
+     * The returned dispatcher cannot enqueue again or resurrect a superseded row. */
+    async queueProof({ email, token, purpose }: ProofMailRequest) {
+      return queue(email, proofCode(token), purpose, "token", token);
     },
     async supersedeOtp({ email, type }: { email: string; type: string }) {
       return await outbox.supersede(

@@ -1,9 +1,16 @@
 # Database foundation verification — October 6, 2026
 
+This record describes the database implementation at the commit below. The later
+[shared-operation verification](shared-operations-2026-10-07.md) supersedes its
+shared-worker implementation status and rechecks inherited database behavior.
+These October 6 runs did not explicitly pin the Docker daemon; their original
+results remain valid historical receipts, not claims of rootless execution.
+
 The Drizzle database foundation passed reviewed final acceptance and a separate
 independent execution on the same frozen source. SQLite and PostgreSQL support
 single-node operation. PostgreSQL is required by multi-node configuration, but
-shared worker ownership and replica availability remain implementation work.
+at that revision, shared worker ownership and replica availability remained
+implementation work.
 The raw interoperability profile still reports the required moderation gap.
 
 ## Source and environment

@@ -225,6 +225,61 @@ export const migration_custody_inventory = table(
   },
   (t) => [],
 );
+export const authority_operations = table(
+  "authority_operations",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind").notNull(),
+    request_digest: text("request_digest").notNull(),
+    state: text("state").notNull(),
+    worker_id: text("worker_id"),
+    attempt_id: text("attempt_id"),
+    fence: count("fence").notNull(),
+    attempt_count: count("attempt_count").notNull(),
+    lease_expires_at: count("lease_expires_at"),
+    pending: boolean("pending").notNull(),
+    phase: text("phase").notNull(),
+    expected_state: text("expected_state"),
+    last_error_code: text("last_error_code"),
+    created_at: count("created_at").notNull(),
+    updated_at: count("updated_at").notNull(),
+  },
+  (t) => [index("authority_operation_lease").on(t.state, t.lease_expires_at)],
+);
+export const operation_admissions = table(
+  "operation_admissions",
+  {
+    resource: text("resource").primaryKey(),
+    operation_id: text("operation_id")
+      .notNull()
+      .references(() => authority_operations.id),
+  },
+  (t) => [index("operation_admission_id").on(t.operation_id)],
+);
+export const external_operation_attempts = table(
+  "external_operation_attempts",
+  {
+    id: text("id").primaryKey(),
+    operation_id: text("operation_id")
+      .notNull()
+      .references(() => authority_operations.id),
+    step: text("step").notNull(),
+    execution_attempt_id: text("execution_attempt_id").notNull(),
+    worker_id: text("worker_id").notNull(),
+    fence: count("fence").notNull(),
+    target: text("target").notNull(),
+    method: text("method").notNull(),
+    intent_digest: text("intent_digest").notNull(),
+    state: text("state").notNull(),
+    result: text("result"),
+    recovery: text("recovery"),
+    created_at: count("created_at").notNull(),
+    updated_at: count("updated_at").notNull(),
+  },
+  (t) => [
+    index("external_operation_step").on(t.operation_id, t.step, t.created_at),
+  ],
+);
 export const mail_outbox = table(
   "mail_outbox",
   {
@@ -241,6 +296,11 @@ export const mail_outbox = table(
     attempt_count: count("attempt_count").notNull(),
     next_attempt_at: count("next_attempt_at").notNull(),
     delivered_at: count("delivered_at"),
+    claim_owner: text("claim_owner"),
+    claim_attempt: text("claim_attempt"),
+    claim_version: count("claim_version").notNull().default(0),
+    lease_expires_at: count("lease_expires_at"),
+    delivery_uncertain: boolean("delivery_uncertain").notNull().default(false),
   },
   (t) => [
     index("mail_outbox_retry_idx").on(t.state, t.next_attempt_at, t.expires_at),
@@ -257,7 +317,11 @@ export const mail_outbox = table(
     check("mail_attempts", sql`${t.attempt_count} BETWEEN 0 AND 3`),
     check(
       "mail_state",
-      sql`${t.state} IN ('queued','delivered','failed','expired')`,
+      sql`${t.state} IN ('queued','sending','delivered','failed','expired')`,
+    ),
+    check(
+      "mail_claim",
+      sql`(${t.state}='sending' AND ${t.claim_owner} IS NOT NULL AND ${t.claim_attempt} IS NOT NULL AND ${t.lease_expires_at} IS NOT NULL) OR (${t.state}!='sending' AND ${t.claim_owner} IS NULL AND ${t.claim_attempt} IS NULL AND ${t.lease_expires_at} IS NULL)`,
     ),
     check("mail_expiry", sql`${t.expires_at}>${t.created_at}`),
     check(

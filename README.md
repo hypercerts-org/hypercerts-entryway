@@ -18,8 +18,13 @@ operations. Two isolated runs passed full fresh acceptance, both database contra
 suites and single-node PostgreSQL login/restart/restore; see the
 [database verification record](docs/evidence/database-foundation-2026-10-06.md).
 Single-node operation accepts either database; multi-node configuration requires
-PostgreSQL. Shared operation ownership, mail claims, request balancing, failover
-and fleet placement remain implementation work. Google/GitHub OIDC is roadmap
+PostgreSQL. [Shared operation ownership](docs/shared-operations.md) now coordinates
+account/PDS orchestration, verified recovery, mail and authentication. Revised
+application and dual-database acceptance passed independent rootless verification;
+the [shared-operation evidence](docs/evidence/shared-operations-2026-10-07.md)
+retains an earlier failed unit run and its deferred credential-lifetime defect.
+Request balancing, readiness/draining, failover and fleet placement remain
+implementation work. Google/GitHub OIDC is roadmap
 work excluded from initial delivery.
 
 ## Start the sandbox

@@ -905,3 +905,171 @@ test("password reset cannot issue current authority to a former primary email af
     true,
   );
 });
+
+test("a delayed earlier challenge delivery cannot supersede the current challenge mail", async (t) => {
+  const f = await fixture(t);
+  let entered,
+    release,
+    first = true;
+  const ready = new Promise((resolve) => {
+    entered = resolve;
+  });
+  const proceed = new Promise((resolve) => {
+    release = resolve;
+  });
+  const queue = f.mail.queueProof;
+  f.mail.queueProof = async (input) => {
+    const dispatch = await queue(input);
+    const pause = first;
+    first = false;
+    return {
+      async deliver() {
+        if (pause) {
+          entered();
+          await proceed;
+        }
+        return dispatch.deliver();
+      },
+    };
+  };
+  const pending = f.security
+    .requestPasswordReset({ email: f.alice.email })
+    .then(
+      () => ({ ok: true }),
+      (error) => ({ ok: false, code: error.code ?? error.error }),
+    );
+  await ready;
+  await f.security.requestPasswordReset({ email: f.alice.email });
+  const latest = await f.db.get("outbox", f.alice.email);
+  release();
+  await pending;
+  const projection = await f.db.get("outbox", f.alice.email);
+  assert.equal(
+    projection.token === latest.token,
+    true,
+    "the captured proof must remain the current challenge",
+  );
+  const latestId = latest.token.split(".")[0];
+  assert.equal(
+    Boolean((await f.db.get("security:challenges", latestId)).consumedAt),
+    false,
+  );
+});
+
+test("a delayed earlier Better Auth OTP cannot replace current verification mail", async (t) => {
+  const f = await fixture(t);
+  let entered,
+    release,
+    first = true;
+  const ready = new Promise((resolve) => {
+    entered = resolve;
+  });
+  const proceed = new Promise((resolve) => {
+    release = resolve;
+  });
+  const queue = f.mail.queueOtp;
+  f.mail.queueOtp = async (input) => {
+    const dispatch = await queue(input);
+    const pause = first;
+    first = false;
+    return {
+      async deliver() {
+        if (pause) {
+          entered();
+          await proceed;
+        }
+        return dispatch.deliver();
+      },
+    };
+  };
+  const pending = f.oauth.sendSignInCode(f.alice.email).then(
+    () => ({ ok: true }),
+    (error) => ({ ok: false, code: error.code ?? error.error }),
+  );
+  await ready;
+  await f.oauth.sendSignInCode(f.alice.email);
+  const current = await f.db.get("outbox", f.alice.email);
+  release();
+  await pending;
+  assert.equal(
+    (await f.db.get("outbox", f.alice.email)).otp === current.otp,
+    true,
+    "projection must retain the latest verification OTP",
+  );
+  assert.equal(
+    (await f.oauth.verifySignInCode({ email: f.alice.email, otp: current.otp }))
+      .ok,
+    true,
+  );
+});
+
+test("Better Auth verification and its queued mail roll back together on callback persistence failure", async (t) => {
+  const f = await fixture(t);
+  const before = (await f.db.read("verification")).length;
+  const beforeMail = JSON.stringify(await f.db.read("mail_outbox"));
+  const beforeProjection = JSON.stringify(
+    await f.db.get("outbox", f.alice.email),
+  );
+  const queue = f.mail.queueOtp;
+  f.mail.queueOtp = async (input) => {
+    await queue(input);
+    throw Error("forced queue failure");
+  };
+  await assert.rejects(
+    f.oauth.sendSignInCode(f.alice.email),
+    /forced queue failure/,
+  );
+  assert.equal((await f.db.read("verification")).length, before);
+  assert.equal(
+    JSON.stringify(await f.db.read("mail_outbox")) === beforeMail,
+    true,
+  );
+  assert.equal(
+    JSON.stringify(await f.db.get("outbox", f.alice.email)) ===
+      beforeProjection,
+    true,
+  );
+});
+
+test("stale saved deletion authorization cannot manufacture another deletion admission", async (t) => {
+  const f = await fixture(t);
+  await f.security.requestAccountDelete(f.actor);
+  const token = await f.token(f.alice.email);
+  const perform = f.accounts.deleteAccount.bind(f.accounts);
+  let fail = true,
+    calls = 0;
+  f.accounts.deleteAccount = async (did) => {
+    if (fail) {
+      fail = false;
+      throw Error("Controlled stop after local authorization");
+    }
+    calls++;
+    return perform(did);
+  };
+  await assert.rejects(
+    f.security.deleteAccount({ did: f.alice.did, token }),
+    /Controlled stop after local authorization/,
+  );
+  const captured = Promise.withResolvers(),
+    release = Promise.withResolvers();
+  let paused = false;
+  const list = f.db.list.bind(f.db);
+  f.db.list = async (ns, ...args) => {
+    const rows = await list(ns, ...args);
+    if (ns === "security:deletion-authorizations" && !paused) {
+      paused = true;
+      captured.resolve();
+      await release.promise;
+    }
+    return rows;
+  };
+  const scheduler = f.security.reconcileDeletions();
+  await captured.promise;
+  await f.security.deleteAccount({ did: f.alice.did });
+  const operations = await f.db.read("authority_operations");
+  release.resolve();
+  assert.deepEqual(await scheduler, []);
+  assert.deepEqual(await f.db.read("authority_operations"), operations);
+  assert.equal(calls, 1);
+  assert.equal((await f.accounts.get(f.alice.did)).status, "deleted");
+});

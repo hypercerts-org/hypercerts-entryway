@@ -1,3 +1,4 @@
+import { mountOperationRecoveryRoutes } from "./features/account-settings/operation-recovery-routes.js";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import express from "express";
 import { createAccounts } from "./compose-accounts.mjs";
@@ -125,6 +126,7 @@ export async function createApp({ config, db, mail }) {
   const reconcile = () => {
     if (!repairPromise)
       repairPromise = (async () => [
+        ...(await security.reconcileDeletions()),
         ...(await migration.reconcile()),
         ...(await accounts.reconcile()),
       ])().finally(() => {
@@ -143,6 +145,7 @@ export async function createApp({ config, db, mail }) {
     migration,
   });
   app.use(express.json({ limit: "64kb" }));
+  mountOperationRecoveryRoutes({ app, config, ownership: accounts.ownership });
   await mountXrpc({
     app,
     db,

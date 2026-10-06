@@ -1,6 +1,6 @@
 # Data model, identity custody and migration
 
-Status: current storage facts plus proposed domain contracts. Updated: 2026-10-06.
+Status: current storage facts plus proposed domain contracts. Updated: 2026-10-07.
 See [architecture](architecture.md) for domain ownership and [delivery reference](delivery-plan.md) for delivery gates.
 
 ## 1. Account identity and ownership
@@ -50,7 +50,10 @@ inside the database adapter. Fresh schemas replace old layouts without a data
 conversion path. Both dialect contracts, full fresh acceptance and the single-node
 PostgreSQL application restart/restore profile passed in two isolated runs; see the
 [verification record](evidence/database-foundation-2026-10-06.md).
-Shared operation/mail ownership and replica failover remain implementation work.
+Shared operation/mail ownership and verified recovery passed revised application
+and dual-database verification, including a separate independent rootless run;
+see the [evidence and retained limitations](evidence/shared-operations-2026-10-07.md).
+Replica failover remains implementation work. See [shared ownership and recovery](shared-operations.md).
 See [database configuration](database.md). The existing ePDS deployment-conversion
 requirement is separate.
 
@@ -157,7 +160,9 @@ The target allows many historical transfers per DID, with at most one active tra
 The database foundation retains the imported account constraints and journal
 invariants in fresh Drizzle schemas and transactional operations. Namespaced JSON
 state and pinned provider-table integration stay inside the database boundary.
-Repeatable transfer history and durable operation ownership remain separate work.
+Repeatable transfer history remains separate work. Durable operation ownership and
+verified recovery have [independent integration evidence](evidence/shared-operations-2026-10-07.md);
+this does not establish a complete custody or repeated-transfer product.
 
 ## 4. Custody boundaries
 

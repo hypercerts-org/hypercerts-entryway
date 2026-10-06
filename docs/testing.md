@@ -41,10 +41,11 @@ and requires no host dependency install:
 | `./tests/local.sh migration-resume` | Resume a reviewed interrupted fixture; inspect state before using |
 | `./tests/local.sh reverify` | Check an already completed migration fixture |
 | `./tests/local.sh resilience` | Disruptive outage/restart checks after other suites finish; run alone |
-| `./tests/local.sh all` | Prepare, up, browser, contracts, migration, profile, PLC recovery, crash, authority drills, resilience; requires fresh fixture |
+| `./tests/local.sh all` | Prepare, up, browser, contracts, migration, profile, PLC recovery, crash, managed recovery, authority drills, resilience; requires fresh fixture |
 | `./tests/local.sh interop-profile` | Raw product profile; exit 2 retains inherited missing moderation requirement |
 | `./tests/local.sh plc-recovery` | Five named synthetic PLC/cache recovery cases in the selected project |
 | `./tests/local.sh process-crash` | Two actual SIGKILL boundaries, exit 137 and post-recovery PDS writes |
+| `./tests/local.sh managed-recovery` | Two real managed-migration modes: consumed successful response and rejected request followed by observe-to-retry authorization; pending/reload UI and preserved record/blob/session/PDS-write assertions |
 | `./tests/local.sh authority-drills` | Fresh two-PDS identities, bounded backup/restore and issuer/fleet/restored key checks |
 | `./tests/local.sh down` | Stop this project; retain volumes and state |
 
@@ -172,8 +173,30 @@ and all three PostgreSQL application stages passed in two isolated runs; see the
 commands, results and limits. [Database configuration and contracts](database.md)
 describes reproduction and receipt contents. These single-node checks do not
 establish worker takeover, rolling removal or multi-instance availability.
-Shared operation ownership, mail claims, balancing/failover and their replica
+[Shared operation ownership](shared-operations.md) adds integrated account, migration,
+recovery, mail and authentication contracts, including independent PostgreSQL worker
+processes. Revised full application and dual-database suites passed independent
+rootless verification; see the [October 7 evidence](evidence/shared-operations-2026-10-07.md).
+The initial executor unit command failed on a pre-existing credential-lifetime
+boundary and remains a failed receipt; the documented deferred defect was not
+fixed or hidden by the later passing suites. Balancing/failover and actual replica
 profiles still require implementation and acceptance.
+
+Repository lifecycle entrypoints explicitly select `DOCKER_CONTEXT=rootless`, unset
+`DOCKER_HOST` and verify the rootless endpoint/security option before acting. There
+is no default-daemon fallback, including cleanup. The receipt records the selected
+context, endpoint and security options. Historical database-foundation receipts did
+not pin the daemon; their actual outcomes remain historical and are not rootless
+acceptance claims.
+
+The revised real process-crash drill uses the unchanged 120-second operation lease,
+a 150-second bounded approval wait, a 360-second browser-case deadline and a
+420-second controller command deadline. It never edits persisted leases. Operator
+recovery follows verified old Entryway exit/removal and a full stop/restart of the
+affected unchanged PDS, then operation-specific observation. Pending desktop/narrow
+screenshots and saved identity/target assertions precede approval. Separate worker
+contracts use an explicitly declared two-second fixture lease and controlled HTTP
+transport; their proof scope differs from the real PDS/browser drill.
 
 The [implementation assessment](implementation-assessment.md) distinguishes the
 implemented foundation from remaining work. Database verification uses fresh

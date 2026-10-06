@@ -22,6 +22,7 @@ export function createSecurityPrimitives({
   legacy,
   mail,
   authority,
+  ownership,
 }) {
   const { account, identity, version, claim, pendingEmail } = authority;
   const assertEmailAvailable = async (email, did, options) =>
@@ -143,12 +144,13 @@ export function createSecurityPrimitives({
             consumedAt: Date.now(),
           });
       await db.set("security:challenges", id, record);
-      return true;
+      // Challenge replacement and its outbox supersession must share the same
+      // transaction. A delayed earlier sender may not enqueue over a newer proof.
+      return mail.queueProof({ email, token: `${id}.${code}`, purpose });
     });
     if (!issued) return {};
-    return mail
-      .sendProof({ email, token: `${id}.${code}`, purpose })
-      .then(() => ({}));
+    await issued.deliver();
+    return {};
   };
 
   const consume = async (token, purpose, expected = {}) => {
@@ -161,9 +163,32 @@ export function createSecurityPrimitives({
       hash: digest(id, purpose, code ?? ""),
     });
   };
+  // Negative proof attempts commit their counters; a valid proof and its local
+  // authority mutation commit together. Callbacks here must contain no I/O.
+  const commitProof = async (token, purpose, expected, change) => {
+    const result = await db.transact(async () => {
+      let proof;
+      try {
+        proof = await consume(token, purpose, expected);
+      } catch (error) {
+        if (
+          !["InvalidToken", "ExpiredToken", "RateLimitExceeded"].includes(
+            error.error ?? error.code,
+          )
+        )
+          throw error;
+        return { error };
+      }
+      return { value: await change(proof) };
+    });
+    if (result.error) throw result.error;
+    return result.value;
+  };
   const revokeAccount = async (did, { credentials = false } = {}) => {
-    await authority.revokeLocal(did);
-    await legacy.revokeAccount(did, { credentials });
+    await db.transact(async () => {
+      await authority.revokeLocal(did);
+      await legacy.revokeAccount(did, { credentials });
+    });
   };
   const currentPassword = async (row, password) => {
     if (
@@ -173,26 +198,30 @@ export function createSecurityPrimitives({
       throw fail(403, "InvalidPassword", "Current password is required");
   };
 
-  const locks = new Map();
   const serialized =
     (perform) =>
     async (...args) => {
+      const challengeId = String(args[0]?.token ?? args[1]?.token ?? "").split(
+        ".",
+      )[0];
       const did =
         args[0]?.did ??
         args[1]?.did ??
-        (
-          await db.get(
-            "security:challenges",
-            String(args[0]?.token ?? "").split(".")[0],
-          )
-        )?.did ??
+        (await db.get("security:challenges", challengeId))?.did ??
         "invalid-token";
-      const previous = locks.get(did) ?? Promise.resolve();
-      const next = previous.catch(() => {}).then(() => perform(...args));
-      locks.set(did, next);
-      return next.finally(() => {
-        if (locks.get(did) === next) locks.delete(did);
-      });
+      // Passwords and OTPs are never persisted or hashed as operation intent.
+      const intent =
+        perform.name === "deleteAccount"
+          ? { kind: "delete", request: {} }
+          : {
+              kind: `security:${perform.name}`,
+              request: {
+                did,
+                email: args[1]?.email ?? args[0]?.newEmail ?? null,
+                challengeId: challengeId || null,
+              },
+            };
+      return ownership.accountStep(did, intent, () => perform(...args));
     };
   return {
     account,
@@ -207,8 +236,10 @@ export function createSecurityPrimitives({
     rate,
     issue,
     consume,
+    commitProof,
     revokeAccount,
     currentPassword,
     serialized,
+    ownership,
   };
 }

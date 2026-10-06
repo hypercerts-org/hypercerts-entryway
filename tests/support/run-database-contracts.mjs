@@ -9,18 +9,32 @@ mkdirSync(directory, { recursive: true });
 const files = [
   "account-schema",
   "account-security",
+  "account-completion",
+  "reconciliation-admission",
   "oauth-stores",
   "database-boundary",
+  "operation-ownership",
+  "external-operation-ownership",
+  "repository-verification",
+  "migration",
+  "migration-payload",
+  "mail-ownership",
+  "shared-authentication",
   "synthetic-client",
   "legacy",
   "service-auth",
   "experience",
   "entryway-extras",
+  "plc-rejection",
   "xrpc-security",
   "external-workflow",
   "migration-boundary",
   "migration-custody",
 ].map((name) => `tests/contracts/${name}.test.mjs`);
+files.push(
+  "src/features/email-login/routes.test.mjs",
+  "src/features/account-settings/operation-recovery-routes.test.mjs",
+);
 const args = [
   "--test",
   "--test-reporter=spec",

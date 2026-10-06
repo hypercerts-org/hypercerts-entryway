@@ -1,3 +1,5 @@
+import { createOperationOwnership } from "../../dist/src/accounts/operation-ownership.js";
+import { createOperationOwnershipStore } from "../../dist/src/database/drizzle/operation-ownership.js";
 import { query } from "../support/database-fixture.mjs";
 import assert from "node:assert/strict";
 const didKey = (char) => "did:key:zQ3sh" + char.repeat(44);
@@ -26,6 +28,9 @@ import {
 async function fixture() {
   const sqlite = await openTestDatabase(":memory:");
 
+  const ownership = createOperationOwnership({
+    store: createOperationOwnershipStore(sqlite),
+  });
   const workflows = createMigrationWorkflowStorage(sqlite),
     snapshots = createSnapshotManifestStorage(sqlite);
   const calls = [],
@@ -35,6 +40,7 @@ async function fixture() {
       payload: true,
       active: false,
       lostReply: false,
+      frozen: false,
     };
   const accounts = {
     async getVerifiedOwner({ userId, sessionId }) {
@@ -55,11 +61,15 @@ async function fixture() {
     },
   };
   const source = {
+    async status() {
+      return { did: input.did, head: state.head, frozen: state.frozen };
+    },
     async observePlcHead() {
       return state.head;
     },
     async freezeSource() {
       calls.push("freeze");
+      state.frozen = true;
     },
     async captureSnapshot() {
       calls.push("snapshot");
@@ -144,14 +154,16 @@ async function fixture() {
       await workflows.create(workflow);
     },
   };
-  const make = (stopAt) =>
+  const make = (stopAt, targetOverride = target) =>
     new ExternalMigrationService({
+      ownership,
+      transact: (operation) => sqlite.transact(operation),
       workflows,
       snapshots,
       start,
       accounts,
       source,
-      target,
+      target: targetOverride,
       sourceHandoffSigner: handoff,
       plcRotationSigner: signer,
       custody,
@@ -182,6 +194,21 @@ async function fixture() {
   };
   return {
     sqlite,
+    target,
+    ownership,
+    async recover() {
+      const pending = await ownership.pendingExternal(input.did);
+      assert.ok(pending);
+      await ownership.approveRecovery({
+        operationId: pending.operationId,
+        externalAttemptId: pending.id,
+        executionAttemptId: pending.executionAttemptId,
+        target: pending.target,
+        dispatcherIsolationReference: "fixture:callback-completed",
+        upstreamDrainReference: "fixture:no-outstanding-transport",
+        action: "retry-if-safe",
+      });
+    },
     workflows,
     snapshots,
     calls,
@@ -252,12 +279,18 @@ test("lost handoff reply reconciles exact recorded CID", async (t) => {
   t.after(async () => await f.sqlite.close());
   await f.make().start(f.input);
   f.state.lostReply = true;
-  await assert.rejects(f.make().resume("workflow-1", f.actor), /lost reply/);
+  await assert.rejects(f.make().resume("workflow-1", f.actor), {
+    code: "OperationRecoveryRequired",
+  });
   assert.equal(
     (await f.workflows.getById("workflow-1")).phase,
     "handoff-journaled",
   );
   assert.equal(f.state.head, heads.handoff);
+  await assert.rejects(f.make().resume("workflow-1", f.actor), {
+    code: "OperationRecoveryRequired",
+  });
+  await f.recover();
   assert.equal(
     (await f.make().resume("workflow-1", f.actor)).phase,
     "complete",
@@ -390,4 +423,61 @@ test("manual repair refuses workflows with a published or journaled handoff", as
     ),
     /InvalidManualRecovery/,
   );
+});
+
+test("concrete target status error retains the saved phase for verified recovery and later completion", async (t) => {
+  const { PdsMigrationClient } =
+    await import("../../dist/src/pds/migration-client.js");
+  const f = await fixture();
+  t.after(() => f.sqlite.close());
+  const nativeFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = nativeFetch;
+  });
+  let writes = 0;
+  const concrete = new PdsMigrationClient({
+    ownership: f.ownership,
+    origin: "https://target.test",
+    plcUrl: "https://plc.test",
+    token: async () => "fixture-only",
+    adminAuthorization: "Basic fixture-only",
+    snapshots: f.snapshots,
+    payloads: {},
+  });
+  // Controlled PLC observation and HTTP status response isolate the concrete
+  // adapter's durable-dispatch failure handling; no live PDS conformance claim.
+  concrete.head = async () => heads.moved;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("updateSubjectStatus")) {
+      writes++;
+      f.state.active = true;
+      return Response.json({ error: "Unavailable" }, { status: 503 });
+    }
+    assert.ok(String(url).includes("checkAccountStatus"));
+    return Response.json({ activated: f.state.active, validDid: true });
+  };
+  const target = {
+    ...f.target,
+    activateTarget: concrete.activateTarget.bind(concrete),
+  };
+  await f.make().start(f.input);
+  await assert.rejects(
+    f.make(undefined, target).resume("workflow-1", f.actor),
+    { code: "OperationRecoveryRequired" },
+  );
+  assert.equal(
+    (await f.workflows.getById("workflow-1")).phase,
+    "account-bound",
+  );
+  await assert.rejects(
+    f.make(undefined, target).resume("workflow-1", f.actor),
+    { code: "OperationRecoveryRequired" },
+  );
+  assert.equal(writes, 1);
+  await f.recover();
+  assert.equal(
+    (await f.make(undefined, target).resume("workflow-1", f.actor)).phase,
+    "complete",
+  );
+  assert.equal(writes, 1);
 });

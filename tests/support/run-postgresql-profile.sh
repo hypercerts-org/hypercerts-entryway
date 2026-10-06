@@ -10,8 +10,9 @@ export ACCEPTANCE_REPORT_DIR="$parent_artifacts/postgresql-profile-$run"
 export DATABASE_BACKEND=postgresql DEPLOYMENT_MODE=single-node
 export DATABASE_URL=postgresql://authority_owner@entryway-postgres/account_authority
 mkdir -p "$ACCEPTANCE_REPORT_DIR"
+source "$root/tests/support/rootless-docker.sh"
 printf '%s\n' "$SANDBOX_CHECKOUT" "$SANDBOX_PROJECT" "$ACCEPTANCE_REPORT_DIR" > "$ACCEPTANCE_REPORT_DIR/sandbox-identity.txt"
-compose() { docker compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" "$@"; }
+compose() { docker --context rootless compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" "$@"; }
 cleanup() {
   status=$?
   printf '%s\n' "$status" > "$ACCEPTANCE_REPORT_DIR/profile.exit"

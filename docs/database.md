@@ -17,7 +17,13 @@ Single-node mode accepts either backend. Multi-node mode requires PostgreSQL;
 SQLite plus multi-node fails with `InvalidDatabaseConfiguration` before startup.
 Configuration errors exclude the supplied URL. Accepting the PostgreSQL multi-node
 configuration is not evidence of replica failover or of operation lease behavior.
-Those contracts have separate acceptance gates.
+Those contracts have separate acceptance gates. [Shared operation ownership](shared-operations.md)
+documents durable admissions and attempt fences, integrated account/PDS workflows,
+operator-verified recovery, mail attempts and authentication ordering. Revised
+application and both-backend suites passed independent rootless verification;
+see the [shared-operation record](evidence/shared-operations-2026-10-07.md), which
+separately retains a failed unit run and deferred credential-lifetime defect.
+Balancer/fleet/readiness work remains unimplemented.
 
 Schemas are fresh, explicit dialect assets in `src/database/schema/`. Startup
 serializes initialization, stores the schema asset hash in `schema_identity`, and

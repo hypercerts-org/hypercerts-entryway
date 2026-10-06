@@ -28,8 +28,9 @@ The database boundary implements SQLite and PostgreSQL through Drizzle ORM,
 pinned to `1.0.0-rc.4`, with asynchronous operations and shared authority transactions.
 Both dialect contract suites, full fresh acceptance and the single-node PostgreSQL
 application login/restart/restore profile passed in two isolated runs; see the
-[verification record](evidence/database-foundation-2026-10-06.md). Replica
-coordination and failover are still implementation work. Single-node operation
+[verification record](evidence/database-foundation-2026-10-06.md). Shared operation
+and mail coordination have since passed [independent verification](evidence/shared-operations-2026-10-07.md);
+application replica readiness and failover remain implementation work. Single-node operation
 accepts SQLite or PostgreSQL; multi-node configuration requires PostgreSQL.
 See [database configuration and contracts](database.md). These code changes start
 from fresh state: no backward-compatibility layer or existing-data conversion is
@@ -235,9 +236,13 @@ Keep shared contracts narrow while features own their operation bodies.
 Still required: ePDS consent/freshness parity, complete XRPC adapters, production email delivery,
 fleet lifecycle, general custody policy and standard-tool migration. The Drizzle
 SQLite/PostgreSQL foundation has passed full fresh and single-node PostgreSQL
-application acceptance in two isolated runs. Shared
-operation ownership, mail claims, replica-safe execution, and verified request
-balancing/failover remain required.
+application acceptance in two isolated runs. [Shared operation ownership](shared-operations.md)
+implements durable account/PDS admission, execution fences, operator-verified
+uncertain-write recovery, mail attempts and authentication ordering. Revised
+application and dual-database suites passed independent rootless verification;
+the [record](evidence/shared-operations-2026-10-07.md) retains the earlier unit
+failure and deferred credential-lifetime defect. Verified multi-instance request balancing,
+readiness, draining and fleet placement remain required.
 The typed external workflow is invoked by the synthetic harness; managed account moves live in pds-migration.
 The existing fixture proves useful mechanics but uses its own source-control API.
 
@@ -259,7 +264,11 @@ A worker must claim an operation durably before issuing external side effects.
 Versioned updates and bounded ownership prevent another instance or a stale worker
 from completing the same transition. A lost SMTP acknowledgement can still mean
 mail was delivered; do not promise exactly-once delivery. PDS/PLC outcomes must be
-observed before retrying ambiguous mutations.
+observed before retrying ambiguous mutations. For an unacknowledged mutable PDS
+request, observation also requires evidence that the old dispatcher cannot resume
+and that old upstream work has completed or been drained. A matching status read
+or expired lease alone never clears its durable pending admission; see the
+[operator recovery contract](shared-operations.md#supported-operator-recovery).
 
 Balancing Entryway requests does not relocate a repository or replicate PDS data.
 PDS placement, drain, transfer and disaster recovery retain their own authority,

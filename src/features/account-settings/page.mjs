@@ -94,6 +94,10 @@ export function mountAccountSettingsPage({
         a,
         csrf,
         migrationState,
+        migrationRecovery:
+          migrationState && migrationState.phase !== "complete"
+            ? await migration.pendingRecovery(a.did)
+            : null,
         migration,
       });
       page(

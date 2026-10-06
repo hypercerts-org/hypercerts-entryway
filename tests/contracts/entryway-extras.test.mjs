@@ -1,3 +1,5 @@
+import { createOperationOwnership } from "../../dist/src/accounts/operation-ownership.js";
+import { createOperationOwnershipStore } from "../../dist/src/database/drizzle/operation-ownership.js";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { test } from "node:test";
@@ -41,7 +43,13 @@ async function fixture(t) {
     status: "active",
     pdsId: "pds1",
   };
+  const ownership = createOperationOwnership({
+    store: createOperationOwnershipStore(db),
+  });
   const accounts = {
+    ownership,
+    serialized: (did, perform, intent) =>
+      ownership.accountStep(did, intent, perform),
     rotation,
     get(id) {
       return [did, row.handle, row.email].includes(id) ? row : null;
@@ -450,6 +458,7 @@ test("account inspection and PLC submission use short target-PDS tokens and prop
       error: "InvalidRequest",
     },
   );
+  await protocolOperations.requestPlcOperationSignature(row);
   for (const { url, init } of calls) {
     assert.equal(new URL(url).origin, config.pds[0].internalUrl);
     const token = init.headers.authorization.slice(7);

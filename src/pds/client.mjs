@@ -1,4 +1,4 @@
-import { HttpError } from "../http/http-error.mjs";
+import { readXrpcResponse } from "./xrpc-response.js";
 
 export async function xrpc(url, nsid, body, authorization) {
   const res = await fetch(new URL(`/xrpc/${nsid}`, url), {
@@ -11,12 +11,5 @@ export async function xrpc(url, nsid, body, authorization) {
     signal: AbortSignal.timeout(15_000),
     redirect: "error",
   });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok)
-    throw new HttpError(
-      res.status,
-      data.error ?? "UpstreamError",
-      data.message ?? `Upstream ${nsid} failed`,
-    );
-  return data;
+  return readXrpcResponse(res, url, nsid);
 }

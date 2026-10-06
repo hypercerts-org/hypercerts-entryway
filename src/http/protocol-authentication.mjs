@@ -248,10 +248,21 @@ export async function createProtocolRouting({
       if (name === "server.createAppPassword") {
         // Authorization and the local credential mutation must share the
         // transaction now that checking authority can yield to another request.
-        return db.transact(async () => {
-          await checkCredentialCreation(req, account.did);
-          return fn(req, account);
-        });
+        return accounts.serialized(
+          account.did,
+          () =>
+            db.transact(async () => {
+              await checkCredentialCreation(req, account.did);
+              return fn(req, account);
+            }),
+          {
+            kind: "create-app-password",
+            request: {
+              name: req.body?.name,
+              privileged: req.body?.privileged === true,
+            },
+          },
+        );
       }
       if (req.legacyCredential)
         await legacy.assertAccessCurrent(req.legacyCredential);

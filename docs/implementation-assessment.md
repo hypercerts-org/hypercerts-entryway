@@ -7,8 +7,12 @@ async Drizzle SQLite/PostgreSQL adapters, shared authority transactions and fres
 schemas. Both dialect contracts, full fresh acceptance and the PostgreSQL
 application login/restart/restore profile passed in two isolated runs; see the
 [verification record](evidence/database-foundation-2026-10-06.md).
-Shared operation ownership, mail claims, fleet placement and multi-node failover
-remain implementation work. See [database configuration and contracts](database.md).
+[Shared operation ownership](shared-operations.md) now includes account/PDS
+orchestration, durable pending recovery, mail claims and authentication ordering.
+Revised application and dual-database suites passed independent rootless
+verification; the [shared-operation record](evidence/shared-operations-2026-10-07.md)
+preserves the earlier unit failure and deferred credential-lifetime defect.
+Fleet placement, readiness/draining and multi-node failover remain implementation work. See [database configuration and contracts](database.md).
 
 The target is Drizzle ORM **`1.0.0-rc.4`**. Single-node operation supports SQLite
 or PostgreSQL; multi-node operation requires PostgreSQL. Scaling, balancing and failover serve
@@ -45,17 +49,19 @@ regression requirements.
    transaction. Dependency checks, shared authority/provider contracts, full fresh
    acceptance and the PostgreSQL application profile passed independent local
    verification.
-2. **Shared operation ownership.** Replace per-process account/security locks with
-   durable admission, execution claims and conditional transitions. Include mail
-   claims. Atomic counters, challenge replacement and grant mutation are already
-   part of the database foundation.
-   Observe ambiguous PDS/PLC outcomes before retrying; SMTP cannot promise exactly
-   one delivery when an acknowledgement is lost.
-3. **Resilience and placement.** Add database-aware readiness, bounded request and
-   worker shutdown, shared fleet eligibility and placement reservations. Exercise
-   two PostgreSQL-backed application processes behind one issuer/balancer. Preserve
-   the verified single-node restart/restore behavior on SQLite and PostgreSQL.
-   Request balancing does not replicate PDS data.
+2. **Shared operation ownership.** Implemented durable admissions, execution claims,
+   fenced local transitions, mail claims and verified operator recovery. Revised
+   regression and independent verification passed with the explicitly retained
+   credential-lifetime limitation described in the evidence record. Uncertain PDS
+   work retains admission until old-dispatch isolation/upstream completion and
+   operation-specific observation are established; SMTP uncertainty can still
+   cause duplicate delivery.
+3. **Deployment resilience.** Add database-aware readiness, bounded request and
+   worker shutdown, and actual SQLite single-node, PostgreSQL single-node and
+   two-process PostgreSQL profiles behind one issuer. Preserve verified worker
+   ownership, pending recovery and existing restart/restore behavior. Fleet
+   eligibility, placement reservations and PDS lifecycle remain separate product
+   work. Request balancing does not replicate PDS data.
 
 Extend the existing backend fixtures and concurrency checks with replica profiles. The
 [Linear project](https://linear.app/hypercerts/project/epds-entryway-888a35a63fe4)

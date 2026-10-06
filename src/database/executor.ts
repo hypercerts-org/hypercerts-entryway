@@ -1,4 +1,5 @@
 import type { SQL } from "drizzle-orm";
+import type { OperationClaim } from "./operation-ownership.port.js";
 import type * as SQLiteSchema from "./schema/sqlite.js";
 import type * as PostgreSQLSchema from "./schema/postgresql.js";
 
@@ -14,6 +15,12 @@ export interface SelectOptions {
 }
 /** Internal schema-backed Drizzle operations. Features use focused database ports. */
 export interface DatabaseExecutor {
+  databaseTime(): Promise<number>;
+  assertOperationFence(claim: OperationClaim): Promise<void>;
+  withOperationFence<T>(
+    claim: OperationClaim,
+    operation: () => Promise<T>,
+  ): Promise<T>;
   readonly backend: "sqlite" | "postgresql";
   readonly tables: typeof SQLiteSchema | typeof PostgreSQLSchema;
   read<K extends TableName>(

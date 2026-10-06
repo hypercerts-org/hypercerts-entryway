@@ -1,3 +1,4 @@
+import { signingKeyResult } from "../accounts/operation-ownership.js";
 import * as plc from "@did-plc/lib";
 
 import { fail } from "../accounts/input.mjs";
@@ -15,10 +16,27 @@ export async function createPlcOperations({
   const reserveSigningKey = async ({ did, pdsId } = {}) => {
     const existing = did && (await accounts.get(did));
     const pds = existing ? accounts.pdsFor(existing) : choosePds(pdsId);
-    return xrpc(
-      pds.internalUrl,
-      "com.atproto.server.reserveSigningKey",
-      did ? { did } : {},
+    const send = () =>
+      xrpc(
+        pds.internalUrl,
+        "com.atproto.server.reserveSigningKey",
+        did ? { did } : {},
+      );
+    // Without a DID this only allocates an unbound repository key. It cannot
+    // change an account, publish PLC or conflict with an admitted DID operation.
+    if (!did) return send();
+    return accounts.ownership.dispatch(
+      {
+        step: "reserve-signing-key",
+        target: pds.url ?? pds.internalUrl,
+        method: "com.atproto.server.reserveSigningKey",
+        intent: { did },
+      },
+      {
+        ...signingKeyResult,
+        send,
+        observe: async () => ({ state: "replay-safe" }),
+      },
     );
   };
   const requestPlcOperationSignature = async (row) => {
@@ -120,10 +138,33 @@ export async function createPlcOperations({
     });
     return {};
   };
+  const serialize = (did, kind, request, perform) =>
+    accounts.serialized(did, perform, { kind, request });
   return {
-    reserveSigningKey,
-    requestPlcOperationSignature,
-    signPlcOperation,
-    submitPlcOperation,
+    reserveSigningKey: (input = {}) =>
+      input.did
+        ? serialize(
+            input.did,
+            "plc-reserve",
+            { pdsId: input.pdsId ?? null },
+            () => reserveSigningKey(input),
+          )
+        : reserveSigningKey(input),
+    requestPlcOperationSignature: (row) =>
+      serialize(row.did, "plc-proof", {}, () =>
+        requestPlcOperationSignature(row),
+      ),
+    signPlcOperation: (row, body) => {
+      const { token: _proof, ...publicIntent } = body;
+      // This admission ends after returning the signature. The owner may publish
+      // it independently later; Entryway cannot serialize third-party publication.
+      return serialize(row.did, "plc-sign", publicIntent, () =>
+        signPlcOperation(row, body),
+      );
+    },
+    submitPlcOperation: (row, { operation }) =>
+      serialize(row.did, "plc-submit", { operation }, () =>
+        submitPlcOperation(row, { operation }),
+      ),
   };
 }

@@ -38,6 +38,8 @@ export type EmailSignInProof =
 
 export interface BrowserAuthentication {
   requireSession(request: BrowserRequest): Promise<BrowserPrincipal | null>;
+  /** Queue within the caller's database transaction; dispatch only after commit. */
+  queueSignInCode(email: string): Promise<{ deliver(): Promise<void> }>;
   sendSignInCode(email: string): Promise<void>;
   verifySignInCode(input: {
     email: string;

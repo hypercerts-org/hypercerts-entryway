@@ -133,6 +133,7 @@ globalThis.fetch = async (url, init) => {
       report.recoveryDescriptionIncludedMatchingDidDocument = true;
     }
   }
+  await response.clone().arrayBuffer();
   return response;
 };
 try {
@@ -147,18 +148,17 @@ try {
     journalPhase: did && (await db.get("operations", `create:${did}`))?.phase,
     error: creationError ?? null,
   };
-  if (["cache-miss-outage", "plc-outage-before-create"].includes(mode)) {
-    assert.equal(report.initialRecovery.accountStatus, "provisioning");
-    assert.equal(report.initialRecovery.journalPhase, "pds-pending");
-    assert.equal(
-      JSON.stringify((await accounts.get(did)).op),
-      originalOperation,
-    );
-  } else {
-    assert.equal(report.initialRecovery.accountStatus, "active");
-    assert.equal(report.initialRecovery.journalPhase, "complete");
-    assert.equal(creationError, undefined);
-  }
+  assert.equal(report.initialRecovery.accountStatus, "provisioning");
+  assert.equal(report.initialRecovery.journalPhase, "pds-pending");
+  assert.ok(creationError);
+  assert.equal(JSON.stringify((await accounts.get(did)).op), originalOperation);
+  await assert.rejects(accounts.create(input), {
+    code: "OperationRecoveryRequired",
+  });
+  await assert.rejects(accounts.setStatus(did, "deactivated"), {
+    code: "OperationPending",
+  });
+  report.durablePendingBeforeRecovery = true;
   if (mode !== "lost-response") {
     await writeFile(
       `${prefix}-observed.json`,
@@ -166,23 +166,35 @@ try {
     );
     await waitFor("restored");
   }
-  if (["cache-miss-outage", "plc-outage-before-create"].includes(mode)) {
-    await db.close();
-    db = await openDatabase({ backend: "sqlite", path });
-    accounts = await createAccounts({ db, config });
-    assert.equal(
-      JSON.stringify((await accounts.get(did)).op),
-      originalOperation,
-    );
-    const recovered = await accounts.create(input);
-    assert.equal(recovered.did, did);
-    assert.equal(recovered.status, "active");
-    assert.equal(
-      (await db.get("operations", `create:${did}`)).phase,
-      "complete",
-    );
-    report.recoveredAfterDatabaseReopen = true;
-  }
+  // This diagnostic received and consumed the real upstream response before
+  // injecting response loss. The original callback has returned and cannot send
+  // again; this is definitive response evidence, unlike a matching status read.
+  globalThis.fetch = nativeFetch;
+  await db.close();
+  db = await openDatabase({ backend: "sqlite", path });
+  accounts = await createAccounts({ db, config });
+  assert.equal(JSON.stringify((await accounts.get(did)).op), originalOperation);
+  const attempt = await accounts.ownership.pendingExternal(did);
+  assert.ok(attempt);
+  await accounts.ownership.approveRecovery({
+    operationId: attempt.operationId,
+    externalAttemptId: attempt.id,
+    executionAttemptId: attempt.executionAttemptId,
+    target: attempt.target,
+    action: "retry-if-safe",
+    dispatcherIsolationReference: `probe:${run}:original-callback-returned`,
+    upstreamDrainReference: `probe:${run}:original-response-consumed`,
+  });
+  const recovered = await accounts.create(input);
+  assert.equal(recovered.did, did);
+  assert.equal(recovered.status, "active");
+  assert.equal((await db.get("operations", `create:${did}`)).phase, "complete");
+  report.recoveredAfterDatabaseReopen = true;
+  report.verifiedRecovery = {
+    originalCallbackReturned: true,
+    originalResponseConsumed: true,
+    dispatcherContextClosed: true,
+  };
   const published = await nativeFetch(`${config.plcUrl}/${did}`).then((r) =>
     r.json(),
   );

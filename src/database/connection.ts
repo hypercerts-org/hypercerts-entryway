@@ -25,10 +25,11 @@ import type {
   NewRow,
   SelectOptions,
 } from "./executor.js";
-import { and, eq, asc, ne } from "drizzle-orm";
+import { and, eq, asc, ne, inArray } from "drizzle-orm";
 import type { SQLiteTable } from "drizzle-orm/sqlite-core";
 import type { PgTable } from "drizzle-orm/pg-core";
 import { serialize, deserialize } from "./serialization.js";
+import type { OperationClaim } from "./operation-ownership.port.js";
 import { DomainError } from "../accounts/errors.js";
 import { createDeviceAccountMembershipReader } from "./drizzle/oauth-device-accounts.js";
 
@@ -72,6 +73,7 @@ export async function openDatabase(configuration: DatabaseConfiguration) {
 async function connectDatabase(configuration: DatabaseConfiguration) {
   const backend = configuration.backend;
   const context = new AsyncLocalStorage<Context>();
+  const operationFence = new AsyncLocalStorage<OperationClaim>();
   let queue = Promise.resolve();
   let closing = false;
   let closePromise: Promise<void> | undefined;
@@ -208,7 +210,9 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
             sql`SELECT pg_advisory_xact_lock(727014682)`,
             "all",
           );
+        await checkOperationFence();
         const result = await operation();
+        await checkOperationFence();
         await current.execute(
           sql.raw(nested ? `RELEASE SAVEPOINT ${savepoint}` : "COMMIT"),
           "run",
@@ -229,11 +233,74 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
         current.transaction = nested;
       }
     });
+  const mutation = <T>(
+    operation: (current: Context) => Promise<T>,
+  ): Promise<T> =>
+    operationFence.getStore()
+      ? transact(() => connected(operation))
+      : connected(operation);
+  const databaseTime = async (): Promise<number> => {
+    const result = await connected((current) =>
+      current.execute(
+        backend === "sqlite"
+          ? sql`SELECT CAST(unixepoch('subsec') * 1000 AS INTEGER) AS now`
+          : sql`SELECT CAST(extract(epoch FROM clock_timestamp()) * 1000 AS BIGINT) AS now`,
+        "all",
+      ),
+    );
+    const now = (result.rows[0] as { now: number }).now;
+    if (!Number.isSafeInteger(now)) throw new Error("InvalidDatabaseClock");
+    return now;
+  };
+  const assertOperationFence = async (claim: OperationClaim): Promise<void> => {
+    const row = (
+      await executor.read("authority_operations", {
+        where: and(
+          eq(tables.authority_operations.id, claim.operationId),
+          eq(tables.authority_operations.worker_id, claim.workerId),
+          eq(tables.authority_operations.attempt_id, claim.attemptId),
+          eq(tables.authority_operations.fence, claim.fence),
+        ),
+        limit: 1,
+      })
+    )[0];
+    if (
+      !row ||
+      row.state !== "running" ||
+      (row.lease_expires_at ?? 0) <= (await databaseTime())
+    )
+      throw new DomainError(
+        "OperationLeaseLost",
+        409,
+        "The operation owner changed; retry after reconciliation",
+      );
+  };
+  const checkOperationFence = async () => {
+    const claim = operationFence.getStore();
+    if (claim) await assertOperationFence(claim);
+  };
   const tables = backend === "sqlite" ? sqliteSchema : postgresSchema;
   const executor: DatabaseExecutor = {
     backend,
     tables,
     transact,
+    databaseTime,
+    assertOperationFence,
+    withOperationFence(claim, operation) {
+      const current = operationFence.getStore();
+      if (
+        current &&
+        (current.operationId !== claim.operationId ||
+          current.attemptId !== claim.attemptId ||
+          current.fence !== claim.fence)
+      )
+        throw new DomainError(
+          "OperationScopeMismatch",
+          409,
+          "Nested work must use the current operation",
+        );
+      return operationFence.run(claim, operation);
+    },
     async read<K extends TableName>(
       name: K,
       options: SelectOptions = {},
@@ -267,7 +334,7 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
       value: NewRow<K>,
       options = {} as { ignoreConflict?: boolean },
     ) {
-      await connected(async (current) => {
+      await mutation(async (current) => {
         const query =
           current.backend === "sqlite"
             ? current.orm
@@ -283,7 +350,7 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
       value: Partial<{ [P in keyof NewRow<K>]: NewRow<K>[P] | SQL }>,
       where: SQL,
     ) {
-      return connected(async (current) => {
+      return mutation(async (current) => {
         const result =
           current.backend === "sqlite"
             ? await current.orm
@@ -300,7 +367,7 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
       });
     },
     async remove(name, where) {
-      return connected(async (current) => {
+      return mutation(async (current) => {
         const result =
           current.backend === "sqlite"
             ? await current.orm
@@ -315,7 +382,7 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
       });
     },
     execute(query, mode = "all") {
-      return connected((current) => current.execute(query, mode));
+      return mutation((current) => current.execute(query, mode));
     },
   };
   // Fresh schema only. Each startup acquires the same physical transaction lock,
@@ -413,7 +480,7 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
         const value: unknown = Reflect.get(target, property, receiver);
         if (typeof value !== "function") return value;
         return (...args: unknown[]) =>
-          connected(async (current) => {
+          mutation(async (current) => {
             const method: unknown = Reflect.get(make(current.orm), property);
             if (typeof method !== "function")
               throw new Error("InvalidAuthenticationAdapterOperation");
@@ -434,7 +501,7 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
     get,
     list,
     async set(namespace: string, key: unknown, value: unknown) {
-      await connected(async (current) => {
+      await mutation(async (current) => {
         const values = { namespace, key: String(key), value: serialize(value) };
         if (current.backend === "sqlite")
           await current.orm
@@ -517,7 +584,7 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
         ).length,
         mail: (
           await executor.read("mail_outbox", {
-            where: eq(tables.mail_outbox.state, "queued"),
+            where: inArray(tables.mail_outbox.state, ["queued", "sending"]),
           })
         ).length,
       };

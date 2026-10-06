@@ -1,3 +1,12 @@
+import {
+  Repo,
+  MemoryBlockstore,
+  blocksToCarFile,
+  readCarWithRoot,
+  verifyCommitSig,
+} from "@atproto/repo";
+import { createOperationOwnership } from "../../dist/src/accounts/operation-ownership.js";
+import { createOperationOwnershipStore } from "../../dist/src/database/drizzle/operation-ownership.js";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -11,7 +20,7 @@ import { cidForCbor } from "@atproto/common";
 import { openTestDatabase } from "../support/database-fixture.mjs";
 import { createAccountMigration } from "../../dist/src/features/pds-migration/move-between-pds.mjs";
 
-async function fixture(t) {
+async function fixture(t, { interruptCompletion = false } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "entryway-migration-"));
   const path = join(directory, "state.sqlite");
   let db = await openTestDatabase(path);
@@ -58,7 +67,28 @@ async function fixture(t) {
     status: "active",
   };
   await db.set("accounts", row.did, row);
+  const newOwnership = () => {
+    const store = createOperationOwnershipStore(db);
+    return createOperationOwnership({
+      store: {
+        ...store,
+        async checkpoint(claim, input) {
+          if (interruptCompletion && input.phase === "complete") {
+            interruptCompletion = false;
+            throw Error("Interrupted after migration local completion");
+          }
+          return store.checkpoint(claim, input);
+        },
+      },
+    });
+  };
+  let ownership = newOwnership();
   const accounts = {
+    get ownership() {
+      return ownership;
+    },
+    serialized: (did, perform, intent) =>
+      ownership.accountStep(did, intent, perform),
     get: async (did) => await db.get("accounts", did),
     save: async (value) => await db.set("accounts", value.did, value),
     rotation,
@@ -91,9 +121,24 @@ async function fixture(t) {
       );
     },
   };
+  const sourceStorage = new MemoryBlockstore();
+  const sourceRepo = await Repo.create(sourceStorage, row.did, sourceKey, [
+    {
+      action: "create",
+      collection: "app.bsky.feed.post",
+      rkey: "snapshot-record",
+      record: {
+        $type: "app.bsky.feed.post",
+        text: "saved migration content",
+        createdAt: "2026-10-06T00:00:00Z",
+      },
+    },
+  ]);
   const car = Buffer.from(
-    "fixture CAR: actual CAR parsing is covered by two-PDS integration",
+    await blocksToCarFile(sourceRepo.cid, sourceStorage.blocks),
   );
+  let targetStorage = new MemoryBlockstore();
+  let targetRepo = await Repo.create(targetStorage, row.did, targetKey);
   const blob = Buffer.from("fixture blob bytes");
   const blobCid = (await cidForCbor({ blob: "fixture" })).toString();
   const state = {
@@ -102,14 +147,14 @@ async function fixture(t) {
       active: true,
       imported: true,
       blob: true,
-      commit: "source-commit",
+      commit: sourceRepo.cid.toString(),
     },
     target: {
       exists: false,
       active: false,
       imported: false,
       blob: false,
-      commit: "empty-commit",
+      commit: targetRepo.cid.toString(),
     },
     failures: new Map(),
     calls: [],
@@ -153,7 +198,7 @@ async function fixture(t) {
     } else if (method === "com.atproto.admin.getAccountInfo") {
       if (!node.exists)
         return Response.json({ error: "NotFound" }, { status: 400 });
-      result = { did: row.did };
+      result = { did: row.did, handle: row.handle };
     } else if (method === "com.atproto.server.checkAccountStatus") {
       if (!node.exists)
         return Response.json({ error: "AccountNotFound" }, { status: 404 });
@@ -166,14 +211,20 @@ async function fixture(t) {
         repoCommit: node.commit,
       };
     } else if (method === "com.atproto.sync.getRepo") {
-      assert.equal(
-        node.active,
-        false,
-        "Snapshot must follow source deactivation",
+      if (pds.id === "pds1")
+        assert.equal(
+          node.active,
+          false,
+          "Snapshot must follow source deactivation",
+        );
+      return new Response(
+        pds.id === "pds1"
+          ? car
+          : await blocksToCarFile(targetRepo.cid, targetStorage.blocks),
+        {
+          headers: { "content-type": "application/vnd.ipld.car" },
+        },
       );
-      return new Response(car, {
-        headers: { "content-type": "application/vnd.ipld.car" },
-      });
     } else if (method === "com.atproto.sync.listBlobs")
       result = url.searchParams.has("cursor")
         ? { cids: [] }
@@ -206,6 +257,9 @@ async function fixture(t) {
       assert.equal(node.active, false);
       assert.deepEqual(init.body, car);
       node.imported = true;
+      const parsed = await readCarWithRoot(car);
+      targetStorage = new MemoryBlockstore(parsed.blocks);
+      targetRepo = await Repo.load(targetStorage, parsed.root);
       node.commit = state.source.commit;
     } else if (method === "com.atproto.repo.uploadBlob") {
       assert.deepEqual(init.body, blob);
@@ -214,7 +268,33 @@ async function fixture(t) {
     } else if (method === "com.atproto.repo.applyWrites") {
       assert.deepEqual(body.writes, []);
       assert.ok(node.active && node.imported && node.blob);
-      node.commit = "new-key-signed-commit";
+      if (state.failures.get("before-empty-write")) {
+        state.failures.delete("before-empty-write");
+        throw Error("Simulated empty write before dispatch completion");
+      }
+      if (state.failures.get("same-count-during-empty-write")) {
+        state.failures.delete("same-count-during-empty-write");
+        targetRepo = await targetRepo.applyWrites(
+          [
+            {
+              action: "update",
+              collection: "app.bsky.feed.post",
+              rkey: "snapshot-record",
+              record: {
+                $type: "app.bsky.feed.post",
+                text: "concurrent different content",
+                createdAt: "2026-10-06T00:00:00Z",
+              },
+            },
+          ],
+          targetKey,
+        );
+        node.commit = targetRepo.cid.toString();
+      }
+      if (body.swapCommit !== targetRepo.cid.toString())
+        return Response.json({ error: "InvalidSwap" }, { status: 400 });
+      targetRepo = await targetRepo.applyWrites([], targetKey);
+      node.commit = targetRepo.cid.toString();
     } else throw new Error(`Unexpected request ${method}`);
     const key = `${pds.id}/${method}`;
     if (state.failures.get(key)) {
@@ -238,6 +318,21 @@ async function fixture(t) {
       currentOp = op;
     },
     getProofUsed: () => proofUsed,
+    targetSignatureValid: () =>
+      verifyCommitSig(targetRepo.commit, targetKey.did()),
+    async recover(action = "observe") {
+      const pending = await ownership.pendingExternal(row.did);
+      assert.ok(pending, "a durable uncertain attempt must remain admitted");
+      await ownership.approveRecovery({
+        operationId: pending.operationId,
+        externalAttemptId: pending.id,
+        executionAttemptId: pending.executionAttemptId,
+        target: pending.target,
+        action,
+        dispatcherIsolationReference: "fixture:completed-request",
+        upstreamDrainReference: "fixture:no-outstanding-callback",
+      });
+    },
   };
   const boot = async () => {
     f.db = db;
@@ -252,6 +347,7 @@ async function fixture(t) {
   f.reopen = async () => {
     await db.close();
     db = await openTestDatabase(path);
+    ownership = newOwnership();
     await boot();
   };
   t.after(async () => {
@@ -278,7 +374,8 @@ test("same-entryway migration preserves DID, snapshots before cutover, imports d
   assert.ok(
     f.state.target.active && f.state.target.imported && f.state.target.blob,
   );
-  assert.equal(f.state.target.commit, "new-key-signed-commit");
+  assert.notEqual(f.state.target.commit, f.state.source.commit);
+  assert.equal(await f.targetSignatureValid(), true);
   assert.equal(f.getCurrent().verificationMethods.atproto, f.targetKey.did());
   assert.equal(await f.db.get("revocation", f.row.did), 2);
   assert.ok(await f.db.get("migration:snapshots", `migrate:${f.row.did}/repo`));
@@ -300,6 +397,8 @@ test("lost target-create response converges after database reopen without issuin
   assert.equal((await f.migration.status(f.actor)).phase, "operation-ready");
   const operation = f.getCurrent();
   await f.reopen();
+  assert.equal((await f.migration.reconcile())[0].status, "pending");
+  await f.recover();
   assert.equal((await f.migration.reconcile())[0].status, "complete");
   assert.deepEqual(f.getCurrent(), operation);
   assert.equal(
@@ -324,7 +423,13 @@ test("repository or blob import response loss is retryable with the original sna
   assert.equal((await f.accounts.get(f.row.did)).pdsId, "pds1");
   f.state.failures.set("pds2/com.atproto.repo.uploadBlob", true);
   assert.equal((await f.migration.reconcile())[0].status, "pending");
+  await f.recover();
+  // The acknowledged import is observed, then the distinct blob attempt loses
+  // its response and independently requires verified recovery.
+  assert.equal((await f.migration.reconcile())[0].status, "pending");
   await f.reopen();
+  assert.equal((await f.migration.reconcile())[0].status, "pending");
+  await f.recover();
   assert.equal((await f.migration.reconcile())[0].status, "complete");
   assert.equal((await f.accounts.get(f.row.did)).pdsId, "pds2");
 });
@@ -343,6 +448,8 @@ test("PLC-only partial creation is repaired by journaling an equivalent update b
   assert.equal(f.state.target.exists, false);
   const published = f.getCurrent();
   await f.reopen();
+  assert.equal((await f.migration.reconcile())[0].status, "pending");
+  await f.recover();
   assert.equal((await f.migration.reconcile())[0].status, "complete");
   assert.equal(f.getCurrent().prev, (await cidForCbor(published)).toString());
   assert.deepEqual(f.getCurrent().rotationKeys, published.rotationKeys);
@@ -490,6 +597,149 @@ test("external PLC edits after partial cutover block automatic local authority c
     })),
   );
   assert.equal((await f.migration.reconcile())[0].error, "IdentityChanged");
+  await f.recover();
+  assert.equal((await f.migration.reconcile())[0].error, "IdentityChanged");
   assert.equal((await f.accounts.get(f.row.did)).pdsId, "pds1");
   assert.ok(f.state.source.exists);
+});
+
+test("lost empty-write response is acknowledged only after complete snapshot and target signature verification", async (t) => {
+  const f = await fixture(t);
+  f.state.failures.set("pds2/com.atproto.repo.applyWrites", true);
+  await assert.rejects(
+    f.migration.importAccount(f.actor, {
+      did: f.row.did,
+      pdsId: "pds2",
+      token: "migration-proof",
+    }),
+  );
+  await assert.rejects(
+    f.migration.importAccount(f.actor, { did: f.row.did, pdsId: "pds2" }),
+    { code: "OperationRecoveryRequired" },
+  );
+  await f.recover();
+  assert.equal((await f.migration.reconcile())[0].status, "complete");
+  assert.equal(
+    f.state.calls.filter((call) => call === "pds2/com.atproto.repo.applyWrites")
+      .length,
+    1,
+  );
+  assert.equal(await f.targetSignatureValid(), true);
+});
+
+test("verified empty-write replay records replay-safe history and signs the unchanged saved snapshot", async (t) => {
+  const f = await fixture(t);
+  f.state.failures.set("before-empty-write", true);
+  await assert.rejects(
+    f.migration.importAccount(f.actor, {
+      did: f.row.did,
+      pdsId: "pds2",
+      token: "migration-proof",
+    }),
+  );
+  await f.recover("retry-if-safe");
+  assert.equal((await f.migration.reconcile())[0].status, "complete");
+  const attempts = (await f.db.read("external_operation_attempts")).filter(
+    (row) => row.step === "resign-imported-root",
+  );
+  assert.equal(attempts.length, 2);
+  assert.ok(
+    attempts.some((row) => JSON.parse(row.result)?.recovery === "replay-safe"),
+  );
+  assert.equal(await f.targetSignatureValid(), true);
+  assert.notEqual(f.state.target.commit, f.state.source.commit);
+});
+
+test("swapCommit rejects same-count replacement between snapshot observation and empty write, and recovery cannot overwrite it", async (t) => {
+  const f = await fixture(t);
+  f.state.failures.set("same-count-during-empty-write", true);
+  await assert.rejects(
+    f.migration.importAccount(f.actor, {
+      did: f.row.did,
+      pdsId: "pds2",
+      token: "migration-proof",
+    }),
+    { error: "InvalidSwap" },
+  );
+  const changedCommit = f.state.target.commit;
+  await f.recover("retry-if-safe");
+  const recovered = (await f.migration.reconcile())[0];
+  assert.equal(recovered.status, "pending");
+  assert.equal(recovered.error, "OperationRecoveryRequired");
+  assert.equal(f.state.target.commit, changedCommit);
+  assert.equal(
+    f.state.calls.filter((call) => call === "pds2/com.atproto.repo.applyWrites")
+      .length,
+    1,
+  );
+  assert.equal((await f.accounts.get(f.row.did)).pdsId, "pds1");
+});
+
+test("completed migration reconciles its acknowledged admission after interruption without another external effect", async (t) => {
+  const f = await fixture(t, { interruptCompletion: true });
+  await assert.rejects(
+    f.migration.importAccount(f.actor, {
+      did: f.row.did,
+      pdsId: "pds2",
+      token: "migration-proof",
+    }),
+    /Interrupted after migration local completion/,
+  );
+  assert.equal(
+    (await f.db.get("migration:operations", `migrate:${f.row.did}`)).phase,
+    "complete",
+  );
+  assert.equal((await f.accounts.get(f.row.did)).pdsId, "pds2");
+  assert.equal(await f.accounts.ownership.pendingExternal(f.row.did), null);
+  const before = [...f.state.calls];
+  await f.reopen();
+  assert.equal((await f.migration.reconcile())[0].status, "complete");
+  assert.deepEqual(f.state.calls, before);
+  await f.accounts.ownership.accountStep(
+    f.row.did,
+    { kind: "next-local-operation", request: {} },
+    () => f.db.set("test:completion", f.row.did, true),
+  );
+  assert.equal(await f.db.get("test:completion", f.row.did), true);
+});
+
+test("stale pending managed migration journal cannot create a new operation after its saved admission completes", async (t) => {
+  const f = await fixture(t);
+  f.state.failures.set("pds2/com.atproto.server.createAccount", true);
+  const input = { did: f.row.did, pdsId: "pds2", token: "migration-proof" };
+  await assert.rejects(
+    f.migration.importAccount(f.actor, input),
+    /connection loss/,
+  );
+  const captured = Promise.withResolvers(),
+    release = Promise.withResolvers();
+  let paused = false;
+  const list = f.db.list.bind(f.db);
+  f.db.list = async (ns, ...args) => {
+    const rows = await list(ns, ...args);
+    if (ns === "migration:operations" && !paused) {
+      paused = true;
+      captured.resolve();
+      await release.promise;
+    }
+    return rows;
+  };
+  const scheduler = f.migration.reconcile();
+  await captured.promise;
+  await f.recover();
+  await f.migration.importAccount(f.actor, input);
+  await f.accounts.ownership.accountStep(
+    f.row.did,
+    { kind: "newer-local-authority", request: {} },
+    () => f.db.set("test:newer", f.row.did, true),
+  );
+  const operations = await f.db.read("authority_operations"),
+    calls = [...f.state.calls],
+    head = f.getCurrent();
+  release.resolve();
+  assert.deepEqual(await scheduler, []);
+  assert.deepEqual(await f.db.read("authority_operations"), operations);
+  assert.deepEqual(f.state.calls, calls);
+  assert.deepEqual(f.getCurrent(), head);
+  assert.equal((await f.accounts.get(f.row.did)).pdsId, "pds2");
 });

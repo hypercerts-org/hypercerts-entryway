@@ -516,8 +516,8 @@ test("password or app-credential changes during session preparation cannot commi
   assert.equal((await legacy.listSessions(alice.did)).length, 0);
 });
 
-test("synchronous verified-access recheck closes revocation between authentication and credential mutation", async (t) => {
-  const { legacy, alice } = await fixture(t);
+test("transactional verified-access recheck rejects revocation committed before credential mutation", async (t) => {
+  const { db, legacy, alice } = await fixture(t);
   const session = await legacy.createAccountSession(alice.did);
   const authenticated = await legacy.verifyAccess(session.accessJwt, {
     full: true,
@@ -530,14 +530,24 @@ test("synchronous verified-access recheck closes revocation between authenticati
     async () => await legacy.assertAccessCurrent({ ...authenticated }),
     { error: "InvalidToken" },
   );
-  const handler = Promise.resolve().then(async () => {
-    await legacy.assertAccessCurrent(authenticated);
-    return await legacy.createAppPassword(alice.did, {
-      name: "would-survive-reset",
+  const admitted = Promise.withResolvers();
+  const continueHandler = Promise.withResolvers();
+  const handler = (async () => {
+    admitted.resolve();
+    await continueHandler.promise;
+    // Match the caller-owned physical transaction used by authenticatedRoute.
+    return db.transact(async () => {
+      await legacy.assertAccessCurrent(authenticated);
+      return legacy.createAppPassword(alice.did, {
+        name: "would-survive-reset",
+      });
     });
-  });
+  })();
+  const rejected = assert.rejects(handler, { error: "ExpiredToken" });
+  await admitted.promise;
   await legacy.revokeAccount(alice.did);
-  await assert.rejects(handler, { error: "ExpiredToken" });
+  continueHandler.resolve();
+  await rejected;
   assert.deepEqual((await legacy.listAppPasswords(alice.did)).passwords, []);
   const fresh = await legacy.verifyAccess(
     (await legacy.createAccountSession(alice.did)).accessJwt,
