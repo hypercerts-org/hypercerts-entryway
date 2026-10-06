@@ -47,8 +47,9 @@ PostgreSQL. Single-node operation supports either database; multi-node operation
 requires PostgreSQL. Both must preserve the same identity, uniqueness and atomicity rules;
 dialect-specific indexes, JSON queries, timestamps and error translation stay
 inside the database adapter. Fresh schemas replace old layouts without a data
-conversion path. Focused contracts verify both dialects; full fresh acceptance
-and the authored PostgreSQL application restart/restore profile remain unrun.
+conversion path. Both dialect contracts, full fresh acceptance and the single-node
+PostgreSQL application restart/restore profile passed in two isolated runs; see the
+[verification record](evidence/database-foundation-2026-10-06.md).
 Shared operation/mail ownership and replica failover remain implementation work.
 See [database configuration](database.md). The existing ePDS deployment-conversion
 requirement is separate.

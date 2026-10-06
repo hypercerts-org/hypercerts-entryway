@@ -156,7 +156,7 @@ that disposable project's cleanup, with resilience last. The backup/rotation
 checks establish bounded local restoration, not off-site/full DR, zero-downtime
 key overlap, existing-refresh continuity or production acceptance.
 
-## Target database and replica coverage
+## Database verification and remaining replica coverage
 
 The Drizzle ORM `1.0.0-rc.4` foundation has fresh SQLite/PostgreSQL adapters and
 shared contract fixtures. Focused checks cover authority rollback, provider
@@ -166,11 +166,12 @@ multi-node mode, and reject multi-node SQLite.
 
 The harness now includes a separate Entryway PostgreSQL service, dual-dialect
 `database-contracts`, and a one-node `database-profile` for actual-main OTP login,
-restart and pg_dump/restore. These commands are authored; full fresh acceptance
-and the PostgreSQL application profile remain unrun pending review. See
-[database configuration and contracts](database.md) for their scope and receipts.
-A profile file or PostgreSQL connection test does not establish application
-restart/restore, worker takeover, rolling removal or multi-instance availability.
+restart and pg_dump/restore. Full fresh acceptance, both database contract suites
+and all three PostgreSQL application stages passed in two isolated runs; see the
+[verification record](evidence/database-foundation-2026-10-06.md) for exact source,
+commands, results and limits. [Database configuration and contracts](database.md)
+describes reproduction and receipt contents. These single-node checks do not
+establish worker takeover, rolling removal or multi-instance availability.
 Shared operation ownership, mail claims, balancing/failover and their replica
 profiles still require implementation and acceptance.
 

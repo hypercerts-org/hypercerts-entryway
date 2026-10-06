@@ -26,8 +26,9 @@ backups and explicit transaction boundaries remain required.
 
 The database boundary implements SQLite and PostgreSQL through Drizzle ORM,
 pinned to `1.0.0-rc.4`, with asynchronous operations and shared authority transactions.
-Focused contracts pass for both dialects. Full fresh acceptance and the authored
-PostgreSQL application login/restart/restore profile remain unrun; replica
+Both dialect contract suites, full fresh acceptance and the single-node PostgreSQL
+application login/restart/restore profile passed in two isolated runs; see the
+[verification record](evidence/database-foundation-2026-10-06.md). Replica
 coordination and failover are still implementation work. Single-node operation
 accepts SQLite or PostgreSQL; multi-node configuration requires PostgreSQL.
 See [database configuration and contracts](database.md). These code changes start
@@ -233,8 +234,8 @@ Keep shared contracts narrow while features own their operation bodies.
 
 Still required: ePDS consent/freshness parity, complete XRPC adapters, production email delivery,
 fleet lifecycle, general custody policy and standard-tool migration. The Drizzle
-SQLite/PostgreSQL foundation is implemented with focused contract verification;
-full fresh and single-node PostgreSQL application acceptance remain unrun. Shared
+SQLite/PostgreSQL foundation has passed full fresh and single-node PostgreSQL
+application acceptance in two isolated runs. Shared
 operation ownership, mail claims, replica-safe execution, and verified request
 balancing/failover remain required.
 The typed external workflow is invoked by the synthetic harness; managed account moves live in pds-migration.
@@ -248,7 +249,8 @@ No current build, runtime or conformance result is asserted by these diagrams.
 Request balancing must preserve one issuer and consistent signing configuration.
 Multi-node application instances use PostgreSQL for shared durable account,
 authentication and operation state. A single-node deployment can use SQLite or
-PostgreSQL; both need restart and restore coverage. SQLite is not a multi-node
+PostgreSQL; both have bounded local restart and restore coverage documented in the
+[verification record](evidence/database-foundation-2026-10-06.md). SQLite is not a multi-node
 failover store. Configuration
 must reject SQLite in multi-node mode. Each deployment profile must state database
 availability, readiness, draining, worker ownership and recovery behavior explicitly.

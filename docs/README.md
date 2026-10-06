@@ -17,6 +17,7 @@ checkout. The [test-plan index](../tests/plans/README.md) links the baseline and
 | [Data model and custody](data-custody.md) | DID-based account model, provider boundaries, key custody, transfer cases and observed test migration order |
 | [Reuse assessment](reuse-assessment.md) | Reusable code, required implementation and investigation findings |
 | [Testing](testing.md) | Local Atmosphere in a Box commands, repeatable flows and evidence limits |
+| [Database configuration](database.md) | Drizzle adapters, deployment selection, transactions and verified single-node profiles |
 | [Source mapping](source-map.json) | Original spike modules, imported locations and current ownership |
 
 ## Diagram conventions

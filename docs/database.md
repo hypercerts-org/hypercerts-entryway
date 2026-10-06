@@ -2,6 +2,9 @@
 
 Entryway uses Drizzle ORM and Drizzle Kit `1.0.0-rc.4`, `pg` `8.16.3`, and
 Better Auth `1.7.3`. Existing account password and app-password APIs remain active.
+The [October 6 verification record](evidence/database-foundation-2026-10-06.md)
+binds the implementation commit to two isolated acceptance runs, including both
+database suites and actual-main PostgreSQL login, restart and dump/restore.
 
 | Setting | Values and behavior |
 | --- | --- |

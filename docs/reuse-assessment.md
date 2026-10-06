@@ -25,7 +25,7 @@ spike/replay runtime sources were found identical and are historical references.
 | MJS orchestration | Feature operation bodies and thin handlers are extracted; retained MJS remains outside strict TS coverage |
 | ePDS consent behaviour | Preserve approved returning-client and eligible trusted-signup behaviour |
 | Account UI composition | Consume domain APIs instead of direct grant/store mutations |
-| Better Auth table integration | Shared physical Drizzle transactions and atomic email binding implemented and focused-tested on both dialects; full application acceptance remains unrun |
+| Better Auth table integration | Shared physical Drizzle transactions and atomic email binding verified on both dialects; two isolated full acceptance runs passed ([record](evidence/database-foundation-2026-10-06.md)) |
 | Database boundary | Exact Drizzle ORM `1.0.0-rc.4`, async operations and fresh SQLite/PostgreSQL schemas implemented; see [database contracts](database.md) for verification limits |
 | Replica coordination | Atomic counters/challenges and grant mutation implemented in the database foundation; durable operation ownership and mail claims remain work |
 | Resilience deployment | Add readiness/draining, shared state and two-instance failover verification |

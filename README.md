@@ -14,8 +14,9 @@ limited to browser authentication, mail sending and database. Preserved MJS is
 owned by its feature; standard-tool migration, moderation coordination and fleet
 registry remain product gaps. The [database foundation](docs/database.md) now uses
 Drizzle ORM `1.0.0-rc.4` with fresh SQLite and PostgreSQL schemas and asynchronous
-operations. Focused contracts pass for both backends; full fresh acceptance and
-the authored PostgreSQL application login/restart/restore profile remain unrun.
+operations. Two isolated runs passed full fresh acceptance, both database contract
+suites and single-node PostgreSQL login/restart/restore; see the
+[database verification record](docs/evidence/database-foundation-2026-10-06.md).
 Single-node operation accepts either database; multi-node configuration requires
 PostgreSQL. Shared operation ownership, mail claims, request balancing, failover
 and fleet placement remain implementation work. Google/GitHub OIDC is roadmap

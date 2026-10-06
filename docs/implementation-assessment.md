@@ -4,8 +4,9 @@ The improve assessment was refreshed on 2026-10-06 against `122e72d`, using the
 owner's edited architecture prose as authoritative. That assessment inspected
 source without changing it. The subsequent database foundation now implements
 async Drizzle SQLite/PostgreSQL adapters, shared authority transactions and fresh
-schemas. Focused checks pass for both dialects; full fresh acceptance and the
-authored PostgreSQL application login/restart/restore profile remain unrun.
+schemas. Both dialect contracts, full fresh acceptance and the PostgreSQL
+application login/restart/restore profile passed in two isolated runs; see the
+[verification record](evidence/database-foundation-2026-10-06.md).
 Shared operation ownership, mail claims, fleet placement and multi-node failover
 remain implementation work. See [database configuration and contracts](database.md).
 
@@ -32,18 +33,18 @@ They are historical findings, not a claim that every listed gap remains open.
 
 These were high-confidence source-to-requirement gaps at assessment time.
 The database contracts, schema/provider transaction integration and dependency
-boundaries now have focused dual-backend coverage. Replica runtime behavior and
-full application profile acceptance remain unverified. Existing single-node
-tests remain regression requirements.
+boundaries now have dual-backend and full single-node application coverage.
+Replica runtime behavior remains unverified. Existing single-node tests remain
+regression requirements.
 
 ## Required implementation areas
 
 1. **Database contracts and adapters.** Implemented with async operations, fresh
    schemas, exact dependencies, backend selection and connection lifecycle.
    Better Auth identity, DID/email claims and revocation share one physical
-   transaction. Dependency checks and shared authority/provider contracts pass
-   in focused diagnostics; reviewed full fresh and application profile acceptance
-   are still required.
+   transaction. Dependency checks, shared authority/provider contracts, full fresh
+   acceptance and the PostgreSQL application profile passed independent local
+   verification.
 2. **Shared operation ownership.** Replace per-process account/security locks with
    durable admission, execution claims and conditional transitions. Include mail
    claims. Atomic counters, challenge replacement and grant mutation are already
@@ -52,8 +53,9 @@ tests remain regression requirements.
    one delivery when an acknowledgement is lost.
 3. **Resilience and placement.** Add database-aware readiness, bounded request and
    worker shutdown, shared fleet eligibility and placement reservations. Exercise
-   two PostgreSQL-backed application processes behind one issuer/balancer, plus
-   single-node restart/restore on both SQLite and PostgreSQL. Request balancing does not replicate PDS data.
+   two PostgreSQL-backed application processes behind one issuer/balancer. Preserve
+   the verified single-node restart/restore behavior on SQLite and PostgreSQL.
+   Request balancing does not replicate PDS data.
 
 Extend the existing backend fixtures and concurrency checks with replica profiles. The
 [Linear project](https://linear.app/hypercerts/project/epds-entryway-888a35a63fe4)
