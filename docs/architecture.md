@@ -24,10 +24,13 @@ Google/GitHub OIDC is on the roadmap and excluded from initial delivery.
 Scaling, request balancing and failover are in scope for resilience. Recovery,
 backups and explicit transaction boundaries remain required.
 
-The database boundary must support SQLite and PostgreSQL through Drizzle ORM,
-pinned to `1.0.0-rc.4`. Single-node operation supports SQLite or PostgreSQL;
-multi-node operation requires PostgreSQL. The current implementation uses direct SQLite access; the
-Drizzle and PostgreSQL paths remain implementation work. These code changes start
+The database boundary implements SQLite and PostgreSQL through Drizzle ORM,
+pinned to `1.0.0-rc.4`, with asynchronous operations and shared authority transactions.
+Focused contracts pass for both dialects. Full fresh acceptance and the authored
+PostgreSQL application login/restart/restore profile remain unrun; replica
+coordination and failover are still implementation work. Single-node operation
+accepts SQLite or PostgreSQL; multi-node configuration requires PostgreSQL.
+See [database configuration and contracts](database.md). These code changes start
 from fresh state: no backward-compatibility layer or existing-data conversion is
 required. This does not remove public account migration or conversion of an
 existing ePDS deployment from product scope.
@@ -117,7 +120,7 @@ schema initialization require coordinated review. See AGENTS.md for enforceable 
 | --- | --- | --- |
 | Browser authentication | Normalized verified identity/session operations | Better Auth |
 | Mail sending | Deliver a fully formed message | SMTP |
-| Database | Focused asynchronous readers and atomic state operations | Target: Drizzle ORM `1.0.0-rc.4`; SQLite or PostgreSQL for single node; PostgreSQL only for multiple nodes. Current: direct SQLite |
+| Database | Focused asynchronous readers and atomic state operations | Drizzle ORM `1.0.0-rc.4`; fresh SQLite/PostgreSQL schemas and async operations. Single node accepts either backend; multi-node configuration requires PostgreSQL; replica acceptance remains outstanding |
 
 PDS, PLC, OAuth provider and signing operations are concrete modules. They do not
 have parallel interchangeable port hierarchies. Provider state storage belongs to
@@ -127,8 +130,9 @@ its persistent outbox contracts live under database.
 `src/features/<feature>/` is the starting point for a feature change.
 `src/main.mjs` owns startup/shutdown and workers; `src/app.mjs` owns middleware and
 route ordering; `src/compose-*.mjs` assembles features. Shared HTTP/UI helpers are
-under `src/http` and `src/ui`. Fresh schema initialization belongs to the database boundary; the current runtime
-still uses an ordered SQLite schema registry.
+under `src/http` and `src/ui`. The database boundary serializes fresh schema
+initialization and checks the dialect asset hash stored in `schema_identity`;
+Better Auth does not run separate schema mutations.
 The build emits `dist/src`; preserved MJS ownership is inventoried in
 [source ownership](source-ownership.json). TS remains strict; MJS extraction is
 not a claim of full typed conversion.
@@ -228,9 +232,11 @@ PDS call sequences, journals, branding, mail ports and regression scenarios.
 Keep shared contracts narrow while features own their operation bodies.
 
 Still required: ePDS consent/freshness parity, complete XRPC adapters, production email delivery,
-fleet lifecycle, general custody policy and standard-tool migration. Drizzle-backed
-SQLite/PostgreSQL, shared operation ownership, replica-safe mail and authentication
-state, and verified request balancing/failover are also still required.
+fleet lifecycle, general custody policy and standard-tool migration. The Drizzle
+SQLite/PostgreSQL foundation is implemented with focused contract verification;
+full fresh and single-node PostgreSQL application acceptance remain unrun. Shared
+operation ownership, mail claims, replica-safe execution, and verified request
+balancing/failover remain required.
 The typed external workflow is invoked by the synthetic harness; managed account moves live in pds-migration.
 The existing fixture proves useful mechanics but uses its own source-control API.
 

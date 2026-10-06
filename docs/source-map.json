@@ -15,9 +15,7 @@
   },
   "legacy.mjs": {
     "imported": "packages/entryway-service/src/compatibility/legacy.mjs",
-    "current": [
-      "src/oauth/legacy-credentials.mjs"
-    ]
+    "current": ["src/oauth/legacy-credentials.mjs"]
   },
   "entryway-extras.mjs": {
     "imported": "packages/entryway-service/src/compatibility/entryway-extras.mjs",
@@ -54,9 +52,7 @@
   },
   "provider.mjs": {
     "imported": "packages/entryway-service/src/compatibility/provider.mjs",
-    "current": [
-      "src/features/oauth-authorization/provider.mjs"
-    ]
+    "current": ["src/features/oauth-authorization/provider.mjs"]
   },
   "account-security.mjs": {
     "imported": "packages/entryway-service/src/compatibility/account-security.mjs",
@@ -65,7 +61,7 @@
       "src/accounts/security-primitives.mjs",
       "src/accounts/change-email-authority.mjs",
       "src/database/authentication-state.port.ts",
-      "src/database/sqlite/account-authority.mjs",
+      "src/database/drizzle/account-authority.mjs",
       "src/features/account-settings/security.mjs",
       "src/features/account-recovery/recover-account.mjs",
       "src/features/account-deletion/authorize-deletion.mjs",
@@ -74,9 +70,7 @@
   },
   "account-migration.mjs": {
     "imported": "packages/entryway-service/src/compatibility/account-migration.mjs",
-    "current": [
-      "src/features/pds-migration/move-between-pds.mjs"
-    ]
+    "current": ["src/features/pds-migration/move-between-pds.mjs"]
   },
   "account-ui.mjs": {
     "imported": "packages/entryway-web/src/features/accounts/compatibility/account-ui.mjs",
@@ -99,15 +93,11 @@
   },
   "client.mjs": {
     "imported": "packages/entryway-service/src/compatibility/client.mjs",
-    "current": [
-      "tests/fixtures/synthetic-client.mjs"
-    ]
+    "current": ["tests/fixtures/synthetic-client.mjs"]
   },
   "oauth-stores.mjs": {
     "imported": "packages/entryway-service/src/compatibility/oauth-stores.mjs",
-    "current": [
-      "src/database/sqlite/oauth-stores.mjs"
-    ]
+    "current": ["src/database/drizzle/oauth-stores.mjs"]
   },
   "auth.mjs": {
     "imported": "packages/entryway-service/src/compatibility/auth.mjs",
@@ -128,29 +118,19 @@
   },
   "index.mjs": {
     "imported": "packages/entryway-service/src/compatibility/index.mjs",
-    "current": [
-      "src/main.mjs",
-      "src/app.mjs",
-      "src/config.mjs"
-    ]
+    "current": ["src/main.mjs", "src/app.mjs", "src/config.mjs"]
   },
   "db.mjs": {
     "imported": "packages/entryway-service/src/compatibility/db.mjs",
-    "current": [
-      "src/database/sqlite/connection.mjs"
-    ]
+    "current": ["src/database/connection.ts", "src/database/serialization.ts"]
   },
   "shared/errors.ts": {
     "imported": "packages/entryway-core/src/shared/errors.ts",
-    "current": [
-      "src/accounts/errors.ts"
-    ]
+    "current": ["src/accounts/errors.ts"]
   },
   "core/mail/domain.ts": {
     "imported": "packages/entryway-core/src/access/mail/domain.ts",
-    "current": [
-      "src/mail/templates.ts"
-    ]
+    "current": ["src/mail/templates.ts"]
   },
   "core/mail/types.ts": {
     "imported": "packages/entryway-core/src/access/mail/types.ts",
@@ -162,27 +142,19 @@
   },
   "core/mail/port.ts": {
     "imported": "packages/entryway-core/src/access/mail/port.ts",
-    "current": [
-      "src/mail/port.ts"
-    ]
+    "current": ["src/mail/port.ts"]
   },
   "core/mail/index.ts": {
     "imported": "packages/entryway-core/src/access/mail/index.ts",
-    "current": [
-      "src/mail/messages.ts"
-    ]
+    "current": ["src/mail/messages.ts"]
   },
   "core/custody/domain.ts": {
     "imported": "packages/entryway-core/src/identity/custody/domain.ts",
-    "current": [
-      "src/plc/custody.ts"
-    ]
+    "current": ["src/plc/custody.ts"]
   },
   "core/custody/types.ts": {
     "imported": "packages/entryway-core/src/identity/custody/types.ts",
-    "current": [
-      "src/plc/types.ts"
-    ]
+    "current": ["src/plc/types.ts"]
   },
   "core/custody/port.ts": {
     "imported": "packages/entryway-core/src/identity/custody/port.ts",
@@ -194,105 +166,71 @@
   },
   "core/custody/index.ts": {
     "imported": "packages/entryway-core/src/identity/custody/index.ts",
-    "current": [
-      "src/plc/custody-values.ts"
-    ]
+    "current": ["src/plc/custody-values.ts"]
   },
   "core/migration/domain.ts": {
     "imported": "packages/entryway-core/src/pds-fleet/migration/domain.ts",
-    "current": [
-      "src/features/external-migration/state-machine.ts"
-    ]
+    "current": ["src/features/external-migration/state-machine.ts"]
   },
   "core/migration/types.ts": {
     "imported": "packages/entryway-core/src/pds-fleet/migration/types.ts",
-    "current": [
-      "src/features/external-migration/types.ts"
-    ]
+    "current": ["src/features/external-migration/types.ts"]
   },
   "core/migration/port.ts": {
     "imported": "packages/entryway-core/src/pds-fleet/migration/port.ts",
-    "current": [
-      "src/database/migration-journal.port.ts"
-    ]
+    "current": ["src/database/migration-journal.port.ts"]
   },
   "core/migration/index.ts": {
     "imported": "packages/entryway-core/src/pds-fleet/migration/index.ts",
-    "current": [
-      "src/features/external-migration/values.ts"
-    ]
+    "current": ["src/features/external-migration/values.ts"]
   },
   "core/migration/validation.ts": {
     "imported": "packages/entryway-core/src/pds-fleet/migration/validation.ts",
-    "current": [
-      "src/features/external-migration/validation.ts"
-    ]
+    "current": ["src/features/external-migration/validation.ts"]
   },
   "core/migration/errors.ts": {
     "imported": "packages/entryway-core/src/pds-fleet/migration/errors.ts",
-    "current": [
-      "src/features/external-migration/errors.ts"
-    ]
+    "current": ["src/features/external-migration/errors.ts"]
   },
   "core/branding/domain.ts": {
     "imported": "packages/entryway-core/src/access/branding/domain.ts",
-    "current": [
-      "src/ui/branding.ts"
-    ]
+    "current": ["src/ui/branding.ts"]
   },
   "core/branding/types.ts": {
     "imported": "packages/entryway-core/src/access/branding/types.ts",
-    "current": [
-      "src/ui/branding-types.ts"
-    ]
+    "current": ["src/ui/branding-types.ts"]
   },
   "core/branding/index.ts": {
     "imported": "packages/entryway-core/src/access/branding/index.ts",
-    "current": [
-      "src/ui/brand.ts"
-    ]
+    "current": ["src/ui/brand.ts"]
   },
   "core/oauth/port.ts": {
     "imported": "packages/entryway-core/src/access/oauth/port.ts",
-    "current": [
-      "src/database/oauth-state.port.ts"
-    ]
+    "current": ["src/database/oauth-state.port.ts"]
   },
   "core/accounts/domain.ts": {
     "imported": "packages/entryway-core/src/accounts/domain.ts",
-    "current": [
-      "src/accounts/rules.ts"
-    ]
+    "current": ["src/accounts/rules.ts"]
   },
   "core/accounts/types.ts": {
     "imported": "packages/entryway-core/src/accounts/types.ts",
-    "current": [
-      "src/accounts/types.ts"
-    ]
+    "current": ["src/accounts/types.ts"]
   },
   "core/accounts/port.ts": {
     "imported": "packages/entryway-core/src/accounts/port.ts",
-    "current": [
-      "src/database/accounts.port.ts"
-    ]
+    "current": ["src/database/accounts.port.ts"]
   },
   "core/accounts/index.ts": {
     "imported": "packages/entryway-core/src/accounts/index.ts",
-    "current": [
-      "src/accounts/values.ts"
-    ]
+    "current": ["src/accounts/values.ts"]
   },
   "features/mail/service.ts": {
     "imported": "packages/entryway-service/src/features/access/mail/service.ts",
-    "current": [
-      "src/mail/delivery.ts"
-    ]
+    "current": ["src/mail/delivery.ts"]
   },
   "features/mail/index.ts": {
     "imported": "packages/entryway-service/src/features/access/mail/index.ts",
-    "current": [
-      "src/mail/create-mail.ts"
-    ]
+    "current": ["src/mail/create-mail.ts"]
   },
   "features/migration/port.ts": {
     "imported": "packages/entryway-service/src/workflows/migration/port.ts",
@@ -304,45 +242,31 @@
   },
   "features/migration/pds-http-adapter.ts": {
     "imported": "packages/entryway-service/src/features/pds-fleet/adapters/pds-http-adapter.ts",
-    "current": [
-      "src/pds/migration-client.ts"
-    ]
+    "current": ["src/pds/migration-client.ts"]
   },
   "features/migration/adapter.ts": {
     "imported": "packages/entryway-service/src/workflows/migration/adapter.ts",
-    "current": [
-      "src/features/external-migration/import-account.ts"
-    ]
+    "current": ["src/features/external-migration/import-account.ts"]
   },
   "features/migration/index.ts": {
     "imported": "packages/entryway-service/src/workflows/migration/index.ts",
-    "current": [
-      "src/features/external-migration/create-migration.ts"
-    ]
+    "current": ["src/features/external-migration/create-migration.ts"]
   },
   "features/migration/source-fixture-client.ts": {
     "imported": "packages/entryway-service/src/features/pds-fleet/adapters/source-fixture-client.ts",
-    "current": [
-      "tests/fixtures/source-client.ts"
-    ]
+    "current": ["tests/fixtures/source-client.ts"]
   },
   "features/experience/index.ts": {
     "imported": "packages/entryway-web/src/features/access/index.ts",
-    "current": [
-      "src/ui/experience.ts"
-    ]
+    "current": ["src/ui/experience.ts"]
   },
   "features/experience/page.ts": {
     "imported": "packages/entryway-web/src/features/access/page.ts",
-    "current": [
-      "src/ui/page.ts"
-    ]
+    "current": ["src/ui/page.ts"]
   },
   "infra/mail/smtp-transport.ts": {
     "imported": "packages/entryway-service/src/features/access/mail/smtp-transport.ts",
-    "current": [
-      "src/mail/smtp.ts"
-    ]
+    "current": ["src/mail/smtp.ts"]
   },
   "infra/migration/adapter-contract.ts": {
     "imported": "packages/entryway-service/src/workflows/migration/adapter-contract.ts",
@@ -354,92 +278,68 @@
   },
   "infra/signing/plc-signer.ts": {
     "imported": "packages/entryway-service/src/features/identity/signing/plc-signer.ts",
-    "current": [
-      "src/plc/signing.ts"
-    ]
+    "current": ["src/plc/signing.ts"]
   },
   "infra/signing/target-access-token.ts": {
     "imported": "packages/entryway-service/src/features/identity/signing/target-access-token.ts",
-    "current": [
-      "src/pds/access-token.ts"
-    ]
+    "current": ["src/pds/access-token.ts"]
   },
   "infra/signing/fixture-source-handoff.ts": {
     "imported": "packages/entryway-service/src/features/identity/signing/fixture-source-handoff.ts",
-    "current": [
-      "tests/fixtures/source-handoff.ts"
-    ]
+    "current": ["tests/fixtures/source-handoff.ts"]
   },
   "infra/logging/request-event.ts": {
     "imported": "packages/entryway-service/src/infra/logging/request-event.ts",
-    "current": [
-      "src/logging/request-event.ts"
-    ]
+    "current": ["src/logging/request-event.ts"]
   },
   "infra/storage/migration-workflow.ts": {
     "imported": "packages/entryway-service/src/features/pds-fleet/storage/migration-workflow.ts",
-    "current": [
-      "src/database/sqlite/migration-workflow.ts"
-    ]
+    "current": ["src/database/drizzle/migration-workflow.ts"]
   },
   "infra/storage/migration-snapshot.ts": {
     "imported": "packages/entryway-service/src/features/pds-fleet/storage/migration-snapshot.ts",
-    "current": [
-      "src/database/sqlite/migration-snapshot.ts"
-    ]
+    "current": ["src/database/drizzle/migration-snapshot.ts"]
   },
   "infra/storage/oauth-device-accounts.ts": {
     "imported": "packages/entryway-service/src/features/access/storage/oauth-device-accounts.ts",
-    "current": [
-      "src/database/sqlite/oauth-device-accounts.ts"
-    ]
+    "current": ["src/database/drizzle/oauth-device-accounts.ts"]
   },
   "infra/storage/mail-schema.ts": {
     "imported": "packages/entryway-service/src/features/access/storage/mail-schema.ts",
     "current": [
-      "src/database/migrations/mail-schema.ts"
+      "src/database/schema/sqlite.ts",
+      "src/database/schema/postgresql.ts"
     ]
   },
   "infra/storage/migration-payload.ts": {
     "imported": "packages/entryway-service/src/features/pds-fleet/storage/migration-payload.ts",
-    "current": [
-      "src/database/sqlite/migration-payload.ts"
-    ]
+    "current": ["src/database/drizzle/migration-payload.ts"]
   },
   "infra/storage/migration.ts": {
     "imported": "packages/entryway-service/src/features/pds-fleet/storage/migration.ts",
-    "current": [
-      "src/database/sqlite/migration.ts"
-    ]
+    "current": ["src/database/drizzle/migration.ts"]
   },
   "infra/storage/migration-custody.ts": {
     "imported": "packages/entryway-service/src/features/identity/storage/migration-custody.ts",
-    "current": [
-      "src/database/sqlite/migration-custody.ts"
-    ]
+    "current": ["src/database/drizzle/migration-custody.ts"]
   },
   "infra/storage/sqlite-account-storage.ts": {
     "imported": "packages/entryway-service/src/features/accounts/storage/sqlite-account-storage.ts",
-    "current": [
-      "src/database/sqlite/sqlite-account-storage.ts"
-    ]
+    "current": ["src/database/drizzle/account-storage.ts"]
   },
   "infra/storage/account-schema.ts": {
     "imported": "packages/entryway-service/src/features/accounts/storage/account-schema.ts",
     "current": [
-      "src/database/migrations/account-schema.ts"
+      "src/database/schema/sqlite.ts",
+      "src/database/schema/postgresql.ts"
     ]
   },
   "infra/storage/migrations.ts": {
     "imported": "packages/entryway-service/src/infra/storage/migrations.ts",
-    "current": [
-      "src/database/migrations/migrations.ts"
-    ]
+    "current": ["src/database/connection.ts"]
   },
   "infra/storage/mail-outbox.ts": {
     "imported": "packages/entryway-service/src/features/access/storage/mail-outbox.ts",
-    "current": [
-      "src/database/sqlite/mail-outbox.ts"
-    ]
+    "current": ["src/database/drizzle/mail-outbox.ts"]
   }
 }

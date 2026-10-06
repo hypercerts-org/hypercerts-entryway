@@ -61,10 +61,11 @@ export async function createProtocolRouting({
     "signPlcOperation",
     "createAccount",
   ]);
-  const checkCredentialCreation = (req, did) => {
-    if (req.legacyCredential) legacy.assertAccessCurrent(req.legacyCredential);
+  const checkCredentialCreation = async (req, did) => {
+    if (req.legacyCredential)
+      await legacy.assertAccessCurrent(req.legacyCredential);
     if (!req.auth?.service) return;
-    const revokedAt = db.get("security:revoked-at", did);
+    const revokedAt = await db.get("security:revoked-at", did);
     const releaseAt = Number(revokedAt) + 5 * 60_000;
     if (
       revokedAt &&
@@ -94,7 +95,7 @@ export async function createProtocolRouting({
           req.res.set("WWW-Authenticate", error.wwwAuthenticateHeader);
         throw new HttpError(401, "InvalidToken", error.message);
       }
-      const account = accounts.get(payload.sub);
+      const account = await accounts.get(payload.sub);
       if (!account || ["deleted", "provisioning"].includes(account.status))
         throw new HttpError(403, "AccountUnavailable", "Account unavailable");
       if (req.body?.did && req.body.did !== account.did)
@@ -188,14 +189,13 @@ export async function createProtocolRouting({
           payload.exp <= payload.iat
         )
           throw new Error("Invalid service token claims");
-        for (const { key, value } of db.list("service-replay"))
-          if (value.expiresAt < now) db.delete("service-replay", key);
-        if (payload.jti) {
-          const replayKey = `${did}:${payload.jti}`;
-          if (db.get("service-replay", replayKey))
-            throw new Error("Replayed service credential");
-          db.set("service-replay", replayKey, { expiresAt: payload.exp });
-        }
+        const admitted = await db.admitServiceCredential({
+          did,
+          jti: payload.jti,
+          expiresAt: payload.exp,
+          now,
+        });
+        if (!admitted) throw new Error("Replayed service credential");
       }
     } catch (e) {
       if (e.status === 403) throw e;
@@ -205,7 +205,7 @@ export async function createProtocolRouting({
         "Invalid authorization credential",
       );
     }
-    const account = accounts.get(did);
+    const account = await accounts.get(did);
     if (
       !account ||
       account.status === "deleted" ||
@@ -220,7 +220,7 @@ export async function createProtocolRouting({
         "Forbidden",
         "Subject does not match credential",
       );
-    if (method === "createAppPassword") checkCredentialCreation(req, did);
+    if (method === "createAppPassword") await checkCredentialCreation(req, did);
     return account;
   };
   const route = (verb, name, fn) =>
@@ -245,16 +245,22 @@ export async function createProtocolRouting({
   const authenticatedRoute = (verb, name, fn) =>
     route(verb, name, async (req) => {
       const account = await authenticate(req, `com.atproto.${name}`);
+      if (name === "server.createAppPassword") {
+        // Authorization and the local credential mutation must share the
+        // transaction now that checking authority can yield to another request.
+        return db.transact(async () => {
+          await checkCredentialCreation(req, account.did);
+          return fn(req, account);
+        });
+      }
       if (req.legacyCredential)
-        legacy.assertAccessCurrent(req.legacyCredential);
-      if (name === "server.createAppPassword")
-        checkCredentialCreation(req, account.did);
+        await legacy.assertAccessCurrent(req.legacyCredential);
       return fn(req, account);
     });
   const migrationPrincipal = async (req) => {
     const session = await oauth.requireSession(req);
     if (session?.emailVerified) {
-      const account = accounts.get(session.email.toLowerCase());
+      const account = await accounts.get(session.email.toLowerCase());
       if (!account)
         throw new HttpError(404, "AccountNotFound", "Account not found");
       const browser = await oauth.loadBrowser(req, req.res);
@@ -276,7 +282,7 @@ export async function createProtocolRouting({
       );
     return req.auth;
   };
-  const admin = (req, did, global = false) => {
+  const admin = async (req, did, global = false) => {
     const hash = (s) => createHash("sha256").update(String(s)).digest();
     const supplied = hash(req.headers.authorization ?? "");
     const candidates = [
@@ -297,7 +303,11 @@ export async function createProtocolRouting({
         "AuthRequired",
         "Administrator credentials required",
       );
-    if (did && matched.pdsId && accounts.get(did)?.pdsId !== matched.pdsId)
+    if (
+      did &&
+      matched.pdsId &&
+      (await accounts.get(did))?.pdsId !== matched.pdsId
+    )
       throw new HttpError(
         403,
         "Forbidden",

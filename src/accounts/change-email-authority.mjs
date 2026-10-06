@@ -11,13 +11,15 @@ export function createEmailAuthorityChange({
   const { account, assertEmailAvailable } = proofs;
   const swapEmail = (did, email, { recovery = false, verified = true } = {}) =>
     (accounts.serialized ?? ((_did, fn) => fn()))(did, async () => {
-      const old = account(did);
-      email = assertEmailAvailable(email, did, { allowOwnBackup: recovery });
+      const old = await account(did);
+      email = await assertEmailAvailable(email, did, {
+        allowOwnBackup: recovery,
+      });
       // Quarantine old service/browser credentials before the first async yield.
-      authority.revokeLocal(did);
+      await authority.revokeLocal(did);
       if (recovery) await legacy.removePassword(did);
       await legacy.revokeAccount(did, { credentials: true });
-      authority.commitEmailChange({
+      await authority.commitEmailChange({
         did,
         email,
         recovery,

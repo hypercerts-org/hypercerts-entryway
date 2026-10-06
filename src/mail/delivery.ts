@@ -75,7 +75,7 @@ export function createMailFeature({
       ) {
         const now = currentTime();
         if (now >= entry.expiresAt) {
-          outbox.expire(now);
+          await outbox.expire(now);
           return false;
         }
         const delay =
@@ -84,9 +84,9 @@ export function createMailFeature({
         const attemptedAt = currentTime();
         if (
           attemptedAt >= entry.expiresAt ||
-          !outbox.beginAttempt(entry.id, attemptedAt)
+          !(await outbox.beginAttempt(entry.id, attemptedAt))
         ) {
-          outbox.expire(attemptedAt);
+          await outbox.expire(attemptedAt);
           return false;
         }
         try {
@@ -97,12 +97,12 @@ export function createMailFeature({
           );
           await transport.deliver(message);
           const deliveredAt = currentTime();
-          const delivered = outbox.markDelivered(entry.id, deliveredAt);
+          const delivered = await outbox.markDelivered(entry.id, deliveredAt);
           if (!delivered) {
-            outbox.expire(deliveredAt);
+            await outbox.expire(deliveredAt);
             return false;
           }
-          outbox.projectCaptured(entry, deliveredAt);
+          await outbox.projectCaptured(entry, deliveredAt);
           return true;
         } catch {
           const failedAt = currentTime();
@@ -110,7 +110,7 @@ export function createMailFeature({
           const retryDelay = RETRY_DELAYS_MS[nextAttempt];
           const retryAt =
             retryDelay === undefined ? null : failedAt + retryDelay;
-          outbox.markFailure(entry.id, failedAt, retryAt);
+          await outbox.markFailure(entry.id, failedAt, retryAt);
           if (retryAt === null || retryAt >= entry.expiresAt) return false;
         }
       }
@@ -129,8 +129,8 @@ export function createMailFeature({
   ): Promise<void> {
     const recipient = validateMailAddress(recipientValue);
     const now = currentTime();
-    outbox.expire(now);
-    outbox.supersede(recipient, purpose, now);
+    await outbox.expire(now);
+    await outbox.supersede(recipient, purpose, now);
     const entry = createEntry(
       recipient,
       code,
@@ -139,15 +139,15 @@ export function createMailFeature({
       projectionToken,
       now,
     );
-    outbox.enqueue(entry);
+    await outbox.enqueue(entry);
     if ((await deliverEntry(entry)) !== true) throw new MailDeliveryError();
   }
 
-  function prune(now: number): number {
+  async function prune(now: number): Promise<number> {
     return (
-      outbox.expire(now) +
-      outbox.pruneTerminal(now) +
-      outbox.pruneCapturedProjection(now)
+      (await outbox.expire(now)) +
+      (await outbox.pruneTerminal(now)) +
+      (await outbox.pruneCapturedProjection(now))
     );
   }
 
@@ -158,15 +158,19 @@ export function createMailFeature({
     async sendProof({ email, token, purpose }: ProofMailRequest) {
       await send(email, proofCode(token), purpose, "token", token);
     },
-    supersedeOtp({ email, type }: { email: string; type: string }) {
-      return outbox.supersede(validateMailAddress(email), type, currentTime());
+    async supersedeOtp({ email, type }: { email: string; type: string }) {
+      return await outbox.supersede(
+        validateMailAddress(email),
+        type,
+        currentTime(),
+      );
     },
     async retryPending() {
       const now = currentTime();
-      const expired = outbox.expire(now);
-      outbox.pruneTerminal(now);
-      outbox.pruneCapturedProjection(now);
-      const entries = outbox.listRetryable(now, MAX_BATCH);
+      const expired = await outbox.expire(now);
+      await outbox.pruneTerminal(now);
+      await outbox.pruneCapturedProjection(now);
+      const entries = await outbox.listRetryable(now, MAX_BATCH);
       let delivered = 0;
       let failed = 0;
       for (const entry of entries) {
@@ -176,8 +180,8 @@ export function createMailFeature({
       }
       return { delivered, failed, expired };
     },
-    pruneExpired() {
-      return prune(currentTime());
+    async pruneExpired() {
+      return await prune(currentTime());
     },
   };
 }

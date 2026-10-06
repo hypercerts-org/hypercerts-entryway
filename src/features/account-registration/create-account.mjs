@@ -52,12 +52,12 @@ export function createRegistration({
       return inFlight.promise;
     }
     const work = (async () => {
-      let row = get(email);
-      let emailClaim = storage.getEmailClaim(email);
+      let row = await get(email);
+      let emailClaim = await storage.getEmailClaim(email);
       if (emailClaim?.purpose === "pending") {
-        const change = db.get("security:pending-email", emailClaim.did);
+        const change = await db.get("security:pending-email", emailClaim.did);
         if (!change || change.expiresAt <= Date.now()) {
-          storage.releaseEmail(email, emailClaim.did, "pending");
+          await storage.releaseEmail(email, emailClaim.did, "pending");
           emailClaim = null;
         }
       }
@@ -83,10 +83,10 @@ export function createRegistration({
           "AccountUnavailable",
           "Account is unavailable",
         );
-      validateHandle(handle, row?.did);
+      await validateHandle(handle, row?.did);
       const pds = config.pds.find((p) => p.id === pdsId);
       if (!pds) throw new HttpError(400, "InvalidPds", "Unknown PDS");
-      provisionPolicy?.reserve(inviteCode, email);
+      await provisionPolicy?.reserve(inviteCode, email);
       if (!row) {
         const { signingKey } = await xrpc(
           pds.internalUrl,
@@ -114,7 +114,7 @@ export function createRegistration({
           ...(recoveryKey ? { recoveryKey } : {}),
         };
         try {
-          storage.insertAccount(row);
+          await storage.insertAccount(row);
         } catch (e) {
           if (e.code?.startsWith("SQLITE_CONSTRAINT"))
             throw new HttpError(
@@ -132,7 +132,7 @@ export function createRegistration({
         phase: "pds-pending",
         at: new Date(),
       };
-      journal(operation);
+      await journal(operation);
       try {
         await xrpc(pds.internalUrl, "com.atproto.server.createAccount", {
           did: row.did,
@@ -148,16 +148,16 @@ export function createRegistration({
         );
         const data = await probe.json().catch(() => ({}));
         if (!probe.ok || data.did !== row.did) {
-          journal({ ...operation, lastError: error.error ?? error.name });
+          await journal({ ...operation, lastError: error.error ?? error.name });
           throw error;
         }
       }
       row.status = "active";
       delete row.op;
-      save(row);
-      claimHandle(handle, row.did);
-      journal({ ...operation, phase: "complete" });
-      provisionPolicy?.complete(row);
+      await save(row);
+      await claimHandle(handle, row.did);
+      await journal({ ...operation, phase: "complete" });
+      await provisionPolicy?.complete(row);
       return row;
     })();
     pending.set(email, { promise: work, handle, pdsId });

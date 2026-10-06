@@ -16,17 +16,17 @@ export interface MailOutboxEntry {
 }
 
 export interface MailOutboxReader {
-  listRetryable(now: number, limit: number): MailOutboxEntry[];
+  listRetryable(now: number, limit: number): Promise<MailOutboxEntry[]>;
 }
 
 export interface MailOutboxTransactor extends MailOutboxReader {
-  enqueue(entry: MailOutboxEntry): void;
-  beginAttempt(id: string, now: number): boolean;
-  markDelivered(id: string, now: number): MailOutboxEntry | null;
-  markFailure(id: string, now: number, retryAt: number | null): void;
-  expire(now: number): number;
-  supersede(recipient: string, purpose: string, now: number): number;
-  projectCaptured(entry: MailOutboxEntry, deliveredAt: number): void;
-  pruneTerminal(now: number): number;
-  pruneCapturedProjection(now: number): number;
+  enqueue(entry: MailOutboxEntry): Promise<void>;
+  beginAttempt(id: string, now: number): Promise<boolean>;
+  markDelivered(id: string, now: number): Promise<MailOutboxEntry | null>;
+  markFailure(id: string, now: number, retryAt: number | null): Promise<void>;
+  expire(now: number): Promise<number>;
+  supersede(recipient: string, purpose: string, now: number): Promise<number>;
+  projectCaptured(entry: MailOutboxEntry, deliveredAt: number): Promise<void>;
+  pruneTerminal(now: number): Promise<number>;
+  pruneCapturedProjection(now: number): Promise<number>;
 }

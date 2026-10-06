@@ -1,15 +1,23 @@
 # Implementation assessment
 
 The improve assessment was refreshed on 2026-10-06 against `122e72d`, using the
-owner's edited architecture prose as authoritative. Source code was inspected,
-not changed. Drizzle/PostgreSQL and multi-node behavior remain unimplemented.
+owner's edited architecture prose as authoritative. That assessment inspected
+source without changing it. The subsequent database foundation now implements
+async Drizzle SQLite/PostgreSQL adapters, shared authority transactions and fresh
+schemas. Focused checks pass for both dialects; full fresh acceptance and the
+authored PostgreSQL application login/restart/restore profile remain unrun.
+Shared operation ownership, mail claims, fleet placement and multi-node failover
+remain implementation work. See [database configuration and contracts](database.md).
 
 The target is Drizzle ORM **`1.0.0-rc.4`**. Single-node operation supports SQLite
 or PostgreSQL; multi-node operation requires PostgreSQL. Scaling, balancing and failover serve
 resilience. No old-data migration or backward compatibility is required for these
 code changes; public account migration and existing ePDS conversion remain required.
 
-## Vetted findings
+## Vetted findings at the assessment baseline
+
+The references below describe `122e72d`, before the database implementation.
+They are historical findings, not a claim that every listed gap remains open.
 
 | Finding | Category | Impact | Effort | Change risk | Evidence |
 | --- | --- | --- | --- | --- | --- |
@@ -22,20 +30,24 @@ code changes; public account migration and existing ePDS conversion remain requi
 | Readiness/shutdown and static placement do not support resilient multi-node operation | Architecture | High | L | High | `src/main.mjs:50`, `src/app.mjs:24`, `src/pds/account-client.mjs:25` |
 | Existing SQLite/single-process tests cannot establish the target deployment profiles | Coverage | High | L | Medium | `tests/contracts/oauth-stores.test.mjs:50`, `tests/atmosphere/stacks/hypercerts-entryway.yaml:26` |
 
-All findings have high confidence as source-to-requirement gaps. PostgreSQL and
-replica runtime behavior was not tested during this assessment. The existing
-single-node tests remain useful regression evidence.
+These were high-confidence source-to-requirement gaps at assessment time.
+The database contracts, schema/provider transaction integration and dependency
+boundaries now have focused dual-backend coverage. Replica runtime behavior and
+full application profile acceptance remain unverified. Existing single-node
+tests remain regression requirements.
 
 ## Required implementation areas
 
-1. **Database contracts and adapters.** Define asynchronous operations first, then
-   add fresh schemas for both dialects, the exact ORM dependency, backend selection
-   and connection lifecycle. Keep Better Auth identity, DID/email claims and
-   revocation in one physical transaction. Extend dependency checks and run the
-   same authority/provider contracts against both databases.
+1. **Database contracts and adapters.** Implemented with async operations, fresh
+   schemas, exact dependencies, backend selection and connection lifecycle.
+   Better Auth identity, DID/email claims and revocation share one physical
+   transaction. Dependency checks and shared authority/provider contracts pass
+   in focused diagnostics; reviewed full fresh and application profile acceptance
+   are still required.
 2. **Shared operation ownership.** Replace per-process account/security locks with
    durable admission, execution claims and conditional transitions. Include mail
-   claims, atomic counters, challenge replacement and per-client grant mutation.
+   claims. Atomic counters, challenge replacement and grant mutation are already
+   part of the database foundation.
    Observe ambiguous PDS/PLC outcomes before retrying; SMTP cannot promise exactly
    one delivery when an acknowledgement is lost.
 3. **Resilience and placement.** Add database-aware readiness, bounded request and
@@ -43,7 +55,7 @@ single-node tests remain useful regression evidence.
    two PostgreSQL-backed application processes behind one issuer/balancer, plus
    single-node restart/restore on both SQLite and PostgreSQL. Request balancing does not replicate PDS data.
 
-Build backend fixtures and concurrency checks alongside these changes. The
+Extend the existing backend fixtures and concurrency checks with replica profiles. The
 [Linear project](https://linear.app/hypercerts/project/epds-entryway-888a35a63fe4)
 and [project document](https://linear.app/hypercerts/document/m1-acceptance-matrices-epds-parity-protocol-and-migration-196f21e01e71)
 own issue relationships, priorities, acceptance criteria and approvals.
@@ -64,4 +76,5 @@ This focused audit covered architecture, storage correctness, authentication
 atomicity, coordination, dependency compatibility, test coverage and affected
 operational tooling. It did not run a dependency advisory scan, load benchmarks,
 production recovery, a general UI audit or unrelated feature discovery. No runtime
-source, manifest or lockfile was changed by the assessment.
+source, manifest or lockfile was changed by the assessment itself; the database
+implementation described above is subsequent work.

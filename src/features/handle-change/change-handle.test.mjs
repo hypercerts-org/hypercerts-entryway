@@ -1,3 +1,4 @@
+import { query } from "../../../tests/support/database-fixture.mjs";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fixture, alice } from "../../../tests/support/account-fixture.mjs";
@@ -16,17 +17,29 @@ test("handle callback failure is journaled and reconciliation completes without 
   await assert.rejects(
     accounts.updateHandle(a.did, "renamed.entryway.atmosbox.test"),
   );
-  assert.equal(accounts.get(a.did).handle, "renamed.entryway.atmosbox.test");
-  assert.equal(db.get("operations", `handle:${a.did}`).phase, "pds-pending");
+  assert.equal(
+    (await accounts.get(a.did)).handle,
+    "renamed.entryway.atmosbox.test",
+  );
+  assert.equal(
+    (await db.get("operations", `handle:${a.did}`)).phase,
+    "pds-pending",
+  );
   fail = false;
   const result = await accounts.reconcile();
   assert.equal(result[0].status, "complete");
   assert.equal(plcWrites, 1);
-  assert.equal(db.get("operations", `handle:${a.did}`).phase, "complete");
   assert.equal(
-    db.sqlite
-      .prepare("SELECT * FROM handle_claims WHERE handle=?")
-      .get(alice.handle),
+    (await db.get("operations", `handle:${a.did}`)).phase,
+    "complete",
+  );
+  assert.equal(
+    await query(
+      db,
+      "SELECT * FROM handle_claims WHERE handle=?",
+      [alice.handle],
+      "get",
+    ),
     undefined,
   );
 });
@@ -70,7 +83,7 @@ test("handle and account status changes serialize so stale snapshots cannot rest
   const status = accounts.setStatus(a.did, "deactivated");
   release();
   await Promise.all([handle, status]);
-  const current = accounts.get(a.did);
+  const current = await accounts.get(a.did);
   assert.equal(current.handle, "serialized.entryway.atmosbox.test");
   assert.equal(current.status, "deactivated");
 });
@@ -93,7 +106,7 @@ test("a new handle operation cannot overwrite an unresolved previous callback", 
     },
   );
   assert.equal(
-    db.get("operations", `handle:${a.did}`).handle,
+    (await db.get("operations", `handle:${a.did}`)).handle,
     "pending.entryway.atmosbox.test",
   );
 });
@@ -114,8 +127,8 @@ test("PDS-incompatible handle updates fail before PLC publication", async (t) =>
     );
   }
   assert.equal(plcWrites, 0);
-  assert.equal(accounts.get(account.did).handle, alice.handle);
-  assert.equal(db.get("operations", `handle:${account.did}`), null);
+  assert.equal((await accounts.get(account.did)).handle, alice.handle);
+  assert.equal(await db.get("operations", `handle:${account.did}`), null);
   await accounts.updateHandle(account.did, "abc.entryway.atmosbox.test");
   await accounts.updateHandle(
     account.did,
@@ -137,5 +150,5 @@ test("repeating an existing long handle with no pending change remains a no-op",
     handle,
   );
   assert.equal(calls.length, before);
-  assert.equal(db.get("operations", `handle:${account.did}`), null);
+  assert.equal(await db.get("operations", `handle:${account.did}`), null);
 });

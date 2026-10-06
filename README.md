@@ -12,11 +12,13 @@ are references, not runtime or documentation dependencies.
 **Status:** one application organized by vertical features. Ports/adapters are
 limited to browser authentication, mail sending and database. Preserved MJS is
 owned by its feature; standard-tool migration, moderation coordination and fleet
-registry remain product gaps. The target also requires Drizzle ORM `1.0.0-rc.4`
-with SQLite or PostgreSQL for single-node operation, PostgreSQL required for
-multi-node operation, and
-scaling, balancing and failover for resilience; these
-are not implemented by the current SQLite baseline. Google/GitHub OIDC is roadmap
+registry remain product gaps. The [database foundation](docs/database.md) now uses
+Drizzle ORM `1.0.0-rc.4` with fresh SQLite and PostgreSQL schemas and asynchronous
+operations. Focused contracts pass for both backends; full fresh acceptance and
+the authored PostgreSQL application login/restart/restore profile remain unrun.
+Single-node operation accepts either database; multi-node configuration requires
+PostgreSQL. Shared operation ownership, mail claims, request balancing, failover
+and fleet placement remain implementation work. Google/GitHub OIDC is roadmap
 work excluded from initial delivery.
 
 ## Start the sandbox
@@ -57,7 +59,7 @@ current evidence and remaining gaps; historical spike passes are not new accepta
 src/features/<feature>/   Operation, routes, pages and co-located tests
 src/authentication/       Better Auth browser proof/session boundary
 src/mail/                 SMTP sending boundary and delivery
-src/database/             Persistence ports, SQLite and migrations
+src/database/             Persistence ports, Drizzle adapters and fresh schemas
 src/accounts/             Common account facts and proof primitives
 src/pds/, src/plc/         Concrete protocol clients and authorized signing
 src/http/, src/ui/        Shared HTTP and presentation helpers

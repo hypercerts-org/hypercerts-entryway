@@ -10,8 +10,8 @@ export function createDeletion({
 }) {
   const deleteAccount = (did) =>
     serialized(did, async () => {
-      assertNoMigration(did);
-      const row = get(did);
+      await assertNoMigration(did);
+      const row = await get(did);
       if (!row || row.status === "deleted") return;
       const op = {
         id: `delete:${did}`,
@@ -20,11 +20,11 @@ export function createDeletion({
         phase: "pds-pending",
         at: new Date(),
       };
-      journal(op);
+      await journal(op);
       await admin(row, "com.atproto.admin.deleteAccount", { did });
       row.status = "deleted";
-      save(row);
-      journal({ ...op, phase: "complete" });
+      await save(row);
+      await journal({ ...op, phase: "complete" });
       // Preserve the PLC DID, as recovery/migration may still use it. Production
       // deletion requires a separately reviewed retention and tombstone policy.
     });

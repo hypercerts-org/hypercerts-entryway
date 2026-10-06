@@ -29,10 +29,10 @@ record_candidate() {
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 const hash = createHash('sha256')
-for (const file of ['package.json', 'package-lock.json', 'tsconfig.json']) hash.update(file).update(readFileSync(file))
+for (const file of ['package.json', 'package-lock.json', 'tsconfig.json', 'scripts/copy-database-schema.mjs', 'scripts/export-database-schema.mjs', 'drizzle.sqlite.config.ts', 'drizzle.postgresql.config.ts']) hash.update(file).update(readFileSync(file))
 for (const base of ['src', 'dist/src', 'tests/support', 'tests/browser']) {
   for (const name of readdirSync(base, { recursive: true }).sort()) {
-    if (!/\.(mjs|ts|sh|json)$/.test(name)) continue
+    if (!/\.(mjs|ts|sh|json|sql)$/.test(name)) continue
     hash.update(`${base}/${name}\0`).update(readFileSync(`${base}/${name}`))
   }
 }

@@ -17,15 +17,15 @@ export function createHandleChange({
 }) {
   const updateHandle = (did, handle) =>
     serialized(did, async () => {
-      assertNoMigration(did);
-      const row = get(did);
+      await assertNoMigration(did);
+      const row = await get(did);
       if (!row || row.status !== "active")
         throw new HttpError(
           403,
           "AccountUnavailable",
           "Account is unavailable",
         );
-      const existingOp = db.get("operations", `handle:${did}`);
+      const existingOp = await db.get("operations", `handle:${did}`);
       if (
         existingOp &&
         existingOp.phase !== "complete" &&
@@ -36,16 +36,16 @@ export function createHandleChange({
           "OperationPending",
           "Reconcile the pending handle change before requesting another",
         );
-      validateHandle(handle, did);
+      await validateHandle(handle, did);
       if (row.handle === handle) {
-        const pendingOp = db.get("operations", `handle:${did}`);
+        const pendingOp = await db.get("operations", `handle:${did}`);
         if (pendingOp?.phase === "pds-pending") {
           await admin(row, "com.atproto.admin.updateAccountHandle", {
             did,
             handle,
           });
-          journal({ ...pendingOp, phase: "complete" });
-          storage.releaseHandle(pendingOp.previousHandle, did);
+          await journal({ ...pendingOp, phase: "complete" });
+          await storage.releaseHandle(pendingOp.previousHandle, did);
         }
         return row;
       }
@@ -60,7 +60,7 @@ export function createHandleChange({
           "InvalidHandle",
           "Hosted handle labels must contain 3 to 18 characters",
         );
-      claimHandle(handle, did);
+      await claimHandle(handle, did);
       const op = {
         id: `handle:${did}`,
         kind: "handle",
@@ -70,19 +70,19 @@ export function createHandleChange({
         phase: "plc-pending",
         at: new Date(),
       };
-      journal(op);
+      await journal(op);
       await plcClient.updateHandle(did, rotation, handle);
       // Persist authority before callback. A failed callback remains explicitly
       // journaled and may be retried by reconciliation.
       row.handle = handle;
-      save(row);
-      journal({ ...op, phase: "pds-pending" });
+      await save(row);
+      await journal({ ...op, phase: "pds-pending" });
       await admin(row, "com.atproto.admin.updateAccountHandle", {
         did,
         handle,
       });
-      journal({ ...op, phase: "complete" });
-      storage.releaseHandle(op.previousHandle, did);
+      await journal({ ...op, phase: "complete" });
+      await storage.releaseHandle(op.previousHandle, did);
       return row;
     });
   return updateHandle;

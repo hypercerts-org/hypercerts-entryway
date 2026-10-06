@@ -26,7 +26,7 @@ export function mountSignupRoutes({
         !session.emailVerified
       )
         throw new InvalidRequestError("Sign-in session expired");
-      const existing = accounts.get(flow.authEmail);
+      const existing = await accounts.get(flow.authEmail);
       let row = existing;
       if (!existing || existing.status === "provisioning") {
         try {
@@ -37,8 +37,12 @@ export function mountSignupRoutes({
                   handle: existing.handle,
                   pdsId: existing.pdsId,
                   inviteCode:
-                    db.get("entryway:invite-reservations", existing.email)
-                      ?.code ?? req.body.inviteCode,
+                    (
+                      await db.get(
+                        "entryway:invite-reservations",
+                        existing.email,
+                      )
+                    )?.code ?? req.body.inviteCode,
                 }
               : {
                   email: flow.authEmail,
@@ -53,13 +57,13 @@ export function mountSignupRoutes({
           return pageForFlow(
             res,
             "Create your account",
-            `<p role="alert">${escapeHtml(error.message)}</p>${signupForm(flow, browser)}`,
+            `<p role="alert">${escapeHtml(error.message)}</p>${await signupForm(flow, browser)}`,
             flow,
             error.status >= 400 && error.status < 600 ? error.status : 503,
           );
         }
       }
-      getAccountSecurity()?.bindVerifiedIdentity({
+      await getAccountSecurity()?.bindVerifiedIdentity({
         did: row.did,
         email: session.email.toLowerCase(),
         userId: session.userId,

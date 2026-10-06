@@ -10,8 +10,8 @@ export function createStatusChange({
 }) {
   const setStatus = (did, status, { deleteAfter } = {}) =>
     serialized(did, async () => {
-      assertNoMigration(did);
-      const row = get(did);
+      await assertNoMigration(did);
+      const row = await get(did);
       if (!row || row.status === "deleted")
         throw new HttpError(404, "AccountNotFound", "Account not found");
       if (!["active", "deactivated"].includes(status))
@@ -31,15 +31,15 @@ export function createStatusChange({
         phase: "pds-pending",
         at: new Date(),
       };
-      journal(op);
+      await journal(op);
       await admin(row, "com.atproto.admin.updateSubjectStatus", {
         subject: { $type: "com.atproto.admin.defs#repoRef", did },
         deactivated: { applied: status === "deactivated" },
       });
       row.status = status;
       row.deleteAfter = status === "deactivated" ? deleteAfter : undefined;
-      save(row);
-      journal({ ...op, phase: "complete" });
+      await save(row);
+      await journal({ ...op, phase: "complete" });
       return row;
     });
   return setStatus;

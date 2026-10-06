@@ -1,4 +1,4 @@
-import { createAccountAuthority } from "./database/sqlite/account-authority.mjs";
+import { createAccountAuthority } from "./database/drizzle/account-authority.mjs";
 import { createEmailAuthorityChange } from "./accounts/change-email-authority.mjs";
 import { createSecurityPrimitives } from "./accounts/security-primitives.mjs";
 import { createAccountSettingsSecurity } from "./features/account-settings/security.mjs";
@@ -8,7 +8,7 @@ import { createMigrationProof } from "./features/pds-migration/proof.mjs";
 
 export async function createAccountSecurity(dependencies) {
   const authority = createAccountAuthority(dependencies);
-  authority.initializeClaims();
+  await authority.initializeClaims();
   const proofs = createSecurityPrimitives({ ...dependencies, authority });
   const changeEmailAuthority = createEmailAuthorityChange({
     ...dependencies,

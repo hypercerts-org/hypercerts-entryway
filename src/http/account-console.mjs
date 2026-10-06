@@ -39,7 +39,7 @@ export function createAccountConsole({
       res.redirect(303, "/login");
       return null;
     }
-    const account = accounts.get(session.email.toLowerCase());
+    const account = await accounts.get(session.email.toLowerCase());
     if (!account || account.status === "deleted") {
       page(
         res,
@@ -94,7 +94,7 @@ export function createAccountConsole({
           if (!ctx) return;
           oauth.checkCsrf(request, ctx.browser);
           // Browser loading yields: recheck live binding/session before mutation.
-          if (security) security.summary(ctx.principal);
+          if (security) await security.summary(ctx.principal);
           if (!noRecentLogin.has(action)) requireRecent(ctx.session);
           const value = (name) => String(request.body[name] ?? "").trim();
           await actions[action]({

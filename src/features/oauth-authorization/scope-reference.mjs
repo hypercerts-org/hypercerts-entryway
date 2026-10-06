@@ -11,14 +11,14 @@ export async function createScopeReferences({ db }) {
     )
       fail("InvalidScope", "Provide an inline AT Protocol scope");
     const ref = `ref:${await cidForLex(scope)}`;
-    db.set("entryway:scopes", ref, { scope });
+    await db.set("entryway:scopes", ref, { scope });
     return { ref };
   };
-  const dereferenceScope = (scope) => {
+  const dereferenceScope = async (scope) => {
     const row =
       typeof scope === "string" &&
       scope.startsWith("ref:") &&
-      db.get("entryway:scopes", scope);
+      (await db.get("entryway:scopes", scope));
     if (!row) fail("InvalidScopeReference", "Scope reference was not found");
     return row;
   };

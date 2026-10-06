@@ -5,7 +5,7 @@ import {
   safeFetchWrap,
 } from "@atproto/oauth-provider/provider";
 import { oauthMiddleware } from "@atproto/oauth-provider/middleware";
-import { createOAuthStores } from "../../database/sqlite/oauth-stores.mjs";
+import { createOAuthStores } from "../../database/drizzle/oauth-stores.mjs";
 import { createAuthentication } from "../../compose-authentication.mjs";
 
 export function createClientMetadataFetch({
@@ -103,8 +103,8 @@ export async function createOAuth({ app, db, config, accounts, mail }) {
         ).includes(clientId),
       };
     },
-    onAuthorized({ account, client }) {
-      db.set("events", `${Date.now()}-${crypto.randomUUID()}`, {
+    async onAuthorized({ account, client }) {
+      await db.set("events", `${Date.now()}-${crypto.randomUUID()}`, {
         type: "oauth.authorized",
         did: account.did,
         clientId: client.id,

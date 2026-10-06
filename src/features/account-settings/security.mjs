@@ -22,13 +22,14 @@ export function createAccountSettingsSecurity({
     serialized,
   } = proofs;
   const operations = {
-    assertLoginEmail({ email, userId }) {
+    async assertLoginEmail({ email, userId }) {
       email = normalizeEmail(email);
-      const row = accounts.get(email);
-      const reservation = claim(email);
+      const row = await accounts.get(email);
+      const reservation = await claim(email);
       if (reservation?.purpose === "external" && !row) {
-        const owner = accounts.storage.getExternalReservationByEmail(email);
-        const verified = accounts.storage.isVerifiedUserEmail({
+        const owner =
+          await accounts.storage.getExternalReservationByEmail(email);
+        const verified = await accounts.storage.isVerifiedUserEmail({
           userId,
           email,
         });
@@ -46,48 +47,48 @@ export function createAccountSettingsSecurity({
           "This address is reserved for account security. Use the recovery page if needed.",
         );
       if (row && !["deleted", "provisioning"].includes(row.status))
-        bindVerifiedIdentity({ did: row.did, email, userId });
+        await bindVerifiedIdentity({ did: row.did, email, userId });
     },
-    summary(actor) {
-      const row = principal(actor);
+    async summary(actor) {
+      const row = await principal(actor);
       return {
         email: row.email,
         emailVerified: row.emailVerified !== false,
-        pendingEmail: pendingEmail(row.did)?.email ?? null,
-        passwordEnabled: legacy.hasPassword(row.did),
-        backupEmails: authority.listBackupEmails(row.did),
+        pendingEmail: (await pendingEmail(row.did))?.email ?? null,
+        passwordEnabled: await legacy.hasPassword(row.did),
+        backupEmails: await authority.listBackupEmails(row.did),
       };
     },
-    requestEmailConfirmation(actor) {
-      const row = principal(actor);
-      const pending = pendingEmail(row.did);
-      return issue(
+    async requestEmailConfirmation(actor) {
+      const row = await principal(actor);
+      const pending = await pendingEmail(row.did);
+      return await issue(
         pending ? "email-new" : "email-confirm",
         row,
         pending?.email ?? row.email,
       );
     },
     async confirmEmail(actor, { email, token }) {
-      const row = principal(actor);
+      const row = await principal(actor);
       email = normalizeEmail(email);
-      const pending = pendingEmail(row.did);
+      const pending = await pendingEmail(row.did);
       if (pending?.email === email && !pending.recovery) {
-        consume(token, "email-new", { did: row.did, email });
+        await consume(token, "email-new", { did: row.did, email });
         return changeEmailAuthority(row.did, email);
       }
       if (row.email !== email)
         throw fail(400, "InvalidEmail", "Email does not match account");
-      consume(token, "email-confirm", { did: row.did, email });
-      authority.confirmEmail({ did: row.did, email });
+      await consume(token, "email-confirm", { did: row.did, email });
+      await authority.confirmEmail({ did: row.did, email });
       return {};
     },
     async requestEmailUpdate(actor) {
-      const row = principal(actor);
+      const row = await principal(actor);
       await issue("email-old", row, row.email);
       return { tokenRequired: true };
     },
-    updateEmail(actor, { email, token, emailAuthFactor }) {
-      const row = principal(actor);
+    async updateEmail(actor, { email, token, emailAuthFactor }) {
+      const row = await principal(actor);
       if (emailAuthFactor === false)
         throw fail(
           400,
@@ -96,10 +97,10 @@ export function createAccountSettingsSecurity({
         );
       if (!token)
         throw fail(400, "TokenRequired", "Verify the current email first");
-      email = assertEmailAvailable(email, row.did);
-      consume(token, "email-old", { did: row.did, email: row.email });
+      email = await assertEmailAvailable(email, row.did);
+      await consume(token, "email-old", { did: row.did, email: row.email });
       return (async () => {
-        const proof = authority.reservePendingEmail({
+        const proof = await authority.reservePendingEmail({
           did: row.did,
           email,
           recovery: false,
@@ -109,44 +110,44 @@ export function createAccountSettingsSecurity({
         return { pending: true };
       })();
     },
-    requestBackupEmail(actor, { email }) {
-      const row = principal(actor, true);
-      email = assertEmailAvailable(email, row.did);
+    async requestBackupEmail(actor, { email }) {
+      const row = await principal(actor, true);
+      email = await assertEmailAvailable(email, row.did);
       if (row.email === email)
         throw fail(
           400,
           "InvalidEmail",
           "Backup email must differ from primary",
         );
-      if (authority.backupCount(row.did) >= 3)
+      if ((await authority.backupCount(row.did)) >= 3)
         throw fail(
           400,
           "BackupLimitExceeded",
           "At most three verified backup emails are supported",
         );
-      return issue("backup-add", row, email);
+      return await issue("backup-add", row, email);
     },
-    confirmBackupEmail(actor, { email, token }) {
-      const row = principal(actor, true);
-      email = assertEmailAvailable(email, row.did);
-      consume(token, "backup-add", { did: row.did, email });
-      return authority.addBackupEmail(row.did, email);
+    async confirmBackupEmail(actor, { email, token }) {
+      const row = await principal(actor, true);
+      email = await assertEmailAvailable(email, row.did);
+      await consume(token, "backup-add", { did: row.did, email });
+      return await authority.addBackupEmail(row.did, email);
     },
-    removeBackupEmail(actor, { email }) {
-      const row = principal(actor, true);
+    async removeBackupEmail(actor, { email }) {
+      const row = await principal(actor, true);
       email = normalizeEmail(email);
-      authority.removeBackupEmail(row.did, email);
+      await authority.removeBackupEmail(row.did, email);
       return {};
     },
     async setPassword(actor, { password, currentPassword: previous }) {
-      const row = principal(actor, true);
+      const row = await principal(actor, true);
       await currentPassword(row, previous);
       await legacy.setPassword(row.did, password);
       await revokeAccount(row.did, { credentials: true });
       return { reauthenticationRequired: true };
     },
     async removePassword(actor, { currentPassword: previous } = {}) {
-      const row = principal(actor, true);
+      const row = await principal(actor, true);
       await currentPassword(row, previous);
       await legacy.removePassword(row.did);
       await revokeAccount(row.did, { credentials: true });
@@ -162,7 +163,7 @@ export function createAccountSettingsSecurity({
     },
     async adminUpdatePassword(actor, { did, password }) {
       requireAdmin(actor);
-      account(did);
+      await account(did);
       await legacy.setPassword(did, password);
       await revokeAccount(did, { credentials: true });
       return {};

@@ -38,10 +38,11 @@ export async function createAccountMigration({
   const maxBlobs = config.migrationMaxBlobs ?? 1000;
   const serial = accounts.serialized ?? ((_did, fn) => fn());
   const operationKey = (did) => `migrate:${did}`;
-  const read = (did) => db.get("migration:operations", operationKey(did));
-  const journal = (operation, changes = {}) => {
+  const read = async (did) =>
+    await db.get("migration:operations", operationKey(did));
+  const journal = async (operation, changes = {}) => {
     const updated = { ...operation, ...changes, updatedAt: new Date() };
-    db.set("migration:operations", operation.id, updated);
+    await db.set("migration:operations", operation.id, updated);
     return updated;
   };
   const choose = (pdsId) => {
@@ -49,21 +50,21 @@ export async function createAccountMigration({
     if (!pds) throw error("InvalidPds", "Choose a configured PDS");
     return pds;
   };
-  const requireOwner = (principal, did = principal?.did) => {
+  const requireOwner = async (principal, did = principal?.did) => {
     if (!principal || principal.did !== did)
       throw error(
         "Forbidden",
         "The authenticated identity must own the migrating DID",
         403,
       );
-    const row = accounts.get(did);
+    const row = await accounts.get(did);
     if (!row || row.did !== did)
       throw error(
         "AuthorityNotManaged",
         "This entryway has no verified account authority for that DID",
         403,
       );
-    security.summary(principal);
+    await security.summary(principal);
     if (
       !["active", "deactivated"].includes(row.status) ||
       row.emailVerified === false
@@ -146,7 +147,7 @@ export async function createAccountMigration({
         headers: { authorization: basic(source) },
       },
     );
-    db.set("migration:snapshots", `${operation.id}/repo`, {
+    await db.set("migration:snapshots", `${operation.id}/repo`, {
       base64: repo.bytes.toString("base64"),
       size: repo.bytes.length,
     });
@@ -181,7 +182,7 @@ export async function createAccountMigration({
         );
         totalBytes += blob.bytes.length;
         blobs.push(cid);
-        db.set("migration:snapshots", `${operation.id}/blob/${cid}`, {
+        await db.set("migration:snapshots", `${operation.id}/blob/${cid}`, {
           base64: blob.bytes.toString("base64"),
           size: blob.bytes.length,
           type: blob.type,
@@ -190,7 +191,7 @@ export async function createAccountMigration({
       if (!list.cids.length || !list.cursor || list.cursor === cursor) break;
       cursor = list.cursor;
     }
-    return journal(operation, {
+    return await journal(operation, {
       phase: "snapshot-ready",
       snapshot: { status, blobs, totalBytes },
       importedBlobs: [],
@@ -204,7 +205,7 @@ export async function createAccountMigration({
         "Cannot migrate a tombstoned identity",
       );
     const normalized = plc.normalizeOp(current);
-    if (!normalized.rotationKeys.includes(accounts.rotation.did()))
+    if (!normalized.rotationKeys.includes(await accounts.rotation.did()))
       throw error(
         "AuthorityNotManaged",
         "This entryway is not an authorized PLC rotation signer",
@@ -244,7 +245,7 @@ export async function createAccountMigration({
     );
     const signed = operation.requestedPlcOp ?? expected;
     await plc.assureValidOp(signed);
-    await plc.assureValidSig([accounts.rotation.did()], signed);
+    await plc.assureValidSig([await accounts.rotation.did()], signed);
     const { sig: _expectedSig, ...expectedUnsigned } = expected;
     const { sig: _suppliedSig, ...suppliedUnsigned } = signed;
     if (
@@ -309,19 +310,19 @@ export async function createAccountMigration({
         // Reject lost authority or a malformed supplied operation before touching
         // source availability. The signed update is journaled before any cutover.
         if (!operation.plcOp)
-          operation = journal(await prepareOperation(operation, target));
+          operation = await journal(await prepareOperation(operation, target));
         await setActive(operation.did, source, false);
-        accounts.save({
-          ...accounts.get(operation.did),
+        await accounts.save({
+          ...(await accounts.get(operation.did)),
           status: "deactivated",
         });
         await security.revokeAccount(operation.did, { credentials: true });
-        operation = journal(operation, { phase: "source-frozen" });
+        operation = await journal(operation, { phase: "source-frozen" });
       }
       if (before("snapshot-ready"))
         operation = await snapshot(operation, source);
       if (before("operation-ready"))
-        operation = journal(
+        operation = await journal(
           operation.plcOp
             ? operation
             : await prepareOperation(operation, target),
@@ -373,7 +374,7 @@ export async function createAccountMigration({
                 },
               }),
             );
-            operation = journal(operation, {
+            operation = await journal(operation, {
               previousPlcOps: [
                 ...(operation.previousPlcOps ?? []),
                 operation.plcOp,
@@ -396,10 +397,13 @@ export async function createAccountMigration({
           );
         }
         await setActive(operation.did, target, false);
-        operation = journal(operation, { phase: "target-created" });
+        operation = await journal(operation, { phase: "target-created" });
       }
       if (before("repo-imported")) {
-        const repo = db.get("migration:snapshots", `${operation.id}/repo`);
+        const repo = await db.get(
+          "migration:snapshots",
+          `${operation.id}/repo`,
+        );
         if (!repo)
           throw error(
             "MissingSnapshot",
@@ -417,12 +421,12 @@ export async function createAccountMigration({
             body: Buffer.from(repo.base64, "base64"),
           },
         );
-        operation = journal(operation, { phase: "repo-imported" });
+        operation = await journal(operation, { phase: "repo-imported" });
       }
       if (before("blobs-imported")) {
         for (const cid of operation.snapshot.blobs) {
           if (operation.importedBlobs.includes(cid)) continue;
-          const blob = db.get(
+          const blob = await db.get(
             "migration:snapshots",
             `${operation.id}/blob/${cid}`,
           );
@@ -451,11 +455,11 @@ export async function createAccountMigration({
               "The target returned a different blob CID",
               409,
             );
-          operation = journal(operation, {
+          operation = await journal(operation, {
             importedBlobs: [...operation.importedBlobs, cid],
           });
         }
-        operation = journal(operation, { phase: "blobs-imported" });
+        operation = await journal(operation, { phase: "blobs-imported" });
       }
       if (before("target-ready")) {
         const status = await userCall(
@@ -492,7 +496,7 @@ export async function createAccountMigration({
             "Target identity or activation is not ready",
             409,
           );
-        operation = journal(operation, {
+        operation = await journal(operation, {
           phase: "target-ready",
           targetStatus: ready,
         });
@@ -521,16 +525,16 @@ export async function createAccountMigration({
         // Source remains deactivated, including on retried completion.
         await setActive(operation.did, source, false);
         await security.revokeAccount(operation.did, { credentials: true });
-        db.transact(() => {
-          const row = accounts.get(operation.did);
-          accounts.save({
+        await db.transact(async () => {
+          const row = await accounts.get(operation.did);
+          await accounts.save({
             ...row,
             pdsId: target.id,
             pdsUrl: target.url,
             status: "active",
             migratedAt: new Date().toISOString(),
           });
-          operation = journal(operation, {
+          operation = await journal(operation, {
             phase: "complete",
             completedAt: new Date(),
             lastError: null,
@@ -546,7 +550,7 @@ export async function createAccountMigration({
         reauthenticationRequired: true,
       };
     } catch (failure) {
-      journal(operation, {
+      await journal(operation, {
         lastError: failure.error ?? failure.name,
         lastErrorMessage: failure.message,
       });
@@ -554,18 +558,18 @@ export async function createAccountMigration({
     }
   };
   return {
-    requestMigration(principal, { pdsId }) {
-      const row = requireOwner(principal);
+    async requestMigration(principal, { pdsId }) {
+      const row = await requireOwner(principal);
       if (row.pdsId === pdsId)
         throw error("InvalidPds", "Choose another configured PDS");
       choose(pdsId);
-      return security.requestMigrationProof(principal, { pdsId });
+      return await security.requestMigrationProof(principal, { pdsId });
     },
     importAccount(principal, input) {
       return serial(input.did, async () => {
-        const row = requireOwner(principal, input.did);
+        const row = await requireOwner(principal, input.did);
         const target = choose(input.pdsId);
-        let operation = read(row.did);
+        let operation = await read(row.did);
         if (operation && operation.phase !== "complete") {
           if (
             operation.targetPdsId !== target.id ||
@@ -612,17 +616,17 @@ export async function createAccountMigration({
           },
           target,
         );
-        security.confirmMigrationProof(principal, {
+        await security.confirmMigrationProof(principal, {
           pdsId: target.id,
           token: input.token,
         });
-        operation = journal(prepared);
+        operation = await journal(prepared);
         return resume(operation);
       });
     },
-    status(principal, { did = principal?.did } = {}) {
-      requireOwner(principal, did);
-      const operation = read(did);
+    async status(principal, { did = principal?.did } = {}) {
+      await requireOwner(principal, did);
+      const operation = await read(did);
       if (!operation) return null;
       const { id, phase, sourcePdsId, targetPdsId, lastError, updatedAt } =
         operation;
@@ -630,10 +634,12 @@ export async function createAccountMigration({
     },
     async reconcile() {
       const results = [];
-      for (const { value } of db.list("migration:operations")) {
+      for (const { value } of await db.list("migration:operations")) {
         if (value.phase === "complete") continue;
         try {
-          results.push(await serial(value.did, () => resume(read(value.did))));
+          results.push(
+            await serial(value.did, async () => resume(await read(value.did))),
+          );
         } catch (failure) {
           results.push({
             did: value.did,

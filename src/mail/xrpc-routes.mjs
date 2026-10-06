@@ -10,8 +10,8 @@ export function mountMailXrpc({
   route("post", "admin.sendEmail", async (req) => {
     let a;
     if (req.headers.authorization?.startsWith("Basic ")) {
-      admin(req, req.body.recipientDid);
-      a = accounts.get(req.body.recipientDid);
+      await admin(req, req.body.recipientDid);
+      a = await accounts.get(req.body.recipientDid);
     } else {
       a = await authenticate(req, "com.atproto.admin.sendEmail");
       if (!req.auth.service || a.did !== req.body.recipientDid)
@@ -27,6 +27,6 @@ export function mountMailXrpc({
         "AccountNotFound",
         "Recipient account not found",
       );
-    return protocolOperations.sendEmail(a, req.body);
+    return await protocolOperations.sendEmail(a, req.body);
   });
 }

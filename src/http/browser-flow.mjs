@@ -40,10 +40,10 @@ export function createBrowserFlow({
     );
   const loadBrowser = async (req, res, rotate = false) => {
     const device = await provider.deviceManager.load(req, res, rotate);
-    let browser = db.get("browser", device.deviceId);
+    let browser = await db.get("browser", device.deviceId);
     if (!browser) {
       browser = { csrf: opaque(), createdAt: new Date() };
-      db.set("browser", device.deviceId, browser);
+      await db.set("browser", device.deviceId, browser);
     }
     return { ...device, csrf: browser.csrf };
   };
@@ -60,21 +60,21 @@ export function createBrowserFlow({
   };
   const fields = (flow, browser) =>
     hidden("flow", flow.id) + hidden("csrf", browser.csrf);
-  const save = (flow) => db.set("auth-flows", flow.id, flow);
-  const newFlow = (browser, extra = {}) => {
+  const save = async (flow) => await db.set("auth-flows", flow.id, flow);
+  const newFlow = async (browser, extra = {}) => {
     const flow = {
       id: opaque(),
       deviceId: browser.deviceId,
       createdAt: new Date(),
       ...extra,
     };
-    save(flow);
+    await save(flow);
     return flow;
   };
   const getFlow = async (req, res) => {
     const browser = await loadBrowser(req, res);
     checkCsrf(req, browser);
-    const flow = db.get("auth-flows", String(req.body?.flow ?? ""));
+    const flow = await db.get("auth-flows", String(req.body?.flow ?? ""));
     if (!flow || flow.deviceId !== browser.deviceId) {
       throw new InvalidRequestError(
         "This sign-in has expired. Start again from your application.",

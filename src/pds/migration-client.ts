@@ -11,7 +11,7 @@ import {
 } from "../features/external-migration/validation.js";
 import type { SnapshotManifest } from "../features/external-migration/types.js";
 import type { SnapshotReader } from "../database/migration-journal.port.js";
-import { MigrationPayloadStore } from "../database/sqlite/migration-payload.js";
+import { MigrationPayloadStore } from "../database/drizzle/migration-payload.js";
 
 export interface TargetPdsOptions {
   origin: string;

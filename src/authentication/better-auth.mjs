@@ -1,5 +1,4 @@
 import { betterAuth } from "better-auth";
-import { getMigrations } from "better-auth/db/migration";
 import { fromNodeHeaders } from "better-auth/node";
 import { emailOTP } from "better-auth/plugins";
 
@@ -8,7 +7,7 @@ export async function createBetterAuthAuthentication({ db, config, mail }) {
   const origin = new URL(config.issuer).origin;
   const authOptions = {
     secret: config.betterAuthSecret,
-    database: db.sqlite,
+    database: db.authenticationAdapter,
     baseURL: config.issuer,
     basePath: "/api/auth",
     trustedOrigins: [origin],
@@ -29,10 +28,6 @@ export async function createBetterAuthAuthentication({ db, config, mail }) {
       }),
     ],
   };
-  // Better Auth 1.7 eagerly validates its schema during construction.
-  // Finish startup migrations before that validation can inspect a partial schema.
-  const migration = await getMigrations(authOptions);
-  await migration.runMigrations();
   const auth = betterAuth(authOptions);
   const headers = (req) => fromNodeHeaders(req.headers);
   const principal = (value) =>
@@ -52,7 +47,9 @@ export async function createBetterAuthAuthentication({ db, config, mail }) {
   };
   return {
     async requireSession(req) {
-      return principal(await auth.api.getSession({ headers: headers(req) }));
+      return await principal(
+        await auth.api.getSession({ headers: headers(req) }),
+      );
     },
     async sendSignInCode(email) {
       await auth.api.sendVerificationOTP({ body: { email, type: "sign-in" } });

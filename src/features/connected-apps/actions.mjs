@@ -10,25 +10,32 @@ export function createConnectedAppsActions({ db, oauth, legacy, console }) {
     },
     "grant-revoke": async ({ account, value }) => {
       const id = value("clientId");
-      const grants = new Map(db.get("oauth:grants", account.did) ?? []);
-      if (!grants.has(id))
-        throw new HttpError(
-          404,
-          "NotFound",
-          "Application permission not found",
+      await db.transact(async () => {
+        const grants = new Map(
+          (await db.get("oauth:grants", account.did)) ?? [],
         );
-      for (const item of oauth.stores.listAccountTokens(account.did))
-        if (item.data.clientId === id) await oauth.stores.deleteToken(item.id);
-      grants.delete(id);
-      db.set("oauth:grants", account.did, [...grants]);
+        if (!grants.has(id))
+          throw new HttpError(
+            404,
+            "NotFound",
+            "Application permission not found",
+          );
+        for (const item of await oauth.stores.listAccountTokens(account.did))
+          if (item.data.clientId === id)
+            await oauth.stores.deleteToken(item.id);
+        grants.delete(id);
+        await db.set("oauth:grants", account.did, [...grants]);
+      });
     },
     "oauth-session-revoke": async ({ account, session, value }) => {
-      const item = oauth.stores
-        .listAccountTokens(account.did)
-        .find((s) => s.id === value("sessionId"));
-      if (!item)
-        throw new HttpError(404, "NotFound", "OAuth session not found");
-      await oauth.stores.deleteToken(item.id);
+      await db.transact(async () => {
+        const item = (await oauth.stores.listAccountTokens(account.did)).find(
+          (s) => s.id === value("sessionId"),
+        );
+        if (!item)
+          throw new HttpError(404, "NotFound", "OAuth session not found");
+        await oauth.stores.deleteToken(item.id);
+      });
     },
     "legacy-session-revoke": async ({ account, session, value }) => {
       console.needed();
@@ -81,9 +88,11 @@ export function createConnectedAppsActions({ db, oauth, legacy, console }) {
 }
 
 export async function revokeAppAccess({ db, oauth, legacy }, did) {
-  for (const token of oauth.stores.listAccountTokens(did))
-    await oauth.stores.deleteToken(token.id);
-  db.delete("oauth:grants", did);
+  await db.transact(async () => {
+    for (const token of await oauth.stores.listAccountTokens(did))
+      await oauth.stores.deleteToken(token.id);
+    await db.delete("oauth:grants", did);
+  });
   await legacy?.revokeAllSessions(did);
 }
 export async function forgetOAuthDevices(oauth, did) {

@@ -12,11 +12,14 @@ test("interrupted status callbacks reconcile and repeated boolean transitions st
   });
   const account = await accounts.create(alice);
   await assert.rejects(accounts.setStatus(account.did, "deactivated"));
-  assert.equal(accounts.get(account.did).status, "active");
+  assert.equal((await accounts.get(account.did)).status, "active");
   assert.equal((await accounts.reconcile())[0].status, "complete");
-  assert.equal(accounts.get(account.did).status, "deactivated");
+  assert.equal((await accounts.get(account.did)).status, "deactivated");
   await accounts.setStatus(account.did, "deactivated");
   await accounts.setStatus(account.did, "active");
-  assert.equal(accounts.get(account.did).status, "active");
-  assert.equal(db.get("operations", `status:${account.did}`).phase, "complete");
+  assert.equal((await accounts.get(account.did)).status, "active");
+  assert.equal(
+    (await db.get("operations", `status:${account.did}`)).phase,
+    "complete",
+  );
 });

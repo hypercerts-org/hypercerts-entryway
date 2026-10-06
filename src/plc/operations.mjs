@@ -13,7 +13,7 @@ export async function createPlcOperations({
   choosePds,
 }) {
   const reserveSigningKey = async ({ did, pdsId } = {}) => {
-    const existing = did && accounts.get(did);
+    const existing = did && (await accounts.get(did));
     const pds = existing ? accounts.pdsFor(existing) : choosePds(pdsId);
     return xrpc(
       pds.internalUrl,
@@ -21,9 +21,9 @@ export async function createPlcOperations({
       did ? { did } : {},
     );
   };
-  const requestPlcOperationSignature = (row) => {
-    accounts.assertNoMigration?.(row.did);
-    return sendCode(
+  const requestPlcOperationSignature = async (row) => {
+    await accounts.assertNoMigration?.(row.did);
+    return await sendCode(
       "plc-operation",
       `${row.did}:${row.email}`,
       row.email,
@@ -32,7 +32,7 @@ export async function createPlcOperations({
     );
   };
   const signPlcOperation = async (row, body) => {
-    accounts.assertNoMigration?.(row.did);
+    await accounts.assertNoMigration?.(row.did);
     const current = await accounts.plcClient.getLastOp(row.did);
     if (current.type === "plc_tombstone")
       fail("InvalidRequest", "The identity is tombstoned");
@@ -89,7 +89,7 @@ export async function createPlcOperations({
     }
     // Validate first; the purpose-bound email proof is consumed exactly once before
     // returning a signature. A signature for migration can transfer all authority.
-    const currentAccount = accounts.get(row.did);
+    const currentAccount = await accounts.get(row.did);
     if (
       !currentAccount ||
       currentAccount.did !== row.did ||
@@ -100,9 +100,9 @@ export async function createPlcOperations({
         "InvalidToken",
         "Account authority changed; request a new signature code",
       );
-    accounts.assertNoMigration?.(row.did);
-    requireCode("plc-operation", `${row.did}:${row.email}`, body.token);
-    db.set("events", `plc:${crypto.randomUUID()}`, {
+    await accounts.assertNoMigration?.(row.did);
+    await requireCode("plc-operation", `${row.did}:${row.email}`, body.token);
+    await db.set("events", `plc:${crypto.randomUUID()}`, {
       type: "plc.signed",
       did: row.did,
       prev: operation.prev,
@@ -111,7 +111,7 @@ export async function createPlcOperations({
     return { operation };
   };
   const submitPlcOperation = async (row, { operation }) => {
-    accounts.assertNoMigration?.(row.did);
+    await accounts.assertNoMigration?.(row.did);
     // The hosting PDS enforces its own key/handle/endpoint invariants and sequences
     // identity events. A migration-away operation is signed here and submitted to
     // the directory by its owner, rather than weakening the stock PDS constraints.

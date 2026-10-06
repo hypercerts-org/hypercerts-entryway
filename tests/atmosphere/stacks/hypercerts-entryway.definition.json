@@ -60,6 +60,10 @@
     {
       "service": "browser",
       "environment": []
+    },
+    {
+      "service": "entryway-postgres",
+      "environment": []
     }
   ],
   "routes": [

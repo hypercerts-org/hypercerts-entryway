@@ -33,6 +33,8 @@ and requires no host dependency install:
 | `./tests/local.sh prepare` | Install sandbox CLI dependencies and create/check project configuration |
 | `./tests/local.sh up` | Build/start the sandbox and build test/browser images after prepare |
 | `./tests/local.sh status` | Inspect this project's services after prepare |
+| `./tests/local.sh database-contracts` | Run both database contract dialects, then the separate PostgreSQL login/restart/restore profile; see [database configuration](database.md) |
+| `./tests/local.sh database-profile` | Run the one-node PostgreSQL application profile in its own fresh project |
 | `./tests/local.sh contracts` | Run imported contract scenarios in the test container after up |
 | `./tests/local.sh browser` | Run browser scenarios after up |
 | `./tests/local.sh migration` | Fresh synthetic external-source migration, including two Entryway restarts |
@@ -63,8 +65,11 @@ Review `resilience.json` and per-phase reports if interrupted. See
 | `SANDBOX_PROJECT` | Explicit owned project name |
 | `ACCEPTANCE_REPORT_DIR` | Report directory override |
 
-Runtime configuration uses `SERVICE_CONFIG_PATH` (default `./.runtime/config.json`)
-and `STATE_DIRECTORY` (default `/data`); the database is `account-authority.sqlite`.
+Runtime configuration uses `SERVICE_CONFIG_PATH` (default `./.runtime/config.json`).
+`DATABASE_BACKEND` selects SQLite or PostgreSQL and `DEPLOYMENT_MODE` selects the
+single-node or multi-node profile. SQLite uses `account-authority.sqlite` under
+`STATE_DIRECTORY` (default `/data`); PostgreSQL requires `DATABASE_URL`. See
+[database configuration](database.md) for validation and profile limits.
 Harness templates and current commands use the purpose-based variables above.
 Historical evidence keeps its original command names. The naming change requires
 fresh state; do not resume a sandbox or restore a database from the older schema.
@@ -153,19 +158,24 @@ key overlap, existing-refresh continuity or production acceptance.
 
 ## Target database and replica coverage
 
-The retained baseline uses one Entryway instance and SQLite. The target requires
-Drizzle ORM `1.0.0-rc.4` in three configurations: single-node SQLite, single-node
-PostgreSQL and multi-node PostgreSQL. Test restart/restore for both single-node
-backends and balancing/failover for multiple application instances. SQLite in
-multi-node mode must be rejected. These profiles and their tests are not
-implemented yet.
-Existing restart and backup probes do not establish shared-database concurrency,
-worker takeover, rolling removal or multi-instance availability. The PostgreSQL
-service in the current sandbox supports other components; it is not evidence of
-a PostgreSQL Entryway adapter.
+The Drizzle ORM `1.0.0-rc.4` foundation has fresh SQLite/PostgreSQL adapters and
+shared contract fixtures. Focused checks cover authority rollback, provider
+persistence and contention across independent PostgreSQL connections. Configuration
+contracts accept either backend for single-node operation, require PostgreSQL for
+multi-node mode, and reject multi-node SQLite.
 
-The [implementation assessment](implementation-assessment.md) describes the required fixtures
-and code changes. Future database refactor verification uses fresh state without
-old-schema upgrades; product account migration and existing ePDS conversion remain
-separate required journeys. Preserve the current tests and their known moderation
-blocker while adding the new profiles.
+The harness now includes a separate Entryway PostgreSQL service, dual-dialect
+`database-contracts`, and a one-node `database-profile` for actual-main OTP login,
+restart and pg_dump/restore. These commands are authored; full fresh acceptance
+and the PostgreSQL application profile remain unrun pending review. See
+[database configuration and contracts](database.md) for their scope and receipts.
+A profile file or PostgreSQL connection test does not establish application
+restart/restore, worker takeover, rolling removal or multi-instance availability.
+Shared operation ownership, mail claims, balancing/failover and their replica
+profiles still require implementation and acceptance.
+
+The [implementation assessment](implementation-assessment.md) distinguishes the
+implemented foundation from remaining work. Database verification uses fresh
+state without old-schema upgrades; product account migration and existing ePDS
+conversion remain separate required journeys. Preserve the existing tests and
+their known moderation blocker while adding the new profiles.

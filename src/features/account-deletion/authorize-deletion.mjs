@@ -9,17 +9,17 @@ export function createDeletionAuthorization({ proofs, authority, accounts }) {
     serialized,
   } = proofs;
   const operations = {
-    requestAccountDelete(actor) {
-      const row = principal(actor);
-      return issue("account-delete", row, row.email);
+    async requestAccountDelete(actor) {
+      const row = await principal(actor);
+      return await issue("account-delete", row, row.email);
     },
     async deleteAccount({ did, token, password }) {
-      const row = account(did);
+      const row = await account(did);
       await currentPassword(row, password);
-      consume(token, "account-delete", { did, email: row.email });
+      await consume(token, "account-delete", { did, email: row.email });
       await revokeAccount(did, { credentials: true });
       await accounts.deleteAccount(did);
-      authority.clearDeletedAccountRecovery(did);
+      await authority.clearDeletedAccountRecovery(did);
       return {};
     },
   };

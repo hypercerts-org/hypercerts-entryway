@@ -1,6 +1,6 @@
 import { Secp256k1Keypair } from "@atproto/crypto";
 import { createAccounts } from "../../dist/src/compose-accounts.mjs";
-import { openDatabase } from "../../dist/src/database/sqlite/connection.mjs";
+import { openTestDatabase } from "./database-fixture.mjs";
 
 export async function fixture(t, reply) {
   const rotation = await Secp256k1Keypair.create({ exportable: true });
@@ -37,10 +37,10 @@ export async function fixture(t, reply) {
       return Response.json({ error: "RepoNotFound" }, { status: 404 });
     return Response.json({});
   };
-  const db = openDatabase(":memory:");
-  t.after(() => {
+  const db = await openTestDatabase(":memory:");
+  t.after(async () => {
     globalThis.fetch = previous;
-    db.close();
+    await db.close();
   });
   const accounts = await createAccounts({ db, config });
   return { db, accounts, calls };

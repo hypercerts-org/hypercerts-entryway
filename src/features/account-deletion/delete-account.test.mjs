@@ -14,12 +14,12 @@ test("deletion retries a failed callback and completes when the retry succeeds",
   const account = await accounts.create(alice);
   await assert.rejects(accounts.deleteAccount(account.did));
   assert.equal(
-    db.get("operations", `delete:${account.did}`).phase,
+    (await db.get("operations", `delete:${account.did}`)).phase,
     "pds-pending",
   );
   const result = await accounts.reconcile();
   assert.equal(result[0].status, "complete");
-  assert.equal(accounts.get(account.did).status, "deleted");
+  assert.equal((await accounts.get(account.did)).status, "deleted");
   await accounts.deleteAccount(account.did);
   assert.equal(attempts, 2);
 });
@@ -32,9 +32,9 @@ test("deletion keeps an authorization failure pending", async (t) => {
   const account = await accounts.create(alice);
   await assert.rejects(accounts.deleteAccount(account.did));
   assert.equal((await accounts.reconcile())[0].status, "pending");
-  assert.equal(accounts.get(account.did).status, "active");
+  assert.equal((await accounts.get(account.did)).status, "active");
   assert.equal(
-    db.get("operations", `delete:${account.did}`).phase,
+    (await db.get("operations", `delete:${account.did}`)).phase,
     "pds-pending",
   );
 });

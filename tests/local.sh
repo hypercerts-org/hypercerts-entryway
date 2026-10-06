@@ -29,7 +29,7 @@ external_browser() { compose run --rm --no-deps -e "EXTERNAL_PHASE=$1" browser n
 migration_command() { compose exec -T entryway node tests/support/external-migration.mjs "$@"; }
 case "$command" in
   fresh)
-    temp=$(mktemp -d "${TMPDIR:-/tmp}/hypercerts-entryway-e2e.XXXXXX")
+    temp=$(mktemp -d "$root/tests/.runtime/hypercerts-entryway-e2e.XXXXXX")
     export SANDBOX_CHECKOUT="$temp/atmosphereinabox"
     export SANDBOX_PROJECT="hypercerts-entryway-$(date +%s)-$$"
     export ACCEPTANCE_REPORT_DIR="$root/tests/artifacts/$SANDBOX_PROJECT"
@@ -71,6 +71,9 @@ case "$command" in
     ;;
   up)
     require_state
+    if [[ "${DATABASE_BACKEND:-sqlite}" == postgresql ]]; then
+      compose up -d --wait entryway-postgres
+    fi
     deno task sandbox up --build
     compose build test browser
     deno task sandbox access --json > "$sandbox/access.json"
@@ -79,6 +82,21 @@ case "$command" in
   contracts)
     require_state
     compose run --rm --no-deps test node tests/support/run-contracts.mjs
+    ;;
+  database-contracts)
+    require_state
+    compose up -d --wait entryway-postgres
+    for backend in sqlite postgresql; do
+      result=0
+      compose run --rm --no-deps -e "CONTRACT_DATABASE_BACKEND=$backend" -e CONTRACT_DATABASE_URL=postgresql://authority_owner@entryway-postgres/account_authority test node tests/support/run-database-contracts.mjs > "$artifacts/database-$backend.log" 2>&1 || result=$?
+      printf '%s\n' "$result" > "$artifacts/database-$backend.exit"
+      cat "$artifacts/database-$backend.log"
+      (( result == 0 )) || exit "$result"
+    done
+    bash "$root/tests/support/run-postgresql-profile.sh"
+    ;;
+  database-profile)
+    bash "$root/tests/support/run-postgresql-profile.sh"
     ;;
   browser)
     require_state
@@ -157,7 +175,7 @@ case "$command" in
     deno task sandbox status
     ;;
   *)
-    echo 'Usage: ./tests/local.sh fresh|prepare|up|browser|contracts|migration|migration-resume|reverify|interop-profile|plc-recovery|process-crash|authority-drills|resilience|all|status|down'
+    echo 'Usage: ./tests/local.sh fresh|prepare|up|browser|contracts|database-contracts|database-profile|migration|migration-resume|reverify|interop-profile|plc-recovery|process-crash|authority-drills|resilience|all|status|down'
     echo 'all requires a fresh project fixture; down retains state and volumes. No implicit reset.'
     ;;
 esac

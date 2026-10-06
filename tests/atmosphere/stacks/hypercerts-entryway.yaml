@@ -5,11 +5,30 @@ x-runtime: &runtime
     dockerfile: tests/support/Dockerfile
   init: true
   environment: &runtime-env
+    DATABASE_BACKEND: ${DATABASE_BACKEND:-sqlite}
+    DATABASE_URL: ${DATABASE_URL:-}
+    DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:-single-node}
     SERVICE_CONFIG_PATH: /config/config.json
     NODE_EXTRA_CA_CERTS: /ca/root.crt
     LOG_LEVEL: warn
   networks: [atmosinabox]
 services:
+  entryway-postgres:
+    image: postgres:16.15-alpine3.24
+    profiles: [database]
+    environment:
+      POSTGRES_DB: account_authority
+      POSTGRES_USER: authority_owner
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - entryway-postgres-data:/var/lib/postgresql/data
+      - database-profile-backup:/backup
+    networks: [atmosinabox]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U authority_owner -d account_authority]
+      interval: 1s
+      timeout: 3s
+      retries: 30
   configure:
     <<: *runtime
     command: node tests/support/configure.mjs
@@ -90,6 +109,7 @@ services:
       - entryway-config:/config:ro
       - entryway-data:/entryway-data:ro
       - mail-capture-data:/capture:ro
+      - database-profile-data:/profile
       - source-fixture-token:/run/secrets:ro
       - ../artifacts:/app/artifacts:z
     depends_on:
@@ -117,6 +137,9 @@ services:
       pds2: { condition: service_healthy }
     shm_size: 1gb
 volumes:
+  entryway-postgres-data: {}
+  database-profile-data: {}
+  database-profile-backup: {}
   entryway-config: {}
   entryway-data: {}
   cluster1-data: {}

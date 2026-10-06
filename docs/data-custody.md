@@ -26,14 +26,15 @@ The current code refactor does not require upgrading existing databases.
 | Public custody evidence | Identity | Import-time custody inventory; not a complete key lifecycle registry |
 | Repository, blobs and repository key | Hosting PDS | Reference PDS-managed storage |
 
-The current SQLite implementation stores account authority, browser authentication, OAuth state, mail
-and workflow journals in `account-authority.sqlite` under `STATE_DIRECTORY`
-(default `/data`). Table and variable names describe their purpose, without
+The database boundary stores account authority, browser authentication, OAuth
+state, mail and workflow journals in one selected database: `account-authority.sqlite`
+under `STATE_DIRECTORY` (default `/data`) for SQLite, or the configured PostgreSQL
+database. Table and variable names describe their purpose, without
 project prefixes. `accounts` stores DID authority; `account_bindings` links a DID
 to a verified Better Auth user, while Better Auth owns the distinct `account`
 table. `email_claims`, `handle_claims` and `backup_emails` hold account claims;
 `migration_reservations` holds destination reservations; `key_value_state` holds
-namespaced JSON state; `schema_migrations` records schema initialization.
+namespaced JSON state; `schema_identity` records the exact fresh schema asset hash.
 
 This naming change starts from a fresh database. There is no data conversion,
 old-name alias or automatic upgrade from the earlier schema. New installs and
@@ -41,12 +42,16 @@ sandbox runs initialize the renamed schema directly. Backups must come from the
 same schema generation. Upstream PDS configuration keys retain their mandated
 names.
 
-The target database boundary uses Drizzle ORM `1.0.0-rc.4` for SQLite and
+The implemented database boundary uses Drizzle ORM `1.0.0-rc.4` for SQLite and
 PostgreSQL. Single-node operation supports either database; multi-node operation
 requires PostgreSQL. Both must preserve the same identity, uniqueness and atomicity rules;
 dialect-specific indexes, JSON queries, timestamps and error translation stay
 inside the database adapter. Fresh schemas replace old layouts without a data
-conversion path. The existing ePDS deployment-conversion requirement is separate.
+conversion path. Focused contracts verify both dialects; full fresh acceptance
+and the authored PostgreSQL application restart/restore profile remain unrun.
+Shared operation/mail ownership and replica failover remain implementation work.
+See [database configuration](database.md). The existing ePDS deployment-conversion
+requirement is separate.
 
 ## 2. Logical model
 
@@ -148,9 +153,10 @@ The target allows many historical transfers per DID, with at most one active tra
 - Keep snapshot payloads outside account rows; verify their manifest and digests before reuse.
 - Retain history when completing a transfer. Release only its active-operation reservation.
 
-The import already contains SQLite constraints, transactional migrations and journal primitives.
-It also contains JSON compatibility state and direct provider-table integration.
-Extract those boundaries without discarding the existing consistency rules.
+The database foundation retains the imported account constraints and journal
+invariants in fresh Drizzle schemas and transactional operations. Namespaced JSON
+state and pinned provider-table integration stay inside the database boundary.
+Repeatable transfer history and durable operation ownership remain separate work.
 
 ## 4. Custody boundaries
 

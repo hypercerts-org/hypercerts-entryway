@@ -25,9 +25,9 @@ spike/replay runtime sources were found identical and are historical references.
 | MJS orchestration | Feature operation bodies and thin handlers are extracted; retained MJS remains outside strict TS coverage |
 | ePDS consent behaviour | Preserve approved returning-client and eligible trusted-signup behaviour |
 | Account UI composition | Consume domain APIs instead of direct grant/store mutations |
-| Better Auth table integration | Share the Drizzle transaction context; preserve atomic email binding on SQLite and PostgreSQL |
-| Database boundary | Pin Drizzle ORM `1.0.0-rc.4`, replace raw SQLite coupling with asynchronous operations and fresh schemas for both dialects |
-| Replica coordination | Replace local locks with durable ownership, atomic counters/challenges and mail claims |
+| Better Auth table integration | Shared physical Drizzle transactions and atomic email binding implemented and focused-tested on both dialects; full application acceptance remains unrun |
+| Database boundary | Exact Drizzle ORM `1.0.0-rc.4`, async operations and fresh SQLite/PostgreSQL schemas implemented; see [database contracts](database.md) for verification limits |
+| Replica coordination | Atomic counters/challenges and grant mutation implemented in the database foundation; durable operation ownership and mail claims remain work |
 | Resilience deployment | Add readiness/draining, shared state and two-instance failover verification |
 | Production mail | Configure real transport/sender; some extra XRPC email paths only record captured mail and report sent |
 | Fleet registry | Replace static-only configuration with add, placement exclusion, drain and retirement operations |

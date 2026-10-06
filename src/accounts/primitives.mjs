@@ -3,11 +3,14 @@ import { HttpError } from "../http/http-error.mjs";
 import { xrpc } from "../pds/client.mjs";
 
 export function createAccountPrimitives({ db, config, storage }) {
-  const claimHandle = (handle, did) => storage.reserveHandle(handle, did);
-  const get = (id) =>
-    storage.getByDid(id) ?? storage.getByEmail(id) ?? storage.getByHandle(id);
-  const list = () => storage.listAccounts();
-  const save = (row) => storage.saveAccount(row);
+  const claimHandle = async (handle, did) =>
+    await storage.reserveHandle(handle, did);
+  const get = async (id) =>
+    (await storage.getByDid(id)) ??
+    (await storage.getByEmail(id)) ??
+    (await storage.getByHandle(id));
+  const list = async () => await storage.listAccounts();
+  const save = async (row) => await storage.saveAccount(row);
   const pdsFor = (row) => config.pds.find((p) => p.id === row.pdsId);
   const admin = (row, nsid, body) => {
     const p = pdsFor(row);
@@ -18,10 +21,10 @@ export function createAccountPrimitives({ db, config, storage }) {
       `Basic ${Buffer.from(`admin:${p.adminPassword}`).toString("base64")}`,
     );
   };
-  const journal = (event) => db.set("operations", event.id, event);
-  const assertNoMigration = (did) => {
-    const operation = db.get("migration:operations", `migrate:${did}`);
-    const external = storage.hasPendingExternalMigration(did);
+  const journal = async (event) => await db.set("operations", event.id, event);
+  const assertNoMigration = async (did) => {
+    const operation = await db.get("migration:operations", `migrate:${did}`);
+    const external = await storage.hasPendingExternalMigration(did);
     if ((operation && operation.phase !== "complete") || external)
       throw new HttpError(
         409,
@@ -29,7 +32,7 @@ export function createAccountPrimitives({ db, config, storage }) {
         "Finish the pending PDS migration before changing this account",
       );
   };
-  const validateHandle = (handle, did) => {
+  const validateHandle = async (handle, did) => {
     if (config.publicHandles && !config.publicHandles.includes(handle))
       throw new HttpError(
         400,
@@ -62,14 +65,14 @@ export function createAccountPrimitives({ db, config, storage }) {
       ].includes(handle)
     )
       throw new HttpError(400, "InvalidHandle", "This handle is reserved");
-    const claim = storage.getHandleClaim(handle);
+    const claim = await storage.getHandleClaim(handle);
     if (claim && claim !== did)
       throw new HttpError(
         409,
         "HandleNotAvailable",
         "This handle is already reserved",
       );
-    const existing = get(handle);
+    const existing = await get(handle);
     if (existing && existing.did !== did)
       throw new HttpError(
         409,

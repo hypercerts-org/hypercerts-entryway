@@ -9,7 +9,7 @@ export function createAccountReconciler({
 }) {
   const reconcile = async () => {
     const results = [];
-    for (const row of list()) {
+    for (const row of await list()) {
       if (
         row.status === "deactivated" &&
         row.deleteAfter &&
@@ -30,11 +30,11 @@ export function createAccountReconciler({
         }
       }
     }
-    for (const { value: op } of db.list("operations")) {
+    for (const { value: op } of await db.list("operations")) {
       if (op.phase === "complete") continue;
       try {
         if (op.kind === "create") {
-          const a = get(op.did);
+          const a = await get(op.did);
           await create({ email: a.email, handle: a.handle, pdsId: a.pdsId });
         } else if (op.kind === "handle") await updateHandle(op.did, op.handle);
         else if (op.kind === "status")

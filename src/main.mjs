@@ -1,17 +1,17 @@
 import { mkdirSync } from "node:fs";
 import { loadConfig } from "./config.mjs";
 import { createApp } from "./app.mjs";
-import { openDatabase } from "./database/sqlite/connection.mjs";
+import { openDatabase } from "./database/connection.js";
 import { createMailFeature } from "./mail/create-mail.js";
-import { createSqliteMailOutbox } from "./database/sqlite/mail-outbox.js";
+import { createMailOutbox } from "./database/drizzle/mail-outbox.js";
 import { createSmtpMailTransport } from "./mail/smtp.js";
 
-const config = loadConfig();
+const config = await loadConfig();
 const dataDir = process.env.STATE_DIRECTORY ?? "/data";
 mkdirSync(dataDir, { recursive: true });
-const db = openDatabase(`${dataDir}/account-authority.sqlite`);
+const db = await openDatabase(config.database);
 const mail = createMailFeature({
-  outbox: createSqliteMailOutbox(db.sqlite),
+  outbox: createMailOutbox(db),
   transport: createSmtpMailTransport({
     host: process.env.MAIL_SMTP_HOST ?? "mail-capture",
     port: Number(process.env.MAIL_SMTP_PORT ?? 2525),
@@ -51,8 +51,8 @@ for (const signal of ["SIGTERM", "SIGINT"])
   process.on(signal, () => {
     clearInterval(repairTimer);
     clearInterval(mailTimer);
-    server.close(() => {
-      db.close();
+    server.close(async () => {
+      await db.close();
       process.exit(0);
     });
   });

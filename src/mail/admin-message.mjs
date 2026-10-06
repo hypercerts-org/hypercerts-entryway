@@ -1,7 +1,7 @@
 import { fail } from "../accounts/input.mjs";
 
 export async function createAdminMessage({ db }) {
-  const sendEmail = (
+  const sendEmail = async (
     row,
     {
       content,
@@ -17,7 +17,7 @@ export async function createAdminMessage({ db }) {
       typeof senderDid !== "string"
     )
       fail("InvalidRequest", "Provide bounded email content and senderDid");
-    db.set("mail-outbox", crypto.randomUUID(), {
+    await db.set("mail-outbox", crypto.randomUUID(), {
       email: row.email,
       recipientDid: row.did,
       content,

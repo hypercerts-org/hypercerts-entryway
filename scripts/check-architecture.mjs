@@ -68,15 +68,25 @@ export function moduleViolations(source, filename, appRoot, options) {
     );
   for (const { specifier, typeOnly } of referencesIn(source, filename)) {
     if (
+      /^(?:better-auth\/adapters\/drizzle|@better-auth\/drizzle-adapter)(?:\/|$)/.test(
+        specifier,
+      ) &&
+      !owner.startsWith("database/")
+    )
+      violations.push(
+        `${specifier}: authentication database adapter belongs to database`,
+      );
+    if (
       /^better-auth(?:\/|$)/.test(specifier) &&
       !owner.startsWith("authentication/") &&
-      owner !== "database/sqlite/account-authority.mjs"
+      owner !== "database/drizzle/account-authority.mjs" &&
+      owner !== "database/connection.ts"
     )
       violations.push(
         `${specifier}: Better Auth belongs to authentication or the pinned authority database helper`,
       );
     if (
-      /^(?:better-sqlite3|node:sqlite|sqlite3|kysely)(?:\/|$)/.test(
+      /^(?:better-sqlite3|node:sqlite|sqlite3|kysely|drizzle-orm|pg|pg-pool)(?:\/|$)/.test(
         specifier,
       ) &&
       !owner.startsWith("database/")
@@ -89,7 +99,7 @@ export function moduleViolations(source, filename, appRoot, options) {
       violations.push(`${specifier}: SMTP belongs to mail`);
     if (
       pure &&
-      /^(?:express|better-auth|better-sqlite3|sqlite3|kysely|node:sqlite|node:https?|https?|@atproto\/xrpc-server)(?:\/|$)/.test(
+      /^(?:express|better-auth|better-sqlite3|sqlite3|kysely|drizzle-orm|pg|pg-pool|node:sqlite|node:https?|https?|@atproto\/xrpc-server)(?:\/|$)/.test(
         specifier,
       )
     )
@@ -113,15 +123,32 @@ export function moduleViolations(source, filename, appRoot, options) {
     ];
     const packageName = resolvedPackages.at(-1)?.[1];
     if (
+      (packageName === "@better-auth/drizzle-adapter" ||
+        (packageName === "better-auth" &&
+          /\/adapters\/drizzle(?:-adapter)?\//.test(normalize(resolved)))) &&
+      !owner.startsWith("database/")
+    )
+      violations.push(
+        `${specifier}: resolved authentication database adapter belongs to database`,
+      );
+    if (
       packageName === "better-auth" &&
       !owner.startsWith("authentication/") &&
-      owner !== "database/sqlite/account-authority.mjs"
+      owner !== "database/drizzle/account-authority.mjs" &&
+      owner !== "database/connection.ts"
     )
       violations.push(
         `${specifier}: resolved Better Auth belongs to authentication`,
       );
     if (
-      ["better-sqlite3", "sqlite3", "kysely"].includes(packageName) &&
+      [
+        "better-sqlite3",
+        "sqlite3",
+        "kysely",
+        "drizzle-orm",
+        "pg",
+        "pg-pool",
+      ].includes(packageName) &&
       !owner.startsWith("database/")
     )
       violations.push(`${specifier}: resolved SQL belongs to database`);
@@ -137,6 +164,9 @@ export function moduleViolations(source, filename, appRoot, options) {
         "better-sqlite3",
         "sqlite3",
         "kysely",
+        "drizzle-orm",
+        "pg",
+        "pg-pool",
         "express",
         "@atproto/xrpc-server",
       ].includes(packageName)

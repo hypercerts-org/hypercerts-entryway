@@ -28,11 +28,15 @@ export async function createApp({ config, db, mail }) {
       pds: config.pds.map(({ id, url }) => ({ id, url })),
     }),
   );
-  app.get("/.well-known/atproto-did", (req, res) => {
-    const account = accounts.get(req.hostname);
-    if (!account || ["deleted", "provisioning"].includes(account.status))
-      return res.sendStatus(404);
-    res.type("text/plain").send(account.did);
+  app.get("/.well-known/atproto-did", async (req, res, next) => {
+    try {
+      const account = await accounts.get(req.hostname);
+      if (!account || ["deleted", "provisioning"].includes(account.status))
+        return res.sendStatus(404);
+      res.type("text/plain").send(account.did);
+    } catch (error) {
+      next(error);
+    }
   });
   app.get("/.well-known/did.json", (_req, res) =>
     res.json({
@@ -75,7 +79,7 @@ export async function createApp({ config, db, mail }) {
     config,
     accounts,
   });
-  accounts.setProvisionPolicy({
+  await accounts.setProvisionPolicy({
     reserve: protocolOperations.reserveInvite,
     complete: protocolOperations.completeInvite,
   });
@@ -86,32 +90,36 @@ export async function createApp({ config, db, mail }) {
     legacy,
     security,
   });
-  app.get("/_ready", (req, res) => {
-    const expected = Buffer.from(
-      `Basic ${Buffer.from(`admin:${config.adminPassword}`).toString("base64")}`,
-    );
-    const supplied = Buffer.from(req.get("authorization") ?? "");
-    if (
-      expected.length !== supplied.length ||
-      !timingSafeEqual(expected, supplied)
-    ) {
-      return res.sendStatus(401);
-    }
-    res.json({
-      status: "ready",
-      schema: db.schema,
-      pending: db.pendingCounts(),
-      custody: {
-        accountBinding: true,
-        managedMigration: true,
-        externalMigration: {
-          operatorFixtureConfigured: Boolean(
-            process.env.SOURCE_FIXTURE_URL &&
-            process.env.SOURCE_FIXTURE_TOKEN_FILE,
-          ),
+  app.get("/_ready", async (req, res, next) => {
+    try {
+      const expected = Buffer.from(
+        `Basic ${Buffer.from(`admin:${config.adminPassword}`).toString("base64")}`,
+      );
+      const supplied = Buffer.from(req.get("authorization") ?? "");
+      if (
+        expected.length !== supplied.length ||
+        !timingSafeEqual(expected, supplied)
+      ) {
+        return res.sendStatus(401);
+      }
+      res.json({
+        status: "ready",
+        schema: db.schema,
+        pending: await db.pendingCounts(),
+        custody: {
+          accountBinding: true,
+          managedMigration: true,
+          externalMigration: {
+            operatorFixtureConfigured: Boolean(
+              process.env.SOURCE_FIXTURE_URL &&
+              process.env.SOURCE_FIXTURE_TOKEN_FILE,
+            ),
+          },
         },
-      },
-    });
+      });
+    } catch (error) {
+      next(error);
+    }
   });
   let repairPromise;
   const reconcile = () => {

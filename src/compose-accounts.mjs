@@ -1,6 +1,6 @@
 import * as plc from "@did-plc/lib";
 import { Secp256k1Keypair } from "@atproto/crypto";
-import { createSqliteAccountStorage } from "./database/sqlite/sqlite-account-storage.js";
+import { createAccountStorage } from "./database/drizzle/account-storage.js";
 import { createAccountPrimitives } from "./accounts/primitives.mjs";
 import { createRegistration } from "./features/account-registration/create-account.mjs";
 import { createHandleChange } from "./features/handle-change/change-handle.mjs";
@@ -14,7 +14,7 @@ export async function createAccounts({ db, config }) {
     Buffer.from(config.plcRotationKeyHex, "hex"),
   );
   const plcClient = new plc.Client(config.plcUrl);
-  const storage = createSqliteAccountStorage(db.sqlite, config.pds);
+  const storage = createAccountStorage(db, config.pds);
   const shared = createAccountPrimitives({ db, config, storage });
   const context = { db, config, rotation, plcClient, ...shared };
   const registration = createRegistration(context);

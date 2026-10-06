@@ -14,7 +14,7 @@ test("provisioning retries reuse the persisted DID and signed operation after a 
     }
   });
   await assert.rejects(accounts.create(alice), { error: "Unavailable" });
-  const pending = accounts.get(alice.email);
+  const pending = await accounts.get(alice.email);
   assert.equal(pending.status, "provisioning");
   assert.ok(pending.op);
   const recovered = await accounts.create(alice);
@@ -29,7 +29,10 @@ test("provisioning retries reuse the persisted DID and signed operation after a 
       .length,
     1,
   );
-  assert.equal(db.get("operations", `create:${pending.did}`).phase, "complete");
+  assert.equal(
+    (await db.get("operations", `create:${pending.did}`)).phase,
+    "complete",
+  );
 });
 test("concurrent provisioning coalesces matching requests and rejects conflicting email ownership", async (t) => {
   const { accounts, calls } = await fixture(t);

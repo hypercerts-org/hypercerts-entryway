@@ -16,14 +16,14 @@ export function mountAccountRegistrationXrpc({
 }) {
   app.post("/signup/request-code", async (req, res, next) => {
     try {
-      protocolOperations.rateLimit(`signup-ip:${req.ip}`, 30);
-      res.json(protocolOperations.requestSignup(req.body));
+      await protocolOperations.rateLimit(`signup-ip:${req.ip}`, 30);
+      res.json(await protocolOperations.requestSignup(req.body));
     } catch (e) {
       next(e);
     }
   });
   route("post", "server.createAccount", async (req) => {
-    protocolOperations.rateLimit(`create-ip:${req.ip}`, 30);
+    await protocolOperations.rateLimit(`create-ip:${req.ip}`, 30);
     if (req.body.did) {
       const result = await migration.importAccount(
         await migrationPrincipal(req),
@@ -66,25 +66,25 @@ export function mountAccountRegistrationXrpc({
         "Password must contain 12 to 256 characters",
       );
     if (!(session?.emailVerified && session.email.toLowerCase() === normalized))
-      protocolOperations.verifySignup({
+      await protocolOperations.verifySignup({
         email: normalized,
         token: verificationPhone
           ? req.body.emailVerificationCode
           : verificationCode,
       });
     if (verificationPhone)
-      protocolOperations.verifyPhone({
+      await protocolOperations.verifyPhone({
         phoneNumber: verificationPhone,
         token: verificationCode,
       });
-    const prior = accounts.get(normalized);
+    const prior = await accounts.get(normalized);
     if (prior && prior.status !== "provisioning")
       throw new HttpError(
         409,
         "AccountExists",
         "This email already has an account",
       );
-    protocolOperations.reserveInvite(inviteCode, normalized);
+    await protocolOperations.reserveInvite(inviteCode, normalized);
     const account = await accounts.create({
       email: normalized,
       handle,
@@ -98,24 +98,27 @@ export function mountAccountRegistrationXrpc({
       userId: session?.email === normalized ? session.userId : undefined,
     });
     if (password) await legacy.setPassword(account.did, password);
-    protocolOperations.completeInvite(account);
-    return legacy.createAccountSession(account.did);
+    await protocolOperations.completeInvite(account);
+    return await legacy.createAccountSession(account.did);
   });
-  authenticatedRoute("get", "server.getAccountInviteCodes", (req, a) =>
-    protocolOperations.getAccountInviteCodes(a, {
-      includeUsed: req.query.includeUsed !== "false",
-    }),
+  authenticatedRoute(
+    "get",
+    "server.getAccountInviteCodes",
+    async (req, a) =>
+      await protocolOperations.getAccountInviteCodes(a, {
+        includeUsed: req.query.includeUsed !== "false",
+      }),
   );
-  route("post", "server.createInviteCode", (req) => {
-    admin(req, req.body.forAccount);
-    return protocolOperations.createInviteCode(req.body);
+  route("post", "server.createInviteCode", async (req) => {
+    await admin(req, req.body.forAccount);
+    return await protocolOperations.createInviteCode(req.body);
   });
   authenticatedRoute("get", "temp.checkSignupQueue", (_req, a) => ({
     activated: a.status === "active",
     ...(a.status === "provisioning" ? { placeInQueue: 1 } : {}),
   }));
-  route("post", "temp.requestPhoneVerification", (req) => {
-    protocolOperations.rateLimit(`phone-ip:${req.ip}`, 30);
-    return protocolOperations.requestPhoneVerification(req.body);
+  route("post", "temp.requestPhoneVerification", async (req) => {
+    await protocolOperations.rateLimit(`phone-ip:${req.ip}`, 30);
+    return await protocolOperations.requestPhoneVerification(req.body);
   });
 }

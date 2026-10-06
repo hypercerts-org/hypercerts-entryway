@@ -3,6 +3,8 @@ import { join, relative, resolve } from "node:path";
 
 const unitContracts = new Set([
   "oauth-stores.test.mjs",
+  "database-boundary.test.mjs",
+  "synthetic-client.test.mjs",
   "service-auth.test.mjs",
   "legacy.test.mjs",
   "account-security.test.mjs",

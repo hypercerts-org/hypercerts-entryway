@@ -14,7 +14,9 @@ Email OTP and ePDS login behaviour are in scope. Google/GitHub OIDC is roadmap
 work excluded from initial delivery. Scaling, balancing and failover are in scope
 for resilience. The database target is SQLite and PostgreSQL through Drizzle ORM
 `1.0.0-rc.4`: single-node operation supports SQLite or PostgreSQL; multi-node
-operation requires PostgreSQL. Current direct SQLite access is a baseline, not the target boundary.
+operation requires PostgreSQL. The asynchronous Drizzle foundation is authored and
+covered by focused contracts; full deployment acceptance and replica coordination
+remain separate work. See [database configuration](docs/database.md).
 Code refactors require neither backward compatibility nor existing-data upgrades.
 Public account migration and existing ePDS deployment conversion remain in scope.
 Use the existing PDS Entryway hooks and XRPC contracts. Do not fork, patch, or
@@ -32,7 +34,7 @@ src/
   features/          One operation, its routes, pages and tests in each feature
   authentication/    Browser proof/session port and Better Auth implementation
   mail/              Sending port, SMTP, templates and durable delivery
-  database/          Persistence ports, SQLite adapters and ordered migrations
+  database/          Persistence ports, Drizzle adapters and fresh schemas
   accounts/          Shared account values, validation and proof primitives
   pds/               Concrete PDS clients
   plc/               Concrete PLC clients and authorized signing

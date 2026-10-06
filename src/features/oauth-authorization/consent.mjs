@@ -18,15 +18,15 @@ export function createConsent({ db, provider, stores, flows }) {
       row.did,
     );
     flow.authDid = row.did;
-    save(flow);
+    await save(flow);
     if (!flow.requestUri) {
-      db.delete("auth-flows", flow.id);
+      await db.delete("auth-flows", flow.id);
       return res.redirect(303, "/account");
     }
     return pageForFlow(
       res,
       "Authorize application",
-      consentForm(flow, browser, stores.account(row.did)),
+      consentForm(flow, browser, await stores.account(row.did)),
       flow,
       200,
       { formOrigin: new URL(flow.parameters.redirect_uri).origin },

@@ -77,17 +77,12 @@
       "kind": "preserved/extracted MJS; checkJs remains false"
     },
     {
-      "path": "src/database/sqlite/account-authority.mjs",
+      "path": "src/database/drizzle/account-authority.mjs",
       "owner": "database",
       "kind": "preserved/extracted MJS; checkJs remains false"
     },
     {
-      "path": "src/database/sqlite/connection.mjs",
-      "owner": "database",
-      "kind": "preserved/extracted MJS; checkJs remains false"
-    },
-    {
-      "path": "src/database/sqlite/oauth-stores.mjs",
+      "path": "src/database/drizzle/oauth-stores.mjs",
       "owner": "database",
       "kind": "preserved/extracted MJS; checkJs remains false"
     },
@@ -255,6 +250,11 @@
       "path": "src/features/handle-change/xrpc-routes.mjs",
       "owner": "handle-change",
       "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
+      "path": "src/features/handle-change/xrpc-routes.test.mjs",
+      "owner": "handle-change",
+      "kind": "co-located contract test"
     },
     {
       "path": "src/features/oauth-authorization/authorization-routes.mjs",

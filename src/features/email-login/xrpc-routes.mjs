@@ -24,8 +24,8 @@ export function mountEmailLoginXrpc({
       next(e);
     }
   });
-  route("post", "server.createSession", (req) => {
-    protocolOperations.rateLimit(`login-ip:${req.ip}`, 60);
+  route("post", "server.createSession", async (req) => {
+    await protocolOperations.rateLimit(`login-ip:${req.ip}`, 60);
     return legacy.createSession(req.body);
   });
   route("post", "server.refreshSession", (req) =>

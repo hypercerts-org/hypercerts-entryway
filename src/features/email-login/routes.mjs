@@ -64,7 +64,7 @@ export function mountEmailLogin({
         429,
       );
     const limitKey = `${email}/${Math.floor(now / 600_000)}`;
-    const count = db.get("otp-limits", limitKey) ?? 0;
+    const count = (await db.get("otp-limits", limitKey)) ?? 0;
     if (count >= 5)
       return pageForFlow(
         res,
@@ -79,14 +79,14 @@ export function mountEmailLogin({
         429,
       );
     if (flow.email && flow.email !== email)
-      mail.supersedeOtp({ email: flow.email, type: "sign-in" });
-    db.set("otp-limits", limitKey, count + 1);
+      await mail.supersedeOtp({ email: flow.email, type: "sign-in" });
+    await db.set("otp-limits", limitKey, count + 1);
     flow.email = email;
     flow.otpRequestCount = (flow.otpRequestCount ?? 0) + 1;
     flow.lastOtpSentAt = now;
     delete flow.authDid;
     delete flow.authEmail;
-    save(flow);
+    await save(flow);
     try {
       await authentication.sendSignInCode(email);
     } catch {
@@ -109,7 +109,7 @@ export function mountEmailLogin({
     "/login",
     guarded(async (req, res) => {
       const browser = await loadBrowser(req, res);
-      const flow = newFlow(browser);
+      const flow = await newFlow(browser);
       page(res, "Sign in", loginForm(flow, browser));
     }),
   );
@@ -156,7 +156,7 @@ export function mountEmailLogin({
         identity.email.toLowerCase() !== flow.email
       )
         throw new InvalidRequestError("Email verification did not complete");
-      getAccountSecurity()?.assertLoginEmail({
+      await getAccountSecurity()?.assertLoginEmail({
         email: flow.email,
         userId: identity.userId,
       });
@@ -164,13 +164,13 @@ export function mountEmailLogin({
       // Rotate the provider's browser session after successful identity verification.
       const rotated = await loadBrowser(req, res, true);
       flow.authEmail = identity.email.toLowerCase();
-      save(flow);
-      const row = accounts.get(flow.authEmail);
+      await save(flow);
+      const row = await accounts.get(flow.authEmail);
       if (!row || row.status === "provisioning")
         return pageForFlow(
           res,
           "Create your account",
-          signupForm(flow, rotated),
+          await signupForm(flow, rotated),
           flow,
         );
       await authenticated(req, res, flow, rotated, row);
