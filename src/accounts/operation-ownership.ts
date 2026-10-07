@@ -200,9 +200,9 @@ export function createOperationOwnership({
               }
             }, heartbeatMs).unref()
           : undefined;
-        let failure: unknown;
+        let outcome: { ok: true; value: T } | { ok: false; error: unknown };
         try {
-          return await execution.run(context, () =>
+          const value = await execution.run(context, () =>
             store.runFenced(claim, async () => {
               await assertActive();
               const result = await operation();
@@ -216,8 +216,9 @@ export function createOperationOwnership({
               return result;
             }),
           );
+          outcome = { ok: true, value };
         } catch (error) {
-          failure = error;
+          let failure: unknown = error;
           if (error instanceof CompletedPlcRejection && error.claim === claim) {
             try {
               await store.rejectPlcSubmission(
@@ -231,26 +232,28 @@ export function createOperationOwnership({
               failure = settlementError;
             }
           }
-          throw failure;
-        } finally {
-          context.active = false;
-          if (timer) clearInterval(timer);
-          await renewal;
-          const code =
-            failure &&
-            typeof failure === "object" &&
-            "code" in failure &&
-            typeof failure.code === "string"
-              ? failure.code
-              : undefined;
-          try {
-            if (!context.settled) await store.release(claim, code);
-          } catch (error) {
-            // An expired/replaced owner must not release the new attempt's admission.
-            // Preserve the original operation failure when both paths fail.
-            if (!failure) throw error;
-          }
+          outcome = { ok: false, error: failure };
         }
+        context.active = false;
+        if (timer) clearInterval(timer);
+        await renewal;
+        const failure = outcome.ok ? undefined : outcome.error;
+        const code =
+          failure &&
+          typeof failure === "object" &&
+          "code" in failure &&
+          typeof failure.code === "string"
+            ? failure.code
+            : undefined;
+        try {
+          if (!context.settled) await store.release(claim, code);
+        } catch (error) {
+          // An expired/replaced owner must not release the new attempt's admission.
+          // Preserve every original thrown value, including undefined and false.
+          if (outcome.ok) outcome = { ok: false, error };
+        }
+        if (!outcome.ok) throw outcome.error;
+        return outcome.value;
       });
     queue.set(resource, next);
     try {

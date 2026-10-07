@@ -1,8 +1,10 @@
 import { xrpc } from "../../dist/src/pds/client.mjs";
 import { rejectedPlcSubmission } from "../../dist/src/pds/xrpc-response.js";
-import { noExternalResult } from "../../dist/src/accounts/operation-ownership.js";
 import { createAccounts } from "../../dist/src/compose-accounts.mjs";
-import { createOperationOwnership } from "../../dist/src/accounts/operation-ownership.js";
+import {
+  createOperationOwnership,
+  noExternalResult,
+} from "../../dist/src/accounts/operation-ownership.js";
 import { pauseVerificationConsumption } from "./verification-barrier.mjs";
 import { openDatabase } from "../../dist/src/database/connection.js";
 import { createOperationOwnershipStore } from "../../dist/src/database/drizzle/operation-ownership.js";
@@ -225,7 +227,7 @@ process.on("message", async ({ id, command, args }) => {
           break;
         }
         if (!["operations", "accounts"].includes(args.pause))
-          throw Error("InvalidSchedulerBarrier");
+          throw new Error("InvalidSchedulerBarrier");
         const object =
           args.pause === "operations" ? db : accountOperations.storage;
         const method = args.pause === "operations" ? "list" : "listAccounts";
@@ -391,7 +393,7 @@ process.on("message", async ({ id, command, args }) => {
         result = null;
         break;
       default:
-        throw Error("InvalidWorkerCommand");
+        throw new Error("InvalidWorkerCommand");
     }
     process.send({ id, ok: true, result });
   } catch (error) {

@@ -2,9 +2,9 @@
 import Database from "better-sqlite3";
 const action = process.argv[2];
 if (!["disable", "restore"].includes(action))
-  throw Error("InvalidProfileFault");
+  throw new Error("InvalidProfileFault");
 if (process.env.DATABASE_BACKEND !== "sqlite")
-  throw Error("ExpectedSQLiteProfile");
+  throw new Error("ExpectedSQLiteProfile");
 const db = new Database("/data/account-authority.sqlite");
 try {
   db.exec(

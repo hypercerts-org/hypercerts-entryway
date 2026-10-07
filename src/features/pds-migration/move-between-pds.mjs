@@ -993,8 +993,7 @@ export async function createAccountMigration({
               async () => {
                 const current = await read(value.did);
                 if (
-                  !current ||
-                  current.authorityOperationId !== operationId ||
+                  current?.authorityOperationId !== operationId ||
                   current.targetPdsId !== value.targetPdsId
                 )
                   throw Object.assign(

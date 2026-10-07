@@ -120,16 +120,20 @@ export function createOperationOwnershipStore(
     if (!reason) throw corrupt();
     return { status: 400, error: "InvalidRequest", reason };
   };
-  const externalRow = (row: typeof external.$inferSelect): ExternalAttempt => {
-    if (
-      !["dispatched", "acknowledged", "recovery-approved", "rejected"].includes(
-        row.state,
-      ) ||
-      !Number.isSafeInteger(row.fence) ||
-      row.fence < 1 ||
-      !/^[a-f0-9]{64}$/.test(row.intent_digest)
-    )
-      throw corrupt();
+  const externalState = (state: string): ExternalAttempt["state"] => {
+    switch (state) {
+      case "dispatched":
+      case "acknowledged":
+      case "recovery-approved":
+      case "rejected":
+        return state;
+      default:
+        throw corrupt();
+    }
+  };
+  const recoveryHistoryFor = (
+    row: typeof external.$inferSelect,
+  ): RecoveryAuthorization[] => {
     const rawHistory = row.recovery === null ? [] : parse(row.recovery);
     if (!Array.isArray(rawHistory) || rawHistory.length > 2) throw corrupt();
     const recoveryHistory = rawHistory.map(recoveryValue);
@@ -140,19 +144,33 @@ export function createOperationOwnershipStore(
         authorization.operationId !== row.operation_id ||
         authorization.externalAttemptId !== row.id ||
         authorization.executionAttemptId !== row.execution_attempt_id ||
-        authorization.target !== row.target ||
-        (index === 0
-          ? authorization.previousAuthorization !== undefined
-          : !previous ||
-            previous.action !== "observe" ||
-            authorization.action !== "retry-if-safe" ||
-            authorization.id === previous.id ||
-            authorization.authorizedAt < previous.authorizedAt ||
-            authorization.previousAuthorization?.id !== previous.id ||
-            authorization.previousAuthorization.version !== previous.version)
+        authorization.target !== row.target
+      )
+        throw corrupt();
+      if (index === 0) {
+        if (authorization.previousAuthorization !== undefined) throw corrupt();
+      } else if (
+        !previous ||
+        previous.action !== "observe" ||
+        authorization.action !== "retry-if-safe" ||
+        authorization.id === previous.id ||
+        authorization.authorizedAt < previous.authorizedAt ||
+        authorization.previousAuthorization?.id !== previous.id ||
+        authorization.previousAuthorization.version !== previous.version
       )
         throw corrupt();
     }
+    return recoveryHistory;
+  };
+  const externalRow = (row: typeof external.$inferSelect): ExternalAttempt => {
+    const state = externalState(row.state);
+    if (
+      !Number.isSafeInteger(row.fence) ||
+      row.fence < 1 ||
+      !/^[a-f0-9]{64}$/.test(row.intent_digest)
+    )
+      throw corrupt();
+    const recoveryHistory = recoveryHistoryFor(row);
     const recovery = recoveryHistory.at(-1) ?? null;
     if (
       (row.state === "dispatched" && recovery !== null) ||
@@ -176,14 +194,7 @@ export function createOperationOwnershipStore(
       target: row.target,
       method: row.method,
       intentDigest: row.intent_digest,
-      state:
-        row.state === "dispatched"
-          ? "dispatched"
-          : row.state === "acknowledged"
-            ? "acknowledged"
-            : row.state === "rejected"
-              ? "rejected"
-              : "recovery-approved",
+      state,
       result,
       recovery,
       recoveryHistory,
@@ -261,8 +272,7 @@ export function createOperationOwnershipStore(
         if (
           input.kind !== "delete" ||
           input.continuation ||
-          !row ||
-          row.status !== "deactivated" ||
+          row?.status !== "deactivated" ||
           !data ||
           typeof data !== "object" ||
           !("deleteAfter" in data) ||

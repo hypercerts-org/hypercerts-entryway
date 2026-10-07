@@ -263,16 +263,9 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
     connected(async (current) => {
       const nested = current.transaction;
       const savepoint = `authority_${++current.savepoint}`;
-      await current.execute(
-        sql.raw(
-          nested
-            ? `SAVEPOINT ${savepoint}`
-            : backend === "sqlite"
-              ? "BEGIN IMMEDIATE"
-              : "BEGIN",
-        ),
-        "run",
-      );
+      let begin = backend === "sqlite" ? "BEGIN IMMEDIATE" : "BEGIN";
+      if (nested) begin = `SAVEPOINT ${savepoint}`;
+      await current.execute(sql.raw(begin), "run");
       current.transaction = true;
       try {
         // All multi-statement authority mutations serialize across independent PG

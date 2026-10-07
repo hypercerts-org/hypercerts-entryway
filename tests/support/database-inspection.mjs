@@ -24,7 +24,7 @@ export async function query(db, text, parameters = [], mode = "all") {
     } else literal += char;
   }
   if (parameter !== parameters.length || quote)
-    throw Error("InvalidContractQuery");
+    throw new Error("InvalidContractQuery");
   chunks.push(sql.raw(literal));
   const result = await db.execute(
     sql.join(chunks, sql.raw("")),
@@ -42,7 +42,7 @@ export async function failureTrigger(db, name, table, message) {
     !/^[a-z_]+$/.test(table) ||
     !/^[a-zA-Z -]+$/.test(message)
   )
-    throw Error("InvalidFailureFixture");
+    throw new Error("InvalidFailureFixture");
   if (db.backend === "sqlite")
     await query(
       db,

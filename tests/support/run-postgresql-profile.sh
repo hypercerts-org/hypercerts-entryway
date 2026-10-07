@@ -21,7 +21,10 @@ cleanup() {
 trap cleanup EXIT
 "$root/tests/local.sh" prepare > "$ACCEPTANCE_REPORT_DIR/prepare.log" 2>&1
 "$root/tests/local.sh" up > "$ACCEPTANCE_REPORT_DIR/up.log" 2>&1
-probe() { compose run --rm --no-deps test node tests/support/postgresql-profile.mjs "$1" > "$ACCEPTANCE_REPORT_DIR/$1.log" 2>&1; }
+probe() {
+  local phase="$1"
+  compose run --rm --no-deps test node tests/support/postgresql-profile.mjs "$phase" > "$ACCEPTANCE_REPORT_DIR/$phase.log" 2>&1
+}
 probe login
 compose restart entryway > "$ACCEPTANCE_REPORT_DIR/restart.log" 2>&1
 compose up -d --wait entryway >> "$ACCEPTANCE_REPORT_DIR/restart.log" 2>&1

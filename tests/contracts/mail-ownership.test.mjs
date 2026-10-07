@@ -162,6 +162,49 @@ test("mail delivered state and captured projection roll back together on persist
   assert.equal((await db.get("outbox", message.recipient)).otp, message.code);
 });
 
+test("delivery persistence failure is not classified or retried as an SMTP rejection", async (t) => {
+  const { db, first } = await fixture(t);
+  let sends = 0;
+  let transportFailures = 0;
+  const mail = createMailFeature({
+    outbox: {
+      ...first,
+      async markFailure(...args) {
+        transportFailures++;
+        return first.markFailure(...args);
+      },
+    },
+    transport: {
+      async deliver() {
+        sends++;
+      },
+    },
+  });
+  const queued = await mail.queueOtp({
+    email: "proof@example.test",
+    otp: "12345678",
+    type: "sign-in",
+  });
+  await failureTrigger(
+    db,
+    "reject_delivery_projection",
+    "key_value_state",
+    "forced projection failure",
+  );
+  await assert.rejects(queued.deliver());
+  assert.equal(sends, 1);
+  assert.equal(transportFailures, 0);
+  const [row] = await db.read("mail_outbox");
+  assert.equal(row.state, "sending");
+  assert.equal(row.attempt_count, 1);
+  assert.equal(await db.get("outbox", "proof@example.test"), null);
+  await removeFailureTrigger(
+    db,
+    "reject_delivery_projection",
+    "key_value_state",
+  );
+});
+
 test("SMTP rejection and acknowledgement loss retain distinct bounded delivery evidence", async (t) => {
   const { db, first } = await fixture(t);
   for (const outcome of ["rejected", "unknown"]) {

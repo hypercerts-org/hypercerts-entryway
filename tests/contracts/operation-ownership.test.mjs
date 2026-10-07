@@ -43,6 +43,83 @@ async function expire(db, claim) {
   );
 }
 
+test("operation failures including falsy values survive a simultaneous release failure", async (t) => {
+  const { db } = await fixture(t);
+  const store = createOperationOwnershipStore(db);
+  const releaseFailure = new Error("Release failed after cleanup");
+  let releases = 0;
+  const owner = createOperationOwnership({
+    store: {
+      ...store,
+      async release(...args) {
+        await store.release(...args);
+        releases++;
+        throw releaseFailure;
+      },
+    },
+    heartbeatMs: 0,
+  });
+  const failures = [
+    undefined,
+    null,
+    false,
+    0,
+    "",
+    new Error("Operation failed"),
+  ];
+  for (const failure of failures) {
+    const outcome = await owner
+      .run(
+        "did:plc:failure-priority",
+        { kind: "local", request: {} },
+        async () => {
+          throw failure;
+        },
+      )
+      .then(
+        (value) => ({ succeeded: true, value }),
+        (error) => ({ succeeded: false, error }),
+      );
+    assert.equal(outcome.succeeded, false);
+    assert.equal(
+      outcome.error,
+      failure,
+      "Cleanup must preserve the original thrown value",
+    );
+  }
+  assert.equal(releases, failures.length);
+  assert.equal((await db.read("operation_admissions")).length, 0);
+});
+
+test("release failure after a successful operation rejects instead of reporting success", async (t) => {
+  const { db } = await fixture(t);
+  const store = createOperationOwnershipStore(db);
+  const releaseFailure = new Error("Release failed after cleanup");
+  const owner = createOperationOwnership({
+    store: {
+      ...store,
+      async release(...args) {
+        await store.release(...args);
+        throw releaseFailure;
+      },
+    },
+    heartbeatMs: 0,
+  });
+  await assert.rejects(
+    owner.run(
+      "did:plc:release-failure",
+      { kind: "local", request: {}, completeOnReturn: true },
+      async () => {
+        await db.set("contract", "completed-before-release", true);
+        return "completed";
+      },
+    ),
+    (error) => error === releaseFailure,
+  );
+  assert.equal(await db.get("contract", "completed-before-release"), true);
+  assert.equal((await db.read("operation_admissions")).length, 0);
+});
+
 test("durable admission distinguishes conflict, active owner, renewal and fenced takeover", async (t) => {
   const { db } = await fixture(t);
   const first = createOperationOwnershipStore(db),

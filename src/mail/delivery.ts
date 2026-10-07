@@ -5,6 +5,7 @@ import {
   validateMailAddress,
 } from "./templates.js";
 import type {
+  MailAttemptClaim,
   MailOutboxEntry,
   MailOutboxTransactor,
 } from "../database/mail-outbox.port.js";
@@ -68,6 +69,42 @@ export function createMailFeature({
 }) {
   if (!workerId || !Number.isSafeInteger(leaseMs) || leaseMs < 1)
     throw new Error("InvalidMailClaim");
+  async function sendClaim(
+    claim: MailAttemptClaim,
+    expiresAt: number,
+  ): Promise<"delivered" | "retry" | "failed"> {
+    // Only the claimed row supplies transport data. No SQL transaction spans
+    // SMTP, and the claim's version protects completion after supersession.
+    try {
+      await transport.deliver(
+        createOtpMessage(
+          claim.entry.recipient,
+          claim.entry.code,
+          claim.entry.purpose,
+        ),
+      );
+    } catch (error) {
+      const failedAt = currentTime();
+      const retryDelay = RETRY_DELAYS_MS[claim.entry.attemptCount];
+      const retryAt = retryDelay === undefined ? null : failedAt + retryDelay;
+      const outcome =
+        error instanceof MailTransportError ? error.outcome : "unknown";
+      const changed = await outbox.markFailure(
+        claim,
+        failedAt,
+        retryAt,
+        outcome,
+      );
+      if (!changed || retryAt === null || retryAt >= expiresAt) return "failed";
+      return "retry";
+    }
+    const deliveredAt = currentTime();
+    if (!(await outbox.markDelivered(claim, deliveredAt))) {
+      await outbox.expire(deliveredAt);
+      return "failed";
+    }
+    return "delivered";
+  }
   async function deliverEntry(entry: MailOutboxEntry): Promise<boolean | null> {
     for (let attempt = entry.attemptCount; attempt < MAX_ATTEMPTS; attempt++) {
       const now = currentTime();
@@ -90,38 +127,8 @@ export function createMailFeature({
         attemptedAt,
       );
       if (!claim) return null;
-      // Only the claimed row supplies transport data. No SQL transaction spans
-      // SMTP, and the claim's version protects completion after supersession.
-      try {
-        await transport.deliver(
-          createOtpMessage(
-            claim.entry.recipient,
-            claim.entry.code,
-            claim.entry.purpose,
-          ),
-        );
-      } catch (error) {
-        const failedAt = currentTime();
-        const retryDelay = RETRY_DELAYS_MS[claim.entry.attemptCount];
-        const retryAt = retryDelay === undefined ? null : failedAt + retryDelay;
-        const outcome =
-          error instanceof MailTransportError ? error.outcome : "unknown";
-        const changed = await outbox.markFailure(
-          claim,
-          failedAt,
-          retryAt,
-          outcome,
-        );
-        if (!changed || retryAt === null || retryAt >= entry.expiresAt)
-          return false;
-        continue;
-      }
-      const deliveredAt = currentTime();
-      if (!(await outbox.markDelivered(claim, deliveredAt))) {
-        await outbox.expire(deliveredAt);
-        return false;
-      }
-      return true;
+      const result = await sendClaim(claim, entry.expiresAt);
+      if (result !== "retry") return result === "delivered";
     }
     return false;
   }

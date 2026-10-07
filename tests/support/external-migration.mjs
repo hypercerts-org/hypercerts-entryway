@@ -18,8 +18,10 @@ import { PdsMigrationClient } from "../../dist/src/pds/migration-client.js";
 import { BoundFixtureSourceHandoffSigner } from "../../dist/tests/fixtures/source-handoff.js";
 import { Secp256k1MigrationPlcSigner } from "../../dist/src/plc/signing.js";
 import { createTargetAccessTokenSigner } from "../../dist/src/pds/access-token.js";
-import { FixtureCheckpointPause } from "../../dist/src/features/external-migration/import-account.js";
-import { ExternalMigrationService } from "../../dist/src/features/external-migration/import-account.js";
+import {
+  FixtureCheckpointPause,
+  ExternalMigrationService,
+} from "../../dist/src/features/external-migration/import-account.js";
 
 const mode = process.argv[2];
 assert.ok(

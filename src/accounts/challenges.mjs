@@ -24,14 +24,9 @@ export async function createProtocolChallenges({ db, config, accounts }) {
         fail("RateLimitExceeded", "Please wait before trying again", 429);
       await db.set("entryway:limits", key, { ...row, count: row.count + 1 });
     });
-  const sendCode = async (
-    purpose,
-    subject,
-    destination,
-    channel = "email",
-    did,
-  ) =>
+  const sendCode = async (purpose, subject, destination, channel, did) =>
     db.transact(async () => {
+      const deliveryChannel = channel === undefined ? "email" : channel;
       await rateLimit(`${purpose}:${subject}`);
       const otp = String(randomInt(10_000_000, 100_000_000));
       await db.set("entryway:challenges", `${purpose}:${subject}`, {
@@ -42,12 +37,16 @@ export async function createProtocolChallenges({ db, config, accounts }) {
           ? { did, version: (await db.get("security:versions", did)) ?? 0 }
           : {}),
       });
-      await db.set(channel === "email" ? "outbox" : "sms-outbox", destination, {
-        [channel === "email" ? "email" : "phoneNumber"]: destination,
-        otp,
-        type: purpose,
-        createdAt: new Date(),
-      });
+      await db.set(
+        deliveryChannel === "email" ? "outbox" : "sms-outbox",
+        destination,
+        {
+          [deliveryChannel === "email" ? "email" : "phoneNumber"]: destination,
+          otp,
+          type: purpose,
+          createdAt: new Date(),
+        },
+      );
       return {};
     });
   const consumeCode = async (purpose, subject, code) =>

@@ -25,7 +25,7 @@ const profiles = [];
 for (const [profile, directory] of entries) {
   assert.match(
     directory,
-    /^resilience-(sqlite-single-node|postgresql-single-node|postgresql-multi-node)-[0-9]+-[0-9]+$/,
+    /^resilience-(sqlite-single-node|postgresql-single-node|postgresql-multi-node)-\d+-\d+$/,
   );
   for (const phase of [
     "prepare",
