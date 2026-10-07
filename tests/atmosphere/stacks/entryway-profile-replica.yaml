@@ -1,0 +1,7 @@
+  entryway-replica:
+    <<: *entryway-node
+    volumes:
+      - ../artifacts:/app/artifacts:z
+      - entryway-config:/config:ro
+      - entryway-replica-data:/data
+      - source-fixture-token:/run/secrets:ro

@@ -5,15 +5,15 @@ import { DatabaseSync } from 'node:sqlite'
 import { createHash, randomBytes } from 'node:crypto'
 import { SignJWT, importJWK, generateKeyPair, exportJWK, calculateJwkThumbprint } from 'jose'
 
-const integration = process.env.SPIKE_CONFIG ? test : test.skip
+const integration = process.env.SERVICE_CONFIG_PATH ? test : test.skip
 let config, account, pds, privateKey, dpopKey, dpopJwk, jkt
 const nonces = new Map()
 before(async () => {
-  if (!process.env.SPIKE_CONFIG) return
-  config = JSON.parse(readFileSync(process.env.SPIKE_CONFIG, 'utf8'))
-  const db = new DatabaseSync('/entryway-data/entryway.sqlite', { readOnly: true })
+  if (!process.env.SERVICE_CONFIG_PATH) return
+  config = JSON.parse(readFileSync(process.env.SERVICE_CONFIG_PATH, 'utf8'))
+  const db = new DatabaseSync('/entryway-data/account-authority.sqlite', { readOnly: true })
   const rows = db
-    .prepare("SELECT data FROM mini_accounts WHERE status='active' ORDER BY rowid")
+    .prepare("SELECT data FROM accounts WHERE status='active' ORDER BY rowid")
     .all()
     .map((r) => JSON.parse(r.data))
   db.close()
@@ -330,7 +330,7 @@ integration(
   async () => {
     const token = await access()
     const url = endpoint(pds.url, 'com.atproto.repo.uploadBlob')
-    const bytes = Buffer.from('mini-entryway blob round trip')
+    const bytes = Buffer.from('authenticated blob round trip')
     let uploaded
     for (let i = 0; i < 2; i++) {
       uploaded = await fetch(url, {

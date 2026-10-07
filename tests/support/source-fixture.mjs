@@ -12,7 +12,7 @@ const source = process.env.SOURCE_PDS_URL ?? 'https://pds3.atmosbox.test'
 const plcUrl = process.env.PLC_URL ?? 'https://plc.atmosbox.test'
 const target = process.env.TARGET_PDS_URL ?? 'https://cluster1.atmosbox.test'
 const token = process.env.SOURCE_FIXTURE_TOKEN_FILE ? (await readFile(process.env.SOURCE_FIXTURE_TOKEN_FILE, 'utf8')).trim() : process.env.SOURCE_FIXTURE_TOKEN
-const rotation = process.env.ENTRYWAY_ROTATION_DID_FILE ? (await readFile(process.env.ENTRYWAY_ROTATION_DID_FILE, 'utf8')).trim() : process.env.ENTRYWAY_ROTATION_DID
+const rotation = process.env.TARGET_ROTATION_KEY_FILE ? (await readFile(process.env.TARGET_ROTATION_KEY_FILE, 'utf8')).trim() : process.env.TARGET_ROTATION_KEY
 if (!token || !rotation) throw new Error('Source fixture public configuration missing')
 const plcClient = new plc.Client(plcUrl)
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex')
@@ -48,7 +48,7 @@ async function sourceAccess() {
   return session.accessJwt
 }
 async function head() { const op = await plcClient.getLastOp(state.did); return { operation: op, cid: String(await cidForCbor(op)) } }
-function publicStatus() { return { did: state.did, email: state.email, sourceHandle: state.handle, sourcePdsUrl: state.sourcePdsUrl, targetPdsUrl: state.targetPdsUrl, sourceRecoveryKey: state.recoveryDid, entrywayRotationKey: state.rotationDid, sourceRepositoryKey: state.sourceRepositoryKey, sourcePlcHead: state.initialHead, record: state.record, blobCid: state.blobCid, blobSha256: state.blobSha256, frozen: state.frozen, sourceCommit: state.sourceCommit } }
+function publicStatus() { return { did: state.did, email: state.email, sourceHandle: state.handle, sourcePdsUrl: state.sourcePdsUrl, targetPdsUrl: state.targetPdsUrl, sourceRecoveryKey: state.recoveryDid, rotationAuthorityKey: state.rotationDid, sourceRepositoryKey: state.sourceRepositoryKey, sourcePlcHead: state.initialHead, record: state.record, blobCid: state.blobCid, blobSha256: state.blobSha256, frozen: state.frozen, sourceCommit: state.sourceCommit } }
 function response(res, code, data) { res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(data)) }
 async function body(req) { let size=0; const chunks=[]; for await (const chunk of req) { size+=chunk.length; if (size>65536) throw new Error('RequestTooLarge'); chunks.push(chunk) } return chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {} }
 async function initialize() {
@@ -93,7 +93,7 @@ async function snapshot(input) {
   return { manifest: { carDigest: hash(car), carBytes: car.length, sourceCommit: state.sourceCommit, blobs: [{ cid: state.blobCid, digest: hash(blob), bytes: blob.length, contentType: 'text/plain' }] }, carBase64: car.toString('base64'), blobs: [{ cid: state.blobCid, bytesBase64: blob.toString('base64') }] }
 }
 async function sign(input) {
-  if (input.did !== state.did || input.entrywayRotationKey !== rotation || input.targetPdsUrl !== target || input.expectedPreviousCid !== state.initialHead) throw new Error('UnboundHandoff')
+  if (input.did !== state.did || input.rotationAuthorityKey !== rotation || input.targetPdsUrl !== target || input.expectedPreviousCid !== state.initialHead) throw new Error('UnboundHandoff')
   const current = await head()
   if (current.cid !== input.expectedPreviousCid) throw new Error('UnexpectedPlcHead')
   const recovery = await Secp256k1Keypair.import(Buffer.from(state.recoveryHex, 'hex'))
@@ -109,7 +109,7 @@ async function publish(input) {
   const now = await head()
   if (now.cid === cid) return { head: cid, alreadyPublished: true }
   if (now.cid !== state.initialHead) throw new Error('UnexpectedPlcHead')
-  const signed = await sign({ did: state.did, expectedPreviousCid: state.initialHead, entrywayRotationKey: rotation, targetPdsUrl: target })
+  const signed = await sign({ did: state.did, expectedPreviousCid: state.initialHead, rotationAuthorityKey: rotation, targetPdsUrl: target })
   if (signed.cid !== cid) throw new Error('UnboundPublication')
   await plcClient.sendOperation(state.did, input.operation)
   const after = await head()

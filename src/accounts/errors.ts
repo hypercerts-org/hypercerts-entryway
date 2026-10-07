@@ -6,7 +6,15 @@ export type DomainErrorCode =
   | "EmailNotAvailable"
   | "HandleNotAvailable"
   | "InvalidAccount"
-  | "SchemaConflict";
+  | "SchemaConflict"
+  | "OperationNoLongerEligible"
+  | "OperationNoLongerPending"
+  | "OperationPending"
+  | "OperationConflict"
+  | "OperationLeaseLost"
+  | "OperationScopeMismatch"
+  | "OperationRecoveryRequired"
+  | "InvalidOperationRecovery";
 
 export class DomainError extends Error {
   constructor(

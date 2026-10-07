@@ -1,3 +1,9 @@
+import {
+  noExternalResult,
+  signingKeyResult,
+  type OperationOwnership,
+} from "../accounts/operation-ownership.js";
+import { verifyRepositorySnapshot } from "./repository-verification.js";
 import { cidForCbor } from "@atproto/common";
 import * as plc from "@did-plc/lib";
 import { MigrationError } from "../features/external-migration/errors.js";
@@ -11,9 +17,10 @@ import {
 } from "../features/external-migration/validation.js";
 import type { SnapshotManifest } from "../features/external-migration/types.js";
 import type { SnapshotReader } from "../database/migration-journal.port.js";
-import { MigrationPayloadStore } from "../database/sqlite/migration-payload.js";
+import { MigrationPayloadStore } from "../database/drizzle/migration-payload.js";
 
 export interface TargetPdsOptions {
+  ownership: OperationOwnership;
   origin: string;
   plcUrl: string;
   token: (did: string) => Promise<string>;
@@ -194,66 +201,132 @@ export class PdsMigrationClient {
     };
   }
   public async reserveTargetRepositoryKey(did: string): Promise<string> {
-    const value = await this.publicJson(
-      "com.atproto.server.reserveSigningKey",
-      { body: { did } },
+    const result = await this.options.ownership.dispatch(
+      {
+        step: "external-target-key",
+        target: this.options.origin,
+        method: "com.atproto.server.reserveSigningKey",
+        intent: { did },
+      },
+      {
+        ...signingKeyResult,
+        send: async () => {
+          const value = await this.publicJson(
+            "com.atproto.server.reserveSigningKey",
+            { body: { did } },
+          );
+          if (!isRecord(value) || !isDidKey(value.signingKey)) return invalid();
+          return { signingKey: value.signingKey };
+        },
+        // An isolated, drained allocation has no published identity binding. A new
+        // public key may be allocated; the original secret never leaves its PDS.
+        observe: async () => ({ state: "replay-safe" }),
+      },
     );
-    if (!isRecord(value) || !isDidKey(value.signingKey)) return invalid();
-    return value.signingKey;
+    return result.signingKey;
   }
   public async createInactiveTarget(input: {
     did: string;
     handle: string;
     operation: unknown;
-  }): Promise<"created" | "already-created"> {
+  }): Promise<void> {
     if (!isRecord(input.operation) || !isCid(input.operation.prev))
       return invalid();
     const cid = String(await cidForCbor(input.operation));
+    const previousCid = input.operation.prev;
     validateJournaledOperation(input.operation, cid);
-    const prior = await this.account(input.did);
-    const observed = await this.head(input.did);
-    const decision = reconcileTargetCreation({
-      did: input.did,
-      handle: input.handle,
-      previousCid: input.operation.prev,
-      operationCid: cid,
-      observedCid: observed,
-      account: prior,
-    });
-    if (decision === "already-created") {
-      await this.deactivate(input.did);
-      return "already-created";
-    }
-    try {
-      await this.publicJson("com.atproto.server.createAccount", {
-        body: { did: input.did, handle: input.handle, plcOp: input.operation },
-      });
-    } catch (error) {
-      const after = await this.account(input.did);
-      const afterHead = await this.head(input.did);
-      if (
-        !after ||
-        after.did !== input.did ||
-        after.handle !== input.handle ||
-        afterHead !== cid
-      )
-        throw error;
-    }
-    if ((await this.head(input.did)) !== cid)
-      throw new MigrationError(
-        "UnexpectedPlcHead",
-        "Published move differs from journal",
-      );
-    await this.deactivate(input.did);
-    return "created";
-  }
-  private async deactivate(did: string): Promise<void> {
-    await this.adminCommand("com.atproto.admin.updateSubjectStatus", {
-      body: {
-        subject: { $type: "com.atproto.admin.defs#repoRef", did },
-        deactivated: { applied: true },
+    await this.options.ownership.dispatch(
+      {
+        step: "external-create-target",
+        target: this.options.origin,
+        method: "com.atproto.server.createAccount",
+        intent: { did: input.did, handle: input.handle, operationCid: cid },
       },
-    });
+      {
+        ...noExternalResult,
+        send: async () => {
+          const decision = reconcileTargetCreation({
+            did: input.did,
+            handle: input.handle,
+            previousCid,
+            operationCid: cid,
+            observedCid: await this.head(input.did),
+            account: await this.account(input.did),
+          });
+          if (decision !== "already-created")
+            await this.publicJson("com.atproto.server.createAccount", {
+              body: {
+                did: input.did,
+                handle: input.handle,
+                plcOp: input.operation,
+              },
+            });
+          if ((await this.head(input.did)) !== cid)
+            throw new MigrationError(
+              "UnexpectedPlcHead",
+              "Published move differs from journal",
+            );
+        },
+        observe: async () => {
+          const actor = await this.account(input.did),
+            head = await this.head(input.did);
+          if (
+            actor?.did === input.did &&
+            actor.handle === input.handle &&
+            head === cid
+          )
+            return { state: "applied", result: undefined };
+          return {
+            state: !actor && head === previousCid ? "unapplied" : "diverged",
+          };
+        },
+      },
+    );
+    await this.changeStatus(input.did, false, cid);
+  }
+  private async changeStatus(
+    did: string,
+    active: boolean,
+    expectedHead: string,
+  ): Promise<void> {
+    await this.options.ownership.dispatch(
+      {
+        step: active ? "external-activate-target" : "external-freeze-target",
+        target: this.options.origin,
+        method: "com.atproto.admin.updateSubjectStatus",
+        intent: { did, active, expectedHead },
+      },
+      {
+        ...noExternalResult,
+        send: async () => {
+          if ((await this.head(did)) !== expectedHead)
+            throw new MigrationError(
+              "UnexpectedPlcHead",
+              "Target identity changed",
+            );
+          await this.adminCommand("com.atproto.admin.updateSubjectStatus", {
+            body: {
+              subject: { $type: "com.atproto.admin.defs#repoRef", did },
+              deactivated: { applied: !active },
+            },
+          });
+        },
+        observe: async () => {
+          if ((await this.head(did)) !== expectedHead)
+            return { state: "diverged" };
+          const status = accountStatus(
+            await this.didJson(
+              did,
+              "com.atproto.server.checkAccountStatus",
+              {},
+            ),
+          );
+          return status.activated === active
+            ? { state: "applied", result: undefined }
+            : { state: "unapplied" };
+        },
+      },
+    );
   }
   private async payload(workflowId: string) {
     const manifest = await this.options.snapshots.getManifest(workflowId);
@@ -270,50 +343,159 @@ export class PdsMigrationClient {
   public async importRepository(input: {
     did: string;
     workflowId: string;
+    expectedPlcHead: string;
+    expectedRepositoryKey: string;
   }): Promise<void> {
     const payload = await this.payload(input.workflowId);
-    const response = await this.requestForDid(
-      input.did,
-      "com.atproto.repo.importRepo",
-      { bytes: payload.car, contentType: "application/vnd.ipld.car" },
+    await this.options.ownership.dispatch(
+      {
+        step: "external-import-repository",
+        target: this.options.origin,
+        method: "com.atproto.repo.importRepo",
+        intent: {
+          did: input.did,
+          digest: payload.manifest.carDigest,
+          head: input.expectedPlcHead,
+        },
+      },
+      {
+        ...noExternalResult,
+        send: async () => {
+          if ((await this.head(input.did)) !== input.expectedPlcHead)
+            throw new MigrationError(
+              "UnexpectedPlcHead",
+              "Target identity changed",
+            );
+          const response = await this.requestForDid(
+            input.did,
+            "com.atproto.repo.importRepo",
+            {
+              bytes: payload.car,
+              contentType: "application/vnd.ipld.car",
+            },
+          );
+          if (!response.ok)
+            throw new MigrationError(
+              "TargetConflict",
+              `Target CAR import returned ${response.status}`,
+            );
+          await response.body?.cancel();
+        },
+        observe: async () => {
+          if ((await this.head(input.did)) !== input.expectedPlcHead)
+            return { state: "diverged" };
+          // A changed or partial repository is deliberately not overwritten. A
+          // successful full snapshot proof permits acknowledgement, not replay.
+          const verified = await this.verifyRepository(
+            input.did,
+            input.workflowId,
+            input.expectedRepositoryKey,
+          );
+          return verified.targetCommit === payload.manifest.sourceCommit
+            ? { state: "applied", result: undefined }
+            : { state: "diverged" };
+        },
+      },
     );
-    if (!response.ok)
-      throw new MigrationError(
-        "TargetConflict",
-        `Target CAR import returned ${response.status}`,
-      );
   }
   public async importBlobs(input: {
     did: string;
     workflowId: string;
+    expectedPlcHead: string;
   }): Promise<void> {
     const payload = await this.payload(input.workflowId);
     for (const [index, blob] of payload.blobs.entries()) {
       const expected = payload.manifest.blobs[index];
       if (!expected)
         throw new MigrationError("MissingSnapshot", "Blob manifest is missing");
-      const value = await this.didJson(
-        input.did,
-        "com.atproto.repo.uploadBlob",
-        { bytes: blob.bytes, contentType: expected.contentType },
+      await this.options.ownership.dispatch(
+        {
+          step: `external-import-blob:${expected.cid}`,
+          target: this.options.origin,
+          method: "com.atproto.repo.uploadBlob",
+          intent: {
+            did: input.did,
+            cid: expected.cid,
+            head: input.expectedPlcHead,
+          },
+        },
+        {
+          ...noExternalResult,
+          send: async () => {
+            if ((await this.head(input.did)) !== input.expectedPlcHead)
+              throw new MigrationError(
+                "UnexpectedPlcHead",
+                "Target identity changed",
+              );
+            const value = await this.didJson(
+              input.did,
+              "com.atproto.repo.uploadBlob",
+              { bytes: blob.bytes, contentType: expected.contentType },
+            );
+            if (
+              !isRecord(value) ||
+              !isRecord(value.blob) ||
+              !isRecord(value.blob.ref) ||
+              !isCid(value.blob.ref.$link)
+            )
+              return invalid();
+            if (value.blob.ref.$link !== expected.cid)
+              throw new MigrationError(
+                "SnapshotDigestMismatch",
+                "Target blob CID differs from source",
+              );
+          },
+          observe: async () => {
+            if ((await this.head(input.did)) !== input.expectedPlcHead)
+              return { state: "diverged" };
+            const response = await this.requestForDid(
+              input.did,
+              "com.atproto.sync.getBlob",
+              { params: { did: input.did, cid: expected.cid } },
+            );
+            if (!response.ok) {
+              const value: unknown = await response.json().catch(() => null);
+              return {
+                state:
+                  isRecord(value) &&
+                  ["BlobNotFound", "NotFound"].includes(String(value.error))
+                    ? "unapplied"
+                    : "diverged",
+              };
+            }
+            return Buffer.from(await response.arrayBuffer()).equals(
+              Buffer.from(blob.bytes),
+            )
+              ? { state: "applied", result: undefined }
+              : { state: "diverged" };
+          },
+        },
       );
-      if (
-        !isRecord(value) ||
-        !isRecord(value.blob) ||
-        !isRecord(value.blob.ref) ||
-        !isCid(value.blob.ref.$link)
-      )
-        return invalid();
-      if (value.blob.ref.$link !== expected.cid)
-        throw new MigrationError(
-          "SnapshotDigestMismatch",
-          "Target blob CID differs from source",
-        );
     }
+  }
+  private async verifyRepository(did: string, workflowId: string, key: string) {
+    const payload = await this.payload(workflowId);
+    const response = await this.requestForDid(did, "com.atproto.sync.getRepo", {
+      params: { did },
+    });
+    if (!response.ok)
+      throw new MigrationError(
+        "TargetConflict",
+        "Target repository cannot be verified",
+      );
+    return verifyRepositorySnapshot({
+      sourceCar: payload.car,
+      targetCar: new Uint8Array(await response.arrayBuffer()),
+      did,
+      sourceCommit: payload.manifest.sourceCommit,
+      targetSigningKey: key,
+    });
   }
   public async verifyInactiveTarget(input: {
     did: string;
     manifest: SnapshotManifest;
+    workflowId: string;
+    expectedPlcHead: string;
     expectedRepositoryKey: string;
   }): Promise<void> {
     const status = accountStatus(
@@ -333,24 +515,47 @@ export class PdsMigrationClient {
       status.expectedBlobs !== input.manifest.blobs.length ||
       status.importedBlobs !== input.manifest.blobs.length ||
       !status.indexedRecords ||
-      operation.verificationMethods.atproto !== input.expectedRepositoryKey
+      operation.verificationMethods.atproto !== input.expectedRepositoryKey ||
+      String(await cidForCbor(lastOperation)) !== input.expectedPlcHead
     )
       throw new MigrationError(
         "TargetConflict",
         "Imported target does not match source snapshot",
       );
-  }
-  public async activateTarget(did: string): Promise<void> {
-    const before = accountStatus(
-      await this.didJson(did, "com.atproto.server.checkAccountStatus", {}),
+    const verified = await this.verifyRepository(
+      input.did,
+      input.workflowId,
+      input.expectedRepositoryKey,
     );
-    if (before.activated !== true)
-      await this.adminCommand("com.atproto.admin.updateSubjectStatus", {
-        body: {
-          subject: { $type: "com.atproto.admin.defs#repoRef", did },
-          deactivated: { applied: false },
-        },
-      });
+    if (verified.targetCommit !== input.manifest.sourceCommit)
+      throw new MigrationError(
+        "TargetConflict",
+        "Target commit differs from saved snapshot",
+      );
+    const payload = await this.payload(input.workflowId);
+    for (const blob of payload.blobs) {
+      const response = await this.requestForDid(
+        input.did,
+        "com.atproto.sync.getBlob",
+        { params: { did: input.did, cid: blob.cid } },
+      );
+      if (
+        !response.ok ||
+        !Buffer.from(await response.arrayBuffer()).equals(
+          Buffer.from(blob.bytes),
+        )
+      )
+        throw new MigrationError(
+          "SnapshotDigestMismatch",
+          "Target blob differs from saved snapshot",
+        );
+    }
+  }
+  public async activateTarget(
+    did: string,
+    expectedPlcHead: string,
+  ): Promise<void> {
+    await this.changeStatus(did, true, expectedPlcHead);
     const after = accountStatus(
       await this.didJson(did, "com.atproto.server.checkAccountStatus", {}),
     );

@@ -18,6 +18,17 @@ class ExpiredFlowError extends Error {
   }
 }
 
+export class ChangedFlowIntentError extends Error {
+  constructor(flow, browser) {
+    super(
+      "This sign-in changed while the code was checked. Use the latest code sent to the email below.",
+    );
+    this.flow = flow;
+    this.browser = browser;
+    this.status = 400;
+  }
+}
+
 export function createBrowserFlow({
   db,
   config,
@@ -40,10 +51,10 @@ export function createBrowserFlow({
     );
   const loadBrowser = async (req, res, rotate = false) => {
     const device = await provider.deviceManager.load(req, res, rotate);
-    let browser = db.get("browser", device.deviceId);
+    let browser = await db.get("browser", device.deviceId);
     if (!browser) {
       browser = { csrf: opaque(), createdAt: new Date() };
-      db.set("browser", device.deviceId, browser);
+      await db.set("browser", device.deviceId, browser);
     }
     return { ...device, csrf: browser.csrf };
   };
@@ -60,21 +71,19 @@ export function createBrowserFlow({
   };
   const fields = (flow, browser) =>
     hidden("flow", flow.id) + hidden("csrf", browser.csrf);
-  const save = (flow) => db.set("auth-flows", flow.id, flow);
-  const newFlow = (browser, extra = {}) => {
+  const save = async (flow) => await db.set("auth-flows", flow.id, flow);
+  const newFlow = async (browser, extra = {}) => {
     const flow = {
       id: opaque(),
       deviceId: browser.deviceId,
       createdAt: new Date(),
       ...extra,
     };
-    save(flow);
+    await save(flow);
     return flow;
   };
-  const getFlow = async (req, res) => {
-    const browser = await loadBrowser(req, res);
-    checkCsrf(req, browser);
-    const flow = db.get("auth-flows", String(req.body?.flow ?? ""));
+  const readFlow = async (id, browser) => {
+    const flow = await db.get("auth-flows", String(id ?? ""));
     if (!flow || flow.deviceId !== browser.deviceId) {
       throw new InvalidRequestError(
         "This sign-in has expired. Start again from your application.",
@@ -87,6 +96,25 @@ export function createBrowserFlow({
       Date.now() - createdAt > FLOW_LIFETIME
     )
       throw new ExpiredFlowError(flow, browser);
+    return flow;
+  };
+  const refreshFlow = (flow, browser) => readFlow(flow.id, browser);
+  // Call inside the transaction that applies the authentication result. Return
+  // the current record, including deleted optional fields, never a merged snapshot.
+  const readCurrentIntent = async (expected, browser) => {
+    const current = await readFlow(expected.id, browser);
+    if (
+      current.email !== expected.email ||
+      current.otpRequestCount !== expected.otpRequestCount ||
+      current.lastOtpSentAt !== expected.lastOtpSentAt
+    )
+      throw new ChangedFlowIntentError(current, browser);
+    return current;
+  };
+  const getFlow = async (req, res) => {
+    const browser = await loadBrowser(req, res);
+    checkCsrf(req, browser);
+    const flow = await readFlow(req.body?.flow, browser);
     if (flow.requestUri)
       await provider.requestManager.get(
         flow.requestUri,
@@ -125,6 +153,8 @@ export function createBrowserFlow({
     save,
     newFlow,
     getFlow,
+    refreshFlow,
+    readCurrentIntent,
     pageForFlow,
     guarded,
     form,

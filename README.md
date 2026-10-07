@@ -1,13 +1,26 @@
 # Hypercerts Entryway
 
-A mini Entryway for multiple unchanged Bluesky reference PDS instances. It moves
+An Entryway for multiple unchanged Bluesky reference PDS instances. It moves
 ePDS email OTP authentication into the PDS's supported Entryway boundary and
 provides account management, authorization and identity operations.
 
-**Status:** one application organized by vertical features. Ports/adapters are
+This repository is self-contained. Application source, sandbox orchestration,
+architecture and acceptance documentation live here; no sibling Entryway checkout
+is required. External repositories and [Lexidraw designs](docs/README.md#core-design-references)
+are references, not runtime or documentation dependencies.
+
+**Status:** one application organized by vertical features, with ports/adapters
 limited to browser authentication, mail sending and database. Preserved MJS is
-owned by its feature; standard-tool migration, moderation coordination and fleet
-registry remain product gaps. Google/GitHub sign-in is out of scope.
+owned by its feature. The [database boundary](docs/database.md) uses Drizzle ORM
+`1.0.0-rc.4` with fresh schemas and asynchronous operations: SQLite or PostgreSQL
+on one node, PostgreSQL on multiple nodes. [Shared operation ownership](docs/shared-operations.md)
+coordinates account/PDS orchestration, verified recovery, mail and authentication.
+[Deployment lifecycle](docs/deployment-profiles.md) supplies bounded readiness and
+draining, with repeatable single-node and replica checks.
+
+Standard-tool migration, moderation coordination, fleet management and complete
+production qualification remain open; see [implementation limits](docs/implementation-assessment.md).
+Google/GitHub OIDC is roadmap work excluded from initial delivery.
 
 ## Start the sandbox
 
@@ -32,13 +45,14 @@ last. It removes its own project and
 volumes afterward. Keep failed state for investigation with:
 
 ```sh
-ENTRYWAY_E2E_KEEP_FAILED_STATE=1 ./tests/local.sh fresh
+KEEP_FAILED_SANDBOX=1 ./tests/local.sh fresh
 ```
 
 Reports go to `tests/artifacts/<project>`. Migration in this suite exercises a
 private synthetic source helper; it is **not** standard-tool migration acceptance.
 For persistent development and selective commands, read [testing](docs/testing.md).
-Current refactor verification is recorded in plans/evidence/execution-ledger.md; historical spike passes are not current acceptance.
+The [acceptance plans](tests/plans/README.md) describe the repeatable checks and
+link to current delivery requirements; historical passes are not new acceptance.
 
 ## Layout
 
@@ -46,7 +60,7 @@ Current refactor verification is recorded in plans/evidence/execution-ledger.md;
 src/features/<feature>/   Operation, routes, pages and co-located tests
 src/authentication/       Better Auth browser proof/session boundary
 src/mail/                 SMTP sending boundary and delivery
-src/database/             Persistence ports, SQLite and migrations
+src/database/             Persistence ports, Drizzle adapters and fresh schemas
 src/accounts/             Common account facts and proof primitives
 src/pds/, src/plc/         Concrete protocol clients and authorized signing
 src/http/, src/ui/        Shared HTTP and presentation helpers
@@ -55,7 +69,7 @@ src/main.mjs              Startup, workers and shutdown
 tests/                    Contracts, browser journeys, fixtures and AiaB harness
 ```
 
-Two engineers own separate feature slices end to end. Shared authentication,
+Features own their operations end to end. Shared authentication,
 transactions and custody changes are coordinated; features never import each
 other's internals. The source boundary checker enforces this structure.
 
@@ -64,17 +78,17 @@ other's internals. The source boundary checker enforces this structure.
 - [Architecture and boundaries](docs/architecture.md)
 - [Data model and identity custody](docs/data-custody.md)
 - [Reusable code, required work and investigations](docs/reuse-assessment.md)
-- [Two-person six-week delivery plan](docs/delivery-plan.md)
+- [Delivery planning in Linear](docs/delivery-plan.md)
 - [Testing and evidence limits](docs/testing.md)
+- [Release notes and managed version preparation](RELEASING.md)
 - [Agent and contributor rules](AGENTS.md)
 
 ## Provenance
 
-The baseline comes from `~/git/hypercerts/entryway/next-spike/app`, with the
-Atmosphere in a Box harness adapted from the same workspace. The sibling
-`~/git/hypercerts/ePDS/e2e/atmosphere` is the design reference for disposable
-pinned checkouts, consumer-owned stacks, access metadata and scoped cleanup.
-Earlier `spike` and
-`replay/spike` trees are historical references, not additional runtime packages.
+The application and Atmosphere in a Box harness were imported from the Entryway
+spike. The ePDS harness supplied the design pattern for disposable pinned checkouts,
+consumer-owned stacks, access metadata and scoped cleanup. Imported implementation
+and the required templates are now owned by this repository; earlier spike/replay
+trees are historical provenance, not additional runtime packages.
 Reference PDS behaviour is grounded in Bluesky's source and Entryway tests; no PDS
 fork is part of this repository. See the reuse assessment for source evidence.

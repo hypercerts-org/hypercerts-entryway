@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { request } from 'node:http'
-const config = JSON.parse(readFileSync(process.env.SPIKE_CONFIG ?? '/config/config.json', 'utf8'))
+const config = JSON.parse(readFileSync(process.env.SERVICE_CONFIG_PATH ?? '/config/config.json', 'utf8'))
 // Use the running authority's locks and stores. A second database writer would
 // bypass the in-process account/migration serialization used by this spike.
 // node:http preserves the canonical Host while connecting only to loopback.

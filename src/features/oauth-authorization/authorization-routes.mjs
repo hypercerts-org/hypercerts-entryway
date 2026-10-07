@@ -48,7 +48,7 @@ export function mountAuthorizationRoutes({
           result.parameters,
           result.redirect,
         );
-      const flow = newFlow(browser, {
+      const flow = await newFlow(browser, {
         requestUri: result.requestUri,
         clientId: result.client.id,
         clientName: result.client.metadata.client_name,
@@ -79,7 +79,7 @@ export function mountAuthorizationRoutes({
     guarded(async (req, res) => {
       const browser = await loadBrowser(req, res);
       checkCsrf(req, browser);
-      const expired = db.get("auth-flows", String(req.body?.flow ?? ""));
+      const expired = await db.get("auth-flows", String(req.body?.flow ?? ""));
       if (
         !expired ||
         expired.deviceId !== browser.deviceId ||
@@ -108,13 +108,13 @@ export function mountAuthorizationRoutes({
           result.parameters,
           result.redirect,
         );
-      const flow = newFlow(browser, {
+      const flow = await newFlow(browser, {
         requestUri: result.requestUri,
         clientId: result.client.id,
         clientName: result.client.metadata.client_name,
         parameters: result.parameters,
       });
-      db.delete("auth-flows", expired.id);
+      await db.delete("auth-flows", expired.id);
       const sessions =
         result.parameters.prompt === "create"
           ? []
@@ -149,7 +149,7 @@ export function mountAuthorizationRoutes({
       );
       if (req.body.decision === "deny") {
         await provider.requestManager.delete(flow.requestUri);
-        db.delete("auth-flows", flow.id);
+        await db.delete("auth-flows", flow.id);
         return authorizationRedirect(res, config.issuer, request.parameters, {
           error: "access_denied",
           error_description: "The user declined access",
@@ -188,7 +188,7 @@ export function mountAuthorizationRoutes({
           authorizedScopes: [...granted],
         },
       );
-      db.delete("auth-flows", flow.id);
+      await db.delete("auth-flows", flow.id);
       authorizationRedirect(res, config.issuer, request.parameters, { code });
     }),
   );

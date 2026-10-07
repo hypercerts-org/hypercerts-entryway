@@ -3,11 +3,11 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { Secp256k1Keypair } from '@atproto/crypto'
 
-const configPath = process.env.SPIKE_CONFIG || '/config/config.json'
+const configPath = process.env.SERVICE_CONFIG_PATH || '/config/config.json'
 let config
-const publicMode = process.env.SPIKE_PUBLIC_MODE === 'true'
+const publicMode = process.env.PUBLIC_NETWORK_MODE === 'true'
 if (publicMode) {
-  for (const key of ['SPIKE_ISSUER', 'SPIKE_CLIENT_URL', 'SPIKE_PDS1_URL', 'SPIKE_PDS2_URL']) {
+  for (const key of ['OAUTH_ISSUER_URL', 'OAUTH_CLIENT_URL', 'PDS1_URL', 'PDS2_URL']) {
     const value = process.env[key]
     if (!value)
       throw new Error(`${key} is required in public mode; use the launcher or its saved public.env`)
@@ -17,24 +17,24 @@ if (publicMode) {
         `${key} must be an HTTPS origin without credentials, paths, queries, fragments, or a trailing slash`,
       )
   }
-  const origins = ['SPIKE_ISSUER', 'SPIKE_CLIENT_URL', 'SPIKE_PDS1_URL', 'SPIKE_PDS2_URL'].map(
+  const origins = ['OAUTH_ISSUER_URL', 'OAUTH_CLIENT_URL', 'PDS1_URL', 'PDS2_URL'].map(
     (key) => process.env[key],
   )
   if (new Set(origins).size !== 4)
     throw new Error('Public entryway, client, and both PDS origins must be distinct')
 }
 await mkdir(dirname(configPath), { recursive: true })
-const issuer = process.env.SPIKE_ISSUER || 'https://entryway.test'
-const clientUrl = process.env.SPIKE_CLIENT_URL || 'https://client.entryway.example.com'
+const issuer = process.env.OAUTH_ISSUER_URL || 'https://entryway.test'
+const clientUrl = process.env.OAUTH_CLIENT_URL || 'https://client.entryway.example.com'
 const pdsUrls = [
-  process.env.SPIKE_PDS1_URL || 'https://pds1.entryway.test',
-  process.env.SPIKE_PDS2_URL || 'https://pds2.entryway.test',
+  process.env.PDS1_URL || 'https://pds1.entryway.test',
+  process.env.PDS2_URL || 'https://pds2.entryway.test',
 ]
 const serviceDid = (url) => `did:web:${new URL(url).host.replaceAll(':', '%3A')}`
 try {
   config = JSON.parse(await readFile(configPath, 'utf8'))
   if (
-    process.env.SPIKE_ISSUER &&
+    process.env.OAUTH_ISSUER_URL &&
     (config.issuer !== issuer ||
       config.clientUrl !== clientUrl ||
       config.pds.length !== pdsUrls.length ||
@@ -56,9 +56,9 @@ try {
     issuer,
     serviceDid: serviceDid(issuer),
     clientUrl,
-    handleDomains: process.env.SPIKE_HANDLE_DOMAINS?.split(',') || ['.entryway.test'],
+    handleDomains: process.env.SERVICE_HANDLE_DOMAINS?.split(',') || ['.entryway.test'],
     publicHandles: publicMode ? [new URL(issuer).hostname, new URL(clientUrl).hostname] : undefined,
-    plcUrl: process.env.SPIKE_PLC_URL || 'http://plc:2582',
+    plcUrl: process.env.PLC_DIRECTORY_URL || 'http://plc:2582',
     jwtJwk,
     jwtPublicHex: jwtKey.publicKeyStr('hex'),
     plcRotationKeyHex: Buffer.from(await rotation.export()).toString('hex'),
@@ -90,7 +90,7 @@ try {
 if (process.env.SOURCE_FIXTURE_PUBLIC_DIR) {
   await mkdir(process.env.SOURCE_FIXTURE_PUBLIC_DIR, { recursive: true, mode: 0o755 })
   await writeFile(
-    `${process.env.SOURCE_FIXTURE_PUBLIC_DIR}/entryway-rotation-did`,
+    `${process.env.SOURCE_FIXTURE_PUBLIC_DIR}/target-rotation-key`,
     `${config.plcRotationKeyDid}\n`,
     { mode: 0o644 },
   )

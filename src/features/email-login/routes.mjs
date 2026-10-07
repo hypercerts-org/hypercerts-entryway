@@ -1,4 +1,5 @@
 import { InvalidRequestError } from "@atproto/oauth-provider/errors";
+import { ChangedFlowIntentError } from "../../http/browser-flow.mjs";
 import { page } from "../../ui/html.mjs";
 const RESEND_COOLDOWN = 5_000;
 export function mountEmailLogin({
@@ -19,6 +20,8 @@ export function mountEmailLogin({
     save,
     newFlow,
     getFlow,
+    refreshFlow,
+    readCurrentIntent,
     loadBrowser,
     checkCsrf,
     pageForFlow,
@@ -27,69 +30,73 @@ export function mountEmailLogin({
   } = flows;
   const { loginForm, otpForm } = forms;
   const sendCode = async (res, flow, browser, emailValue) => {
-    const email = String(emailValue ?? "")
-      .trim()
-      .toLowerCase();
-    if (
-      !email ||
-      email.length > 320 ||
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-    )
-      throw new InvalidRequestError("Enter a valid email address");
-    const now = Date.now();
-    if (flow.otpRequestCount >= 5)
-      return pageForFlow(
-        res,
-        "Code request limit reached",
-        otpForm(
-          flow,
-          browser,
-          "Too many code requests for this sign-in. Start again later.",
-          email,
-        ),
-        flow,
-        429,
-      );
-    if (flow.lastOtpSentAt && now - flow.lastOtpSentAt < RESEND_COOLDOWN)
-      return pageForFlow(
-        res,
-        "Wait before requesting another code",
-        otpForm(
-          flow,
-          browser,
-          "Wait five seconds before requesting another code.",
-          email,
-        ),
-        flow,
-        429,
-      );
-    const limitKey = `${email}/${Math.floor(now / 600_000)}`;
-    const count = db.get("otp-limits", limitKey) ?? 0;
-    if (count >= 5)
-      return pageForFlow(
-        res,
-        "Try again later",
-        otpForm(
-          flow,
-          browser,
-          "Too many codes were requested for this email. Wait ten minutes.",
-          email,
-        ),
-        flow,
-        429,
-      );
-    if (flow.email && flow.email !== email)
-      mail.supersedeOtp({ email: flow.email, type: "sign-in" });
-    db.set("otp-limits", limitKey, count + 1);
-    flow.email = email;
-    flow.otpRequestCount = (flow.otpRequestCount ?? 0) + 1;
-    flow.lastOtpSentAt = now;
-    delete flow.authDid;
-    delete flow.authEmail;
-    save(flow);
+    let email;
+    let reserved;
+    let preparingMail = false;
     try {
-      await authentication.sendSignInCode(email);
-    } catch {
+      reserved = await db.transact(async () => {
+        // getFlow authenticated this flow before yielding. Refresh its mutable
+        // request counters and intent under the same lock as the shared budget.
+        flow = await refreshFlow(flow, browser);
+        email = String(emailValue ?? flow.email ?? "")
+          .trim()
+          .toLowerCase();
+        if (!email && emailValue === undefined)
+          throw new InvalidRequestError("Request a sign-in code first");
+        if (
+          !email ||
+          email.length > 320 ||
+          !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+        )
+          throw new InvalidRequestError("Enter a valid email address");
+        const now = Date.now();
+        if (flow.otpRequestCount >= 5) return { reason: "flow-limit" };
+        if (flow.lastOtpSentAt && now - flow.lastOtpSentAt < RESEND_COOLDOWN)
+          return { reason: "cooldown" };
+        const limitKey = `${email}/${Math.floor(now / 600_000)}`;
+        const count = (await db.get("otp-limits", limitKey)) ?? 0;
+        if (count >= 5) return { reason: "email-limit" };
+        if (flow.email && flow.email !== email)
+          await mail.supersedeOtp({ email: flow.email, type: "sign-in" });
+        await db.set("otp-limits", limitKey, count + 1);
+        flow.email = email;
+        flow.otpRequestCount = (flow.otpRequestCount ?? 0) + 1;
+        flow.lastOtpSentAt = now;
+        delete flow.authDid;
+        delete flow.authEmail;
+        await save(flow);
+        // Verification and outbox queue belong to this reservation. The returned
+        // dispatcher performs SMTP only after the outer transaction commits.
+        preparingMail = true;
+        const dispatch = await authentication.queueSignInCode(email);
+        preparingMail = false;
+        return { dispatch };
+      });
+      const refusal = {
+        "flow-limit": [
+          "Code request limit reached",
+          "Too many code requests for this sign-in. Start again later.",
+        ],
+        cooldown: [
+          "Wait before requesting another code",
+          "Wait five seconds before requesting another code.",
+        ],
+        "email-limit": [
+          "Try again later",
+          "Too many codes were requested for this email. Wait ten minutes.",
+        ],
+      }[reserved.reason];
+      if (refusal)
+        return pageForFlow(
+          res,
+          refusal[0],
+          otpForm(flow, browser, refusal[1], email),
+          flow,
+          429,
+        );
+      await reserved.dispatch.deliver();
+    } catch (error) {
+      if (!reserved && !preparingMail) throw error;
       return pageForFlow(
         res,
         "Code not delivered",
@@ -109,7 +116,7 @@ export function mountEmailLogin({
     "/login",
     guarded(async (req, res) => {
       const browser = await loadBrowser(req, res);
-      const flow = newFlow(browser);
+      const flow = await newFlow(browser);
       page(res, "Sign in", loginForm(flow, browser));
     }),
   );
@@ -118,7 +125,7 @@ export function mountEmailLogin({
     form,
     guarded(async (req, res) => {
       const { flow, browser } = await getFlow(req, res);
-      await sendCode(res, flow, browser, req.body.email);
+      await sendCode(res, flow, browser, String(req.body.email ?? ""));
     }),
   );
   app.post(
@@ -126,54 +133,78 @@ export function mountEmailLogin({
     form,
     guarded(async (req, res) => {
       const { flow, browser } = await getFlow(req, res);
-      if (!flow.email)
-        throw new InvalidRequestError("Request a sign-in code first");
-      await sendCode(res, flow, browser, flow.email);
+      await sendCode(res, flow, browser);
     }),
   );
   app.post(
     "/auth/verify",
     form,
     guarded(async (req, res) => {
-      const { flow, browser } = await getFlow(req, res);
-      if (!flow.email)
-        throw new InvalidRequestError("Request a sign-in code first");
-      const response = await authentication.verifySignInCode({
-        email: flow.email,
-        otp: String(req.body.otp ?? "").trim(),
-      });
-      if (!response.ok)
+      try {
+        const { flow, browser } = await getFlow(req, res);
+        if (!flow.email)
+          throw new InvalidRequestError("Request a sign-in code first");
+        const response = await authentication.verifySignInCode({
+          email: flow.email,
+          otp: String(req.body.otp ?? "").trim(),
+        });
+        if (!response.ok)
+          return pageForFlow(
+            res,
+            "Check your email",
+            otpForm(
+              flow,
+              browser,
+              "Invalid or expired code. Please try again.",
+            ),
+            flow,
+            400,
+          );
+        const identity = response.principal;
+        if (
+          !identity?.emailVerified ||
+          identity.email.toLowerCase() !== flow.email
+        )
+          throw new InvalidRequestError("Email verification did not complete");
+        await db.transact(async () => {
+          await readCurrentIntent(flow, browser);
+          await getAccountSecurity()?.assertLoginEmail({
+            email: flow.email,
+            userId: identity.userId,
+          });
+        });
+        // Rotate the provider's browser session after successful identity verification.
+        const rotated = await loadBrowser(req, res, true);
+        const verifiedEmail = identity.email.toLowerCase();
+        const row = await accounts.get(verifiedEmail);
+        if (!row || row.status === "provisioning") {
+          const body = await signupForm(
+            { ...flow, authEmail: verifiedEmail },
+            rotated,
+          );
+          const current = await db.transact(async () => {
+            const current = await readCurrentIntent(flow, rotated);
+            current.authEmail = verifiedEmail;
+            await save(current);
+            return current;
+          });
+          response.commitCookies(res);
+          return pageForFlow(res, "Create your account", body, current);
+        }
+        await authenticated(req, res, flow, rotated, row, {
+          verifiedEmail,
+          commitCookies: () => response.commitCookies(res),
+        });
+      } catch (error) {
+        if (!(error instanceof ChangedFlowIntentError)) throw error;
         return pageForFlow(
           res,
-          "Check your email",
-          otpForm(flow, browser, "Invalid or expired code. Please try again."),
-          flow,
+          "Use your latest email code",
+          otpForm(error.flow, error.browser, error.message),
+          error.flow,
           400,
         );
-      const identity = response.principal;
-      if (
-        !identity?.emailVerified ||
-        identity.email.toLowerCase() !== flow.email
-      )
-        throw new InvalidRequestError("Email verification did not complete");
-      getAccountSecurity()?.assertLoginEmail({
-        email: flow.email,
-        userId: identity.userId,
-      });
-      response.commitCookies(res);
-      // Rotate the provider's browser session after successful identity verification.
-      const rotated = await loadBrowser(req, res, true);
-      flow.authEmail = identity.email.toLowerCase();
-      save(flow);
-      const row = accounts.get(flow.authEmail);
-      if (!row || row.status === "provisioning")
-        return pageForFlow(
-          res,
-          "Create your account",
-          signupForm(flow, rotated),
-          flow,
-        );
-      await authenticated(req, res, flow, rotated, row);
+      }
     }),
   );
   app.post(

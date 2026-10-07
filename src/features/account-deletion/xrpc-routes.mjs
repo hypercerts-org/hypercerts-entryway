@@ -3,8 +3,10 @@ export function mountAccountDeletionXrpc({
   route,
   authenticatedRoute,
 }) {
-  authenticatedRoute("post", "server.requestAccountDelete", (req) =>
-    security.requestAccountDelete(req.auth),
+  authenticatedRoute(
+    "post",
+    "server.requestAccountDelete",
+    async (req) => await security.requestAccountDelete(req.auth),
   );
   route("post", "server.deleteAccount", (req) =>
     security.deleteAccount(req.body),

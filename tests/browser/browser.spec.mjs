@@ -5,13 +5,13 @@ import { createPublicKey, randomUUID } from 'node:crypto'
 import { SignJWT, importJWK, exportJWK } from 'jose'
 
 const config = JSON.parse(
-  readFileSync(process.env.SPIKE_CONFIG ?? './.runtime/config.json', 'utf8'),
+  readFileSync(process.env.SERVICE_CONFIG_PATH ?? './.runtime/config.json', 'utf8'),
 )
 const mailbox = new DatabaseSync(
-  process.env.SPIKE_TEST_DATABASE ?? '/entryway-data/entryway.sqlite',
+  process.env.TEST_ACCOUNT_DATABASE_PATH ?? '/entryway-data/account-authority.sqlite',
   { readOnly: true },
 )
-const read = mailbox.prepare('SELECT value FROM mini_kv WHERE namespace=? AND key=?')
+const read = mailbox.prepare('SELECT value FROM key_value_state WHERE namespace=? AND key=?')
 const kv = (namespace, key) => {
   const row = read.get(namespace, key)
   return row ? JSON.parse(row.value) : null

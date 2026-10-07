@@ -3,6 +3,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
+FROM dependencies AS changesets
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 FROM node:24-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
@@ -10,4 +12,4 @@ COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
 RUN npm run build && mkdir -p artifacts
 ENV NODE_ENV=production
-CMD ["npm", "start"]
+CMD ["node", "dist/src/main.mjs"]

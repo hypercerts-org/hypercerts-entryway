@@ -1,6 +1,6 @@
 // Read-only compatibility probe. An invalid empty subject cannot change an account.
 import { readFileSync } from 'node:fs'
-const config = JSON.parse(readFileSync(process.env.SPIKE_CONFIG, 'utf8'))
+const config = JSON.parse(readFileSync(process.env.SERVICE_CONFIG_PATH, 'utf8'))
 const call = async (url, options) => {
   const response = await fetch(url, { ...options, signal: AbortSignal.timeout(10000) })
   const body = await response.json().catch(() => ({}))

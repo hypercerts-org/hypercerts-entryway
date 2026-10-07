@@ -12,7 +12,7 @@ export function mountHttpXrpc({ app, config, reconcile, admin }) {
   );
   app.post("/admin/reconcile", async (req, res, next) => {
     try {
-      admin(req, undefined, true);
+      await admin(req, undefined, true);
       res.json(await reconcile());
     } catch (e) {
       next(e);

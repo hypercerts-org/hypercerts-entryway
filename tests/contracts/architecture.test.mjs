@@ -65,12 +65,16 @@ test("authentication, database and mail accept their own provider integrations",
       "import { betterAuth } from 'better-auth'",
     ],
     [
-      "src/database/sqlite/connection.mjs",
+      "src/database/connection.ts",
       "import Database from 'better-sqlite3'; db.sqlite.prepare('SELECT 1')",
     ],
     [
-      "src/database/sqlite/account-authority.mjs",
+      "src/database/drizzle/account-authority.mjs",
       "import { hashPassword } from 'better-auth/crypto'",
+    ],
+    [
+      "src/database/connection.ts",
+      "import { drizzleAdapter } from 'better-auth/adapters/drizzle'; import pg from 'pg'; import { drizzle } from 'drizzle-orm/node-postgres'",
     ],
     ["src/mail/smtp.ts", "import nodemailer from 'nodemailer'"],
     ["src/authentication/port.ts", "export interface BrowserPort {}"],
@@ -348,6 +352,8 @@ test("resolved provider aliases cannot bypass authentication, SQL or SMTP owners
   const providers = [
     ["@auth-provider", "better-auth", "resolved Better Auth"],
     ["@sql-provider", "better-sqlite3", "resolved SQL"],
+    ["@drizzle-provider", "drizzle-orm", "resolved SQL"],
+    ["@postgres-provider", "pg", "resolved SQL"],
     ["@mail-provider", "nodemailer", "resolved SMTP"],
   ];
   for (const [alias, provider] of providers) {
@@ -378,5 +384,89 @@ test("resolved provider aliases cannot bypass authentication, SQL or SMTP owners
         .some((issue) => issue.includes("pure rules cannot depend")),
       dependency,
     );
+  }
+});
+
+test("Drizzle and PostgreSQL providers stay inside database for all import forms", (t) => {
+  const f = fixture(t);
+  for (const provider of [
+    "drizzle-orm",
+    "drizzle-orm/sqlite-core",
+    "drizzle-orm/node-postgres",
+    "pg",
+    "pg-pool",
+  ]) {
+    for (const source of [
+      `import value from '${provider}'`,
+      `await import('${provider}')`,
+      `require('${provider}')`,
+    ]) {
+      assert.ok(
+        f
+          .check("src/features/email-login/routes.mjs", source)
+          .some((issue) => issue.includes("SQL belongs to database")),
+        source,
+      );
+      assert.ok(
+        f
+          .check("src/accounts/rules.ts", source)
+          .some((issue) => issue.includes("pure rules")),
+        source,
+      );
+    }
+  }
+  assert.ok(
+    f
+      .check(
+        "src/authentication/better-auth.mjs",
+        "import { drizzleAdapter } from 'better-auth/adapters/drizzle'",
+      )
+      .some((issue) => issue.includes("database adapter belongs to database")),
+  );
+  assert.ok(
+    f
+      .check(
+        "src/authentication/better-auth.mjs",
+        "import { drizzleAdapter } from '@better-auth/drizzle-adapter'",
+      )
+      .some((issue) => issue.includes("database adapter belongs to database")),
+  );
+});
+
+test("resolved Better Auth database adapter aliases cannot bypass database ownership", (t) => {
+  const f = fixture(t);
+  const adapterAliases = [
+    [
+      "@provider-db",
+      "node_modules/better-auth/dist/adapters/drizzle-adapter/index.d.mts",
+    ],
+    [
+      "@provider-db-package",
+      "node_modules/@better-auth/drizzle-adapter/dist/index.d.mts",
+    ],
+  ];
+  for (const [alias, path] of adapterAliases) {
+    f.options.paths[alias] = [
+      f.write(path, "export declare const drizzleAdapter: unknown"),
+    ];
+  }
+  for (const [alias] of adapterAliases) {
+    for (const statement of [
+      `import { drizzleAdapter } from '${alias}'`,
+      `await import('${alias}')`,
+      `require('${alias}')`,
+    ]) {
+      assert.ok(
+        f
+          .check("src/authentication/better-auth.mjs", statement)
+          .some((issue) =>
+            issue.includes(
+              "resolved authentication database adapter belongs to database",
+            ),
+          ),
+        `${statement}: ${JSON.stringify(f.check("src/authentication/better-auth.mjs", statement))}`,
+      );
+      assert.deepEqual(f.check("src/database/connection.ts", statement), []);
+    }
   }
 });

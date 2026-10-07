@@ -6,13 +6,13 @@ import { randomBytes } from 'node:crypto'
 import { Secp256k1Keypair } from '@atproto/crypto'
 import * as plc from '@did-plc/lib'
 
-const integration = process.env.SPIKE_CONFIG ? test : test.skip
+const integration = process.env.SERVICE_CONFIG_PATH ? test : test.skip
 let config, db, main, identity, adminAccount
 const password = `spike-${randomBytes(20).toString('hex')}`
 const unique = randomBytes(6).toString('hex')
 const mail = (email, namespace = 'outbox') => {
   const row = db
-    .prepare('SELECT value FROM mini_kv WHERE namespace=? AND key=?')
+    .prepare('SELECT value FROM key_value_state WHERE namespace=? AND key=?')
     .get(namespace, email)
   return row && JSON.parse(row.value)
 }
@@ -22,7 +22,13 @@ const admin = (pds) =>
 async function request(
   origin,
   path,
-  { body, auth, status = 200, method = body === undefined ? 'GET' : 'POST' } = {},
+  {
+    body,
+    auth,
+    status = 200,
+    strictJson = false,
+    method = body === undefined ? 'GET' : 'POST',
+  } = {},
 ) {
   const r = await fetch(new URL(path, origin), {
     method,
@@ -33,7 +39,9 @@ async function request(
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: AbortSignal.timeout(15000),
   })
-  const data = await r.json().catch(() => ({}))
+  const data = strictJson
+    ? JSON.parse(await r.text())
+    : await r.json().catch(() => ({}))
   assert.equal(r.status, status, `${method} ${path}: ${data.error ?? ''} ${data.message ?? ''}`)
   return data
 }
@@ -68,9 +76,9 @@ async function signup(label, pdsId = 'pds1', extra = {}) {
   return { ...session, email, handle, pds: config.pds.find((p) => p.id === pdsId) }
 }
 before(async () => {
-  if (!process.env.SPIKE_CONFIG) return
-  config = JSON.parse(readFileSync(process.env.SPIKE_CONFIG, 'utf8'))
-  db = new DatabaseSync('/entryway-data/entryway.sqlite', { readOnly: true })
+  if (!process.env.SERVICE_CONFIG_PATH) return
+  config = JSON.parse(readFileSync(process.env.SERVICE_CONFIG_PATH, 'utf8'))
+  db = new DatabaseSync('/entryway-data/account-authority.sqlite', { readOnly: true })
   main = await signup('legacy')
   identity = await signup('identity')
   adminAccount = await signup('admin', 'pds2')
@@ -91,7 +99,7 @@ integration(
       { status: 400 },
     )
     assert.equal(rejected.error, 'InvalidPassword')
-    assert.equal(db.prepare('SELECT did FROM mini_accounts WHERE email=?').get(email), undefined)
+    assert.equal(db.prepare('SELECT did FROM accounts WHERE email=?').get(email), undefined)
     const accepted = await call('server.createAccount', {
       email,
       handle,
@@ -284,7 +292,18 @@ integration(
     await call('identity.submitPlcOperation', { operation }, bearer(identity))
     const updated = await new plc.Client(config.plcUrl).getLastOp(identity.did)
     assert.deepEqual(updated.rotationKeys, operation.rotationKeys)
-    await call('identity.submitPlcOperation', { operation }, bearer(identity), { status: 400 })
+    const duplicate = await call(
+      'identity.submitPlcOperation',
+      { operation },
+      bearer(identity),
+      { status: 400, strictJson: true },
+    )
+    assert.equal(duplicate.error, 'InvalidRequest')
+    assert.equal(
+      duplicate.message === `Invalid signature on op: ${JSON.stringify(operation)}`,
+      true,
+      'Duplicate must preserve the exact unchanged PLC rejection',
+    )
     await call('identity.requestPlcOperationSignature', {}, bearer(identity))
     const migration = await call(
       'identity.signPlcOperation',
@@ -298,7 +317,22 @@ integration(
     )
     assert.equal(migration.operation.services.atproto_pds.endpoint, config.pds[1].url)
     // A hosting PDS must not accept a migration-away operation through its local submit API.
-    await call('identity.submitPlcOperation', migration, bearer(identity), { status: 400 })
+    const rejectedMigration = await call(
+      'identity.submitPlcOperation',
+      migration,
+      bearer(identity),
+      { status: 400, strictJson: true },
+    )
+    assert.equal(rejectedMigration.error, 'InvalidRequest')
+    assert.equal(rejectedMigration.message, 'Incorrect endpoint on atproto_pds service')
+    // Both definitively rejected requests preserve the next ordinary action.
+    await call('identity.requestPlcOperationSignature', undefined, bearer(identity))
+    const afterRejections = await new plc.Client(config.plcUrl).getLastOp(identity.did)
+    assert.equal(
+      JSON.stringify(afterRejections) === JSON.stringify(updated),
+      true,
+      'Both rejections preserve the published operation',
+    )
   },
 )
 integration('entryway resource-status and reserve-key APIs return actual PDS state', async () => {
@@ -343,7 +377,7 @@ integration(
       { origin: adminAccount.pds.url },
     )
     const messages = db
-      .prepare("SELECT value FROM mini_kv WHERE namespace='mail-outbox'")
+      .prepare("SELECT value FROM key_value_state WHERE namespace='mail-outbox'")
       .all()
       .map((r) => JSON.parse(r.value))
     assert.ok(
@@ -357,7 +391,7 @@ integration(
       { origin: adminAccount.pds.url },
     )
     const row = JSON.parse(
-      db.prepare('SELECT data FROM mini_accounts WHERE did=?').get(adminAccount.did).data,
+      db.prepare('SELECT data FROM accounts WHERE did=?').get(adminAccount.did).data,
     )
     assert.equal(row.email, newEmail)
     assert.equal(row.emailVerified, false)
@@ -427,7 +461,7 @@ integration(
     await call('server.deleteAccount', { did: a.did, token, password }, undefined, {
       origin: a.pds.url,
     })
-    const row = JSON.parse(db.prepare('SELECT data FROM mini_accounts WHERE did=?').get(a.did).data)
+    const row = JSON.parse(db.prepare('SELECT data FROM accounts WHERE did=?').get(a.did).data)
     assert.equal(row.status, 'deleted')
     await call('server.createSession', { identifier: a.email, password }, undefined, {
       status: 403,
@@ -478,7 +512,7 @@ integration(
     })
     assert.equal(status.phase, 'complete')
     assert.equal(
-      db.prepare('SELECT pds_id FROM mini_accounts WHERE did=?').get(a.did).pds_id,
+      db.prepare('SELECT pds_id FROM accounts WHERE did=?').get(a.did).pds_id,
       'pds2',
     )
   },

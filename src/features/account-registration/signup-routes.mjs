@@ -26,7 +26,10 @@ export function mountSignupRoutes({
         !session.emailVerified
       )
         throw new InvalidRequestError("Sign-in session expired");
-      const existing = accounts.get(flow.authEmail);
+      const existing = await accounts.get(flow.authEmail);
+      const savedIntent = !existing
+        ? await accounts.pendingRegistration(flow.authEmail)
+        : null;
       let row = existing;
       if (!existing || existing.status === "provisioning") {
         try {
@@ -36,30 +39,43 @@ export function mountSignupRoutes({
                   email: existing.email,
                   handle: existing.handle,
                   pdsId: existing.pdsId,
+                  recoveryKey: existing.recoveryKey,
                   inviteCode:
-                    db.get("entryway:invite-reservations", existing.email)
-                      ?.code ?? req.body.inviteCode,
+                    (
+                      await db.get(
+                        "entryway:invite-reservations",
+                        existing.email,
+                      )
+                    )?.code ?? req.body.inviteCode,
                 }
               : {
                   email: flow.authEmail,
-                  handle: String(req.body.handle ?? "")
+                  recoveryKey: savedIntent?.recoveryKey ?? undefined,
+                  handle: String(savedIntent?.handle ?? req.body.handle ?? "")
                     .trim()
                     .toLowerCase(),
-                  pdsId: String(req.body.pdsId ?? ""),
+                  pdsId: String(savedIntent?.pdsId ?? req.body.pdsId ?? ""),
                   inviteCode: req.body.inviteCode,
                 },
           );
         } catch (error) {
+          const pending = await accounts.ownership.pendingExternal(
+            `email:${flow.authEmail}`,
+          );
+          const message =
+            pending?.state === "dispatched"
+              ? "Account setup is saved and waiting for operator recovery. Contact the service operator; retrying alone cannot resolve this pending request."
+              : error.message;
           return pageForFlow(
             res,
             "Create your account",
-            `<p role="alert">${escapeHtml(error.message)}</p>${signupForm(flow, browser)}`,
+            `<p role="alert">${escapeHtml(message)}</p>${await signupForm(flow, browser)}`,
             flow,
             error.status >= 400 && error.status < 600 ? error.status : 503,
           );
         }
       }
-      getAccountSecurity()?.bindVerifiedIdentity({
+      await getAccountSecurity()?.bindVerifiedIdentity({
         did: row.did,
         email: session.email.toLowerCase(),
         userId: session.userId,

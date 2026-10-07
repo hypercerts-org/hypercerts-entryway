@@ -3,15 +3,15 @@ import { fail } from "../../accounts/security-primitives.mjs";
 export function createMigrationProof({ proofs, config }) {
   const { account, principal, issue, consume } = proofs;
   const operations = {
-    requestMigrationProof(actor, { pdsId }) {
-      const row = principal(actor);
+    async requestMigrationProof(actor, { pdsId }) {
+      const row = await principal(actor);
       if (!config.pds.some((pds) => pds.id === pdsId) || row.pdsId === pdsId)
         throw fail(400, "InvalidPds", "Choose another configured PDS");
-      return issue("account-migrate", row, row.email, { pdsId });
+      return await issue("account-migrate", row, row.email, { pdsId });
     },
-    confirmMigrationProof(actor, { pdsId, token }) {
-      const row = principal(actor);
-      const proof = consume(token, "account-migrate", {
+    async confirmMigrationProof(actor, { pdsId, token }) {
+      const row = await principal(actor);
+      const proof = await consume(token, "account-migrate", {
         did: row.did,
         email: row.email,
       });

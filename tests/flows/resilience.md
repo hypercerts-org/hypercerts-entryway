@@ -21,3 +21,12 @@ stays failed even if restoration succeeds.
 
 Do not run against a user-owned production stack. The controller requires the
 scoped `hypercerts-entryway` project prefix and reads its selected Compose file.
+
+## Fresh deployment profiles
+
+`./tests/local.sh resilience-profiles` is a separate required gate. It creates
+fresh SQLite single-node, PostgreSQL single-node and PostgreSQL two-node projects;
+it does not reuse this flow's signed-in fixture. The [deployment profile contract](../../docs/deployment-profiles.md)
+states exact journeys, independent-process proof scope, fault bounds, safe UI
+continuation and evidence requirements. Run the collection sequentially to avoid
+contention from concurrent browser stacks; preserve failed receipts and state.

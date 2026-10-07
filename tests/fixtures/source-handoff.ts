@@ -8,15 +8,15 @@ import type { SourceFixtureClient } from './source-client.js'
 export class BoundFixtureSourceHandoffSigner {
   public constructor(
     private readonly client: SourceFixtureClient,
-    private readonly allowed: { did: string; entrywayRotationKey: string; targetPdsUrl: string },
+    private readonly allowed: { did: string; rotationAuthorityKey: string; targetPdsUrl: string },
   ) {}
 
-  public async signBoundHandoff(input: { workflowId: string; did: string; expectedPreviousCid: string; entrywayRotationKey: string; targetPdsUrl: string }): Promise<{ operation: unknown; cid: string }> {
-    if (input.did !== this.allowed.did || input.entrywayRotationKey !== this.allowed.entrywayRotationKey)
+  public async signBoundHandoff(input: { workflowId: string; did: string; expectedPreviousCid: string; rotationAuthorityKey: string; targetPdsUrl: string }): Promise<{ operation: unknown; cid: string }> {
+    if (input.did !== this.allowed.did || input.rotationAuthorityKey !== this.allowed.rotationAuthorityKey)
       throw new MigrationError('AuthorityNotDelegated', 'Source fixture rejected an unbound handoff request')
     const signed = await this.client.signBoundHandoff({
       did: input.did, expectedPreviousCid: input.expectedPreviousCid,
-      entrywayRotationKey: input.entrywayRotationKey,
+      rotationAuthorityKey: input.rotationAuthorityKey,
       targetPdsUrl: input.targetPdsUrl,
     })
     if (!signed.cid) throw new MigrationError('UnexpectedPlcHead', 'Source fixture did not report an operation CID')

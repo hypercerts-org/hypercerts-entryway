@@ -1,3 +1,4 @@
+import { mountOperationRecoveryRoutes } from "./features/account-settings/operation-recovery-routes.js";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import express from "express";
 import { createAccounts } from "./compose-accounts.mjs";
@@ -7,12 +8,16 @@ import { mountAccountUi } from "./compose-account-ui.mjs";
 import { page } from "./ui/html.mjs";
 import { createLegacy } from "./oauth/legacy-credentials.mjs";
 import { createAccountSecurity } from "./compose-account-security.mjs";
-import { createEntrywayExtras } from "./compose-protocol-operations.mjs";
+import { createProtocolOperations } from "./compose-protocol-operations.mjs";
 import { createAccountMigration } from "./features/pds-migration/move-between-pds.mjs";
 import { requestFailureEvent } from "./logging/request-event.js";
 
-export async function createApp({ config, db, mail }) {
-  const accounts = await createAccounts({ db, config });
+export async function createApp({ config, db, mail, lifecycle }) {
+  const accounts = await createAccounts({
+    db,
+    config,
+    workerId: lifecycle?.instanceId,
+  });
   const app = express();
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
@@ -28,11 +33,19 @@ export async function createApp({ config, db, mail }) {
       pds: config.pds.map(({ id, url }) => ({ id, url })),
     }),
   );
-  app.get("/.well-known/atproto-did", (req, res) => {
-    const account = accounts.get(req.hostname);
-    if (!account || ["deleted", "provisioning"].includes(account.status))
-      return res.sendStatus(404);
-    res.type("text/plain").send(account.did);
+  if (lifecycle) {
+    app.get("/_readyz", lifecycle.readiness);
+    app.use(lifecycle.admission);
+  }
+  app.get("/.well-known/atproto-did", async (req, res, next) => {
+    try {
+      const account = await accounts.get(req.hostname);
+      if (!account || ["deleted", "provisioning"].includes(account.status))
+        return res.sendStatus(404);
+      res.type("text/plain").send(account.did);
+    } catch (error) {
+      next(error);
+    }
   });
   app.get("/.well-known/did.json", (_req, res) =>
     res.json({
@@ -70,10 +83,14 @@ export async function createApp({ config, db, mail }) {
     legacy,
     mail,
   });
-  const extras = await createEntrywayExtras({ db, config, accounts });
-  accounts.setProvisionPolicy({
-    reserve: extras.reserveInvite,
-    complete: extras.completeInvite,
+  const protocolOperations = await createProtocolOperations({
+    db,
+    config,
+    accounts,
+  });
+  await accounts.setProvisionPolicy({
+    reserve: protocolOperations.reserveInvite,
+    complete: protocolOperations.completeInvite,
   });
   const migration = await createAccountMigration({
     db,
@@ -82,37 +99,42 @@ export async function createApp({ config, db, mail }) {
     legacy,
     security,
   });
-  app.get("/_ready", (req, res) => {
-    const expected = Buffer.from(
-      `Basic ${Buffer.from(`admin:${config.adminPassword}`).toString("base64")}`,
-    );
-    const supplied = Buffer.from(req.get("authorization") ?? "");
-    if (
-      expected.length !== supplied.length ||
-      !timingSafeEqual(expected, supplied)
-    ) {
-      return res.sendStatus(401);
-    }
-    res.json({
-      status: "ready",
-      schema: db.schema,
-      pending: db.pendingCounts(),
-      custody: {
-        accountBinding: true,
-        managedMigration: true,
-        externalMigration: {
-          operatorFixtureConfigured: Boolean(
-            process.env.SOURCE_FIXTURE_URL &&
-            process.env.SOURCE_FIXTURE_TOKEN_FILE,
-          ),
+  app.get("/_ready", async (req, res, next) => {
+    try {
+      const expected = Buffer.from(
+        `Basic ${Buffer.from(`admin:${config.adminPassword}`).toString("base64")}`,
+      );
+      const supplied = Buffer.from(req.get("authorization") ?? "");
+      if (
+        expected.length !== supplied.length ||
+        !timingSafeEqual(expected, supplied)
+      ) {
+        return res.sendStatus(401);
+      }
+      res.json({
+        status: "ready",
+        schema: db.schema,
+        pending: await db.pendingCounts(),
+        custody: {
+          accountBinding: true,
+          managedMigration: true,
+          externalMigration: {
+            operatorFixtureConfigured: Boolean(
+              process.env.SOURCE_FIXTURE_URL &&
+              process.env.SOURCE_FIXTURE_TOKEN_FILE,
+            ),
+          },
         },
-      },
-    });
+      });
+    } catch (error) {
+      next(error);
+    }
   });
   let repairPromise;
   const reconcile = () => {
     if (!repairPromise)
       repairPromise = (async () => [
+        ...(await security.reconcileDeletions()),
         ...(await migration.reconcile()),
         ...(await accounts.reconcile()),
       ])().finally(() => {
@@ -131,6 +153,7 @@ export async function createApp({ config, db, mail }) {
     migration,
   });
   app.use(express.json({ limit: "64kb" }));
+  mountOperationRecoveryRoutes({ app, config, ownership: accounts.ownership });
   await mountXrpc({
     app,
     db,
@@ -139,7 +162,7 @@ export async function createApp({ config, db, mail }) {
     oauth,
     legacy,
     security,
-    extras,
+    protocolOperations,
     migration,
     reconcile,
   });

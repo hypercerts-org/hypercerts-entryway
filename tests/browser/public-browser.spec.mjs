@@ -2,15 +2,15 @@ import { test, expect } from '@playwright/test'
 import { DatabaseSync } from 'node:sqlite'
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 
-const config = JSON.parse(readFileSync(process.env.SPIKE_CONFIG, 'utf8'))
-const db = new DatabaseSync(process.env.SPIKE_TEST_DATABASE ?? '/entryway-data/entryway.sqlite', {
+const config = JSON.parse(readFileSync(process.env.SERVICE_CONFIG_PATH, 'utf8'))
+const db = new DatabaseSync(process.env.TEST_ACCOUNT_DATABASE_PATH ?? '/entryway-data/account-authority.sqlite', {
   readOnly: true,
 })
 const cases = config.pds.slice(0, 2).map((pds, index) => {
   const handle =
     config.publicHandles?.[index] ??
     new URL(index === 0 ? config.issuer : config.clientUrl).hostname
-  const existing = db.prepare('SELECT data FROM mini_accounts WHERE handle=?').get(handle)
+  const existing = db.prepare('SELECT data FROM accounts WHERE handle=?').get(handle)
   const identity = existing
     ? JSON.parse(existing.data)
     : {
@@ -34,7 +34,7 @@ for (const { identity, existing } of cases) {
     test.setTimeout(180_000)
     const mail = () => {
       const value = db
-        .prepare('SELECT value FROM mini_kv WHERE namespace=? AND key=?')
+        .prepare('SELECT value FROM key_value_state WHERE namespace=? AND key=?')
         .get('outbox', identity.email)
       return value ? JSON.parse(value.value) : null
     }

@@ -1,3 +1,8 @@
+import {
+  noExternalResult,
+  type OperationOwnership,
+} from "../../accounts/operation-ownership.js";
+import { DomainError } from "../../accounts/errors.js";
 import { advance, commandFor, requireSameOwner } from "./state-machine.js";
 import { createHash } from "node:crypto";
 import { publicKeyAlgorithm } from "../../plc/custody.js";
@@ -55,6 +60,8 @@ const moved: readonly MigrationPhase[] = [
 export class ExternalMigrationService {
   public constructor(
     private readonly d: {
+      readonly ownership: OperationOwnership;
+      readonly transact: <T>(operation: () => Promise<T>) => Promise<T>;
       readonly workflows: MigrationWorkflowReader & MigrationWorkflowTransactor;
       readonly start: MigrationStartTransactor;
       readonly snapshots: SnapshotReader & SnapshotTransactor;
@@ -62,7 +69,7 @@ export class ExternalMigrationService {
       readonly source: SourceFixtureClient;
       readonly target: PdsMigrationClient;
       readonly sourceHandoffSigner: BoundFixtureSourceHandoffSigner;
-      readonly entrywayPlcSigner: Secp256k1MigrationPlcSigner;
+      readonly plcRotationSigner: Secp256k1MigrationPlcSigner;
       readonly audit: (input: {
         workflowId: string;
         event: string;
@@ -130,7 +137,14 @@ export class ExternalMigrationService {
       targetPdsUrl: workflow.targetPdsUrl,
       handle: workflow.handle,
     };
-    await this.d.start.createReservedWorkflow({ reservation, workflow });
+    await this.d.ownership.run(workflow.did, this.intent(workflow), () =>
+      this.d.transact(async () => {
+        await this.d.start.createReservedWorkflow({ reservation, workflow });
+        await this.d.ownership.checkpoint(workflow.phase, {
+          workflowId: workflow.id,
+        });
+      }),
+    );
     this.audit(workflow, "created");
     return workflow;
   }
@@ -155,14 +169,36 @@ export class ExternalMigrationService {
         "OwnerBindingChanged",
         "Recent verified destination ownership changed",
       );
-    return this.execute(workflow, owner.email, actor.sessionId);
+    return this.d.ownership.run(
+      workflow.did,
+      this.intent(workflow),
+      async () => {
+        const current = await this.d.workflows.getById(workflowId);
+        if (!current)
+          throw new MigrationError(
+            "ManualRecoveryRequired",
+            "Migration workflow is missing",
+          );
+        await this.requireOwner(current, actor.sessionId);
+        return this.execute(current, owner.email, actor.sessionId);
+      },
+    );
+  }
+  private intent(w: MigrationWorkflow) {
+    return {
+      kind: "external-migration",
+      request: { workflowId: w.id, targetPdsUrl: w.targetPdsUrl },
+    };
   }
   private async transition(
     before: MigrationWorkflow,
     after: MigrationWorkflow,
     id: string,
   ): Promise<void> {
-    await this.d.workflows.transition(before, after, id);
+    await this.d.transact(async () => {
+      await this.d.workflows.transition(before, after, id);
+      await this.d.ownership.checkpoint(after.phase, { workflowId: after.id });
+    });
     this.audit(after, id);
     await this.d.checkpointObserver?.(after);
   }
@@ -178,7 +214,26 @@ export class ExternalMigrationService {
         if (moved.includes(w.phase)) await this.ensureInventory(w);
         switch (commandFor(w).kind) {
           case "freeze-source":
-            await this.d.source.freezeSource(w.did);
+            await this.d.ownership.dispatch(
+              {
+                step: "freeze-external-source",
+                target: w.sourcePdsUrl,
+                method: "freeze-source",
+                intent: { did: w.did },
+              },
+              {
+                ...noExternalResult,
+                send: () => this.d.source.freezeSource(w.did),
+                observe: async () => {
+                  const status = await this.d.source.status();
+                  if (status.did !== w.did || status.head !== w.expectedPlcHead)
+                    return { state: "diverged" };
+                  return status.frozen
+                    ? { state: "applied", result: undefined }
+                    : { state: "unapplied" };
+                },
+              },
+            );
             {
               const n = advance(w, "source-frozen");
               await this.transition(w, n, "freeze-source");
@@ -202,7 +257,7 @@ export class ExternalMigrationService {
                 workflowId: w.id,
                 did: w.did,
                 expectedPreviousCid: w.expectedPlcHead ?? "",
-                entrywayRotationKey: w.authority.entrywayRotationKey,
+                rotationAuthorityKey: w.authority.rotationAuthorityKey,
                 targetPdsUrl: w.targetPdsUrl,
               });
               const n = advance(w, "handoff-journaled", {
@@ -224,12 +279,40 @@ export class ExternalMigrationService {
                   "ManualRecoveryRequired",
                   "Journaled source handoff is missing its CID",
                 );
-              await this.d.source.publishPlcOperation({
-                did: w.did,
-                operation: w.handoffOperation,
-                cid: handoffCid,
-                expectedPreviousCid: w.expectedPlcHead ?? "",
-              });
+              await this.d.ownership.dispatch(
+                {
+                  step: "publish-source-handoff",
+                  target: w.sourcePdsUrl,
+                  method: "publish-plc-operation",
+                  intent: {
+                    did: w.did,
+                    cid: handoffCid,
+                    previous: w.expectedPlcHead,
+                  },
+                },
+                {
+                  ...noExternalResult,
+                  send: async () => {
+                    await this.d.source.publishPlcOperation({
+                      did: w.did,
+                      operation: w.handoffOperation,
+                      cid: handoffCid,
+                      expectedPreviousCid: w.expectedPlcHead ?? "",
+                    });
+                  },
+                  observe: async () => {
+                    const head = await this.d.source.observePlcHead(w.did);
+                    return head === handoffCid
+                      ? { state: "applied", result: undefined }
+                      : {
+                          state:
+                            head === w.expectedPlcHead
+                              ? "unapplied"
+                              : "diverged",
+                        };
+                  },
+                },
+              );
               const n = advance(w, "authority-handed-off", {
                 expectedPlcHead: handoffCid,
               });
@@ -241,7 +324,7 @@ export class ExternalMigrationService {
             {
               await this.assertHead(w);
               const k = await this.d.target.reserveTargetRepositoryKey(w.did);
-              const s = await this.d.entrywayPlcSigner.signMigrationMove({
+              const s = await this.d.plcRotationSigner.signMigrationMove({
                 workflowId: w.id,
                 did: w.did,
                 handoffOperation: w.handoffOperation,
@@ -279,6 +362,8 @@ export class ExternalMigrationService {
             await this.d.target.importRepository({
               did: w.did,
               workflowId: w.id,
+              expectedPlcHead: w.moveOperationCid ?? "",
+              expectedRepositoryKey: w.targetRepositoryKey ?? "",
             });
             {
               const n = advance(w, "repo-imported");
@@ -288,7 +373,11 @@ export class ExternalMigrationService {
             break;
           case "import-blobs":
             await this.snapshot(w);
-            await this.d.target.importBlobs({ did: w.did, workflowId: w.id });
+            await this.d.target.importBlobs({
+              did: w.did,
+              workflowId: w.id,
+              expectedPlcHead: w.moveOperationCid ?? "",
+            });
             {
               const n = advance(w, "blobs-imported");
               await this.transition(w, n, "import-blobs");
@@ -301,6 +390,8 @@ export class ExternalMigrationService {
               await this.d.target.verifyInactiveTarget({
                 did: w.did,
                 manifest: m,
+                workflowId: w.id,
+                expectedPlcHead: w.moveOperationCid ?? "",
                 expectedRepositoryKey: w.targetRepositoryKey ?? "",
               });
               const n = advance(w, "target-ready");
@@ -311,33 +402,53 @@ export class ExternalMigrationService {
           case "complete-binding":
             await this.requireOwner(w, currentSessionId);
             await this.assertHead(w);
-            await this.d.accounts.finalizeImportedAccount({
-              workflowId: w.id,
-              did: w.did,
-              userId: w.ownerUserId,
-              email,
-              handle: w.handle,
-              pdsId: w.targetPdsId,
-              pdsUrl: w.targetPdsUrl,
-            });
             {
               const n = advance(w, "account-bound");
-              await this.transition(w, n, "finalize-account-binding");
+              await this.d.transact(async () => {
+                await this.d.accounts.finalizeImportedAccount({
+                  workflowId: w.id,
+                  did: w.did,
+                  userId: w.ownerUserId,
+                  email,
+                  handle: w.handle,
+                  pdsId: w.targetPdsId,
+                  pdsUrl: w.targetPdsUrl,
+                });
+                await this.d.workflows.transition(
+                  w,
+                  n,
+                  "finalize-account-binding",
+                );
+                await this.d.ownership.checkpoint(n.phase, {
+                  workflowId: n.id,
+                });
+              });
+              this.audit(n, "finalize-account-binding");
+              await this.d.checkpointObserver?.(n);
               w = n;
             }
             break;
           case "activate-target":
             await this.requireOwner(w, currentSessionId);
             await this.assertHead(w);
-            await this.d.target.activateTarget(w.did);
-            await this.d.accounts.activateImportedAccount({
-              workflowId: w.id,
-              did: w.did,
-              userId: w.ownerUserId,
-            });
+            await this.d.target.activateTarget(w.did, w.moveOperationCid ?? "");
             {
               const n = advance(w, "complete");
-              await this.transition(w, n, "activate-target");
+              await this.d.transact(async () => {
+                await this.d.accounts.activateImportedAccount({
+                  workflowId: w.id,
+                  did: w.did,
+                  userId: w.ownerUserId,
+                });
+                await this.d.workflows.transition(w, n, "activate-target");
+                await this.d.ownership.checkpoint(
+                  "complete",
+                  { workflowId: n.id },
+                  false,
+                );
+              });
+              this.audit(n, "activate-target");
+              await this.d.checkpointObserver?.(n);
               w = n;
             }
             break;
@@ -347,7 +458,25 @@ export class ExternalMigrationService {
       }
       return w;
     } catch (error: unknown) {
-      if (error instanceof FixtureCheckpointPause) throw error;
+      if (
+        error instanceof FixtureCheckpointPause ||
+        error instanceof DomainError
+      )
+        throw error;
+      // A transport error after a durable dispatch is uncertain even when its
+      // stable code is a migration error. Keep the saved command reachable so
+      // verified operator recovery can invoke its operation-specific observer.
+      if (await this.d.ownership.pendingExternal(w.did)) {
+        await this.d.workflows.markRetryable({
+          ...w,
+          stableErrorCode: "RetryPending",
+        });
+        throw new DomainError(
+          "OperationRecoveryRequired",
+          409,
+          "An external migration request is pending. Contact the operator for verified recovery, then retry the saved migration.",
+        );
+      }
       if (!(error instanceof MigrationError)) {
         await this.d.workflows.markRetryable({
           ...w,
@@ -444,7 +573,7 @@ export class ExternalMigrationService {
           "user",
         ),
         publicKey(
-          workflow.authority.entrywayRotationKey,
+          workflow.authority.rotationAuthorityKey,
           "entryway-plc",
           "entryway",
         ),

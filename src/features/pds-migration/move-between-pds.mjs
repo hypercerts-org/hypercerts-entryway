@@ -1,3 +1,8 @@
+import { verifyRepositorySnapshot } from "../../pds/repository-verification.js";
+import {
+  noExternalResult,
+  signingKeyResult,
+} from "../../accounts/operation-ownership.js";
 import { randomUUID } from "node:crypto";
 import { importJWK, SignJWT } from "jose";
 import * as plc from "@did-plc/lib";
@@ -36,12 +41,23 @@ export async function createAccountMigration({
   const signingKey = await importJWK(config.jwtJwk, "ES256K");
   const maxBytes = config.migrationMaxBytes ?? 256 * 1024 * 1024;
   const maxBlobs = config.migrationMaxBlobs ?? 1000;
-  const serial = accounts.serialized ?? ((_did, fn) => fn());
+  const ownership = accounts.ownership;
+  const serial = (did, targetPdsId, perform) =>
+    accounts.serialized(did, perform, {
+      kind: "managed-migration",
+      request: { targetPdsId },
+    });
   const operationKey = (did) => `migrate:${did}`;
-  const read = (did) => db.get("migration:operations", operationKey(did));
-  const journal = (operation, changes = {}) => {
-    const updated = { ...operation, ...changes, updatedAt: new Date() };
-    db.set("migration:operations", operation.id, updated);
+  const read = async (did) =>
+    await db.get("migration:operations", operationKey(did));
+  const journal = async (operation, changes = {}) => {
+    const updated = {
+      ...operation,
+      ...changes,
+      updatedAt: new Date(),
+      authorityOperationId: ownership.currentClaim.operationId,
+    };
+    await db.set("migration:operations", operation.id, updated);
     return updated;
   };
   const choose = (pdsId) => {
@@ -49,21 +65,21 @@ export async function createAccountMigration({
     if (!pds) throw error("InvalidPds", "Choose a configured PDS");
     return pds;
   };
-  const requireOwner = (principal, did = principal?.did) => {
+  const requireOwner = async (principal, did = principal?.did) => {
     if (!principal || principal.did !== did)
       throw error(
         "Forbidden",
         "The authenticated identity must own the migrating DID",
         403,
       );
-    const row = accounts.get(did);
+    const row = await accounts.get(did);
     if (!row || row.did !== did)
       throw error(
         "AuthorityNotManaged",
         "This entryway has no verified account authority for that DID",
         403,
       );
-    security.summary(principal);
+    await security.summary(principal);
     if (
       !["active", "deactivated"].includes(row.status) ||
       row.emailVerified === false
@@ -87,15 +103,57 @@ export async function createAccountMigration({
       .sign(signingKey);
   const userCall = async (did, pds, method, body) =>
     xrpc(pds.internalUrl, method, body, `Bearer ${await jwt(did, pds)}`);
-  const setActive = (did, pds, active) =>
-    xrpc(
-      pds.internalUrl,
-      "com.atproto.admin.updateSubjectStatus",
+  const setActive = (did, pds, active, step) =>
+    ownership.dispatch(
       {
-        subject: { $type: "com.atproto.admin.defs#repoRef", did },
-        deactivated: { applied: !active },
+        step,
+        target: pds.url,
+        method: "com.atproto.admin.updateSubjectStatus",
+        intent: { did, active },
       },
-      basic(pds),
+      {
+        ...noExternalResult,
+        send: () =>
+          xrpc(
+            pds.internalUrl,
+            "com.atproto.admin.updateSubjectStatus",
+            {
+              subject: { $type: "com.atproto.admin.defs#repoRef", did },
+              deactivated: { applied: !active },
+            },
+            basic(pds),
+          ),
+        observe: async () => {
+          const status = await userCall(
+            did,
+            pds,
+            "com.atproto.server.checkAccountStatus",
+          );
+          if (typeof status.activated !== "boolean")
+            return { state: "diverged" };
+          return {
+            state: status.activated === active ? "applied" : "unapplied",
+            result: {},
+          };
+        },
+      },
+    );
+  const reserveKey = (did, target, head) =>
+    ownership.dispatch(
+      {
+        step: `reserve-target-key:${head}`,
+        target: target.url,
+        method: "com.atproto.server.reserveSigningKey",
+        intent: { did },
+      },
+      {
+        ...signingKeyResult,
+        send: () =>
+          xrpc(target.internalUrl, "com.atproto.server.reserveSigningKey", {
+            did,
+          }),
+        observe: async () => ({ state: "replay-safe" }),
+      },
     );
   const request = async (url, init = {}, limit = maxBytes) => {
     const response = await fetch(url, {
@@ -146,7 +204,7 @@ export async function createAccountMigration({
         headers: { authorization: basic(source) },
       },
     );
-    db.set("migration:snapshots", `${operation.id}/repo`, {
+    await db.set("migration:snapshots", `${operation.id}/repo`, {
       base64: repo.bytes.toString("base64"),
       size: repo.bytes.length,
     });
@@ -181,7 +239,7 @@ export async function createAccountMigration({
         );
         totalBytes += blob.bytes.length;
         blobs.push(cid);
-        db.set("migration:snapshots", `${operation.id}/blob/${cid}`, {
+        await db.set("migration:snapshots", `${operation.id}/blob/${cid}`, {
           base64: blob.bytes.toString("base64"),
           size: blob.bytes.length,
           type: blob.type,
@@ -190,7 +248,7 @@ export async function createAccountMigration({
       if (!list.cids.length || !list.cursor || list.cursor === cursor) break;
       cursor = list.cursor;
     }
-    return journal(operation, {
+    return await journal(operation, {
       phase: "snapshot-ready",
       snapshot: { status, blobs, totalBytes },
       importedBlobs: [],
@@ -204,7 +262,7 @@ export async function createAccountMigration({
         "Cannot migrate a tombstoned identity",
       );
     const normalized = plc.normalizeOp(current);
-    if (!normalized.rotationKeys.includes(accounts.rotation.did()))
+    if (!normalized.rotationKeys.includes(await accounts.rotation.did()))
       throw error(
         "AuthorityNotManaged",
         "This entryway is not an authorized PLC rotation signer",
@@ -219,10 +277,10 @@ export async function createAccountMigration({
         "The DID document no longer points at the recorded source PDS",
         409,
       );
-    const { signingKey: reservedKey } = await xrpc(
-      target.internalUrl,
-      "com.atproto.server.reserveSigningKey",
-      { did: operation.did },
+    const { signingKey: reservedKey } = await reserveKey(
+      operation.did,
+      target,
+      (await cidForCbor(current)).toString(),
     );
     const expected = await plc.createUpdateOp(
       current,
@@ -244,7 +302,7 @@ export async function createAccountMigration({
     );
     const signed = operation.requestedPlcOp ?? expected;
     await plc.assureValidOp(signed);
-    await plc.assureValidSig([accounts.rotation.did()], signed);
+    await plc.assureValidSig([await accounts.rotation.did()], signed);
     const { sig: _expectedSig, ...expectedUnsigned } = expected;
     const { sig: _suppliedSig, ...suppliedUnsigned } = signed;
     if (
@@ -284,6 +342,111 @@ export async function createAccountMigration({
       throw failure;
     }
   };
+  const createTarget = (operation, target) =>
+    ownership.dispatch(
+      {
+        step: `create-target:${operation.plcOpCid}`,
+        target: target.url,
+        method: "com.atproto.server.createAccount",
+        intent: {
+          did: operation.did,
+          handle: operation.handle,
+          plcOp: operation.plcOp,
+        },
+      },
+      {
+        project: (outcome) => outcome,
+        resume: (outcome) => {
+          if (!["created", "plc-published-actor-absent"].includes(outcome))
+            throw error(
+              "OperationRecoveryRequired",
+              "The saved target outcome requires operator inspection",
+              409,
+            );
+          return outcome;
+        },
+        send: async () => {
+          await xrpc(target.internalUrl, "com.atproto.server.createAccount", {
+            did: operation.did,
+            handle: operation.handle,
+            plcOp: operation.plcOp,
+          });
+          return "created";
+        },
+        observe: async () => {
+          const actor = await probeTarget(operation, target);
+          const head = (
+            await cidForCbor(await accounts.plcClient.getLastOp(operation.did))
+          ).toString();
+          if (head === operation.plcOpCid) {
+            if (!actor)
+              return { state: "partial", result: "plc-published-actor-absent" };
+            return {
+              state:
+                actor.did === operation.did && actor.handle === operation.handle
+                  ? "applied"
+                  : "diverged",
+              result: "created",
+            };
+          }
+          return {
+            state:
+              head === operation.plcOp.prev && !actor
+                ? "unapplied"
+                : "diverged",
+          };
+        },
+      },
+    );
+  const verifyImportedSnapshot = async (operation, target) => {
+    if (
+      (
+        await cidForCbor(await accounts.plcClient.getLastOp(operation.did))
+      ).toString() !== operation.plcOpCid
+    )
+      throw error(
+        "IdentityChanged",
+        "PLC changed before target recovery verification",
+        409,
+      );
+    const source = await db.get("migration:snapshots", `${operation.id}/repo`);
+    if (!source)
+      throw error(
+        "MissingSnapshot",
+        "The saved source repository is missing",
+        409,
+      );
+    const targetRepo = await request(
+      getUrl(target, "com.atproto.sync.getRepo", { did: operation.did }),
+      { headers: { authorization: basic(target) } },
+    );
+    const verified = await verifyRepositorySnapshot({
+      sourceCar: Buffer.from(source.base64, "base64"),
+      targetCar: targetRepo.bytes,
+      did: operation.did,
+      sourceCommit: operation.snapshot.status.repoCommit,
+      targetSigningKey: operation.signingKey,
+    });
+    for (const cid of operation.snapshot.blobs) {
+      const expected = await db.get(
+        "migration:snapshots",
+        `${operation.id}/blob/${cid}`,
+      );
+      if (!expected)
+        throw error("MissingSnapshot", "A saved blob is missing", 409);
+      const observed = await request(
+        getUrl(target, "com.atproto.sync.getBlob", { did: operation.did, cid }),
+        { headers: { authorization: basic(target) } },
+      );
+      if (!observed.bytes.equals(Buffer.from(expected.base64, "base64")))
+        throw error(
+          "BlobIntegrityError",
+          "A target blob differs from the saved snapshot",
+          409,
+        );
+    }
+    return verified;
+  };
   const resume = async (initial) => {
     let operation = initial;
     const source = choose(operation.sourcePdsId);
@@ -309,19 +472,21 @@ export async function createAccountMigration({
         // Reject lost authority or a malformed supplied operation before touching
         // source availability. The signed update is journaled before any cutover.
         if (!operation.plcOp)
-          operation = journal(await prepareOperation(operation, target));
-        await setActive(operation.did, source, false);
-        accounts.save({
-          ...accounts.get(operation.did),
-          status: "deactivated",
+          operation = await journal(await prepareOperation(operation, target));
+        await setActive(operation.did, source, false, "source-freeze");
+        await db.transact(async () => {
+          await accounts.save({
+            ...(await accounts.get(operation.did)),
+            status: "deactivated",
+          });
+          await security.revokeAccount(operation.did, { credentials: true });
+          operation = await journal(operation, { phase: "source-frozen" });
         });
-        await security.revokeAccount(operation.did, { credentials: true });
-        operation = journal(operation, { phase: "source-frozen" });
       }
       if (before("snapshot-ready"))
         operation = await snapshot(operation, source);
       if (before("operation-ready"))
-        operation = journal(
+        operation = await journal(
           operation.plcOp
             ? operation
             : await prepareOperation(operation, target),
@@ -350,79 +515,133 @@ export async function createAccountMigration({
             "PLC changed after migration was prepared; operator reconciliation is required",
             409,
           );
-        const targetStatus = await probeTarget(operation, target);
-        if (!targetStatus) {
-          if (currentCid === operation.plcOpCid) {
-            // createAccount can publish PLC and subsequently remove its actor on
-            // failure. Reposting that old update would fail PLC's prev check.
-            // Extend ONLY our exact published head, preserving the target and
-            // authority, and persist the repair before another create attempt.
-            const { signingKey: reservedKey } = await xrpc(
-              target.internalUrl,
-              "com.atproto.server.reserveSigningKey",
-              { did: operation.did },
+        const outcome = await createTarget(operation, target);
+        if (outcome === "plc-published-actor-absent") {
+          // This known partial result is classified only after operator-confirmed
+          // isolation/drain. Extend exactly the retained PLC head, never a newer
+          // unrelated operation, and retain the original signed history.
+          const head = await accounts.plcClient.getLastOp(operation.did);
+          if ((await cidForCbor(head)).toString() !== operation.plcOpCid)
+            throw error(
+              "IdentityChanged",
+              "PLC changed before the recorded target repair",
+              409,
             );
-            const repaired = await plc.createUpdateOp(
-              current,
-              accounts.rotation,
-              (op) => ({
-                ...op,
-                verificationMethods: {
-                  ...op.verificationMethods,
-                  atproto: reservedKey,
-                },
-              }),
-            );
-            operation = journal(operation, {
-              previousPlcOps: [
-                ...(operation.previousPlcOps ?? []),
-                operation.plcOp,
-              ],
-              plcOp: repaired,
-              plcOpCid: (await cidForCbor(repaired)).toString(),
-              signingKey: reservedKey,
-            });
-          }
-          await xrpc(target.internalUrl, "com.atproto.server.createAccount", {
-            did: operation.did,
-            handle: operation.handle,
-            plcOp: operation.plcOp,
-          });
-        } else if (currentCid !== operation.plcOpCid) {
-          throw error(
-            "TargetAccountExists",
-            "Target already contains this DID without the recorded migration operation",
-            409,
+          const { signingKey: reservedKey } = await reserveKey(
+            operation.did,
+            target,
+            operation.plcOpCid,
           );
+          const repaired = await plc.createUpdateOp(
+            head,
+            accounts.rotation,
+            (op) => ({
+              ...op,
+              verificationMethods: {
+                ...op.verificationMethods,
+                atproto: reservedKey,
+              },
+            }),
+          );
+          operation = await journal(operation, {
+            previousPlcOps: [
+              ...(operation.previousPlcOps ?? []),
+              operation.plcOp,
+            ],
+            plcOp: repaired,
+            plcOpCid: (await cidForCbor(repaired)).toString(),
+            signingKey: reservedKey,
+          });
+          if ((await createTarget(operation, target)) !== "created")
+            throw error(
+              "OperationRecoveryRequired",
+              "The repair itself requires a separately verified recovery",
+              409,
+            );
         }
-        await setActive(operation.did, target, false);
-        operation = journal(operation, { phase: "target-created" });
+        await setActive(operation.did, target, false, "target-freeze");
+        operation = await journal(operation, { phase: "target-created" });
       }
       if (before("repo-imported")) {
-        const repo = db.get("migration:snapshots", `${operation.id}/repo`);
+        const repo = await db.get(
+          "migration:snapshots",
+          `${operation.id}/repo`,
+        );
         if (!repo)
           throw error(
             "MissingSnapshot",
             "The durable source snapshot is missing",
             409,
           );
-        await request(
-          new URL("/xrpc/com.atproto.repo.importRepo", target.internalUrl),
+        if (!operation.targetBeforeImport)
+          operation = await journal(operation, {
+            targetBeforeImport: await userCall(
+              operation.did,
+              target,
+              "com.atproto.server.checkAccountStatus",
+            ),
+          });
+        await ownership.dispatch(
           {
-            method: "POST",
-            headers: {
-              authorization: `Bearer ${await jwt(operation.did, target)}`,
-              "content-type": "application/vnd.ipld.car",
+            step: "import-repository",
+            target: target.url,
+            method: "com.atproto.repo.importRepo",
+            intent: {
+              did: operation.did,
+              sourceCommit: operation.snapshot.status.repoCommit,
             },
-            body: Buffer.from(repo.base64, "base64"),
+          },
+          {
+            ...noExternalResult,
+            send: async () => {
+              await request(
+                new URL(
+                  "/xrpc/com.atproto.repo.importRepo",
+                  target.internalUrl,
+                ),
+                {
+                  method: "POST",
+                  headers: {
+                    authorization: `Bearer ${await jwt(operation.did, target)}`,
+                    "content-type": "application/vnd.ipld.car",
+                  },
+                  body: Buffer.from(repo.base64, "base64"),
+                },
+              );
+            },
+            observe: async () => {
+              if (
+                (
+                  await cidForCbor(
+                    await accounts.plcClient.getLastOp(operation.did),
+                  )
+                ).toString() !== operation.plcOpCid
+              )
+                return { state: "diverged" };
+              const status = await userCall(
+                operation.did,
+                target,
+                "com.atproto.server.checkAccountStatus",
+              );
+              return {
+                state:
+                  status.repoCommit === operation.snapshot.status.repoCommit
+                    ? "applied"
+                    : status.repoCommit ===
+                        operation.targetBeforeImport.repoCommit
+                      ? "unapplied"
+                      : "diverged",
+                result: {},
+              };
+            },
           },
         );
-        operation = journal(operation, { phase: "repo-imported" });
+        operation = await journal(operation, { phase: "repo-imported" });
       }
       if (before("blobs-imported")) {
         for (const cid of operation.snapshot.blobs) {
           if (operation.importedBlobs.includes(cid)) continue;
-          const blob = db.get(
+          const blob = await db.get(
             "migration:snapshots",
             `${operation.id}/blob/${cid}`,
           );
@@ -432,30 +651,77 @@ export async function createAccountMigration({
               "A durable blob snapshot is missing",
               409,
             );
-          const result = await request(
-            new URL("/xrpc/com.atproto.repo.uploadBlob", target.internalUrl),
+          await ownership.dispatch(
             {
-              method: "POST",
-              headers: {
-                authorization: `Bearer ${await jwt(operation.did, target)}`,
-                "content-type": blob.type,
-              },
-              body: Buffer.from(blob.base64, "base64"),
+              step: `import-blob:${cid}`,
+              target: target.url,
+              method: "com.atproto.repo.uploadBlob",
+              intent: { did: operation.did, cid },
             },
-            1_000_000,
+            {
+              ...noExternalResult,
+              send: async () => {
+                const result = await request(
+                  new URL(
+                    "/xrpc/com.atproto.repo.uploadBlob",
+                    target.internalUrl,
+                  ),
+                  {
+                    method: "POST",
+                    headers: {
+                      authorization: `Bearer ${await jwt(operation.did, target)}`,
+                      "content-type": blob.type,
+                    },
+                    body: Buffer.from(blob.base64, "base64"),
+                  },
+                  1_000_000,
+                );
+                const uploaded = JSON.parse(result.bytes.toString());
+                if (uploaded.blob?.ref?.$link !== cid)
+                  throw error(
+                    "BlobIntegrityError",
+                    "The target returned a different blob CID",
+                    409,
+                  );
+              },
+              observe: async () => {
+                if (
+                  (
+                    await cidForCbor(
+                      await accounts.plcClient.getLastOp(operation.did),
+                    )
+                  ).toString() !== operation.plcOpCid
+                )
+                  return { state: "diverged" };
+                try {
+                  const observed = await request(
+                    getUrl(target, "com.atproto.sync.getBlob", {
+                      did: operation.did,
+                      cid,
+                    }),
+                    { headers: { authorization: basic(target) } },
+                  );
+                  return {
+                    state: observed.bytes.equals(
+                      Buffer.from(blob.base64, "base64"),
+                    )
+                      ? "applied"
+                      : "diverged",
+                    result: {},
+                  };
+                } catch (failure) {
+                  if (["BlobNotFound", "NotFound"].includes(failure.error))
+                    return { state: "unapplied" };
+                  throw failure;
+                }
+              },
+            },
           );
-          const uploaded = JSON.parse(result.bytes.toString());
-          if (uploaded.blob?.ref?.$link !== cid)
-            throw error(
-              "BlobIntegrityError",
-              "The target returned a different blob CID",
-              409,
-            );
-          operation = journal(operation, {
+          operation = await journal(operation, {
             importedBlobs: [...operation.importedBlobs, cid],
           });
         }
-        operation = journal(operation, { phase: "blobs-imported" });
+        operation = await journal(operation, { phase: "blobs-imported" });
       }
       if (before("target-ready")) {
         const status = await userCall(
@@ -473,14 +739,54 @@ export async function createAccountMigration({
             "The target repository or blob index is incomplete",
             409,
           );
-        await setActive(operation.did, target, true);
+        await setActive(operation.did, target, true, "target-activate");
         // importRepo preserves the old signed root. A normal empty write asks the
         // target PDS to produce a new commit under its new repository signing key.
-        await userCall(operation.did, target, "com.atproto.repo.applyWrites", {
-          repo: operation.did,
-          writes: [],
-          validate: false,
-        });
+        await ownership.dispatch(
+          {
+            step: "resign-imported-root",
+            target: target.url,
+            method: "com.atproto.repo.applyWrites",
+            intent: { did: operation.did, writes: [] },
+          },
+          {
+            ...noExternalResult,
+            send: async () => {
+              const verified = await verifyImportedSnapshot(operation, target);
+              return userCall(
+                operation.did,
+                target,
+                "com.atproto.repo.applyWrites",
+                {
+                  repo: operation.did,
+                  writes: [],
+                  validate: false,
+                  swapCommit: verified.targetCommit,
+                },
+              );
+            },
+            observe: async () => {
+              const verified = await verifyImportedSnapshot(operation, target);
+              const observed = await userCall(
+                operation.did,
+                target,
+                "com.atproto.server.checkAccountStatus",
+              );
+              if (
+                !observed.validDid ||
+                !observed.activated ||
+                observed.repoCommit !== verified.targetCommit
+              )
+                return { state: "diverged" };
+              if (verified.targetSignatureValid)
+                return { state: "applied", result: {} };
+              // After verified drain, another empty mutation preserves the verified
+              // record/blob inventory. swapCommit rejects a changed root between
+              // observation and write. A new signed commit/revision may be created.
+              return { state: "replay-safe" };
+            },
+          },
+        );
         const ready = await userCall(
           operation.did,
           target,
@@ -492,7 +798,7 @@ export async function createAccountMigration({
             "Target identity or activation is not ready",
             409,
           );
-        operation = journal(operation, {
+        operation = await journal(operation, {
           phase: "target-ready",
           targetStatus: ready,
         });
@@ -519,18 +825,18 @@ export async function createAccountMigration({
             409,
           );
         // Source remains deactivated, including on retried completion.
-        await setActive(operation.did, source, false);
-        await security.revokeAccount(operation.did, { credentials: true });
-        db.transact(() => {
-          const row = accounts.get(operation.did);
-          accounts.save({
+        await setActive(operation.did, source, false, "source-retain");
+        await db.transact(async () => {
+          await security.revokeAccount(operation.did, { credentials: true });
+          const row = await accounts.get(operation.did);
+          await accounts.save({
             ...row,
             pdsId: target.id,
             pdsUrl: target.url,
             status: "active",
             migratedAt: new Date().toISOString(),
           });
-          operation = journal(operation, {
+          operation = await journal(operation, {
             phase: "complete",
             completedAt: new Date(),
             lastError: null,
@@ -546,7 +852,7 @@ export async function createAccountMigration({
         reauthenticationRequired: true,
       };
     } catch (failure) {
-      journal(operation, {
+      await journal(operation, {
         lastError: failure.error ?? failure.name,
         lastErrorMessage: failure.message,
       });
@@ -554,75 +860,112 @@ export async function createAccountMigration({
     }
   };
   return {
-    requestMigration(principal, { pdsId }) {
-      const row = requireOwner(principal);
+    pendingRecovery: (did) => ownership.pendingExternal(did),
+    async requestMigration(principal, { pdsId }) {
+      const row = await requireOwner(principal);
       if (row.pdsId === pdsId)
         throw error("InvalidPds", "Choose another configured PDS");
       choose(pdsId);
-      return security.requestMigrationProof(principal, { pdsId });
+      return await security.requestMigrationProof(principal, { pdsId });
     },
     importAccount(principal, input) {
-      return serial(input.did, async () => {
-        const row = requireOwner(principal, input.did);
-        const target = choose(input.pdsId);
-        let operation = read(row.did);
-        if (operation && operation.phase !== "complete") {
-          if (
-            operation.targetPdsId !== target.id ||
-            (input.plcOp &&
-              JSON.stringify(input.plcOp) !==
-                JSON.stringify(operation.plcOp ?? operation.requestedPlcOp))
-          )
+      return serial(input.did, input.pdsId, async () => {
+        try {
+          const row = await requireOwner(principal, input.did);
+          const target = choose(input.pdsId);
+          let operation = await read(row.did);
+          if (operation && operation.phase !== "complete") {
+            if (
+              operation.targetPdsId !== target.id ||
+              (input.plcOp &&
+                JSON.stringify(input.plcOp) !==
+                  JSON.stringify(operation.plcOp ?? operation.requestedPlcOp))
+            )
+              throw error(
+                "OperationPending",
+                "Retry the original migration target and signed operation",
+                409,
+              );
+            return resume(operation);
+          }
+          if (row.pdsId === target.id) {
+            if (operation?.phase === "complete")
+              return {
+                did: row.did,
+                handle: row.handle,
+                pdsId: row.pdsId,
+                pdsUrl: row.pdsUrl,
+                status: "complete",
+                reauthenticationRequired: true,
+              };
+            throw error("InvalidPds", "Account is already on this PDS");
+          }
+          if (await probeTarget({ did: row.did }, target))
             throw error(
-              "OperationPending",
-              "Retry the original migration target and signed operation",
+              "TargetAccountExists",
+              "The target already contains this DID; a reviewed restore or reverse-migration workflow is required",
               409,
             );
-          return resume(operation);
-        }
-        if (row.pdsId === target.id) {
-          if (operation?.phase === "complete")
-            return {
+          const prepared = await prepareOperation(
+            {
+              id: operationKey(row.did),
               did: row.did,
               handle: row.handle,
-              pdsId: row.pdsId,
-              pdsUrl: row.pdsUrl,
-              status: "complete",
-              reauthenticationRequired: true,
-            };
-          throw error("InvalidPds", "Account is already on this PDS");
-        }
-        if (await probeTarget({ did: row.did }, target))
-          throw error(
-            "TargetAccountExists",
-            "The target already contains this DID; a reviewed restore or reverse-migration workflow is required",
-            409,
+              sourcePdsId: row.pdsId,
+              targetPdsId: target.id,
+              phase: "authorized",
+              requestedPlcOp: input.plcOp,
+              authorizedAt: new Date(),
+              originalStatus: row.status,
+            },
+            target,
           );
-        const prepared = await prepareOperation(
-          {
-            id: operationKey(row.did),
-            did: row.did,
-            handle: row.handle,
-            sourcePdsId: row.pdsId,
-            targetPdsId: target.id,
-            phase: "authorized",
-            requestedPlcOp: input.plcOp,
-            authorizedAt: new Date(),
-            originalStatus: row.status,
-          },
-          target,
-        );
-        security.confirmMigrationProof(principal, {
-          pdsId: target.id,
-          token: input.token,
-        });
-        operation = journal(prepared);
-        return resume(operation);
+          const confirmed = await db.transact(async () => {
+            try {
+              await security.confirmMigrationProof(principal, {
+                pdsId: target.id,
+                token: input.token,
+              });
+            } catch (failure) {
+              if (
+                !["InvalidToken", "ExpiredToken", "RateLimitExceeded"].includes(
+                  failure.error ?? failure.code ?? failure.message,
+                )
+              )
+                throw failure;
+              return { failure };
+            }
+            const saved = await journal(prepared);
+            await ownership.checkpoint("migration-authorized", {
+              did: row.did,
+              targetPdsId: target.id,
+            });
+            return { saved };
+          });
+          if (confirmed.failure) throw confirmed.failure;
+          operation = confirmed.saved;
+          return await resume(operation);
+        } catch (failure) {
+          const saved = await read(input.did);
+          if (
+            (!saved || saved.phase === "complete") &&
+            !(await ownership.pendingExternal(input.did))
+          ) {
+            // Only an acknowledged unbound key may have been allocated. No
+            // migration journal or external uncertainty exists to retain.
+            await ownership.checkpoint(
+              "migration-validation-failed",
+              null,
+              false,
+            );
+          }
+          throw failure;
+        }
       });
     },
-    status(principal, { did = principal?.did } = {}) {
-      requireOwner(principal, did);
-      const operation = read(did);
+    async status(principal, { did = principal?.did } = {}) {
+      await requireOwner(principal, did);
+      const operation = await read(did);
       if (!operation) return null;
       const { id, phase, sourcePdsId, targetPdsId, lastError, updatedAt } =
         operation;
@@ -630,11 +973,39 @@ export async function createAccountMigration({
     },
     async reconcile() {
       const results = [];
-      for (const { value } of db.list("migration:operations")) {
-        if (value.phase === "complete") continue;
+      for (const { value } of await db.list("migration:operations")) {
+        const intent = {
+          kind: "managed-migration",
+          request: { targetPdsId: value.targetPdsId },
+        };
+        const operationId = value.authorityOperationId;
+        if (typeof operationId !== "string") continue;
         try {
-          results.push(await serial(value.did, () => resume(read(value.did))));
+          const acquire =
+            value.phase === "complete"
+              ? ownership.resumeAcknowledged
+              : ownership.resumePending;
+          results.push(
+            await acquire(
+              value.did,
+              operationId,
+              { ...intent, completeOnReturn: true },
+              async () => {
+                const current = await read(value.did);
+                if (
+                  current?.authorityOperationId !== operationId ||
+                  current.targetPdsId !== value.targetPdsId
+                )
+                  throw Object.assign(
+                    new Error("The nominated migration is no longer pending"),
+                    { code: "OperationNoLongerPending" },
+                  );
+                return resume(current);
+              },
+            ),
+          );
         } catch (failure) {
+          if (failure.code === "OperationNoLongerPending") continue;
           results.push({
             did: value.did,
             status: "pending",

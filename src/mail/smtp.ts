@@ -1,6 +1,6 @@
 import nodemailer from "nodemailer";
 import type { MailMessage } from "./types.js";
-import type { MailTransport } from "./port.js";
+import { MailTransportError, type MailTransport } from "./port.js";
 
 export interface SmtpTransportConfig {
   host: string;
@@ -23,13 +23,27 @@ export function createSmtpMailTransport({
   });
   return {
     async deliver(message: MailMessage) {
-      await transporter.sendMail({
-        from: "Entryway sandbox <entryway@entryway.test>",
-        to: message.recipient,
-        subject: message.subject,
-        text: message.text,
-        html: message.html,
-      });
+      try {
+        await transporter.sendMail({
+          from: "Entryway sandbox <entryway@entryway.test>",
+          to: message.recipient,
+          subject: message.subject,
+          text: message.text,
+          html: message.html,
+        });
+      } catch (error) {
+        const response =
+          error && typeof error === "object" && "responseCode" in error
+            ? error.responseCode
+            : undefined;
+        // A final negative SMTP reply proves rejection. A missing reply, timeout,
+        // or dropped connection can follow DATA acceptance; preserve uncertainty.
+        throw new MailTransportError(
+          typeof response === "number" && response >= 400 && response <= 599
+            ? "rejected"
+            : "unknown",
+        );
+      }
     },
   };
 }

@@ -1,12 +1,12 @@
 import { test, expect } from '@playwright/test'
 import { DatabaseSync } from 'node:sqlite'
 import { readFileSync, writeFileSync } from 'node:fs'
-const config = JSON.parse(readFileSync(process.env.SPIKE_CONFIG, 'utf8'))
+const config = JSON.parse(readFileSync(process.env.SERVICE_CONFIG_PATH, 'utf8'))
 const reportPath = 'artifacts/external-migration.json'
 const report = JSON.parse(readFileSync(reportPath, 'utf8'))
 const identity = report.identity
-const mailbox = new DatabaseSync('/entryway-data/entryway.sqlite', { readOnly: true })
-const mail = () => JSON.parse(mailbox.prepare('SELECT value FROM mini_kv WHERE namespace=? AND key=?').get('outbox', identity.email)?.value ?? 'null')
+const mailbox = new DatabaseSync('/entryway-data/account-authority.sqlite', { readOnly: true })
+const mail = () => JSON.parse(mailbox.prepare('SELECT value FROM key_value_state WHERE namespace=? AND key=?').get('outbox', identity.email)?.value ?? 'null')
 test.afterAll(() => mailbox.close())
 
 test('external account verifies its destination email, then uses OAuth on the cluster', async ({ page }) => {

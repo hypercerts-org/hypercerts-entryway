@@ -4,5 +4,5 @@ export interface DeviceAccountMembershipFilter {
 }
 
 export interface DeviceAccountMembershipReader {
-  findKeys(filter: DeviceAccountMembershipFilter): string[];
+  findKeys(filter: DeviceAccountMembershipFilter): Promise<string[]>;
 }

@@ -1,4 +1,4 @@
-import { ENTRYWAY_BRAND, renderExperiencePage } from "./experience.js";
+import { DEFAULT_BRAND, renderExperiencePage } from "./experience.js";
 
 export const escapeHtml = (s) =>
   String(s ?? "").replace(
@@ -15,7 +15,7 @@ export function page(
   body,
   status = 200,
   policy = {},
-  brand = ENTRYWAY_BRAND,
+  brand = DEFAULT_BRAND,
 ) {
   const rendered = renderExperiencePage({ title, body, brand, policy });
   res.set({

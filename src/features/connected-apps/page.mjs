@@ -18,8 +18,8 @@ export async function loadConnectedApps({ db, oauth, legacy }, req, did) {
     baSessions,
     appPasswords,
     legacySessions,
-    tokens: oauth.stores.listAccountTokens(did),
-    grants: db.get("oauth:grants", did) ?? [],
+    tokens: await oauth.stores.listAccountTokens(did),
+    grants: (await db.get("oauth:grants", did)) ?? [],
     devices: await oauth.stores.listDeviceAccounts({ did }),
   };
 }

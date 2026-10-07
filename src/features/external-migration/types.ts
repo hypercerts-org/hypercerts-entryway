@@ -15,7 +15,7 @@ export type MigrationPhase =
 
 export interface PublicAuthorityEvidence {
   readonly sourceRecoveryKey: string;
-  readonly entrywayRotationKey: string;
+  readonly rotationAuthorityKey: string;
   readonly sourceRepositoryKey: string;
   readonly sourcePlcHead: string;
 }

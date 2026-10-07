@@ -1,6 +1,8 @@
 # Local acceptance plan
 
-Status: imported and adapted; execution has not been performed in this repository.
+These checks cover the current managed sandbox. They do not close every
+[outstanding acceptance requirement](README.md), and the raw moderation failure
+remains explicit.
 
 ## Preparation
 
@@ -9,7 +11,7 @@ Use Docker with Compose v2 (`up --wait` support), Deno 2.8.3, Node 24, Git, Pyth
 The main repeatable command is `./tests/local.sh fresh`. It clones pinned AiaB
 into a unique temporary directory, uses an automatically selected subnet and
 a unique project name, runs the complete ordered flow, then removes that exact
-project and its volumes. Set `ENTRYWAY_E2E_KEEP_FAILED_STATE=1` to retain failed
+project and its volumes. Set `KEEP_FAILED_SANDBOX=1` to retain failed
 state for diagnosis. Reports stay under `tests/artifacts/<project>/`.
 
 For persistent debugging:
@@ -31,7 +33,15 @@ No host port or DNS changes are required. Mailpit captures sandbox SMTP.
 3. `./tests/local.sh migration`: fresh synthetic external source, verified
    destination owner, custody handoff, journal pauses/restarts, target checks
    and post-migration OAuth.
-4. `./tests/local.sh resilience`: explicitly disrupt Entryway, then restart the
+4. `./tests/local.sh interop-profile`: record the raw exit 2 and required missing
+   moderation coordination. `all` checks that this is exactly the predeclared
+   inherited gap before continuing; it does not turn it into a product pass.
+5. `./tests/local.sh plc-recovery`: five provisioning reconciliation cases.
+6. `./tests/local.sh process-crash`: actual signup process kills before and after
+   PDS success, followed by same-DID reconciliation.
+7. `./tests/local.sh authority-drills`: bounded local authority backup/restore,
+   issuer-only skew and coordinated key replacement/restoration.
+8. `./tests/local.sh resilience`: explicitly disrupt Entryway, then restart the
    core stack with volumes retained. Run alone and last; verify token/resource
    behavior during outage, restore service and check persistent identity/data.
 
@@ -47,8 +57,17 @@ Reports/screenshots are under `tests/artifacts/`. Keep generated configuration,
 private credentials, CA keys and volume data out of commits. The external flow
 uses a privileged synthetic source adapter; it does not prove compatibility
 with goat or PDS MOOver. Earlier browser cases read the test outbox directly;
-newer experience cases use Mailpit. No imported prior results are included.
+newer experience cases use Mailpit. Report actual results in the PR or final
+handoff, distinguishing wrapper equivalence from the failing moderation requirement.
+Historical spike reports establish provenance only.
 
 Use `fresh` for a clean replay. Persistent lifecycle commands never reset existing
 accounts implicitly. Only the explicitly disposable `fresh` command removes its
 own volumes during cleanup.
+
+Deployment-foundation acceptance additionally runs `./tests/local.sh database-contracts`
+and `./tests/local.sh resilience-profiles` after `fresh`. The latter requires all
+three fresh profiles and rejects missing or single-process-only replica evidence.
+See [deployment lifecycle and bounds](../../docs/deployment-profiles.md). Existing
+raw moderation and [credential-lifetime limits](../../docs/implementation-assessment.md#known-limits)
+remain unresolved.

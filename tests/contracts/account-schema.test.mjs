@@ -1,258 +1,604 @@
-import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import test from 'node:test'
-import Sqlite from 'better-sqlite3'
-import { openDatabase } from '../../dist/src/database/sqlite/connection.mjs'
-import { ACCOUNT_SCHEMA_MIGRATION } from '../../dist/src/database/migrations/account-schema.js'
-import { createSqliteAccountStorage } from '../../dist/src/database/sqlite/sqlite-account-storage.js'
-import { createMigrationStartTransactor } from '../../dist/src/database/sqlite/migration-workflow.js'
-import { runSchemaMigrations } from '../../dist/src/database/migrations/migrations.js'
+import {
+  query,
+  verifiedUser,
+  browserSession,
+  failureTrigger,
+  removeFailureTrigger,
+  hasFailure,
+} from "../support/database-fixture.mjs";
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { openTestDatabase } from "../support/database-fixture.mjs";
+import { createAccountStorage } from "../../dist/src/database/drizzle/account-storage.js";
+import { createMigrationStartTransactor } from "../../dist/src/database/drizzle/migration-workflow.js";
 
-const pds = [{ id: 'pds1', url: 'https://pds1.atmosbox.test' }]
+const pds = [{ id: "pds1", url: "https://pds1.atmosbox.test" }];
 const alice = {
-  did: 'did:plc:aaaaaaaaaaaaaaaaaaaaaaaa',
-  email: 'alice@example.test',
-  handle: 'alice.entryway.atmosbox.test',
-  pdsId: 'pds1',
+  did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
+  email: "alice@example.test",
+  handle: "alice.entryway.atmosbox.test",
+  pdsId: "pds1",
   pdsUrl: pds[0].url,
-  status: 'active',
-}
+  status: "active",
+};
 
 function fixture(t) {
-  const dir = mkdtempSync(join(tmpdir(), 'entryway-schema-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
-  return { dir, path: join(dir, 'entryway.sqlite') }
+  const dir = mkdtempSync(join(tmpdir(), "account-schema-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  return { dir, path: join(dir, "account-authority.sqlite") };
 }
 
-function foreignKeyTables(sqlite, table) {
-  return sqlite.pragma(`foreign_key_list(${table})`).map((entry) => entry.table)
+async function foreignKeyTables(db, table) {
+  if (db.backend === "sqlite")
+    return (await query(db, `PRAGMA foreign_key_list(${table})`)).map(
+      (row) => row.table,
+    );
+  const rows = await query(
+    db,
+    "SELECT ccu.table_name AS target FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_name=tc.constraint_name AND ccu.constraint_schema=tc.constraint_schema WHERE tc.constraint_type='FOREIGN KEY' AND tc.table_schema=current_schema() AND tc.table_name=?",
+    [table],
+  );
+  return rows.map((row) => row.target);
 }
 
-test('fresh account schema has versioned DID foreign keys and rejects future versions', (t) => {
-  const { path } = fixture(t)
-  const db = openDatabase(path)
-  try {
-    assert.equal(db.schema.version, 303)
-    for (const table of ['mini_handle_claims', 'mini_email_claims', 'mini_account_identities', 'mini_backup_emails']) {
-      assert.ok(foreignKeyTables(db.sqlite, table).includes('mini_accounts'), table)
-    }
-    db.sqlite.prepare('INSERT INTO entryway_schema_migrations VALUES (?,?,?)')
-      .run(999, 'future-schema', new Date().toISOString())
-    assert.throws(
-      () => runSchemaMigrations(db.sqlite, [ACCOUNT_SCHEMA_MIGRATION]),
-      (error) => error.code === 'SchemaConflict',
-    )
-  } finally { db.close() }
-})
+test("fresh account schema has versioned DID foreign keys and rejects future versions", async (t) => {
+  const { path } = fixture(t);
+  const db = await openTestDatabase(path);
+  assert.equal(db.schema.version, 1);
+  for (const table of [
+    "handle_claims",
+    "email_claims",
+    "account_bindings",
+    "backup_emails",
+  ])
+    assert.ok((await foreignKeyTables(db, table)).includes("accounts"), table);
+  await query(db, "UPDATE schema_identity SET version=999", [], "run");
+  await db.close();
+  await assert.rejects(openTestDatabase(path), { code: "SchemaConflict" });
+});
 
-test('legacy seed upgrades claims and binding to constrained tables without changing owner', (t) => {
-  const { path } = fixture(t)
-  const legacy = new Sqlite(path)
-  legacy.exec(`
-    CREATE TABLE mini_accounts (did TEXT PRIMARY KEY,email TEXT NOT NULL UNIQUE,handle TEXT NOT NULL UNIQUE,pds_id TEXT NOT NULL,status TEXT NOT NULL,data TEXT NOT NULL);
-    CREATE TABLE mini_email_claims (email TEXT PRIMARY KEY,did TEXT NOT NULL,purpose TEXT NOT NULL);
-    CREATE TABLE mini_handle_claims (handle TEXT PRIMARY KEY,did TEXT NOT NULL);
-    CREATE TABLE mini_account_identities (did TEXT PRIMARY KEY,user_id TEXT NOT NULL UNIQUE);
-    CREATE TABLE mini_backup_emails (email TEXT PRIMARY KEY,did TEXT NOT NULL,created_at TEXT NOT NULL);
-  `)
-  legacy.prepare('INSERT INTO mini_accounts VALUES (?,?,?,?,?,?)')
-    .run(alice.did, alice.email, alice.handle, alice.pdsId, alice.status, JSON.stringify(alice))
-  legacy.prepare('INSERT INTO mini_account_identities VALUES (?,?)').run(alice.did, 'verified-user')
-  legacy.close()
-  const db = openDatabase(path)
+test("reopening the database preserves account ownership, claims and stored dates", async (t) => {
+  const { path } = await fixture(t);
+  const initial = await openTestDatabase(path);
+  const expiresAt = new Date("2030-01-02T03:04:05.000Z");
   try {
-    const storage = createSqliteAccountStorage(db.sqlite, pds)
-    assert.equal(storage.getByDid(alice.did)?.email, alice.email)
-    assert.equal(storage.getVerifiedBinding(alice.did)?.userId, 'verified-user')
-    assert.equal(storage.getEmailClaim(alice.email)?.did, alice.did)
-    assert.equal(storage.getHandleClaim(alice.handle), alice.did)
-    for (const table of ['mini_handle_claims', 'mini_email_claims', 'mini_account_identities', 'mini_backup_emails']) {
-      assert.ok(foreignKeyTables(db.sqlite, table).includes('mini_accounts'), table)
+    await createAccountStorage(initial, pds).insertAccount(alice);
+    await verifiedUser(initial, "verified-user", alice.email);
+    await query(
+      initial,
+      "INSERT INTO account_bindings VALUES (?,?)",
+      [alice.did, "verified-user"],
+      "run",
+    );
+    await initial.set("oauth:fixture", "session", { nested: [{ expiresAt }] });
+  } finally {
+    await initial.close();
+  }
+  const db = await openTestDatabase(path);
+  try {
+    const storage = createAccountStorage(db, pds);
+    assert.equal((await storage.getByDid(alice.did))?.email, alice.email);
+    assert.equal(
+      (await storage.getVerifiedBinding(alice.did))?.userId,
+      "verified-user",
+    );
+    assert.equal((await storage.getEmailClaim(alice.email))?.did, alice.did);
+    assert.equal(await storage.getHandleClaim(alice.handle), alice.did);
+    assert.deepEqual(await db.get("oauth:fixture", "session"), {
+      nested: [{ expiresAt }],
+    });
+    for (const table of [
+      "handle_claims",
+      "email_claims",
+      "account_bindings",
+      "backup_emails",
+    ]) {
+      assert.ok(
+        (await foreignKeyTables(db, table)).includes("accounts"),
+        table,
+      );
     }
-    assert.throws(() => db.sqlite.prepare('INSERT INTO mini_email_claims VALUES (?,?,?)')
-      .run('orphan@example.test', 'did:plc:missing', 'backup'), /FOREIGN KEY/)
-  } finally { db.close() }
-})
+    await assert.rejects(
+      async () =>
+        await query(
+          db,
+          "INSERT INTO email_claims VALUES (?,?,?)",
+          ["orphan@example.test", "did:plc:missing", "backup"],
+          "run",
+        ),
+      hasFailure("foreign key"),
+    );
+  } finally {
+    await db.close();
+  }
+});
 
-test('account and claims roll back on unique collision and disposable backup restores authority', async (t) => {
-  const { path, dir } = fixture(t)
-  const db = openDatabase(path)
+test("account and claims roll back on unique collision", async (t) => {
+  const { path } = fixture(t);
+  const db = await openTestDatabase(path);
   try {
-    const storage = createSqliteAccountStorage(db.sqlite, pds)
-    storage.insertAccount(alice)
-    const second = { ...alice, did: 'did:plc:bbbbbbbbbbbbbbbbbbbbbbbb', email: 'bob@example.test' }
-    assert.throws(() => storage.insertAccount(second), (error) => error.code === 'IdentityConflict')
-    assert.equal(storage.getByDid(second.did), null)
-    assert.equal(storage.getEmailClaim(second.email), null)
-    assert.equal(storage.getByDid(alice.did)?.handle, alice.handle)
-    await db.sqlite.backup(join(dir, 'backup.sqlite'))
-    const restored = openDatabase(join(dir, 'backup.sqlite'))
+    const storage = createAccountStorage(db, pds);
+    await storage.insertAccount(alice);
+    const second = {
+      ...alice,
+      did: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
+      email: "bob@example.test",
+    };
+    await assert.rejects(storage.insertAccount(second), {
+      code: "IdentityConflict",
+    });
+    assert.equal(await storage.getByDid(second.did), null);
+    assert.equal(await storage.getEmailClaim(second.email), null);
+    assert.equal((await storage.getByDid(alice.did)).handle, alice.handle);
+  } finally {
+    await db.close();
+  }
+});
+
+test(
+  "SQLite disposable file backup restores authority",
+  {
+    skip:
+      process.env.CONTRACT_DATABASE_BACKEND === "postgresql"
+        ? "SQLite file backup; PostgreSQL dump/restore is a separate application profile"
+        : false,
+  },
+  async (t) => {
+    const { path, dir } = fixture(t),
+      db = await openTestDatabase(path);
     try {
-      const reader = createSqliteAccountStorage(restored.sqlite, pds)
-      assert.equal(reader.getByDid(alice.did)?.email, alice.email)
-      assert.equal(reader.getHandleClaim(alice.handle), alice.did)
-      assert.equal(restored.schema.version, 303)
-    } finally { restored.close() }
-  } finally { db.close() }
-})
+      await createAccountStorage(db, pds).insertAccount(alice);
+      await query(db, "VACUUM INTO ?", [join(dir, "backup.sqlite")], "run");
+      const restored = await openTestDatabase(join(dir, "backup.sqlite"));
+      try {
+        const reader = createAccountStorage(restored, pds);
+        assert.equal((await reader.getByDid(alice.did)).email, alice.email);
+        assert.equal(await reader.getHandleClaim(alice.handle), alice.did);
+        assert.equal(restored.schema.version, 1);
+      } finally {
+        await restored.close();
+      }
+    } finally {
+      await db.close();
+    }
+  },
+);
 
-test('synthetic imported DID binds only a recent verified owner then activates after placement', (t) => {
-  const { path } = fixture(t)
-  const db = openDatabase(path)
+test("synthetic imported DID binds only a recent verified owner then activates after placement", async (t) => {
+  const { path } = await fixture(t);
+  const db = await openTestDatabase(path);
   try {
-    const storage = createSqliteAccountStorage(db.sqlite, pds)
-    db.sqlite.exec(`
-      CREATE TABLE user (id TEXT PRIMARY KEY,email TEXT NOT NULL,emailVerified INTEGER NOT NULL);
-      CREATE TABLE session (id TEXT PRIMARY KEY,userId TEXT NOT NULL,createdAt INTEGER NOT NULL,expiresAt INTEGER NOT NULL);
-    `)
-    db.sqlite.prepare('INSERT INTO user VALUES (?,?,?)').run('owner', alice.email, 1)
-    db.sqlite.prepare('INSERT INTO user VALUES (?,?,?)').run('wrong', 'wrong@example.test', 1)
-    assert.equal(storage.isVerifiedUserEmail({ userId: 'owner', email: 'ALICE@example.test' }), true)
-    assert.equal(storage.isVerifiedUserEmail({ userId: 'wrong', email: alice.email }), false)
-    db.sqlite.prepare('UPDATE user SET emailVerified=0 WHERE id=?').run('owner')
-    assert.equal(storage.isVerifiedUserEmail({ userId: 'owner', email: alice.email }), false)
-    db.sqlite.prepare('UPDATE user SET emailVerified=1 WHERE id=?').run('owner')
-    const now = Date.now()
-    db.sqlite.prepare('INSERT INTO session VALUES (?,?,?,?)').run('current', 'owner', now, now + 600_000)
-    db.sqlite.prepare('INSERT INTO session VALUES (?,?,?,?)').run('expired', 'owner', now - 700_000, now - 1)
-    const insertSession = db.sqlite.prepare('INSERT INTO session VALUES (?,?,?,?)')
-    insertSession.run('iso-current', 'owner', new Date(now - 1_000).toISOString(), new Date(now + 600_000).toISOString())
-    insertSession.run('iso-stale', 'owner', new Date(now - 700_000).toISOString(), new Date(now + 600_000).toISOString())
-    insertSession.run('iso-future', 'owner', new Date(now + 60_000).toISOString(), new Date(now + 600_000).toISOString())
-    insertSession.run('iso-expired', 'owner', new Date(now - 1_000).toISOString(), new Date(now - 1).toISOString())
-    insertSession.run('iso-invalid', 'owner', 'invalid', new Date(now + 600_000).toISOString())
-    assert.equal(storage.getVerifiedOwner({ userId: 'owner', sessionId: 'expired' }), null)
-    assert.equal(storage.getVerifiedOwner({ userId: 'wrong', sessionId: 'current' }), null)
-    assert.equal(storage.getVerifiedOwner({ userId: 'owner', sessionId: 'iso-current' })?.userId, 'owner')
-    for (const sessionId of ['iso-stale', 'iso-future', 'iso-expired', 'iso-invalid'])
-      assert.equal(storage.getVerifiedOwner({ userId: 'owner', sessionId }), null)
+    const storage = createAccountStorage(db, pds);
+    await verifiedUser(db, "owner", alice.email);
+    await verifiedUser(db, "wrong", "wrong@example.test");
+    assert.equal(
+      await storage.isVerifiedUserEmail({
+        userId: "owner",
+        email: "ALICE@example.test",
+      }),
+      true,
+    );
+    assert.equal(
+      await storage.isVerifiedUserEmail({
+        userId: "wrong",
+        email: alice.email,
+      }),
+      false,
+    );
+    await query(
+      db,
+      'UPDATE "user" SET "emailVerified"=FALSE WHERE id=?',
+      ["owner"],
+      "run",
+    );
+    assert.equal(
+      await storage.isVerifiedUserEmail({
+        userId: "owner",
+        email: alice.email,
+      }),
+      false,
+    );
+    await query(
+      db,
+      'UPDATE "user" SET "emailVerified"=TRUE WHERE id=?',
+      ["owner"],
+      "run",
+    );
+    const now = Date.now();
+    await browserSession(db, "current", "owner", now, now + 600_000);
+    await browserSession(db, "expired", "owner", now - 700_000, now - 1);
+    await browserSession(
+      db,
+      "iso-current",
+      "owner",
+      new Date(now - 1_000).toISOString(),
+      new Date(now + 600_000).toISOString(),
+    );
+    await browserSession(
+      db,
+      "iso-stale",
+      "owner",
+      new Date(now - 700_000).toISOString(),
+      new Date(now + 600_000).toISOString(),
+    );
+    await browserSession(
+      db,
+      "iso-future",
+      "owner",
+      new Date(now + 60_000).toISOString(),
+      new Date(now + 600_000).toISOString(),
+    );
+    await browserSession(
+      db,
+      "iso-expired",
+      "owner",
+      new Date(now - 1_000).toISOString(),
+      new Date(now - 1).toISOString(),
+    );
+    await assert.rejects(
+      browserSession(
+        db,
+        "iso-invalid",
+        "owner",
+        "invalid",
+        new Date(now + 600_000).toISOString(),
+      ),
+    );
+    assert.equal(
+      await storage.getVerifiedOwner({ userId: "owner", sessionId: "expired" }),
+      null,
+    );
+    assert.equal(
+      await storage.getVerifiedOwner({ userId: "wrong", sessionId: "current" }),
+      null,
+    );
+    assert.equal(
+      (
+        await storage.getVerifiedOwner({
+          userId: "owner",
+          sessionId: "iso-current",
+        })
+      )?.userId,
+      "owner",
+    );
+    for (const sessionId of [
+      "iso-stale",
+      "iso-future",
+      "iso-expired",
+      "iso-invalid",
+    ])
+      assert.equal(
+        await storage.getVerifiedOwner({ userId: "owner", sessionId }),
+        null,
+      );
     const reservation = {
-      workflowId: 'synthetic-import', did: alice.did,
+      workflowId: "synthetic-import",
+      did: alice.did,
       handle: alice.handle,
-      userId: 'owner', sessionId: 'current', targetPdsId: 'pds1', targetPdsUrl: pds[0].url,
-    }
-    assert.throws(() => storage.reserveExternalMigration({ ...reservation, sessionId: 'expired' }),
-      (error) => error.code === 'AccountMismatch')
+      userId: "owner",
+      sessionId: "current",
+      targetPdsId: "pds1",
+      targetPdsUrl: pds[0].url,
+    };
+    await assert.rejects(
+      async () =>
+        await storage.reserveExternalMigration({
+          ...reservation,
+          sessionId: "expired",
+        }),
+      (error) => error.code === "AccountMismatch",
+    );
     const hosted = {
-      ...alice, did: 'did:plc:dddddddddddddddddddddddd',
-      email: 'owner@example.test', handle: 'owner.entryway.atmosbox.test',
-    }
-    storage.insertAccount(hosted)
-    db.sqlite.prepare('UPDATE user SET email=? WHERE id=?').run(hosted.email, 'owner')
-    storage.bindVerifiedIdentity({ did: hosted.did, email: hosted.email, userId: 'owner' })
-    db.sqlite.prepare('UPDATE user SET email=? WHERE id=?').run(alice.email, 'owner')
-    assert.throws(() => storage.reserveExternalMigration(reservation),
-      (error) => error.code === 'IdentityConflict')
-    db.sqlite.prepare('DELETE FROM mini_account_identities WHERE did=?').run(hosted.did)
-    storage.reserveExternalMigration(reservation)
-    assert.throws(() => storage.insertAccount({
-      ...alice, did: 'did:plc:eeeeeeeeeeeeeeeeeeeeeeee', email: 'other@example.test',
-    }), (error) => error.code === 'HandleNotAvailable')
-    assert.throws(() => storage.reserveExternalMigration({ ...reservation, targetPdsUrl: 'https://other.test' }),
-      (error) => error.code === 'InvalidAccount')
-    assert.throws(() => storage.reserveExternalMigration({ ...reservation, handle: 'changed.entryway.atmosbox.test' }),
-      (error) => error.code === 'IdentityConflict')
-    assert.throws(() => storage.reserveExternalMigration({ ...reservation, did: 'did:plc:cccccccccccccccccccccccc' }),
-      (error) => error.code === 'IdentityConflict')
-    assert.throws(() => storage.finalizeImportedAccount({
-      workflowId: reservation.workflowId, did: alice.did, userId: 'wrong', email: alice.email,
-      handle: alice.handle, pdsId: 'pds1', pdsUrl: pds[0].url,
-    }), (error) => error.code === 'IdentityConflict')
-    assert.throws(() => storage.finalizeImportedAccount({
-      workflowId: reservation.workflowId, did: alice.did, userId: 'owner', email: alice.email,
-      handle: 'changed.entryway.atmosbox.test', pdsId: 'pds1', pdsUrl: pds[0].url,
-    }), (error) => error.code === 'IdentityConflict')
-    const placed = storage.finalizeImportedAccount({
-      workflowId: reservation.workflowId, did: alice.did, userId: 'owner', email: alice.email,
-      handle: alice.handle, pdsId: 'pds1', pdsUrl: pds[0].url,
-    })
-    assert.equal(placed.status, 'provisioning')
-    assert.equal(storage.getVerifiedBinding(alice.did)?.userId, 'owner')
-    assert.equal(storage.hasPendingExternalMigration(alice.did), true)
-    const active = storage.activateImportedAccount({ workflowId: reservation.workflowId, did: alice.did, userId: 'owner' })
-    assert.equal(active.status, 'active')
-    assert.equal(storage.hasPendingExternalMigration(alice.did), false)
-    assert.equal(storage.activateImportedAccount({ workflowId: reservation.workflowId, did: alice.did, userId: 'owner' }).status, 'active')
-  } finally { db.close() }
-})
+      ...alice,
+      did: "did:plc:dddddddddddddddddddddddd",
+      email: "owner@example.test",
+      handle: "owner.entryway.atmosbox.test",
+    };
+    await storage.insertAccount(hosted);
+    await query(
+      db,
+      'UPDATE "user" SET email=? WHERE id=?',
+      [hosted.email, "owner"],
+      "run",
+    );
+    await storage.bindVerifiedIdentity({
+      did: hosted.did,
+      email: hosted.email,
+      userId: "owner",
+    });
+    await query(
+      db,
+      'UPDATE "user" SET email=? WHERE id=?',
+      [alice.email, "owner"],
+      "run",
+    );
+    await assert.rejects(
+      async () => await storage.reserveExternalMigration(reservation),
+      (error) => error.code === "IdentityConflict",
+    );
+    await query(
+      db,
+      "DELETE FROM account_bindings WHERE did=?",
+      [hosted.did],
+      "run",
+    );
+    await storage.reserveExternalMigration(reservation);
+    await assert.rejects(
+      async () =>
+        await storage.insertAccount({
+          ...alice,
+          did: "did:plc:eeeeeeeeeeeeeeeeeeeeeeee",
+          email: "other@example.test",
+        }),
+      (error) => error.code === "HandleNotAvailable",
+    );
+    await assert.rejects(
+      async () =>
+        await storage.reserveExternalMigration({
+          ...reservation,
+          targetPdsUrl: "https://other.test",
+        }),
+      (error) => error.code === "InvalidAccount",
+    );
+    await assert.rejects(
+      async () =>
+        await storage.reserveExternalMigration({
+          ...reservation,
+          handle: "changed.entryway.atmosbox.test",
+        }),
+      (error) => error.code === "IdentityConflict",
+    );
+    await assert.rejects(
+      async () =>
+        await storage.reserveExternalMigration({
+          ...reservation,
+          did: "did:plc:cccccccccccccccccccccccc",
+        }),
+      (error) => error.code === "IdentityConflict",
+    );
+    await assert.rejects(
+      async () =>
+        await storage.finalizeImportedAccount({
+          workflowId: reservation.workflowId,
+          did: alice.did,
+          userId: "wrong",
+          email: alice.email,
+          handle: alice.handle,
+          pdsId: "pds1",
+          pdsUrl: pds[0].url,
+        }),
+      (error) => error.code === "IdentityConflict",
+    );
+    await assert.rejects(
+      async () =>
+        await storage.finalizeImportedAccount({
+          workflowId: reservation.workflowId,
+          did: alice.did,
+          userId: "owner",
+          email: alice.email,
+          handle: "changed.entryway.atmosbox.test",
+          pdsId: "pds1",
+          pdsUrl: pds[0].url,
+        }),
+      (error) => error.code === "IdentityConflict",
+    );
+    const placed = await storage.finalizeImportedAccount({
+      workflowId: reservation.workflowId,
+      did: alice.did,
+      userId: "owner",
+      email: alice.email,
+      handle: alice.handle,
+      pdsId: "pds1",
+      pdsUrl: pds[0].url,
+    });
+    assert.equal(placed.status, "provisioning");
+    assert.equal(
+      (await storage.getVerifiedBinding(alice.did))?.userId,
+      "owner",
+    );
+    assert.equal(await storage.hasPendingExternalMigration(alice.did), true);
+    const active = await storage.activateImportedAccount({
+      workflowId: reservation.workflowId,
+      did: alice.did,
+      userId: "owner",
+    });
+    assert.equal(active.status, "active");
+    assert.equal(await storage.hasPendingExternalMigration(alice.did), false);
+    assert.equal(
+      (
+        await storage.activateImportedAccount({
+          workflowId: reservation.workflowId,
+          did: alice.did,
+          userId: "owner",
+        })
+      ).status,
+      "active",
+    );
+  } finally {
+    await db.close();
+  }
+});
 
-test('external reservation excludes hosted and competing email claims before cutover', (t) => {
-  const { path } = fixture(t)
-  const db = openDatabase(path)
+test("external reservation excludes hosted and competing email claims before cutover", async (t) => {
+  const { path } = await fixture(t);
+  const db = await openTestDatabase(path);
   try {
-    const storage = createSqliteAccountStorage(db.sqlite, pds)
-    db.sqlite.exec(`
-      CREATE TABLE user (id TEXT PRIMARY KEY,email TEXT NOT NULL,emailVerified INTEGER NOT NULL);
-      CREATE TABLE session (id TEXT PRIMARY KEY,userId TEXT NOT NULL,createdAt INTEGER NOT NULL,expiresAt INTEGER NOT NULL);
-    `)
-    const now = Date.now()
-    const hosted = { ...alice, did: 'did:plc:ffffffffffffffffffffffff',
-      email: 'hosted@example.test', handle: 'hosted.entryway.atmosbox.test' }
-    storage.insertAccount(hosted)
-    db.sqlite.prepare('INSERT INTO user VALUES (?,?,?)').run('owner', hosted.email, 1)
-    db.sqlite.prepare('INSERT INTO session VALUES (?,?,?,?)').run('current', 'owner', now, now + 600_000)
-    const reservation = { workflowId: 'email-reservation', did: alice.did, handle: alice.handle,
-      userId: 'owner', sessionId: 'current', targetPdsId: 'pds1', targetPdsUrl: pds[0].url }
-    assert.throws(() => storage.reserveExternalMigration(reservation),
-      (error) => error.code === 'EmailNotAvailable')
-    db.sqlite.prepare('UPDATE user SET email=? WHERE id=?').run('fresh@example.test', 'owner')
-    storage.reserveExternalMigration(reservation)
-    assert.deepEqual(storage.getEmailClaim('fresh@example.test'), { did: alice.did, purpose: 'external' })
-    assert.throws(() => storage.reserveEmail('fresh@example.test', hosted.did, 'backup'),
-      (error) => error.code === 'EmailNotAvailable')
-    assert.throws(() => storage.insertAccount({
-      ...alice, did: 'did:plc:gggggggggggggggggggggggg',
-      email: 'fresh@example.test', handle: 'other.entryway.atmosbox.test',
-    }), (error) => error.code === 'EmailNotAvailable')
-    assert.throws(() => storage.saveAccount({ ...hosted, email: 'fresh@example.test' }),
-      (error) => error.code === 'EmailNotAvailable')
-    assert.equal(storage.getByEmail('fresh@example.test'), null)
-  } finally { db.close() }
-})
-
-test('failed workflow insert rolls back identity reservation and permits retry', async (t) => {
-  const { path } = fixture(t)
-  const db = openDatabase(path)
-  try {
-    const accounts = createSqliteAccountStorage(db.sqlite, pds)
-    const start = createMigrationStartTransactor(db.sqlite, accounts)
-    db.sqlite.exec(`
-      CREATE TABLE user (id TEXT PRIMARY KEY,email TEXT NOT NULL,emailVerified INTEGER NOT NULL);
-      CREATE TABLE session (id TEXT PRIMARY KEY,userId TEXT NOT NULL,createdAt TEXT NOT NULL,expiresAt TEXT NOT NULL);
-    `)
-    const now = Date.now()
-    db.sqlite.prepare('INSERT INTO user VALUES (?,?,?)').run('atomic-owner', alice.email, 1)
-    db.sqlite.prepare('INSERT INTO session VALUES (?,?,?,?)').run(
-      'atomic-session', 'atomic-owner', new Date(now - 1_000).toISOString(), new Date(now + 600_000).toISOString(),
-    )
+    const storage = createAccountStorage(db, pds);
+    const now = Date.now();
+    const hosted = {
+      ...alice,
+      did: "did:plc:ffffffffffffffffffffffff",
+      email: "hosted@example.test",
+      handle: "hosted.entryway.atmosbox.test",
+    };
+    await storage.insertAccount(hosted);
+    await verifiedUser(db, "owner", hosted.email);
+    await browserSession(db, "current", "owner", now, now + 600_000);
     const reservation = {
-      workflowId: 'atomic-start', did: alice.did, handle: alice.handle,
-      userId: 'atomic-owner', sessionId: 'atomic-session', targetPdsId: 'pds1', targetPdsUrl: pds[0].url,
-    }
-    const timestamp = new Date(now).toISOString()
-    const key = `did:key:zQ3sh${'a'.repeat(44)}`
-    const head = `b${'a'.repeat(30)}`
+      workflowId: "email-reservation",
+      did: alice.did,
+      handle: alice.handle,
+      userId: "owner",
+      sessionId: "current",
+      targetPdsId: "pds1",
+      targetPdsUrl: pds[0].url,
+    };
+    await assert.rejects(
+      async () => await storage.reserveExternalMigration(reservation),
+      (error) => error.code === "EmailNotAvailable",
+    );
+    await query(
+      db,
+      'UPDATE "user" SET email=? WHERE id=?',
+      ["fresh@example.test", "owner"],
+      "run",
+    );
+    await storage.reserveExternalMigration(reservation);
+    assert.deepEqual(await storage.getEmailClaim("fresh@example.test"), {
+      did: alice.did,
+      purpose: "external",
+    });
+    await assert.rejects(
+      async () =>
+        await storage.reserveEmail("fresh@example.test", hosted.did, "backup"),
+      (error) => error.code === "EmailNotAvailable",
+    );
+    await assert.rejects(
+      async () =>
+        await storage.insertAccount({
+          ...alice,
+          did: "did:plc:gggggggggggggggggggggggg",
+          email: "fresh@example.test",
+          handle: "other.entryway.atmosbox.test",
+        }),
+      (error) => error.code === "EmailNotAvailable",
+    );
+    await assert.rejects(
+      async () =>
+        await storage.saveAccount({ ...hosted, email: "fresh@example.test" }),
+      (error) => error.code === "EmailNotAvailable",
+    );
+    assert.equal(await storage.getByEmail("fresh@example.test"), null);
+  } finally {
+    await db.close();
+  }
+});
+
+test("failed workflow insert rolls back identity reservation and permits retry", async (t) => {
+  const { path } = await fixture(t);
+  const db = await openTestDatabase(path);
+  try {
+    const accounts = createAccountStorage(db, pds);
+    const start = createMigrationStartTransactor(db, accounts);
+    const now = Date.now();
+    await verifiedUser(db, "atomic-owner", alice.email);
+    await browserSession(
+      db,
+      "atomic-session",
+      "atomic-owner",
+      new Date(now - 1_000).toISOString(),
+      new Date(now + 600_000).toISOString(),
+    );
+    const reservation = {
+      workflowId: "atomic-start",
+      did: alice.did,
+      handle: alice.handle,
+      userId: "atomic-owner",
+      sessionId: "atomic-session",
+      targetPdsId: "pds1",
+      targetPdsUrl: pds[0].url,
+    };
+    const timestamp = new Date(now).toISOString();
+    const key = `did:key:zQ3sh${"a".repeat(44)}`;
+    const head = `b${"a".repeat(30)}`;
     const workflow = {
-      id: reservation.workflowId, did: reservation.did, ownerUserId: reservation.userId,
-      ownerEmail: alice.email, ownerSessionReference: reservation.sessionId,
-      handle: reservation.handle, sourcePdsUrl: 'https://source.test',
-      targetPdsId: reservation.targetPdsId, targetPdsUrl: reservation.targetPdsUrl,
-      authority: { sourceRecoveryKey: key, entrywayRotationKey: key, sourceRepositoryKey: key, sourcePlcHead: head },
-      phase: 'owner-confirmed', expectedPlcHead: head, version: 0, createdAt: timestamp, updatedAt: timestamp,
-    }
-    db.sqlite.exec(`CREATE TRIGGER reject_journal BEFORE INSERT ON migration_workflow
-      BEGIN SELECT RAISE(ABORT, 'synthetic journal failure'); END;`)
-    await assert.rejects(start.createReservedWorkflow({ reservation, workflow }), /synthetic journal failure/)
-    assert.equal(db.sqlite.prepare('SELECT count(*) AS count FROM migration_workflow').get().count, 0)
-    assert.equal(db.sqlite.prepare('SELECT count(*) AS count FROM entryway_external_reservations').get().count, 0)
-    assert.equal(accounts.getEmailClaim(alice.email), null)
-    assert.equal(accounts.getHandleClaim(alice.handle), null)
-    db.sqlite.exec('DROP TRIGGER reject_journal')
-    await start.createReservedWorkflow({ reservation, workflow })
-    assert.equal(db.sqlite.prepare('SELECT count(*) AS count FROM migration_workflow').get().count, 1)
-    assert.equal(db.sqlite.prepare('SELECT count(*) AS count FROM entryway_external_reservations').get().count, 1)
-    assert.deepEqual(accounts.getEmailClaim(alice.email), { did: alice.did, purpose: 'external' })
-  } finally { db.close() }
-})
+      id: reservation.workflowId,
+      did: reservation.did,
+      ownerUserId: reservation.userId,
+      ownerEmail: alice.email,
+      ownerSessionReference: reservation.sessionId,
+      handle: reservation.handle,
+      sourcePdsUrl: "https://source.test",
+      targetPdsId: reservation.targetPdsId,
+      targetPdsUrl: reservation.targetPdsUrl,
+      authority: {
+        sourceRecoveryKey: key,
+        rotationAuthorityKey: key,
+        sourceRepositoryKey: key,
+        sourcePlcHead: head,
+      },
+      phase: "owner-confirmed",
+      expectedPlcHead: head,
+      version: 0,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    await failureTrigger(
+      db,
+      "reject_journal",
+      "migration_workflow",
+      "synthetic journal failure",
+    );
+    await assert.rejects(
+      start.createReservedWorkflow({ reservation, workflow }),
+      hasFailure("synthetic journal failure"),
+    );
+    assert.equal(
+      (
+        await query(
+          db,
+          "SELECT count(*) AS count FROM migration_workflow",
+          [],
+          "get",
+        )
+      ).count,
+      0,
+    );
+    assert.equal(
+      (
+        await query(
+          db,
+          "SELECT count(*) AS count FROM migration_reservations",
+          [],
+          "get",
+        )
+      ).count,
+      0,
+    );
+    assert.equal(await accounts.getEmailClaim(alice.email), null);
+    assert.equal(await accounts.getHandleClaim(alice.handle), null);
+    await removeFailureTrigger(db, "reject_journal", "migration_workflow");
+    await start.createReservedWorkflow({ reservation, workflow });
+    assert.equal(
+      (
+        await query(
+          db,
+          "SELECT count(*) AS count FROM migration_workflow",
+          [],
+          "get",
+        )
+      ).count,
+      1,
+    );
+    assert.equal(
+      (
+        await query(
+          db,
+          "SELECT count(*) AS count FROM migration_reservations",
+          [],
+          "get",
+        )
+      ).count,
+      1,
+    );
+    assert.deepEqual(await accounts.getEmailClaim(alice.email), {
+      did: alice.did,
+      purpose: "external",
+    });
+  } finally {
+    await db.close();
+  }
+});

@@ -1,11 +1,11 @@
 x-runtime: &runtime
-  image: ${ENTRYWAY_E2E_PROJECT:-hypercerts-entryway}:local
+  image: ${SANDBOX_PROJECT:-hypercerts-entryway}:local
   build:
     context: ../..
     dockerfile: tests/support/Dockerfile
   init: true
   environment: &runtime-env
-    SPIKE_CONFIG: /config/config.json
+    SERVICE_CONFIG_PATH: /config/config.json
     NODE_EXTRA_CA_CERTS: /ca/root.crt
     LOG_LEVEL: warn
   networks: [atmosinabox]
@@ -36,7 +36,7 @@ services:
     environment:
       <<: *runtime-env
       SOURCE_FIXTURE_TOKEN_FILE: /run/secrets/source-fixture-token
-      ENTRYWAY_ROTATION_DID_FILE: /run/fixture-public/entryway-rotation-did
+      TARGET_ROTATION_KEY_FILE: /run/fixture-public/target-rotation-key
       SOURCE_PDS_URL: https://pds3.atmosbox.test
       PLC_URL: https://plc.atmosbox.test
       TARGET_PDS_URL: https://cluster1.atmosbox.test

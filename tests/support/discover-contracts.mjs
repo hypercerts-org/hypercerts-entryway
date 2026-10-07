@@ -3,10 +3,22 @@ import { join, relative, resolve } from "node:path";
 
 const unitContracts = new Set([
   "oauth-stores.test.mjs",
+  "database-boundary.test.mjs",
+  "lifecycle.test.mjs",
+  "profile-evidence.test.mjs",
+  "operation-ownership.test.mjs",
+  "external-operation-ownership.test.mjs",
+  "repository-verification.test.mjs",
+  "mail-ownership.test.mjs",
+  "shared-authentication.test.mjs",
+  "synthetic-client.test.mjs",
   "service-auth.test.mjs",
   "legacy.test.mjs",
   "account-security.test.mjs",
+  "account-completion.test.mjs",
+  "reconciliation-admission.test.mjs",
   "entryway-extras.test.mjs",
+  "plc-rejection.test.mjs",
   "migration.test.mjs",
   "xrpc-security.test.mjs",
 ]);

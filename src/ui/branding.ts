@@ -1,6 +1,6 @@
 import type { BrandTokens, TrustedBrandClientIds } from "./branding-types.js";
 
-export const ENTRYWAY_BRAND: BrandTokens = {
+export const DEFAULT_BRAND: BrandTokens = {
   id: "entryway",
   name: "Entryway",
   page: "#f4f3ef",
@@ -15,7 +15,7 @@ export const ENTRYWAY_BRAND: BrandTokens = {
 
 const TRUSTED_BRANDS: Readonly<Record<"primary" | "secondary", BrandTokens>> = {
   primary: {
-    ...ENTRYWAY_BRAND,
+    ...DEFAULT_BRAND,
     id: "hypercerts",
     name: "Hypercerts",
     page: "#f5f6fb",
@@ -25,7 +25,7 @@ const TRUSTED_BRANDS: Readonly<Record<"primary" | "secondary", BrandTokens>> = {
     focus: "#2844ac",
   },
   secondary: {
-    ...ENTRYWAY_BRAND,
+    ...DEFAULT_BRAND,
     id: "hypercerts-secondary",
     name: "Hypercerts test client",
     page: "#f1f7f7",
@@ -40,8 +40,8 @@ export function resolveBrand(
   clientId: unknown,
   clients: TrustedBrandClientIds,
 ): BrandTokens {
-  if (typeof clientId !== "string") return ENTRYWAY_BRAND;
+  if (typeof clientId !== "string") return DEFAULT_BRAND;
   if (clientId === clients.primary) return TRUSTED_BRANDS.primary;
   if (clientId === clients.secondary) return TRUSTED_BRANDS.secondary;
-  return ENTRYWAY_BRAND;
+  return DEFAULT_BRAND;
 }

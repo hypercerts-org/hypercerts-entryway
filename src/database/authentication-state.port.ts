@@ -24,52 +24,52 @@ export interface PendingEmail {
 /** Atomic account authority operations over account and authentication tables.
  * Implementations retain the same database transaction across both schemas. */
 export interface AuthenticationState {
-  account(did: string): AccountRow;
-  identity(did: string): string | undefined;
-  version(did: string): number;
-  claim(email: string): { did: string; purpose: string } | null;
-  pendingEmail(did: string): PendingEmail | null;
+  account(did: string): Promise<AccountRow>;
+  identity(did: string): Promise<string | undefined>;
+  version(did: string): Promise<number>;
+  claim(email: string): Promise<{ did: string; purpose: string } | null>;
+  pendingEmail(did: string): Promise<PendingEmail | null>;
   assertEmailAvailable(
     email: string,
     did: string,
     options?: { allowOwnBackup?: boolean },
-  ): string;
+  ): Promise<string>;
   bindVerifiedIdentity(input: {
     did: string;
     email: string;
     userId?: string;
-  }): string;
-  initializeClaims(): void;
-  hasLiveSession(sessionId: string, userId: string): boolean;
-  revokeLocal(did: string): void;
+  }): Promise<string>;
+  initializeClaims(): Promise<void>;
+  hasLiveSession(sessionId: string, userId: string): Promise<boolean>;
+  revokeLocal(did: string): Promise<void>;
   commitEmailChange(input: {
     did: string;
     email: string;
     recovery: boolean;
     verified: boolean;
     previousEmail: string;
-  }): void;
-  confirmEmail(input: { did: string; email: string }): void;
+  }): Promise<void>;
+  confirmEmail(input: { did: string; email: string }): Promise<void>;
   reservePendingEmail(input: {
     did: string;
     email: string;
     recovery: boolean;
     backupEmail?: string;
     expiresAt: number;
-  }): { row: AccountRow; email: string; purpose: string };
+  }): Promise<{ row: AccountRow; email: string; purpose: string }>;
   consumeChallenge(input: {
     id: string;
     purpose: string;
     hash: string;
     expected: { did?: string; email?: string };
     malformed: boolean;
-  }): SecurityChallenge;
+  }): Promise<SecurityChallenge>;
   listBackupEmails(
     did: string,
-  ): { email: string; createdAt: string; verified: boolean }[];
-  backupCount(did: string): number;
-  backupOwner(email: string): { did: string } | undefined;
-  addBackupEmail(did: string, email: string): Record<string, never>;
-  removeBackupEmail(did: string, email: string): void;
-  clearDeletedAccountRecovery(did: string): void;
+  ): Promise<{ email: string; createdAt: string; verified: boolean }[]>;
+  backupCount(did: string): Promise<number>;
+  backupOwner(email: string): Promise<{ did: string } | undefined>;
+  addBackupEmail(did: string, email: string): Promise<Record<string, never>>;
+  removeBackupEmail(did: string, email: string): Promise<void>;
+  clearDeletedAccountRecovery(did: string): Promise<void>;
 }

@@ -51,7 +51,7 @@ export function mountAccountUi(context) {
       const ctx = await console.authenticated(req, res);
       if (!ctx) return;
       context.oauth.checkCsrf(req, ctx.browser);
-      if (context.security) context.security.summary(ctx.principal);
+      if (context.security) await context.security.summary(ctx.principal);
       console.requireRecent(ctx.session);
       console.needed();
       throw new HttpError(404, "NotFound", "Unknown account operation");

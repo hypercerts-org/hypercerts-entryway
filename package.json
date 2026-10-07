@@ -7,7 +7,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/copy-database-schema.mjs",
     "start": "node dist/src/main.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "check": "node scripts/check.mjs",
@@ -21,7 +21,12 @@
     "test:unit": "node tests/support/run-contracts.mjs --unit",
     "test:external-workflow": "node --test tests/contracts/external-workflow.test.mjs tests/contracts/migration-domain.test.mjs tests/contracts/migration-custody.test.mjs tests/contracts/migration-payload.test.mjs tests/contracts/migration-target-token.test.mjs",
     "test:experience": "node --test tests/contracts/experience.test.mjs && playwright test --config tests/playwright.config.mjs tests/browser/experience-browser.spec.mjs",
-    "test:e2e:atmosphere": "bash tests/local.sh fresh"
+    "test:e2e:atmosphere": "bash tests/local.sh fresh",
+    "schema:export": "node scripts/export-database-schema.mjs",
+    "schema:check": "node scripts/export-database-schema.mjs --check",
+    "changeset": "changeset",
+    "changeset:check": "changeset status",
+    "version-packages": "changeset version && npm install --package-lock-only --ignore-scripts --offline --no-audit --no-fund"
   },
   "dependencies": {
     "@atproto/common": "0.8.1",
@@ -32,6 +37,7 @@
     "@atproto/oauth-provider": "0.22.5",
     "@atproto/oauth-scopes": "0.5.10",
     "@atproto/pds": "0.5.36",
+    "@atproto/repo": "0.10.12",
     "@atproto/syntax": "0.7.5",
     "@atproto/xrpc-server": "0.12.7",
     "@did-plc/lib": "0.0.4",
@@ -39,18 +45,23 @@
     "@noble/curves": "1.9.7",
     "better-auth": "1.7.3",
     "better-sqlite3": "12.6.2",
+    "drizzle-orm": "1.0.0-rc.4",
     "express": "4.22.1",
     "jose": "5.10.0",
     "nodemailer": "10.0.12",
+    "pg": "8.16.3",
     "smtp-server": "3.19.15"
   },
   "devDependencies": {
+    "@changesets/cli": "3.0.3",
     "@playwright/test": "1.58.2",
     "@types/better-sqlite3": "9.6.0",
     "@types/express": "4.17.25",
     "@types/node": "24.19.0",
     "@types/nodemailer": "8.0.2",
+    "@types/pg": "8.15.5",
     "@types/smtp-server": "3.5.13",
+    "drizzle-kit": "1.0.0-rc.4",
     "prettier": "3.8.1",
     "typescript": "7.0.2",
     "typescript6": "npm:typescript@6.0.3"

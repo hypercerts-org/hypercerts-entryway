@@ -2,16 +2,17 @@
 # Only this project's sandbox is controlled; application execution stays in containers.
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-sandbox=${ENTRYWAY_SANDBOX_ROOT:-"$root/tests/.runtime/atmosphereinabox"}
-project=${ENTRYWAY_E2E_PROJECT:-hypercerts-entryway}
-artifacts=${ENTRYWAY_E2E_REPORT_DIR:-"$root/tests/artifacts"}
-export ENTRYWAY_SANDBOX_ROOT="$sandbox" ENTRYWAY_E2E_PROJECT="$project" ENTRYWAY_E2E_REPORT_DIR="$artifacts"
+sandbox=${SANDBOX_CHECKOUT:-"$root/tests/.runtime/atmosphereinabox"}
+project=${SANDBOX_PROJECT:-hypercerts-entryway}
+artifacts=${ACCEPTANCE_REPORT_DIR:-"$root/tests/artifacts"}
+export SANDBOX_CHECKOUT="$sandbox" SANDBOX_PROJECT="$project" ACCEPTANCE_REPORT_DIR="$artifacts"
 [[ "$project" =~ ^hypercerts-entryway(-[a-z0-9_-]+)?$ ]] || { echo "Invalid Entryway project name" >&2; exit 2; }
 mkdir -p "$sandbox"
 cd "$sandbox"
 command=${1:-help}
 mkdir -p "$artifacts"
-compose() { docker compose --project-name "$project" -f "$sandbox/compose.yaml" "$@"; }
+source "$root/tests/support/rootless-docker.sh"
+compose() { docker --context rootless compose --project-name "$project" -f "$sandbox/compose.yaml" "$@"; }
 guard_project() {
   node --input-type=module - "$sandbox/state/manifest.json" "$project" <<'JS'
 import { readFileSync } from 'node:fs'
@@ -29,26 +30,26 @@ external_browser() { compose run --rm --no-deps -e "EXTERNAL_PHASE=$1" browser n
 migration_command() { compose exec -T entryway node tests/support/external-migration.mjs "$@"; }
 case "$command" in
   fresh)
-    temp=$(mktemp -d "${TMPDIR:-/tmp}/hypercerts-entryway-e2e.XXXXXX")
-    export ENTRYWAY_SANDBOX_ROOT="$temp/atmosphereinabox"
-    export ENTRYWAY_E2E_PROJECT="hypercerts-entryway-$(date +%s)-$$"
-    export ENTRYWAY_E2E_REPORT_DIR="$root/tests/artifacts/$ENTRYWAY_E2E_PROJECT"
+    temp=$(mktemp -d "$root/tests/.runtime/hypercerts-entryway-e2e.XXXXXX")
+    export SANDBOX_CHECKOUT="$temp/atmosphereinabox"
+    export SANDBOX_PROJECT="hypercerts-entryway-$(date +%s)-$$"
+    export ACCEPTANCE_REPORT_DIR="$root/tests/artifacts/$SANDBOX_PROJECT"
     cleanup() {
       result=$?
-      if (( result != 0 )) && [[ "${ENTRYWAY_E2E_KEEP_FAILED_STATE:-0}" == 1 ]]; then
-        echo "Preserved project $ENTRYWAY_E2E_PROJECT at $temp" >&2
+      if (( result != 0 )) && [[ "${KEEP_FAILED_SANDBOX:-0}" == 1 ]]; then
+        echo "Preserved project $SANDBOX_PROJECT at $temp" >&2
       else
-        if test -f "$ENTRYWAY_SANDBOX_ROOT/compose.yaml"; then
-          if ! docker compose --project-name "$ENTRYWAY_E2E_PROJECT" -f "$ENTRYWAY_SANDBOX_ROOT/compose.yaml" down --volumes --remove-orphans; then
-            echo "Scoped cleanup failed; preserved $temp for project $ENTRYWAY_E2E_PROJECT" >&2
+        if test -f "$SANDBOX_CHECKOUT/compose.yaml"; then
+          if ! docker --context rootless compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" down --volumes --remove-orphans; then
+            echo "Scoped cleanup failed; preserved $temp for project $SANDBOX_PROJECT" >&2
             (( result != 0 )) || result=1
-            echo "Run exit: $result; reports: $ENTRYWAY_E2E_REPORT_DIR"
+            echo "Run exit: $result; reports: $ACCEPTANCE_REPORT_DIR"
             exit "$result"
           fi
         fi
         rm -rf -- "$temp"
       fi
-      echo "Run exit: $result; reports: $ENTRYWAY_E2E_REPORT_DIR"
+      echo "Run exit: $result; reports: $ACCEPTANCE_REPORT_DIR"
       exit "$result"
     }
     trap cleanup EXIT
@@ -71,6 +72,9 @@ case "$command" in
     ;;
   up)
     require_state
+    if [[ "${DATABASE_BACKEND:-sqlite}" == postgresql ]]; then
+      compose up -d --wait entryway-postgres
+    fi
     deno task sandbox up --build
     compose build test browser
     deno task sandbox access --json > "$sandbox/access.json"
@@ -79,6 +83,24 @@ case "$command" in
   contracts)
     require_state
     compose run --rm --no-deps test node tests/support/run-contracts.mjs
+    ;;
+  database-contracts)
+    require_state
+    compose up -d --wait entryway-postgres
+    for backend in sqlite postgresql; do
+      result=0
+      compose run --rm --no-deps -e "CONTRACT_DATABASE_BACKEND=$backend" -e CONTRACT_DATABASE_URL=postgresql://authority_owner@entryway-postgres/account_authority test node tests/support/run-database-contracts.mjs > "$artifacts/database-$backend.log" 2>&1 || result=$?
+      printf '%s\n' "$result" > "$artifacts/database-$backend.exit"
+      cat "$artifacts/database-$backend.log"
+      (( result == 0 )) || exit "$result"
+    done
+    bash "$root/tests/support/run-postgresql-profile.sh"
+    ;;
+  resilience-profiles)
+    bash "$root/tests/support/run-resilience-profiles.sh"
+    ;;
+  database-profile)
+    bash "$root/tests/support/run-postgresql-profile.sh"
     ;;
   browser)
     require_state
@@ -128,7 +150,7 @@ case "$command" in
     record_candidate interop-profile
     compose exec -T entryway node tests/support/interop-profile-probe.mjs > "$artifacts/interop-profile.json"
     ;;
-  plc-recovery|process-crash|authority-drills)
+  plc-recovery|process-crash|managed-recovery|authority-drills)
     require_state
     bash "$root/tests/support/run-$command.sh"
     ;;
@@ -145,6 +167,7 @@ case "$command" in
     compose run --rm --no-deps test node tests/support/assert-interop-profile.mjs /app/artifacts/interop-profile.json "$profile_status" /app/artifacts/interop-profile-acceptance.json
     "$root/tests/local.sh" plc-recovery
     "$root/tests/local.sh" process-crash
+    "$root/tests/local.sh" managed-recovery
     "$root/tests/local.sh" authority-drills
     "$root/tests/local.sh" resilience
     ;;
@@ -157,7 +180,7 @@ case "$command" in
     deno task sandbox status
     ;;
   *)
-    echo 'Usage: ./tests/local.sh fresh|prepare|up|browser|contracts|migration|migration-resume|reverify|interop-profile|plc-recovery|process-crash|authority-drills|resilience|all|status|down'
+    echo 'Usage: ./tests/local.sh fresh|prepare|up|browser|contracts|database-contracts|database-profile|resilience-profiles|migration|migration-resume|reverify|interop-profile|plc-recovery|process-crash|managed-recovery|authority-drills|resilience|all|status|down'
     echo 'all requires a fresh project fixture; down retains state and volumes. No implicit reset.'
     ;;
 esac

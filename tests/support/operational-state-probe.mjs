@@ -8,18 +8,18 @@ import { SignJWT, importJWK } from 'jose'
 const [mode, run, stage] = process.argv.slice(2)
 assert.match(run ?? '', /^[a-z0-9-]+$/)
 const dir = `/data/verification-${run}`
-const configPath = process.env.SPIKE_CONFIG
+const configPath = process.env.SERVICE_CONFIG_PATH
 const config = JSON.parse(await readFile(configPath, 'utf8'))
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const save = (name, value) => writeFile(`/app/artifacts/operations-${run}-${name}.json`, JSON.stringify(value, null, 2))
-const mappings = db => db.prepare('SELECT did,email,handle,pds_id,status,data FROM mini_accounts ORDER BY did').all()
-const bindings = db => db.prepare('SELECT * FROM mini_account_identities ORDER BY did').all()
+const mappings = db => db.prepare('SELECT did,email,handle,pds_id,status,data FROM accounts ORDER BY did').all()
+const bindings = db => db.prepare('SELECT * FROM account_bindings ORDER BY did').all()
 if (mode === 'backup') {
   await mkdir(`${dir}/restored`, { recursive: true, mode: 0o700 })
   await writeFile(`${dir}/config.json`, JSON.stringify(config), { mode: 0o600 })
-  const db = new Database('/data/entryway.sqlite', { readonly: true })
-  await db.backup(`${dir}/restored/entryway.sqlite`)
-  const restored = new Database(`${dir}/restored/entryway.sqlite`, { readonly: true })
+  const db = new Database('/data/account-authority.sqlite', { readonly: true })
+  await db.backup(`${dir}/restored/account-authority.sqlite`)
+  const restored = new Database(`${dir}/restored/account-authority.sqlite`, { readonly: true })
   assert.equal(restored.pragma('integrity_check', { simple: true }), 'ok')
   assert.deepEqual(mappings(restored), mappings(db))
   assert.deepEqual(bindings(restored), bindings(db))
@@ -48,9 +48,9 @@ if (mode === 'backup') {
 } else if (mode === 'tokens') {
   assert.ok(['before', 'issuer-only', 'fleet', 'restored'].includes(stage))
   const original = stage === 'before' ? config : JSON.parse(await readFile(`${configPath}.verification-${run}`, 'utf8'))
-  const db = new Database('/entryway-data/entryway.sqlite', { readonly: true })
+  const db = new Database('/entryway-data/account-authority.sqlite', { readonly: true })
   const fixture = JSON.parse(await readFile(`/app/artifacts/operations-${run}-fixture.json`, "utf8"))
-  const rows = config.pds.map(p => db.prepare("SELECT did,handle FROM mini_accounts WHERE pds_id=? AND did=? AND status='active'").get(p.id, fixture.identities.find(i => i.pdsId === p.id)?.did))
+  const rows = config.pds.map(p => db.prepare("SELECT did,handle FROM accounts WHERE pds_id=? AND did=? AND status='active'").get(p.id, fixture.identities.find(i => i.pdsId === p.id)?.did))
   db.close()
   const results = []
   for (let i=0; i<config.pds.length; i++) {

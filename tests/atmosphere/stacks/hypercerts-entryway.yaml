@@ -1,31 +1,51 @@
 x-runtime: &runtime
-  image: ${ENTRYWAY_E2E_PROJECT:-hypercerts-entryway}:local
+  image: ${SANDBOX_PROJECT:-hypercerts-entryway}:local
   build:
     context: ../..
     dockerfile: tests/support/Dockerfile
   init: true
   environment: &runtime-env
-    SPIKE_CONFIG: /config/config.json
+    DATABASE_BACKEND: ${DATABASE_BACKEND:-sqlite}
+    DATABASE_URL: ${DATABASE_URL:-}
+    DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:-single-node}
+    SERVICE_CONFIG_PATH: /config/config.json
     NODE_EXTRA_CA_CERTS: /ca/root.crt
     LOG_LEVEL: warn
   networks: [atmosinabox]
 services:
+  entryway-postgres:
+    image: postgres:16.15-alpine3.24
+    profiles: [database]
+    environment:
+      POSTGRES_DB: account_authority
+      POSTGRES_USER: authority_owner
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - entryway-postgres-data:/var/lib/postgresql/data
+      - database-profile-backup:/backup
+    networks: [atmosinabox]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U authority_owner -d account_authority]
+      interval: 1s
+      timeout: 3s
+      retries: 30
   configure:
     <<: *runtime
     command: node tests/support/configure.mjs
     environment:
-      SPIKE_CONFIG: /config/config.json
-      SPIKE_HANDLE_DOMAINS: .entryway.atmosbox.test
-      SPIKE_CLIENT_URL: https://client.entryway.example.com
+      SERVICE_CONFIG_PATH: /config/config.json
+      SERVICE_HANDLE_DOMAINS: .entryway.atmosbox.test
+      OAUTH_CLIENT_URL: https://client.entryway.example.com
       SOURCE_FIXTURE_PUBLIC_DIR: /run/fixture-public
       SOURCE_FIXTURE_TOKEN_DIR: /run/secrets
     volumes:
       - entryway-config:/config
       - source-fixture-public:/run/fixture-public
       - source-fixture-token:/run/secrets
-  entryway:
+  entryway: &entryway-node
     <<: *runtime
-    command: npm start
+    stop_grace_period: 20s
+    command: node dist/src/main.mjs
     volumes:
       - ../artifacts:/app/artifacts:z
       - entryway-config:/config:ro
@@ -35,7 +55,7 @@ services:
       <<: *runtime-env
       MAIL_SMTP_HOST: mail-capture
       MAIL_SMTP_PORT: '2525'
-      SPIKE_BROWSER_CLIENT_METADATA_URL: https://browser.atmosbox.internal/oauth-client-metadata.json
+      BROWSER_CLIENT_METADATA_URL: https://browser.atmosbox.internal/oauth-client-metadata.json
       SOURCE_FIXTURE_URL: http://source-fixture:3313
       SOURCE_FIXTURE_TOKEN_FILE: /run/secrets/source-fixture-token
     depends_on:
@@ -90,13 +110,14 @@ services:
       - entryway-config:/config:ro
       - entryway-data:/entryway-data:ro
       - mail-capture-data:/capture:ro
+      - database-profile-data:/profile
       - source-fixture-token:/run/secrets:ro
       - ../artifacts:/app/artifacts:z
     depends_on:
       pds1: { condition: service_healthy }
       pds2: { condition: service_healthy }
   browser:
-    image: ${ENTRYWAY_E2E_PROJECT:-hypercerts-entryway}-browser:local
+    image: ${SANDBOX_PROJECT:-hypercerts-entryway}-browser:local
     build:
       context: ../..
       dockerfile: tests/support/Dockerfile.browser
@@ -117,6 +138,9 @@ services:
       pds2: { condition: service_healthy }
     shm_size: 1gb
 volumes:
+  entryway-postgres-data: {}
+  database-profile-data: {}
+  database-profile-backup: {}
   entryway-config: {}
   entryway-data: {}
   cluster1-data: {}

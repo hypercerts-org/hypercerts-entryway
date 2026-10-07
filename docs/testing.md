@@ -27,24 +27,28 @@ Run these from the repository root. `npm run test:e2e:atmosphere` is an optional
 alias for `./tests/local.sh fresh`; this host command only starts shell orchestration
 and requires no host dependency install:
 
-| Command | Purpose and precondition |
-| --- | --- |
-| `./tests/local.sh fresh` | Repeatable full run in a disposable project; cleanup follows success/failure |
-| `./tests/local.sh prepare` | Install sandbox CLI dependencies and create/check project configuration |
-| `./tests/local.sh up` | Build/start the sandbox and build test/browser images after prepare |
-| `./tests/local.sh status` | Inspect this project's services after prepare |
-| `./tests/local.sh contracts` | Run imported contract scenarios in the test container after up |
-| `./tests/local.sh browser` | Run browser scenarios after up |
-| `./tests/local.sh migration` | Fresh synthetic external-source migration, including two Entryway restarts |
-| `./tests/local.sh migration-resume` | Resume a reviewed interrupted fixture; inspect state before using |
-| `./tests/local.sh reverify` | Check an already completed migration fixture |
-| `./tests/local.sh resilience` | Disruptive outage/restart checks after other suites finish; run alone |
-| `./tests/local.sh all` | Prepare, up, browser, contracts, migration, profile, PLC recovery, crash, authority drills, resilience; requires fresh fixture |
-| `./tests/local.sh interop-profile` | Raw product profile; exit 2 retains inherited missing moderation requirement |
-| `./tests/local.sh plc-recovery` | Five named synthetic PLC/cache recovery cases in the selected project |
-| `./tests/local.sh process-crash` | Two actual SIGKILL boundaries, exit 137 and post-recovery PDS writes |
-| `./tests/local.sh authority-drills` | Fresh two-PDS identities, bounded backup/restore and issuer/fleet/restored key checks |
-| `./tests/local.sh down` | Stop this project; retain volumes and state |
+| Command                                | Purpose and precondition                                                                                                                                                                                 |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `./tests/local.sh fresh`               | Repeatable full run in a disposable project; cleanup follows success/failure                                                                                                                             |
+| `./tests/local.sh prepare`             | Install sandbox CLI dependencies and create/check project configuration                                                                                                                                  |
+| `./tests/local.sh up`                  | Build/start the sandbox and build test/browser images after prepare                                                                                                                                      |
+| `./tests/local.sh status`              | Inspect this project's services after prepare                                                                                                                                                            |
+| `./tests/local.sh database-contracts`  | Run both database contract dialects, then the separate PostgreSQL login/restart/restore profile; see [database configuration](database.md)                                                               |
+| `./tests/local.sh database-profile`    | Run the one-node PostgreSQL application profile in its own fresh project                                                                                                                                 |
+| `./tests/local.sh resilience-profiles` | Run all three fresh deployment profiles and require complete bounded receipts; see [profile contract](deployment-profiles.md)                                                                            |
+| `./tests/local.sh contracts`           | Run imported contract scenarios in the test container after up                                                                                                                                           |
+| `./tests/local.sh browser`             | Run browser scenarios after up                                                                                                                                                                           |
+| `./tests/local.sh migration`           | Fresh synthetic external-source migration, including two Entryway restarts                                                                                                                               |
+| `./tests/local.sh migration-resume`    | Resume a reviewed interrupted fixture; inspect state before using                                                                                                                                        |
+| `./tests/local.sh reverify`            | Check an already completed migration fixture                                                                                                                                                             |
+| `./tests/local.sh resilience`          | Disruptive outage/restart checks after other suites finish; run alone                                                                                                                                    |
+| `./tests/local.sh all`                 | Prepare, up, browser, contracts, migration, profile, PLC recovery, crash, managed recovery, authority drills, resilience; requires fresh fixture                                                         |
+| `./tests/local.sh interop-profile`     | Raw product profile; exit 2 retains inherited missing moderation requirement                                                                                                                             |
+| `./tests/local.sh plc-recovery`        | Five named synthetic PLC/cache recovery cases in the selected project                                                                                                                                    |
+| `./tests/local.sh process-crash`       | Two actual SIGKILL boundaries, exit 137 and post-recovery PDS writes                                                                                                                                     |
+| `./tests/local.sh managed-recovery`    | Two real managed-migration modes: consumed successful response and rejected request followed by observe-to-retry authorization; pending/reload UI and preserved record/blob/session/PDS-write assertions |
+| `./tests/local.sh authority-drills`    | Fresh two-PDS identities, bounded backup/restore and issuer/fleet/restored key checks                                                                                                                    |
+| `./tests/local.sh down`                | Stop this project; retain volumes and state                                                                                                                                                              |
 
 For the optional persistent commands, the default generated checkout is
 `tests/.runtime/atmosphereinabox`. `down` retains state; it does not reset fixtures.
@@ -56,12 +60,20 @@ no other test containers active. It retains volumes and attempts service restora
 Review `resilience.json` and per-phase reports if interrupted. See
 [`tests/flows/resilience.md`](../tests/flows/resilience.md) for the sequence.
 
-| Environment variable | Meaning |
-| --- | --- |
-| `ENTRYWAY_E2E_KEEP_FAILED_STATE=1` | Keep a failed disposable run for investigation |
-| `ENTRYWAY_SANDBOX_ROOT` | Explicit runtime checkout location for controlled use |
-| `ENTRYWAY_E2E_PROJECT` | Explicit owned project name |
-| `ENTRYWAY_E2E_REPORT_DIR` | Report directory override |
+| Environment variable    | Meaning                                               |
+| ----------------------- | ----------------------------------------------------- |
+| `KEEP_FAILED_SANDBOX=1` | Keep a failed disposable run for investigation        |
+| `SANDBOX_CHECKOUT`      | Explicit runtime checkout location for controlled use |
+| `SANDBOX_PROJECT`       | Explicit owned project name                           |
+| `ACCEPTANCE_REPORT_DIR` | Report directory override                             |
+
+Runtime configuration uses `SERVICE_CONFIG_PATH` (default `./.runtime/config.json`).
+`DATABASE_BACKEND` selects SQLite or PostgreSQL and `DEPLOYMENT_MODE` selects the
+single-node or multi-node profile. SQLite uses `account-authority.sqlite` under
+`STATE_DIRECTORY` (default `/data`); PostgreSQL requires `DATABASE_URL`. See
+[database configuration](database.md) for validation and profile limits.
+The schemas require fresh state; do not resume a sandbox or restore a database
+from an incompatible schema generation.
 
 `fresh` generates its own runtime path, project name and report directory; the
 explicit location/name overrides apply to persistent commands.
@@ -76,12 +88,44 @@ It prepares a synthetic external source, verifies the destination owner's email,
 pauses after authority handoff and repository import, restarts Entryway between
 steps, completes and checks the result with browser OAuth. It uses private source
 fixture APIs and assumed recovery custody. It does not prove migration from an
-arbitrary live provider or interoperability with an unmodified migration tool.
+arbitrary live provider or compliance with the complete public migration contract.
 
-Standard-tool migration remains a separate release gate. Its acceptance must use
-normal account credentials and public XRPC endpoints, preserve DID/repository/blob
-state and allow sign-in after transfer, without operator database edits or fixture
-private keys. Reference PDS containers remain unchanged.
+Public-protocol migration remains a separate release gate. Acceptance uses normal
+account credentials and public endpoints, preserves DID/repository/blob state and
+allows sign-in after transfer, without operator database edits or fixture private
+keys. A particular migration tool/version is not required; record versions for
+reproducibility if tools are used. Reference PDS containers remain unchanged.
+
+Cover standard PLC confirmation, signature and publication with different source
+and destination emails. Destination email proof establishes login binding, not an
+extra DID-ownership mechanism. Retain standard endpoint authentication and
+service-auth scope/audience checks. Separately cover whole-PDS joining with imported
+DID/email associations and retained valid PLC rotation authority. Custody cases
+must distinguish repository signing from rotation authority, optional user keys
+from operator offline recovery, and ordinary departure from uncertain-write
+reconciliation. Valid destination keys may replace former host authority without
+separate operator approval. Independent exit requires independently usable
+user-authorized rotation authority and available data; do not infer it from an
+operator-only offline key. These are pending product acceptance cases, not claims
+about the current synthetic suite.
+
+## Operator onboarding and shared-authority coverage
+
+Future onboarding acceptance must reject effective association before the PDS
+applies the supplied configuration and passes live DID, issuer and authenticated
+callback checks. Incorrect or missing settings must leave it unassociated and
+ineligible for placement. Existing-PDS conversion must honor that order while
+preserving the approved account and custody rules. Current static-host harnesses
+do not establish a supported operator onboarding tool or conversion procedure.
+
+Distinguish loss of one replica from loss of the whole shared authority. Record
+which login, refresh, signup and delegated operations fail, which already-issued
+token operations remain PDS-local, and the checks/expiry that bound any continued
+access. Existing profile cases do not prove blanket PDS availability. Isolated
+Entryway deployments need no inter-Entryway federation or discovery-router suite;
+standard public protocol discovery and migration acceptance remain required.
+Registry coverage, conversion qualification and operator runbooks remain later
+work, not additional database/deployment-foundation implementation claims.
 
 ## Acceptance groups
 
@@ -89,7 +133,7 @@ private keys. Reference PDS containers remain unchanged.
    fresh authentication, consent and recovery.
 2. Protocol: discovery, PAR, code/refresh, PKCE/DPoP, revocation and applicable XRPC
    contracts against the reference PDS.
-3. Migration: standard tools, internal and external movement, repeated operations,
+3. Migration: public protocol compliance, internal and external movement, repeated operations,
    interruptions, empty repositories and outward portability.
 4. Fleet: add, placement exclusion during drain, transfer and retirement.
 5. Operations: mail delivery, backups/restores, signing custody and reconciliation.
@@ -100,17 +144,21 @@ risk. Do not count it as product parity. Existing access tokens may remain usabl
 until expiry after grant revocation; the imported immediate-write test does not
 measure the complete expiry interval.
 
-## Evidence reporting
+## Reporting validation
 
-No tests or builds were executed as part of the documentation import. Report new
-runs with source revision, command, sandbox/dependency versions, result and unrun
-groups. Historical spike reports establish provenance only. Never copy captured
-OTPs, access tokens, private keys or runtime configuration into committed reports.
+Report runs in PR checks, comments or the final handoff with source revision,
+command, sandbox/dependency versions, actual result and unrun groups. Retain failed
+results when a later attempt passes. Keep raw logs, screenshots, inventories and
+execution ledgers in ignored `tests/artifacts/`, not in versioned design docs.
+Never put captured OTPs, access tokens, private keys or generated runtime
+configuration in public reports. Historical spike reports establish provenance only.
+Keep design rationale in the existing domain guides and operator-facing release
+notes in [Changesets](../RELEASING.md), not routine test or scanner output.
 
 ## Feature tests and operational evidence
 
-Contract discovery executes both tests/contracts/*.test.mjs and recursively
-co-located src/features/**/*.test.mjs, once and sorted, with a shared JUnit report.
+Contract discovery executes both `tests/contracts/*.test.mjs` and recursively
+co-located `src/features/**/*.test.mjs`, once and sorted, with a shared JUnit report.
 Run browser before contracts in a fresh project: real contracts require the
 verified account created by the browser journey. Pure diagnostic unit runs use
 `npm run test:unit` inside the managed test container and do not need that fixture.
@@ -126,7 +174,7 @@ consumer migration lock, use bounded waits and restore only owned services and
 keys on exit. Fresh authority fixtures belong to the current project. Database
 backups and private signing configuration remain in ignored private volumes.
 Reports include candidate source/build digests, image identities and redacted
-named-case results under ENTRYWAY_E2E_REPORT_DIR.
+named-case results under ACCEPTANCE_REPORT_DIR.
 
 `interop-profile` retains its raw exit 2 for required moderation coordination.
 `all` records that result and independently asserts that the only failure is the
@@ -135,7 +183,47 @@ failure blocks equivalence. A passing restructuring equivalence run does not
 mean the product profile passed or that release requirements are complete.
 
 The final reviewed candidate runs `TMPDIR="$HOME/temp/tmp"
-ENTRYWAY_E2E_KEEP_FAILED_STATE=1 ./tests/local.sh fresh`. All probes run before
+KEEP_FAILED_SANDBOX=1 ./tests/local.sh fresh`. All probes run before
 that disposable project's cleanup, with resilience last. The backup/rotation
 checks establish bounded local restoration, not off-site/full DR, zero-downtime
 key overlap, existing-refresh continuity or production acceptance.
+
+## Database and deployment verification
+
+The Drizzle ORM `1.0.0-rc.4` foundation has fresh SQLite/PostgreSQL adapters and
+shared contract fixtures. Focused checks cover authority rollback, provider
+persistence and contention across independent PostgreSQL connections. Configuration
+contracts accept either backend for single-node operation, require PostgreSQL for
+multi-node mode, and reject multi-node SQLite.
+
+The harness includes a separate Entryway PostgreSQL service, dual-dialect
+`database-contracts`, and a one-node `database-profile` for actual-main OTP login,
+restart and pg_dump/restore. [Database configuration and contracts](database.md)
+describes reproduction and receipt contents. These single-node checks do not
+establish worker takeover or multi-instance availability.
+[Shared operation ownership](shared-operations.md) adds account, migration,
+recovery, mail and authentication contracts, including separate PostgreSQL worker
+processes. [Deployment profiles](deployment-profiles.md) exercise readiness/draining
+and actual application replicas. The [credential-lifetime defect](implementation-assessment.md#known-limits)
+remains unfixed; passing suites do not erase its earlier failure.
+
+Repository lifecycle entrypoints explicitly select `DOCKER_CONTEXT=rootless`, unset
+`DOCKER_HOST` and verify the rootless endpoint/security option before acting. There
+is no default-daemon fallback, including cleanup. The receipt records the selected
+context, endpoint and security options. A historical result without that
+provenance must not be presented as rootless acceptance.
+
+The revised real process-crash drill uses the unchanged 120-second operation lease,
+a 150-second bounded approval wait, a 360-second browser-case deadline and a
+420-second controller command deadline. It never edits persisted leases. Operator
+recovery follows verified old Entryway exit/removal and a full stop/restart of the
+affected unchanged PDS, then operation-specific observation. Pending desktop/narrow
+screenshots and saved identity/target assertions precede approval. Separate worker
+contracts use an explicitly declared two-second fixture lease and controlled HTTP
+transport; their proof scope differs from the real PDS/browser drill.
+
+The [implementation assessment](implementation-assessment.md) distinguishes the
+implemented foundation from remaining work. Database verification uses fresh
+state without old-schema upgrades; product account migration and existing ePDS
+conversion remain separate required journeys. Preserve the existing tests and
+their known moderation blocker alongside the deployment-profile gates.

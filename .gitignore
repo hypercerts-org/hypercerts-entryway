@@ -38,3 +38,6 @@ artifacts/
 tests/artifacts/
 reports/
 tests/reports/
+
+# Local working plans
+/plans/

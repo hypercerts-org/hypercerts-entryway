@@ -1,14 +1,15 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { betterAuth } from "better-auth";
-import { getMigrations } from "better-auth/db/migration";
 import { fromNodeHeaders } from "better-auth/node";
 import { emailOTP } from "better-auth/plugins";
 
 /** @returns {Promise<import('./port.js').BrowserAuthentication>} */
 export async function createBetterAuthAuthentication({ db, config, mail }) {
   const origin = new URL(config.issuer).origin;
+  const verificationMail = new AsyncLocalStorage();
   const authOptions = {
     secret: config.betterAuthSecret,
-    database: db.sqlite,
+    database: db.authenticationAdapter,
     baseURL: config.issuer,
     basePath: "/api/auth",
     trustedOrigins: [origin],
@@ -24,15 +25,19 @@ export async function createBetterAuthAuthentication({ db, config, mail }) {
         allowedAttempts: 5,
         storeOTP: "hashed",
         async sendVerificationOTP({ email, otp, type }) {
-          await mail.sendOtp({ email, otp, type });
+          const scope = verificationMail.getStore();
+          if (!scope) throw new Error("MissingVerificationMailScope");
+          try {
+            scope.dispatch = await mail.queueOtp({ email, otp, type });
+          } catch (error) {
+            // Better Auth deliberately catches mail callback failures. Retain the
+            // error for the public API wrapper so verification and queue roll back.
+            scope.failure = error;
+          }
         },
       }),
     ],
   };
-  // Better Auth 1.7 eagerly validates its schema during construction.
-  // Finish startup migrations before that validation can inspect a partial schema.
-  const migration = await getMigrations(authOptions);
-  await migration.runMigrations();
   const auth = betterAuth(authOptions);
   const headers = (req) => fromNodeHeaders(req.headers);
   const principal = (value) =>
@@ -50,18 +55,39 @@ export async function createBetterAuthAuthentication({ db, config, mail }) {
     for (const value of response.headers.getSetCookie())
       res.append("Set-Cookie", value);
   };
+  const queueSignInCode = async (email) => {
+    const scope = { dispatch: null, failure: null };
+    await db.transact(() =>
+      verificationMail.run(scope, async () => {
+        await auth.api.sendVerificationOTP({
+          body: { email, type: "sign-in" },
+        });
+        if (scope.failure) throw scope.failure;
+      }),
+    );
+    if (!scope.dispatch) throw new Error("MissingVerificationMailDispatch");
+    return scope.dispatch;
+  };
   return {
     async requireSession(req) {
-      return principal(await auth.api.getSession({ headers: headers(req) }));
+      return await principal(
+        await auth.api.getSession({ headers: headers(req) }),
+      );
     },
+    queueSignInCode,
     async sendSignInCode(email) {
-      await auth.api.sendVerificationOTP({ body: { email, type: "sign-in" } });
+      await (await queueSignInCode(email)).deliver();
     },
     async verifySignInCode({ email, otp }) {
-      const response = await auth.api.signInEmailOTP({
-        body: { email, otp },
-        asResponse: true,
-      });
+      // The provider consumes first, then recreates the verification on a wrong
+      // guess. Keep that whole supported operation ordered with issuance.
+      // asResponse preserves expected 4xx results so invalid-attempt writes commit.
+      const response = await db.transact(() =>
+        auth.api.signInEmailOTP({
+          body: { email, otp },
+          asResponse: true,
+        }),
+      );
       if (!response.ok) return { ok: false, status: response.status };
       const value = await response.json();
       return {
