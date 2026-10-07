@@ -8,8 +8,10 @@ locations and owners are recorded in [source-map.json](source-map.json).
 
 - Keep the upstream OAuth provider and Better Auth's supported browser-proof API;
   Better Auth does not become the ATProto identity model.
-- Keep account constraints, indexed device membership and transactional provider
-  stores behind the [database boundary](database.md).
+- Keep DID identity, indexed device membership and transactional provider stores
+  behind the [database boundary](database.md). Current email and auth-user binding
+  uniqueness must change for the approved multiple-DID email target; preserve
+  atomic authority changes and one binding per DID.
 - Keep mail transport separate from templates, durable outbox and retry policy.
 - Keep feature-owned orchestration, server-selected branding, escaping and CSP.
 - Keep browser, lifecycle and failure scenarios as regression checks, while
@@ -20,6 +22,14 @@ are implemented; see [database contracts](database.md), [shared operations](shar
 and [deployment profiles](deployment-profiles.md).
 
 ## Remaining integration work
+
+The approved [multiple-DID email policy](data-custody.md#1-account-identity-and-ownership)
+requires schema changes and import of DID/email associations when an existing PDS
+joins Entryway. Reuse Better Auth's email proof, then resolve associated DIDs and
+require an explicit choice for multiple accounts before continuing the original
+flow and establishing a selected-DID session. These changes are not implemented;
+the current schema remains unique per email and bound auth user. Email matching
+alone must not establish authority over an unimported DID or merge accounts.
 
 Preserved MJS remains outside strict TypeScript coverage. Complete ePDS consent and
 freshness parity, production email delivery across the XRPC surface, fleet

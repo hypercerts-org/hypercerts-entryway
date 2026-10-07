@@ -22,6 +22,15 @@ delivery priorities and approvals belong in the
 
 ## Known limits
 
+- **Multiple accounts per email:** the approved target permits imported DID/email
+  associations from an existing PDS joining Entryway. Sign-in verifies email,
+  resolves associated DIDs and requires a choice when there are several, then
+  continues the original flow before establishing the selected-DID session. The
+  current unique-email and unique-auth-user binding constraints remain in place;
+  schema changes, association import and the chooser are not implemented. Email
+  matching never merges DIDs or establishes unimported DID authority. See
+  [account identity](data-custody.md#1-account-identity-and-ownership).
+
 - **Moderation:** raw interoperability still exits 2 with
   `MISSING_REQUIRED_MODERATION_COORDINATION`. The wrapper recognizes this specific
   inherited failure; it does not turn it into a product pass.

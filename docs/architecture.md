@@ -156,9 +156,14 @@ owned boundaries, feature-internal imports, runtime cycles and impure rule modul
 
 ## 5. Login and application authorization
 
-The sequence shows the proposed complete journey, not a claim of ePDS parity today.
-Account choice, proof freshness and consent remain separate policy decisions.
-Public and confidential clients both need acceptance coverage.
+The sequence shows the target sign-in journey for existing associated accounts,
+not a claim of ePDS parity today.
+The approved sign-in policy verifies email before resolving associated DIDs, then
+requires an explicit choice if more than one is associated. The joining-PDS
+association import, schema changes and chooser remain unimplemented; see
+[account identity](data-custody.md#1-account-identity-and-ownership). Proof freshness
+and consent remain separate policy decisions. Public and confidential clients
+both need acceptance coverage.
 
 ```mermaid
 %%{init: {"theme":"base","themeVariables":{"primaryTextColor":"#172B4D","lineColor":"#45556C","actorBkg":"#DBEAFE","actorBorder":"#315582","actorTextColor":"#172B4D","signalColor":"#45556C","signalTextColor":"#172B4D","noteBkgColor":"#FFF1D6","noteTextColor":"#172B4D","noteBorderColor":"#8A5A2B","activationBkgColor":"#EDE9FE","activationBorderColor":"#65538A","fontFamily":"Arial"}}}%%
@@ -172,12 +177,20 @@ sequenceDiagram
   C->>E: PAR with scope and PKCE challenge
   E-->>C: Request URI
   C->>B: Navigate to authorization endpoint
-  B->>E: Select account or enter email
+  B->>E: Enter email in the original authorization flow
   E->>A: Request and verify email OTP
-  A-->>E: Verified identity and browser session
-  E->>E: Bind or load DID and PDS placement
-  Note over B,E: Apply freshness and consent policy
+  A-->>E: Verified email and email-level browser session
+  E->>E: Resolve DIDs from established email associations
+  alt One associated DID
+    E->>E: Select the associated DID directly
+  else Multiple associated DIDs
+    E-->>B: Show associated accounts
+    B->>E: Explicitly choose a DID
+  end
+  E->>E: Resume original flow with selected DID and PDS placement
+  Note over B,E: Complete account authentication and apply freshness policy
   B->>E: Approve or deny when consent is required
+  E->>E: On success, establish selected-DID session
   E-->>C: Authorization callback with code, state and issuer
   C->>E: Exchange code with PKCE and DPoP
   E-->>C: DPoP-bound tokens and subject DID
@@ -185,6 +198,11 @@ sequenceDiagram
   C->>P: Scoped XRPC request with DPoP proof
   P-->>C: Account or repository result
 ```
+
+The Better Auth session proves the email identity; it does not itself select or
+authenticate a DID. Only established associations are eligible for account choice;
+matching an email cannot add authority over an unimported DID. Preserve the
+original client request and authorization context through verification and choice.
 
 Confidential clients also supply client authentication where required.
 The account page distinguishes ending a browser session, forgetting device membership,
@@ -227,11 +245,12 @@ Removing a configuration entry is not retirement.
 
 ## 7. Current baseline and delivery gaps
 
-Reuse provider wiring, OTP integration, account constraints, indexed device lookup,
+Reuse provider wiring, OTP integration, atomic account/DID invariants, indexed device lookup,
 PDS call sequences, journals, branding, mail ports and regression scenarios.
 Keep shared contracts narrow while features own their operation bodies.
 
-Still required: ePDS consent/freshness parity, complete XRPC adapters, production email delivery,
+Still required: the approved multiple-DID email schema, joining-PDS association import
+and post-verification chooser, ePDS consent/freshness parity, complete XRPC adapters, production email delivery,
 fleet lifecycle, general custody policy and standard-tool migration. The [Drizzle database boundary](database.md) provides asynchronous authority
 transactions. [Shared operation ownership](shared-operations.md) implements durable
 account/PDS admission, execution fences, operator-verified uncertain-write recovery,
@@ -272,8 +291,8 @@ data-integrity and recovery requirements.
 
 ## Open design decisions
 
-Operator ownership, independent authentication, email discovery, account
-cardinality, custody and deployment-conversion decisions are maintained in the
+Operator ownership, independent authentication, email discovery, custody, recovery
+and deployment-conversion decisions are maintained in the
 [Linear project](https://linear.app/hypercerts/project/epds-entryway-888a35a63fe4) and [project document](https://linear.app/hypercerts/document/m1-acceptance-matrices-epds-parity-protocol-and-migration-196f21e01e71). Scaling does not imply
 independent authentication operators. These decisions do not authorize reference
 PDS changes. See [implementation assessment](implementation-assessment.md) for source-grounded

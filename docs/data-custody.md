@@ -8,10 +8,24 @@ See [architecture](architecture.md) for domain ownership and [delivery reference
 Use the DID as the account primary key. A separate account UUID is not required by the agreed scope.
 Better Auth user IDs, browser-session IDs, devices, grants and migration-operation IDs remain separate identifiers.
 
-The current schema enforces one unique email and one bound Better Auth user per DID.
-Multiple accounts on a device do not imply multiple DIDs under one email identity.
-Changing that cardinality requires an explicit product decision and a revised schema.
-The current code refactor does not require upgrading existing databases.
+The approved target permits one verified email identity to be associated with
+multiple DIDs when an existing PDS joins Entryway and its DID/email associations
+are imported. Each DID remains a separate account with at most one login binding;
+associations never merge DIDs. An email match alone cannot establish authority over
+an unimported DID.
+
+Sign-in verifies the email before resolving its associated DIDs. One associated
+DID continues directly; multiple associated DIDs require an explicit account
+choice. The selected DID then continues the original authentication or
+authorization flow before a session for that DID is established. Better Auth's
+email-level browser session is distinct from this selected-account session.
+
+The current implementation still enforces a unique account email and a unique
+Better Auth user in the DID binding. The schema changes, joining-PDS association
+import and post-verification chooser are not implemented. The table below records
+current storage, not the approved target. Internal refactoring does not require
+upgrading existing databases; public account migration and existing ePDS deployment
+conversion remain separate requirements.
 
 | State                                  | Domain or system owner              | Current representation                                                |
 | -------------------------------------- | ----------------------------------- | --------------------------------------------------------------------- |
@@ -55,14 +69,15 @@ The existing ePDS deployment-conversion requirement is separate.
 
 ## 2. Logical model
 
-This diagram describes the proposed relationships. It does not prescribe new physical tables for provider-owned data.
+This diagram describes the target relationships, including the approved multiple-DID email association.
+It does not prescribe new physical tables for provider-owned data.
 The PDS registry and repeatable transfer history are target additions. The current journal limits a DID to one workflow.
 
 ```mermaid
 %%{init: {"theme":"base","themeVariables":{"primaryColor":"#EDE9FE","primaryTextColor":"#172B4D","primaryBorderColor":"#65538A","secondaryColor":"#DBEAFE","tertiaryColor":"#F0FDF4","lineColor":"#45556C","textColor":"#172B4D","fontFamily":"Arial"}}}%%
 erDiagram
   ACCOUNT ||--o| LOGIN_BINDING : has
-  AUTH_USER ||--o| LOGIN_BINDING : owns
+  AUTH_USER ||--o{ LOGIN_BINDING : owns
   AUTH_USER ||--o{ BROWSER_SESSION : authenticates
   ACCOUNT ||--o{ DEVICE_MEMBERSHIP : remembers
   DEVICE ||--o{ DEVICE_MEMBERSHIP : contains
@@ -73,14 +88,14 @@ erDiagram
   ACCOUNT ||--o{ CUSTODY_RECORD : records
   ACCOUNT {
     string did PK
-    string email UK
+    string email
     string handle UK
     string current_pds_id FK
     string status
   }
   LOGIN_BINDING {
     string did PK
-    string auth_user_id UK
+    string auth_user_id FK
   }
   AUTH_USER {
     string user_id PK
@@ -131,6 +146,12 @@ erDiagram
     string lifecycle
   }
 ```
+
+In the target, account email and the binding's `auth_user_id` are nonunique; the
+DID remains the account primary key and permits only one binding per DID.
+`BROWSER_SESSION` represents the email-level Better Auth session, not selected-DID
+authentication. The [login sequence](architecture.md#5-login-and-application-authorization)
+keeps those steps separate.
 
 Device membership requires uniqueness for its device/DID pair.
 Grant/session implementation must retain the provider's real cardinalities and token-family semantics.
@@ -268,12 +289,12 @@ No PDS modification is proposed.
 The independent-tool contract is an early delivery gate.
 The private source fixture remains valuable for deterministic failures, but cannot substitute for that gate.
 
-## Required account and recovery decisions
+## Required recovery decisions
 
-The current unique-email schema is a starting implementation, not a settled
-product requirement. Multiple-DID email binding and duplicate-email incoming
-migration need an explicit decision. Email verification must never merge
-identities or substitute for proof of DID control.
+The multiple-DID email policy is settled as described [above](#1-account-identity-and-ownership);
+its implementation is pending. Import must establish the DID/email association
+under the account-authority contract. Email verification cannot substitute for
+that authority or merge identities.
 
 Recovery policy must define authority and available data when the old Entryway is
 offline or refuses assistance. Accounts without independent recovery authority
