@@ -116,18 +116,20 @@ export async function mountClient({ app, config, db }) {
     secondary: "/client/callback/secondary",
   };
   for (const id of ["primary", "secondary"]) {
-    let jwk = await db.get("client:keys", id);
-    if (!jwk) {
+    const jwk = await db.transact(async () => {
+      const stored = await db.get("client:keys", id);
+      if (stored) return stored;
       const { privateKey } = generateKeyPairSync("ec", {
         namedCurve: "prime256v1",
       });
-      jwk = {
+      const generated = {
         ...privateKey.export({ format: "jwk" }),
         alg: "ES256",
         kid: `spike-client-${id}`,
       };
-      await db.set("client:keys", id, jwk);
-    }
+      await db.set("client:keys", id, generated);
+      return generated;
+    });
     stateStores[id] = store(`client:${id}:states`, true);
     clients[id] = new NodeOAuthClient({
       clientMetadata: {

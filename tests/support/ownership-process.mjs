@@ -35,23 +35,36 @@ export async function ownershipProcess(t, configuration) {
     }
     requests.clear();
   });
-  const command = (command, args) =>
+  const command = (command, args, { timeoutMs = 10_000 } = {}) =>
     new Promise((resolve, reject) => {
       const id = ++next;
       const timer = setTimeout(() => {
         requests.delete(id);
         reject(Error(`Worker command timed out: ${command}`));
         child.kill("SIGKILL");
-      }, 10_000);
+      }, timeoutMs);
       requests.set(id, { resolve, reject, timer });
       child.send({ id, command, args });
     });
+  let paused = false;
   t.after(async () => {
-    if (child.exitCode === null && child.connected) {
-      await command("close");
-      const exited = once(child, "exit");
-      child.disconnect();
-      await exited;
+    if (paused) child.kill("SIGCONT");
+    let exitTimer;
+    try {
+      if (child.exitCode === null && child.signalCode === null) {
+        // A failed assertion may leave a deliberately held request running.
+        // Bound teardown independently of that request's long lease timeout.
+        const exited = once(child, "exit");
+        exitTimer = setTimeout(() => child.kill("SIGKILL"), 5_000);
+        if (requests.size > 0) child.kill("SIGKILL");
+        else if (child.connected) {
+          await command("close", undefined, { timeoutMs: 4_000 });
+          child.disconnect();
+        }
+        await exited;
+      }
+    } finally {
+      clearTimeout(exitTimer);
     }
     if (expectedSignal) {
       assert.equal(child.exitCode, null);
@@ -67,6 +80,14 @@ export async function ownershipProcess(t, configuration) {
   return {
     command,
     identity,
+    pauseScheduling() {
+      assert.equal(child.kill("SIGSTOP"), true);
+      paused = true;
+    },
+    resumeScheduling() {
+      assert.equal(child.kill("SIGCONT"), true);
+      paused = false;
+    },
     async killForIsolation() {
       expectedSignal = "SIGKILL";
       const exited = once(child, "exit");

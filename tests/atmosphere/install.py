@@ -17,6 +17,29 @@ for app in ['hypercerts-entryway','entryway-fixtures','entryway-oauth-web-app','
         registry.append(entry)
     for suffix in ['.yaml','.definition.json']:
         text = (source / 'stacks' / (app + suffix)).read_text()
+        profile_nodes = os.environ.get('ENTRYWAY_PROFILE_NODE_COUNT')
+        if profile_nodes and app == 'hypercerts-entryway':
+            if profile_nodes not in ['1', '2']:
+                raise SystemExit('Invalid profile node count')
+            if profile_nodes == '2' and (os.environ.get('DATABASE_BACKEND') != 'postgresql' or os.environ.get('DEPLOYMENT_MODE') != 'multi-node'):
+                raise SystemExit('Two-node profile requires PostgreSQL multi-node')
+            if suffix == '.yaml':
+                extra = (source / 'stacks/entryway-profile-services.yaml').read_text()
+                if profile_nodes == '2':
+                    extra += (source / 'stacks/entryway-profile-replica.yaml').read_text()
+                text = text.replace('\nvolumes:\n', '\n' + extra + '\nvolumes:\n  profile-private: {}\n  entryway-replica-data: {}\n')
+                # Browser state is private mounted state, excluded from reports.
+                text = text.replace('      - entryway-data:/entryway-data\n', '      - profile-private:/profile\n      - entryway-data:/entryway-data\n')
+                text = text.replace('      - database-profile-data:/profile', '      - profile-private:/profile')
+            else:
+                definition = json.loads(text)
+                for route in definition['routes']:
+                    if route['service'] == 'entryway':
+                        route['service'] = 'profile-ingress'
+                definition['services'].append({'service': 'profile-ingress', 'environment': []})
+                if profile_nodes == '2':
+                    definition['services'].append({'service': 'entryway-replica', 'environment': []})
+                text = json.dumps(definition, indent=2) + '\n'
         # Compose paths resolve relative to the generated file in the clone.
         text = text.replace('context: ../..', 'context: ' + json.dumps(str(root)))
         text = text.replace('../artifacts:/app/artifacts:z', os.environ.get('ACCEPTANCE_REPORT_DIR', str(root / 'tests/artifacts')) + ':/app/artifacts:z')

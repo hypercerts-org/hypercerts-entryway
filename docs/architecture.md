@@ -1,7 +1,7 @@
 # Entryway architecture
 
 Status: vertical feature structure; product requirements and gaps below remain explicit.
-Updated: 2026-10-06. This document distinguishes target behaviour from implemented behaviour.
+Updated: 2026-10-07. This document distinguishes target behaviour from implemented behaviour.
 
 Read alongside the [delivery reference](delivery-plan.md), [data and custody design](data-custody.md),
 [reuse assessment](reuse-assessment.md), and [local test guide](testing.md).
@@ -30,7 +30,9 @@ Both dialect contract suites, full fresh acceptance and the single-node PostgreS
 application login/restart/restore profile passed in two isolated runs; see the
 [verification record](evidence/database-foundation-2026-10-06.md). Shared operation
 and mail coordination have since passed [independent verification](evidence/shared-operations-2026-10-07.md);
-application replica readiness and failover remain implementation work. Single-node operation
+bounded readiness/draining and consumer-owned replica profile controllers have also
+passed [independent full verification](evidence/deployment-foundation-2026-10-07.md).
+See [deployment lifecycle](deployment-profiles.md) for behavior and limits. Single-node operation
 accepts SQLite or PostgreSQL; multi-node configuration requires PostgreSQL.
 See [database configuration and contracts](database.md). These code changes start
 from fresh state: no backward-compatibility layer or existing-data conversion is
@@ -122,7 +124,7 @@ schema initialization require coordinated review. See AGENTS.md for enforceable 
 | --- | --- | --- |
 | Browser authentication | Normalized verified identity/session operations | Better Auth |
 | Mail sending | Deliver a fully formed message | SMTP |
-| Database | Focused asynchronous readers and atomic state operations | Drizzle ORM `1.0.0-rc.4`; fresh SQLite/PostgreSQL schemas and async operations. Single node accepts either backend; multi-node configuration requires PostgreSQL; replica acceptance remains outstanding |
+| Database | Focused asynchronous readers and atomic state operations | Drizzle ORM `1.0.0-rc.4`; fresh SQLite/PostgreSQL schemas and async operations. Single node accepts either backend; multi-node configuration requires PostgreSQL; bounded replica checks passed independent verification; complete production qualification remains separate |
 
 PDS, PLC, OAuth provider and signing operations are concrete modules. They do not
 have parallel interchangeable port hierarchies. Provider state storage belongs to
@@ -241,8 +243,11 @@ implements durable account/PDS admission, execution fences, operator-verified
 uncertain-write recovery, mail attempts and authentication ordering. Revised
 application and dual-database suites passed independent rootless verification;
 the [record](evidence/shared-operations-2026-10-07.md) retains the earlier unit
-failure and deferred credential-lifetime defect. Verified multi-instance request balancing,
-readiness, draining and fleet placement remain required.
+failure and deferred credential-lifetime defect. [Deployment lifecycle](deployment-profiles.md)
+implements readiness/draining and three profile controllers; full application,
+database and deployment gates passed in two isolated rootless runs, including
+independent verification. The [deployment record](evidence/deployment-foundation-2026-10-07.md)
+retains their exact scope. Fleet placement remains separate required work.
 The typed external workflow is invoked by the synthetic harness; managed account moves live in pds-migration.
 The existing fixture proves useful mechanics but uses its own source-control API.
 

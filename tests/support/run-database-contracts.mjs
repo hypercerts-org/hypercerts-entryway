@@ -13,6 +13,7 @@ const files = [
   "reconciliation-admission",
   "oauth-stores",
   "database-boundary",
+  "lifecycle",
   "operation-ownership",
   "external-operation-ownership",
   "repository-verification",

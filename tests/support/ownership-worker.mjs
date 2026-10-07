@@ -25,7 +25,11 @@ let db,
   interruptAccountAcknowledgement = false,
   releaseScheduler,
   plcCoordinator,
-  releaseRejection;
+  releaseRejection,
+  releaseAccountCheckpoint,
+  profileMail,
+  releaseProfileMail,
+  profileMailClaim;
 process.on("message", async ({ id, command, args }) => {
   try {
     let result;
@@ -104,6 +108,15 @@ process.on("message", async ({ id, command, args }) => {
           ...ownership,
           async acknowledgeExternal(claim, attempt, result) {
             await ownership.acknowledgeExternal(claim, attempt, result);
+            if (args.pauseAfterAcknowledgement) {
+              process.send({
+                event: "external-acknowledgement-paused",
+                processId: process.pid,
+              });
+              await new Promise((resolve) => {
+                releaseAccountCheckpoint = resolve;
+              });
+            }
             if (interruptAccountAcknowledgement) {
               interruptAccountAcknowledgement = false;
               throw Object.assign(
@@ -140,15 +153,60 @@ process.on("message", async ({ id, command, args }) => {
           store,
           workerId: `account-process-${process.pid}`,
           leaseMs: args.leaseMs,
-          heartbeatMs: 0,
+          heartbeatMs: args.heartbeatMs ?? 0,
         });
         accountOperations = await createAccounts({
           db,
           config: args.config,
           ownership: coordinator,
         });
+        result = { workerId: coordinator.workerId };
         break;
       }
+      case "releaseAccountCheckpoint":
+        releaseAccountCheckpoint();
+        break;
+      case "profileMailOpen":
+        profileMail = createMailFeature({
+          outbox: {
+            ...mail,
+            async claimAttempt(...parameters) {
+              const claim = await mail.claimAttempt(...parameters);
+              if (claim)
+                profileMailClaim = {
+                  leaseMs: parameters[2],
+                  leaseExpiresAt: claim.leaseExpiresAt,
+                };
+              return claim;
+            },
+          },
+          workerId: `mail-process-${process.pid}`,
+          transport: {
+            async deliver() {
+              if (args.hold) {
+                process.send({
+                  event: "profile-mail-held",
+                  processId: process.pid,
+                  ...profileMailClaim,
+                });
+                await new Promise((resolve) => {
+                  releaseProfileMail = resolve;
+                });
+              }
+            },
+          },
+        });
+        result = { workerId: `mail-process-${process.pid}` };
+        break;
+      case "profileMailSend":
+        result = await profileMail.sendOtp(args);
+        break;
+      case "profileMailRetry":
+        result = await profileMail.retryPending();
+        break;
+      case "releaseProfileMail":
+        releaseProfileMail();
+        break;
       case "accountStatus":
         result = {
           status: (
@@ -162,6 +220,12 @@ process.on("message", async ({ id, command, args }) => {
         interruptAccountAcknowledgement = true;
         break;
       case "accountReconcile": {
+        if (args.pause === undefined) {
+          result = await accountOperations.reconcile();
+          break;
+        }
+        if (!["operations", "accounts"].includes(args.pause))
+          throw Error("InvalidSchedulerBarrier");
         const object =
           args.pause === "operations" ? db : accountOperations.storage;
         const method = args.pause === "operations" ? "list" : "listAccounts";

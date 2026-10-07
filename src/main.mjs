@@ -5,54 +5,85 @@ import { openDatabase } from "./database/connection.js";
 import { createMailFeature } from "./mail/create-mail.js";
 import { createMailOutbox } from "./database/drizzle/mail-outbox.js";
 import { createSmtpMailTransport } from "./mail/smtp.js";
+import { createLifecycle } from "./http/lifecycle.js";
 
 const config = await loadConfig();
 const dataDir = process.env.STATE_DIRECTORY ?? "/data";
 mkdirSync(dataDir, { recursive: true });
 const db = await openDatabase(config.database);
+const lifecycle = createLifecycle({
+  probe: db.probe,
+  configuration: config.lifecycle,
+});
 const mail = createMailFeature({
+  workerId: lifecycle.instanceId,
   outbox: createMailOutbox(db),
   transport: createSmtpMailTransport({
     host: process.env.MAIL_SMTP_HOST ?? "mail-capture",
     port: Number(process.env.MAIL_SMTP_PORT ?? 2525),
   }),
 });
-await mail.retryPending();
-const { app, reconcile } = await createApp({ config, db, mail });
+const { app, reconcile } = await createApp({ config, db, mail, lifecycle });
+lifecycle.initialize();
 const server = app.listen(Number(process.env.PORT ?? 3000), "0.0.0.0", () =>
   console.log(
-    JSON.stringify({ event: "entryway.started", issuer: config.issuer }),
+    JSON.stringify({
+      event: "entryway.started",
+      issuer: config.issuer,
+      instanceId: lifecycle.instanceId,
+    }),
   ),
 );
-// One worker in this single-process spike; per-account locks serialize repairs
-// with interactive changes. Persistent operation rows survive every restart.
-let repairing = false;
-const repairTimer = setInterval(async () => {
-  if (repairing) return;
-  repairing = true;
-  try {
-    await reconcile();
-  } catch {
-    console.error(JSON.stringify({ event: "reconciliation.failed" }));
-  } finally {
-    repairing = false;
-  }
-}, 30_000).unref();
-const mailTimer = setInterval(async () => {
-  try {
-    await mail.retryPending();
-  } catch {
+const runWorker = (name, work) => {
+  void lifecycle.runWorker(name, work).catch(() => {
     console.error(
-      JSON.stringify({ event: "mail.retry.failed", code: "MailRetryFailed" }),
+      JSON.stringify({
+        event: "worker.failed",
+        worker: name,
+        code: "WorkerFailed",
+      }),
     );
-  }
-}, 30_000).unref();
+  });
+};
+// Shared durable claims protect independent processes. Local tracking coalesces
+// scheduling and lets shutdown wait for admitted work, including SMTP delivery.
+runWorker("mail", () => mail.retryPending());
+const repairTimer = setInterval(
+  () => runWorker("reconciliation", reconcile),
+  30_000,
+).unref();
+const mailTimer = setInterval(
+  () => runWorker("mail", () => mail.retryPending()),
+  30_000,
+).unref();
+let stopping = false;
 for (const signal of ["SIGTERM", "SIGINT"])
   process.on(signal, () => {
+    if (stopping) return;
+    stopping = true;
+    lifecycle.beginDrain();
     clearInterval(repairTimer);
     clearInterval(mailTimer);
-    server.close(async () => {
-      await db.close();
-      process.exit(0);
-    });
+    void lifecycle
+      .stop(server, () => db.close())
+      .then((outcome) => {
+        console.log(
+          JSON.stringify({
+            event: "entryway.stopped",
+            outcome,
+            instanceId: lifecycle.instanceId,
+          }),
+        );
+        // Deadline exit never marks durable work complete or frees its admission.
+        process.exit(outcome === "complete" ? 0 : 1);
+      })
+      .catch(() => {
+        console.error(
+          JSON.stringify({
+            event: "entryway.stop.failed",
+            code: "ShutdownFailed",
+          }),
+        );
+        process.exit(1);
+      });
   });

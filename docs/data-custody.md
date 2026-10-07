@@ -53,7 +53,7 @@ PostgreSQL application restart/restore profile passed in two isolated runs; see 
 Shared operation/mail ownership and verified recovery passed revised application
 and dual-database verification, including a separate independent rootless run;
 see the [evidence and retained limitations](evidence/shared-operations-2026-10-07.md).
-Replica failover remains implementation work. See [shared ownership and recovery](shared-operations.md).
+Bounded application replica checks now have [independent deployment evidence](evidence/deployment-foundation-2026-10-07.md), including node loss and shared-database refusal/recovery. This does not qualify general disaster recovery or change custody. See [shared ownership and recovery](shared-operations.md).
 See [database configuration](database.md). The existing ePDS deployment-conversion
 requirement is separate.
 

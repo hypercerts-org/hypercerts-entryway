@@ -4,6 +4,8 @@ import { join, relative, resolve } from "node:path";
 const unitContracts = new Set([
   "oauth-stores.test.mjs",
   "database-boundary.test.mjs",
+  "lifecycle.test.mjs",
+  "profile-evidence.test.mjs",
   "operation-ownership.test.mjs",
   "external-operation-ownership.test.mjs",
   "repository-verification.test.mjs",

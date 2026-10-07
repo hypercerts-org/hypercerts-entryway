@@ -96,6 +96,9 @@ case "$command" in
     done
     bash "$root/tests/support/run-postgresql-profile.sh"
     ;;
+  resilience-profiles)
+    bash "$root/tests/support/run-resilience-profiles.sh"
+    ;;
   database-profile)
     bash "$root/tests/support/run-postgresql-profile.sh"
     ;;
@@ -177,7 +180,7 @@ case "$command" in
     deno task sandbox status
     ;;
   *)
-    echo 'Usage: ./tests/local.sh fresh|prepare|up|browser|contracts|database-contracts|database-profile|migration|migration-resume|reverify|interop-profile|plc-recovery|process-crash|managed-recovery|authority-drills|resilience|all|status|down'
+    echo 'Usage: ./tests/local.sh fresh|prepare|up|browser|contracts|database-contracts|database-profile|resilience-profiles|migration|migration-resume|reverify|interop-profile|plc-recovery|process-crash|managed-recovery|authority-drills|resilience|all|status|down'
     echo 'all requires a fresh project fixture; down retains state and volumes. No implicit reset.'
     ;;
 esac

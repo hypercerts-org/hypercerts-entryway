@@ -10,4 +10,4 @@ COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
 RUN npm run build && mkdir -p artifacts
 ENV NODE_ENV=production
-CMD ["npm", "start"]
+CMD ["node", "dist/src/main.mjs"]

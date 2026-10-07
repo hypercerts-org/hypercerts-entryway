@@ -7,8 +7,11 @@ The revised application suites and both database contracts passed independent
 rootless verification, including separate PostgreSQL worker processes. The
 [October 7 evidence](evidence/shared-operations-2026-10-07.md) records those results
 and retains an earlier failed unit run with a deferred credential-lifetime defect.
-Request balancing, readiness/draining, fleet placement and multi-instance deployment
-acceptance remain separate unfinished work.
+[Deployment lifecycle and profile controllers](deployment-profiles.md) now implement
+readiness/draining and bounded replica checks. Full application, dual-database and
+all three profile gates passed independent rootless verification; see the
+[deployment record](evidence/deployment-foundation-2026-10-07.md).
+Fleet placement remains separate work.
 
 The [database foundation](evidence/database-foundation-2026-10-06.md) is the
 accepted baseline. Historical receipts did not explicitly pin the Docker daemon;
@@ -248,8 +251,10 @@ they are not SMTP conformance or application replica acceptance. The existing
 full browser, real Mailpit, migration and single-node application gates passed
 on the frozen candidate and again independently. Use the repository's
 [managed testing workflow](testing.md) and preserve the raw moderation
-interoperability blocker separately. These runs do not establish application
-replicas or production recovery qualification.
+interoperability blocker separately. Those shared-operation runs alone do not
+establish application replicas. The later [deployment verification](evidence/deployment-foundation-2026-10-07.md)
+adds bounded actual replica checks; complete production recovery qualification
+remains separate.
 
 The real SIGKILL/browser harness uses the default lease and bounded waits, verifies
 old Entryway exit/removal and affected unchanged-PDS stop/restart, captures desktop

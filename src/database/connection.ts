@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
+import { Socket } from "node:net";
 import Database from "better-sqlite3";
 import pg from "pg";
 import {
@@ -78,6 +79,8 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
   let closing = false;
   let closePromise: Promise<void> | undefined;
   let closeDriver: () => Promise<void>;
+  let probeDriver: (deadline: number) => Promise<boolean>;
+  let probeFlight: Promise<boolean> | undefined;
   let runConnection: <T>(
     operation: (current: Context) => Promise<T>,
   ) => Promise<T>;
@@ -116,6 +119,29 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
         release();
       }
     };
+    probeDriver = (deadline) =>
+      runConnection(async (current) => {
+        const remaining = Math.floor(deadline - performance.now());
+        if (remaining < 1 || closing) return false;
+        // The native driver cannot be cancelled by a Promise timer. Bound its
+        // actual busy wait while holding the same gate as every authority caller.
+        driver.pragma(`busy_timeout = ${remaining}`);
+        try {
+          const result = await current.execute(
+            sql`SELECT version,identity FROM schema_identity`,
+            "all",
+          );
+          const rows = result.rows as { version: number; identity: string }[];
+          return (
+            performance.now() < deadline &&
+            rows.length === 1 &&
+            rows[0]?.version === 1 &&
+            rows[0].identity === identity
+          );
+        } finally {
+          driver.pragma("busy_timeout = 5000");
+        }
+      });
     closeDriver = async () => {
       await queue;
       driver.close();
@@ -138,6 +164,52 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
             : pg.types.getTypeParser(oid, format),
       },
     });
+    // pg removes failed idle clients itself; handling this event prevents a DB
+    // outage from becoming an unhandled process error. Probes decide readiness.
+    pool.on("error", () => {});
+    probeDriver = async (deadline) => {
+      const remaining = () =>
+        Math.max(1, Math.floor(deadline - performance.now()));
+      // Own the underlying transport through pg's public stream configuration.
+      // pg still performs its configured TLS negotiation over this socket.
+      const transport = new Socket();
+      const client = new pg.Client({
+        connectionString: configuration.url,
+        stream: () => transport,
+        connectionTimeoutMillis: remaining(),
+        query_timeout: remaining(),
+        statement_timeout: remaining(),
+      });
+      client.on("error", () => {});
+      const expiry = setTimeout(() => transport.destroy(), remaining());
+      try {
+        await client.connect();
+        if (performance.now() >= deadline || closing) return false;
+        // pg8 supports per-query timeouts; its QueryConfig declaration omits
+        // that option, so retain the structural query value explicitly.
+        const query = {
+          text: "SELECT version,identity FROM schema_identity",
+          query_timeout: remaining(),
+        };
+        const result = await client.query(query);
+        const rows = result.rows as { version: number; identity: string }[];
+        return (
+          performance.now() < deadline &&
+          rows.length === 1 &&
+          rows[0]?.version === 1 &&
+          rows[0].identity === identity
+        );
+      } finally {
+        try {
+          // A successful query does not make graceful peer closure bounded.
+          // This one-query client owns no transaction or reusable pool state.
+          transport.destroy();
+          await client.end();
+        } finally {
+          clearTimeout(expiry);
+        }
+      }
+    };
     runConnection = async (operation) => {
       const client = await pool.connect();
       const orm = postgresDrizzle({ client });
@@ -497,6 +569,32 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
     ...executor,
     schema: { version: 1, pending: 0 },
     authenticationAdapter,
+    probe(timeoutMs: number): Promise<boolean> {
+      if (
+        !Number.isSafeInteger(timeoutMs) ||
+        timeoutMs < 1 ||
+        timeoutMs > 10_000
+      )
+        return Promise.resolve(false);
+      if (closing) return Promise.resolve(false);
+      if (!probeFlight) {
+        const deadline = performance.now() + timeoutMs;
+        probeFlight = probeDriver(deadline)
+          .catch(() => false)
+          .finally(() => {
+            probeFlight = undefined;
+          });
+      }
+      let timer: ReturnType<typeof setTimeout>;
+      const timeout = new Promise<boolean>((done) => {
+        timer = setTimeout(() => done(false), timeoutMs);
+      });
+      // Retain the one physical flight until native/queued work settles. Each
+      // caller gets its own bound, including shorter coalesced probe requests.
+      return Promise.race([probeFlight, timeout]).finally(() =>
+        clearTimeout(timer),
+      );
+    },
     deviceAccountMemberships: createDeviceAccountMembershipReader(executor),
     get,
     list,
@@ -591,7 +689,10 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
     },
     async close() {
       closing = true;
-      await (closePromise ??= closeDriver());
+      await (closePromise ??= (async () => {
+        await probeFlight;
+        await closeDriver();
+      })());
     },
   };
 }

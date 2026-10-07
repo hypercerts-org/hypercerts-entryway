@@ -42,9 +42,10 @@ services:
       - entryway-config:/config
       - source-fixture-public:/run/fixture-public
       - source-fixture-token:/run/secrets
-  entryway:
+  entryway: &entryway-node
     <<: *runtime
-    command: npm start
+    stop_grace_period: 20s
+    command: node dist/src/main.mjs
     volumes:
       - ../artifacts:/app/artifacts:z
       - entryway-config:/config:ro

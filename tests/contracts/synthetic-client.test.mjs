@@ -305,3 +305,62 @@ test("client routes persist flow, callback, write and logout with controlled pro
     {},
   );
 });
+
+test("simultaneous cold client instances share the committed public signing keys", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "client-cold-start-"));
+  const path = join(directory, "authority.sqlite");
+  const firstDb = await openTestDatabase(path);
+  const secondDb =
+    process.env.CONTRACT_DATABASE_BACKEND === "postgresql"
+      ? await openTestDatabase(path)
+      : firstDb;
+  t.after(async () => {
+    await firstDb.close();
+    if (secondDb !== firstDb) await secondDb.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  let enter, release;
+  const entered = new Promise((done) => {
+    enter = done;
+  });
+  const held = new Promise((done) => {
+    release = done;
+  });
+  const captured = [[], []];
+  let blocked = false;
+  // Hold the first initialization after reading the absent key, while still in
+  // its real authority transaction. A second instance must read the winner.
+  const wrap = (db, index) => ({
+    ...db,
+    async get(namespace, key) {
+      const value = await db.get(namespace, key);
+      if (namespace === "client:keys") {
+        if (index === 0 && key === "primary" && !blocked) {
+          blocked = true;
+          enter();
+          await held;
+        }
+        captured[index].push(value && publicKey(value));
+      }
+      return value;
+    },
+  });
+  const first = mountClient({ app: express(), db: wrap(firstDb, 0), config });
+  await entered;
+  const second = mountClient({ app: express(), db: wrap(secondDb, 1), config });
+  // Inspect the second physical PG backend waiting for the first transaction
+  // in the dedicated PostgreSQL process contracts; this barrier proves the
+  // client-specific absent-read interleaving without exposing private keys.
+  release();
+  const clients = await Promise.all([first, second]);
+  assert.equal(
+    clients.every((item) => item.clients.primary instanceof NodeOAuthClient),
+    true,
+  );
+  for (const [index, id] of ["primary", "secondary"].entries()) {
+    assert.deepEqual(
+      captured[1][index],
+      publicKey(await firstDb.get("client:keys", id)),
+    );
+  }
+});

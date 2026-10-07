@@ -33,7 +33,8 @@ export function candidateIdentity() {
   }
   // Include extensionless image inputs, controllers, fixtures, browser tests,
   // generated runtime SQL and schema export/copy inputs. Never walk state roots.
-  for (const root of ["src", "dist/src", "scripts", "tests"]) walk(root);
+  for (const root of ["src", "dist/src", "dist/tests", "scripts", "tests"])
+    walk(root);
   const manifest = files.sort().map((path) => ({
     path,
     sha256: createHash("sha256").update(readFileSync(path)).digest("hex"),

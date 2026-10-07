@@ -65,3 +65,9 @@ only. It distinguishes wrapper equivalence from the failing moderation requireme
 Use `fresh` for a clean replay. Persistent lifecycle commands never reset existing
 accounts implicitly. Only the explicitly disposable `fresh` command removes its
 own volumes during cleanup.
+
+Deployment-foundation acceptance additionally runs `./tests/local.sh database-contracts`
+and `./tests/local.sh resilience-profiles` after `fresh`. The latter requires all
+three fresh profiles and rejects missing or single-process-only replica evidence.
+See [deployment lifecycle and bounds](../../docs/deployment-profiles.md). Existing
+raw moderation and recorded credential-lifetime limitations remain separate.

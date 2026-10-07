@@ -23,8 +23,12 @@ account/PDS orchestration, verified recovery, mail and authentication. Revised
 application and dual-database acceptance passed independent rootless verification;
 the [shared-operation evidence](docs/evidence/shared-operations-2026-10-07.md)
 retains an earlier failed unit run and its deferred credential-lifetime defect.
-Request balancing, readiness/draining, failover and fleet placement remain
-implementation work. Google/GitHub OIDC is roadmap
+[Deployment lifecycle and profile controllers](docs/deployment-profiles.md) now
+implement bounded readiness/draining and fresh one/one/two-process checks. Full
+application, dual-database and all three deployment-profile gates passed twice,
+including independent verification; see the
+[deployment evidence](docs/evidence/deployment-foundation-2026-10-07.md).
+Fleet placement and complete production qualification remain separate work. Google/GitHub OIDC is roadmap
 work excluded from initial delivery.
 
 ## Start the sandbox

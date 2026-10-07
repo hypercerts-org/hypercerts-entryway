@@ -1,0 +1,13 @@
+  profile-ingress:
+    <<: *runtime
+    command: node dist/tests/fixtures/profile-ingress.js
+    environment:
+      <<: *runtime-env
+      PROFILE_NODE_COUNT: ${ENTRYWAY_PROFILE_NODE_COUNT}
+    depends_on:
+      entryway: { condition: service_healthy }
+    healthcheck:
+      test: [CMD, node, -e, 'fetch("http://localhost:3000/__profile/nodes").then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))']
+      interval: 1s
+      timeout: 3s
+      retries: 30

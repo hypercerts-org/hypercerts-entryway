@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { loadLifecycleConfiguration } from "./http/lifecycle.js";
 
 export async function loadConfig() {
   const config = JSON.parse(
@@ -11,6 +12,7 @@ export async function loadConfig() {
     config.browserClientMetadataUrl = process.env.BROWSER_CLIENT_METADATA_URL;
   }
   config.database = loadDatabaseConfiguration(process.env);
+  config.lifecycle = loadLifecycleConfiguration(process.env);
   return config;
 }
 

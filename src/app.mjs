@@ -12,8 +12,12 @@ import { createProtocolOperations } from "./compose-protocol-operations.mjs";
 import { createAccountMigration } from "./features/pds-migration/move-between-pds.mjs";
 import { requestFailureEvent } from "./logging/request-event.js";
 
-export async function createApp({ config, db, mail }) {
-  const accounts = await createAccounts({ db, config });
+export async function createApp({ config, db, mail, lifecycle }) {
+  const accounts = await createAccounts({
+    db,
+    config,
+    workerId: lifecycle?.instanceId,
+  });
   const app = express();
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
@@ -29,6 +33,10 @@ export async function createApp({ config, db, mail }) {
       pds: config.pds.map(({ id, url }) => ({ id, url })),
     }),
   );
+  if (lifecycle) {
+    app.get("/_readyz", lifecycle.readiness);
+    app.use(lifecycle.admission);
+  }
   app.get("/.well-known/atproto-did", async (req, res, next) => {
     try {
       const account = await accounts.get(req.hostname);

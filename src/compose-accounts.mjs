@@ -14,8 +14,10 @@ import { createAccountReconciler } from "./reconcile-accounts.mjs";
 export async function createAccounts({
   db,
   config,
+  workerId,
   ownership = createOperationOwnership({
     store: createOperationOwnershipStore(db),
+    workerId,
   }),
 }) {
   const rotation = await Secp256k1Keypair.import(

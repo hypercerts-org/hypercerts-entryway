@@ -35,6 +35,7 @@ and requires no host dependency install:
 | `./tests/local.sh status` | Inspect this project's services after prepare |
 | `./tests/local.sh database-contracts` | Run both database contract dialects, then the separate PostgreSQL login/restart/restore profile; see [database configuration](database.md) |
 | `./tests/local.sh database-profile` | Run the one-node PostgreSQL application profile in its own fresh project |
+| `./tests/local.sh resilience-profiles` | Run all three fresh deployment profiles and require complete bounded receipts; see [profile contract](deployment-profiles.md) |
 | `./tests/local.sh contracts` | Run imported contract scenarios in the test container after up |
 | `./tests/local.sh browser` | Run browser scenarios after up |
 | `./tests/local.sh migration` | Fresh synthetic external-source migration, including two Entryway restarts |
@@ -157,7 +158,7 @@ that disposable project's cleanup, with resilience last. The backup/rotation
 checks establish bounded local restoration, not off-site/full DR, zero-downtime
 key overlap, existing-refresh continuity or production acceptance.
 
-## Database verification and remaining replica coverage
+## Database and deployment verification
 
 The Drizzle ORM `1.0.0-rc.4` foundation has fresh SQLite/PostgreSQL adapters and
 shared contract fixtures. Focused checks cover authority rollback, provider
@@ -179,8 +180,12 @@ processes. Revised full application and dual-database suites passed independent
 rootless verification; see the [October 7 evidence](evidence/shared-operations-2026-10-07.md).
 The initial executor unit command failed on a pre-existing credential-lifetime
 boundary and remains a failed receipt; the documented deferred defect was not
-fixed or hidden by the later passing suites. Balancing/failover and actual replica
-profiles still require implementation and acceptance.
+fixed or hidden by the later passing suites. The new [deployment lifecycle and
+profiles](deployment-profiles.md) implement readiness/draining and actual replica
+checks. Full fresh, dual-database and all three fresh deployment profiles passed
+in two isolated rootless runs, including independent verification; the
+[deployment record](evidence/deployment-foundation-2026-10-07.md) gives exact results,
+bounds and remaining limits.
 
 Repository lifecycle entrypoints explicitly select `DOCKER_CONTEXT=rootless`, unset
 `DOCKER_HOST` and verify the rootless endpoint/security option before acting. There
@@ -202,4 +207,4 @@ The [implementation assessment](implementation-assessment.md) distinguishes the
 implemented foundation from remaining work. Database verification uses fresh
 state without old-schema upgrades; product account migration and existing ePDS
 conversion remain separate required journeys. Preserve the existing tests and
-their known moderation blocker while adding the new profiles.
+their known moderation blocker alongside the deployment-profile gates.

@@ -23,7 +23,11 @@ operator-verified recovery, mail attempts and authentication ordering. Revised
 application and both-backend suites passed independent rootless verification;
 see the [shared-operation record](evidence/shared-operations-2026-10-07.md), which
 separately retains a failed unit run and deferred credential-lifetime defect.
-Balancer/fleet/readiness work remains unimplemented.
+[Deployment lifecycle and profiles](deployment-profiles.md) implement bounded
+database probing and request/worker drain. Full fresh, dual-database and all three
+profile gates passed in two rootless runs, including independent verification;
+see the [deployment record](evidence/deployment-foundation-2026-10-07.md).
+Fleet placement is separate work.
 
 Schemas are fresh, explicit dialect assets in `src/database/schema/`. Startup
 serializes initialization, stores the schema asset hash in `schema_identity`, and
@@ -84,5 +88,6 @@ successful cleanup targets only that profile's project.
 For a standalone profile use `./tests/local.sh database-profile`. It owns a new
 `tests/.runtime/postgresql-profile-<run>` checkout and distinct Compose project.
 Do not reuse another worker's runtime. Full baseline acceptance remains
-`./tests/local.sh fresh` plus the database contracts after independent review,
-with the known raw interoperability moderation blocker reported separately.
+`./tests/local.sh fresh`, `./tests/local.sh database-contracts` and
+`./tests/local.sh resilience-profiles` after independent review, with the known
+raw interoperability moderation blocker reported separately.

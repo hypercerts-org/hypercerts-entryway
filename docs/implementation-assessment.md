@@ -12,7 +12,11 @@ orchestration, durable pending recovery, mail claims and authentication ordering
 Revised application and dual-database suites passed independent rootless
 verification; the [shared-operation record](evidence/shared-operations-2026-10-07.md)
 preserves the earlier unit failure and deferred credential-lifetime defect.
-Fleet placement, readiness/draining and multi-node failover remain implementation work. See [database configuration and contracts](database.md).
+[Deployment lifecycle and profile controllers](deployment-profiles.md) now implement
+bounded readiness/draining and actual replica checks. Full application,
+dual-database and all three deployment profiles passed two isolated rootless runs,
+including independent verification; see the [deployment record](evidence/deployment-foundation-2026-10-07.md).
+Fleet placement remains separate work.
 
 The target is Drizzle ORM **`1.0.0-rc.4`**. Single-node operation supports SQLite
 or PostgreSQL; multi-node operation requires PostgreSQL. Scaling, balancing and failover serve
@@ -38,8 +42,9 @@ They are historical findings, not a claim that every listed gap remains open.
 These were high-confidence source-to-requirement gaps at assessment time.
 The database contracts, schema/provider transaction integration and dependency
 boundaries now have dual-backend and full single-node application coverage.
-Replica runtime behavior remains unverified. Existing single-node tests remain
-regression requirements.
+Bounded replica acceptance now has independent full verification. Existing
+single-node tests remain regression requirements; complete production resilience
+and fleet behavior remain separate work.
 
 ## Required implementation areas
 
@@ -56,14 +61,16 @@ regression requirements.
    work retains admission until old-dispatch isolation/upstream completion and
    operation-specific observation are established; SMTP uncertainty can still
    cause duplicate delivery.
-3. **Deployment resilience.** Add database-aware readiness, bounded request and
+3. **Deployment resilience.** Database-aware readiness, bounded request and
    worker shutdown, and actual SQLite single-node, PostgreSQL single-node and
-   two-process PostgreSQL profiles behind one issuer. Preserve verified worker
-   ownership, pending recovery and existing restart/restore behavior. Fleet
+   two-process PostgreSQL profile controllers are implemented behind one issuer.
+   Full application and all three profile gates passed independent verification,
+   preserving worker ownership, pending recovery and existing restart/restore
+   behavior. Fleet
    eligibility, placement reservations and PDS lifecycle remain separate product
    work. Request balancing does not replicate PDS data.
 
-Extend the existing backend fixtures and concurrency checks with replica profiles. The
+Retain the verified backend, concurrency and replica profiles as regression gates. The
 [Linear project](https://linear.app/hypercerts/project/epds-entryway-888a35a63fe4)
 and [project document](https://linear.app/hypercerts/document/m1-acceptance-matrices-epds-parity-protocol-and-migration-196f21e01e71)
 own issue relationships, priorities, acceptance criteria and approvals.

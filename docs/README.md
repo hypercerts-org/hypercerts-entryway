@@ -18,6 +18,7 @@ checkout. The [test-plan index](../tests/plans/README.md) links the baseline and
 | [Reuse assessment](reuse-assessment.md) | Reusable code, required implementation and investigation findings |
 | [Testing](testing.md) | Local Atmosphere in a Box commands, repeatable flows and evidence limits |
 | [Database configuration](database.md) | Drizzle adapters, deployment selection, transactions and verified single-node profiles |
+| [Deployment lifecycle](deployment-profiles.md) | Bounded readiness/draining, independently verified three-profile harness and limits |
 | [Source mapping](source-map.json) | Original spike modules, imported locations and current ownership |
 
 ## Diagram conventions

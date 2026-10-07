@@ -27,8 +27,8 @@ spike/replay runtime sources were found identical and are historical references.
 | Account UI composition | Consume domain APIs instead of direct grant/store mutations |
 | Better Auth table integration | Shared physical Drizzle transactions and atomic email binding verified on both dialects; two isolated full acceptance runs passed ([record](evidence/database-foundation-2026-10-06.md)) |
 | Database boundary | Exact Drizzle ORM `1.0.0-rc.4`, async operations and fresh SQLite/PostgreSQL schemas implemented; see [database contracts](database.md) for verification limits |
-| Replica coordination | Atomic counters/challenges and grant mutation accepted in the database foundation; durable operation ownership, mail claims and verified recovery have [independent application and dual-database evidence](evidence/shared-operations-2026-10-07.md); replica readiness remains work |
-| Resilience deployment | Reuse shared authority; add readiness/draining and real two-instance failover verification |
+| Replica coordination | Atomic counters/challenges and grant mutation accepted in the database foundation; durable operation ownership, mail claims and verified recovery have [independent application and dual-database evidence](evidence/shared-operations-2026-10-07.md); bounded replica readiness and all three deployment profiles have [independent application evidence](evidence/deployment-foundation-2026-10-07.md) |
+| Resilience deployment | Shared authority, bounded readiness/draining and real two-instance profile controllers passed two full rootless runs, including independent verification; complete production qualification remains separate |
 | Production mail | Configure real transport/sender; some extra XRPC email paths only record captured mail and report sent |
 | Fleet registry | Replace static-only configuration with add, placement exclusion, drain and retirement operations |
 | Migration journal | Allow multiple operations per DID; do not reject valid empty repositories solely for zero indexed records |
