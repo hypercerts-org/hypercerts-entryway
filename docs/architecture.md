@@ -13,8 +13,10 @@ Move ePDS email OTP authentication into the supported Entryway integration bound
 Preserve ePDS login behaviour and provide a styled account page.
 
 The complete service must meet applicable ATProto, OAuth and XRPC contracts.
-Users must migrate in using existing migration tools and normal account credentials.
-Public migration must not require operator database edits or private fixture APIs.
+Migration acceptance is compliance with public endpoints and normal account
+credentials, without operator database edits or private fixture APIs. Existing
+unmodified tools may exercise those contracts; no specific tool or version is a
+prerequisite. Record versions only for reproducibility when a tool is used.
 
 Use the reference PDS hooks, lexicons and tests as the integration contract.
 Do not fork or patch the PDS. Keep the upstream ATProto OAuth provider.
@@ -37,10 +39,15 @@ existing ePDS deployment from product scope.
 
 ## 2. System overview
 
-This is the target responsibility map. Fleet administration and independent-tool migration remain incomplete.
+This is the target responsibility map. Fleet administration and public-protocol migration remain incomplete.
 The account page is part of Entryway. Better Auth and the provider run inside each
 application instance; feature boundaries do not prescribe separately deployed services.
-PDS instances own repository data and repository signing keys.
+PDS instances own repository data and private repository signing keys, distinct
+from PLC rotation authority. The approved custody model uses an Entryway hot PLC
+key, operator offline recovery and an optional user recovery key. Existing PDS
+rotation authority is preserved on adoption within PLC rules; normal departure
+may replace former host authority with valid destination keys. See
+[custody boundaries](data-custody.md#4-custody-boundaries) for priority and exit limits.
 
 ```mermaid
 %%{init: {"theme":"base","themeVariables":{"background":"#FFFFFF","primaryTextColor":"#172B4D","lineColor":"#45556C","edgeLabelBackground":"#FFFFFF","fontFamily":"Arial"},"flowchart":{"nodeSpacing":40,"rankSpacing":55,"curve":"linear"}}}%%
@@ -148,7 +155,12 @@ Synthetic source migration clients/signers live in tests/fixtures. The current
 external-import service has two explicit type-only references to these concrete
 classes because its only current invocation is the managed synthetic harness;
 those imports are erased from runtime output. They are not a public source
-implementation. Standard-tool migration and general custody remain release gates.
+implementation. Public-protocol migration and implementation of the approved
+custody model remain release gates. Standard PLC confirmation, signature and
+publication authorize individual migration; destination email proof separately
+binds login and may use a different address from the source. Whole-PDS joining
+imports established DID/email associations. Neither route adds a bespoke ownership
+proof or permits email matching alone to establish DID authority.
 
 The architecture checker resolves real imports, including TS/MJS aliases, dynamic
 imports and require. It rejects extra ports, raw SQL/SMTP/Better Auth access outside
@@ -251,7 +263,7 @@ Keep shared contracts narrow while features own their operation bodies.
 
 Still required: the approved multiple-DID email schema, joining-PDS association import
 and post-verification chooser, ePDS consent/freshness parity, complete XRPC adapters, production email delivery,
-fleet lifecycle, general custody policy and standard-tool migration. The [Drizzle database boundary](database.md) provides asynchronous authority
+fleet lifecycle, implementation of the approved custody model and public-protocol migration. The [Drizzle database boundary](database.md) provides asynchronous authority
 transactions. [Shared operation ownership](shared-operations.md) implements durable
 account/PDS admission, execution fences, operator-verified uncertain-write recovery,
 mail attempts and authentication ordering. [Deployment lifecycle](deployment-profiles.md)
@@ -291,8 +303,8 @@ data-integrity and recovery requirements.
 
 ## Open design decisions
 
-Operator ownership, independent authentication, email discovery, custody, recovery
-and deployment-conversion decisions are maintained in the
+Operator ownership, independent authentication, email discovery, operational key
+management, recovery execution and deployment-conversion details are maintained in the
 [Linear project](https://linear.app/hypercerts/project/epds-entryway-888a35a63fe4) and [project document](https://linear.app/hypercerts/document/m1-acceptance-matrices-epds-parity-protocol-and-migration-196f21e01e71). Scaling does not imply
 independent authentication operators. These decisions do not authorize reference
 PDS changes. See [implementation assessment](implementation-assessment.md) for source-grounded

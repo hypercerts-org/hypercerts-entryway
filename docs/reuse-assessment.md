@@ -15,7 +15,7 @@ locations and owners are recorded in [source-map.json](source-map.json).
 - Keep mail transport separate from templates, durable outbox and retry policy.
 - Keep feature-owned orchestration, server-selected branding, escaping and CSP.
 - Keep browser, lifecycle and failure scenarios as regression checks, while
-  distinguishing synthetic migration from independent-tool compatibility.
+  distinguishing synthetic migration from public-protocol compliance.
 
 The database adapters, shared operation ownership and bounded deployment lifecycle
 are implemented; see [database contracts](database.md), [shared operations](shared-operations.md)
@@ -33,7 +33,7 @@ alone must not establish authority over an unimported DID or merge accounts.
 
 Preserved MJS remains outside strict TypeScript coverage. Complete ePDS consent and
 freshness parity, production email delivery across the XRPC surface, fleet
-placement/drain/retirement, repeatable migration history and independent-tool
+placement/drain/retirement, repeatable migration history and public-protocol
 migration still require work. Valid empty repositories and actual create-then-
 deactivate/PLC ordering must be covered by the complete migration contract.
 See [implementation limits](implementation-assessment.md#known-limits) for unresolved
@@ -41,10 +41,16 @@ moderation, credential lifetime and production qualification.
 
 ## Investigate before committing contracts
 
-1. **Standard-tool migration:** the external source helper uses private fixture
-   operations. It does not establish independent inbound migration support.
-2. **Custody policy:** fixed fixture key layouts and assumed recovery-key authority
-   are not a general identity custody design.
+1. **Public migration compliance:** private fixture operations do not establish
+   support for standard public endpoints and credentials. No tool/version
+   selection is mandatory; versions record reproducibility when a tool is used.
+   Standard PLC authorization permits different source/destination emails, while
+   destination email proof separately establishes login binding.
+2. **Custody implementation:** implement the approved key roles and departure
+   rules in [custody boundaries](data-custody.md#4-custody-boundaries). Fixed fixture
+   layouts neither require three rotation keys nor prove that an adopted PDS's
+   repository key is recovery authority. Whole-PDS joining imports established
+   DID/email associations and preserves valid existing PLC rotation authority.
 3. **Fresh login:** the lifecycle test deliberately records public-client
    `prompt=login` / requested-identity behaviour as an open risk. A client-side DID
    guard is not server-side ePDS parity.
@@ -52,6 +58,16 @@ moderation, credential lifetime and production qualification.
    the contract source. Close integration gaps in Entryway, without modifying PDS.
 5. **Email coverage:** sending login OTP through SMTP does not prove every XRPC
    email challenge is delivered through the same transport.
+
+## Custody design reference
+
+The approved model follows [Rust Entryway in atproto-crates](https://tangled.org/ngerakines.me/atproto-crates)
+at revision `02421130930198fcc0c2636bcffd531c748ef9cf`. Its `genesis.rs` orders
+rotation authority as optional user key, operator offline key, then hot Entryway
+key; the PDS repository key is a separate `verificationMethods.atproto` reference.
+This is design provenance, not imported runtime code or a claim of implementation.
+It does not adopt unrelated Rust migration restrictions or extensions. Operational
+key provisioning and recovery procedures remain separate delivery work.
 
 ## Source provenance
 

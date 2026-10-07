@@ -183,22 +183,40 @@ repeated-transfer product.
 
 ## 4. Custody boundaries
 
-Hosting location and identity authority are separate concerns.
-A move between managed PDS instances should preserve the DID and Entryway relationship.
-The destination PDS owns its repository signing key. Entryway uses its public reference in identity operations.
+Hosting location and identity authority are separate concerns. A move between
+managed PDS instances preserves the DID and Entryway relationship. The PDS retains
+its private repository signing key; Entryway uses only the public reference in
+identity operations. Repository signing and PLC rotation are distinct authorities.
+
+The approved approach follows the [Rust Entryway design reference](reuse-assessment.md#custody-design-reference):
+Entryway holds a hot PLC rotation key and the operator keeps an offline recovery
+key. A user recovery key is optional and may be added during migration or any
+other authorized PLC operation. For new genesis, the priority is the user key if
+supplied, then the operator offline key, then the hot Entryway key. This is not a
+requirement for exactly three rotation keys. When an existing PDS joins, preserve
+its existing PLC rotation authority subject to valid PLC rules and limits; do not
+replace it mechanically with the genesis arrangement or assume that its repository
+signing key is a recovery key.
+
+These are the target custody rules, not a claim that their provisioning, migration
+or recovery workflows are implemented.
 
 ```mermaid
 %%{init: {"theme":"base","themeVariables":{"primaryTextColor":"#172B4D","lineColor":"#45556C","edgeLabelBackground":"#FFFFFF","fontFamily":"Arial"},"flowchart":{"nodeSpacing":40,"rankSpacing":50,"curve":"linear"}}}%%
 flowchart LR
-  user["User or recovery custodian<br/>Authority depends on agreed policy"]
-  identity["Owning feature<br/>Authorize PLC changes"]
-  signer["PLC signing module<br/>Protected rotation key"]
+  user["Account holder<br/>Standard PLC confirmation"]
+  identity["Owning feature<br/>Authorized PLC operation"]
+  signer["Entryway hot PLC key<br/>Routine signing"]
+  offline["Operator offline PLC key<br/>Recovery authority"]
+  recovery["Optional user PLC key<br/>Independent authority"]
   plc["PLC directory<br/>Public operation history"]
   host["Hosting PDS<br/>Private repository signing key"]
   inventory["Custody inventory<br/>Public references and history only"]
-  user -->|"Approve transfer or recovery"| identity
+  user -->|"Confirm authorized change"| identity
   identity -->|"Request permitted signature"| signer
   signer -->|"Signed operation for submission"| plc
+  offline -->|"Authorized recovery operation"| plc
+  recovery -->|"Authorized operation without operator cooperation"| plc
   host -->|"Expose repository public key"| identity
   identity -->|"Record authority changes"| inventory
   classDef violet fill:#EDE9FE,stroke:#65538A,color:#172B4D,stroke-width:2px;
@@ -206,40 +224,69 @@ flowchart LR
   classDef mint fill:#DCFCE7,stroke:#32694D,color:#172B4D,stroke-width:2px;
   classDef peach fill:#FFEDD5,stroke:#8A5A2B,color:#172B4D,stroke-width:2px;
   class identity,signer violet;
-  class user blue;
+  class user,offline,recovery blue;
   class host,inventory mint;
   class plc peach;
 ```
 
-| Material                            | Custody direction                            | Required decision or control                                       |
-| ----------------------------------- | -------------------------------------------- | ------------------------------------------------------------------ |
-| Email proof and browser credentials | Access / Better Auth                         | Expiry, revocation, freshness and data retention                   |
-| PLC rotation signing key            | Entryway signer adapter                      | Provisioning, authorized operations, backup, rotation and recovery |
-| User recovery key, when present     | User or explicitly agreed recovery custodian | Supported key set, priority and proof requirements                 |
-| Repository signing private key      | Hosting PDS                                  | Never copy into Entryway account or workflow state                 |
-| OAuth issuer key                    | Access / provider adapter                    | Key lifecycle distinct from PLC and repository keys                |
-| Public custody records              | Identity                                     | Purpose, fingerprint, custodian, lifecycle and change history      |
+| Material                            | Custody direction                 | Rule and remaining operational work                                                    |
+| ----------------------------------- | --------------------------------- | -------------------------------------------------------------------------------------- |
+| Email proof and browser credentials | Access / Better Auth              | Destination login binding; expiry, revocation, freshness and retention remain separate |
+| Hot PLC rotation signing key        | Entryway signing module           | Routine authorized operations; provisioning, backup and rotation need implementation   |
+| Offline PLC recovery key            | Operator, offline                 | Recovery authority; protection and recovery procedures need qualification              |
+| User recovery key, when supplied    | User or user-authorized custodian | Optional PLC rotation authority; may be added through an authorized PLC operation      |
+| Repository signing private key      | Hosting PDS                       | Distinct from PLC rotation; never copy into Entryway account or workflow state         |
+| OAuth issuer key                    | Access / provider adapter         | Lifecycle distinct from PLC and repository keys                                        |
+| Public custody records              | Identity                          | Public purpose, fingerprint, custodian, lifecycle and change history                   |
 
-The current custody validator assumes four fixture-specific key purposes, including a user-held source recovery key.
-That is useful import evidence, not a complete policy for all new and imported accounts.
-Do not promise user-held recovery for an account that has no such key.
-A specific production key-management product has not been selected.
+Normal departure uses standard PLC confirmation, signing and publication. A valid
+destination key set may replace former host authority; no separate operator
+approval or equality between source and destination emails is required. A user
+can leave without a refusing operator only when they control or can authorize a
+valid PLC rotation key independently. The operator's offline key alone does not
+provide that independence. Identity control also cannot recover repository or
+blob data that is unavailable; source availability or a usable backup remains a
+separate requirement.
 
-## 5. Three migration cases
+The current custody validator assumes four fixture-specific key purposes,
+including a user-held source recovery key. Those purposes are not a required
+rotation-key count or proof that every account has user recovery authority.
+A production key-management product, retention periods and detailed provisioning
+procedures are not selected by this policy.
 
-| Case                           | Stable state                                   | Changing state                                           | Required behavior                                                   |
-| ------------------------------ | ---------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------- |
-| External PDS into Entryway     | DID and user data                              | Account binding, host and permitted custody              | Existing tool, normal credentials, no operator database edits       |
-| PDS A to PDS B within Entryway | DID, account binding and Entryway relationship | Placement, repository key reference and hosting endpoint | Resumable move with record/blob integrity and working client access |
-| Entryway to external PDS       | DID and user data                              | Host and custody relationship                            | User can leave through supported public protocol operations         |
+<a id="5-three-migration-cases"></a>
 
-Email verification proves control of the destination login identity.
-It does not prove control of an incoming DID.
-The incoming contract must combine source-DID authority proof with secure destination binding.
+## 5. Migration and whole-PDS joining
+
+| Case                                      | Stable state                                                | Changing state                                           | Required behavior                                                                                       |
+| ----------------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Individual external account into Entryway | DID and user data                                           | Login binding, host and permitted PLC authority          | Public protocol operations and normal credentials; no operator database edits or private fixture APIs   |
+| PDS A to PDS B within Entryway            | DID, account binding and Entryway relationship              | Placement, repository key reference and hosting endpoint | Resumable move with record/blob integrity and working client access                                     |
+| Individual account leaving Entryway       | DID and user data                                           | Host and permitted PLC authority                         | Valid destination keys may replace former host authority through standard PLC operations                |
+| Whole existing PDS joining Entryway       | DIDs, hosted data and valid existing PLC rotation authority | Entryway integration and login associations              | Import established DID/email associations, including multiple DIDs for one email; do not merge accounts |
+
+For an individual migration, the standard PLC confirmation, signature and
+publication flow authorizes the DID transition. Source and destination email
+addresses may differ. Destination email verification establishes the new login
+binding; it is separate from PLC authority and introduces no bespoke DID-ownership
+proof. Neither email equality nor an email match substitutes for the standard
+PLC flow. Standard endpoint authentication, service-auth credentials, scopes and
+audiences still apply; PLC authorization does not by itself authorize every
+endpoint call.
+
+Whole-PDS joining instead imports the established DID/email associations of that
+PDS, as described in the [account model](#1-account-identity-and-ownership). It is
+not an individual email-matching migration and does not require moving each
+repository to a new host.
+
+Migration acceptance is compliance with public protocol endpoints and normal
+credentials. No particular migration tool or version must be selected. If a tool
+is used, record its version for reproducibility; the client choice does not define
+the acceptance contract.
 
 ### What the imported external fixture actually does
 
-This diagram records existing choreography. It is not the agreed implementation of independent-tool migration.
+This diagram records existing synthetic choreography. It does not establish public-protocol migration compliance.
 Each checkpoint must describe observed state, not merely that an HTTP request was sent.
 
 ```mermaid
@@ -271,23 +318,24 @@ flowchart LR
 ```
 
 Target creation is not atomically inactive. Public identity can change before repository import.
-Investigate client and relay observations, interruption recovery and standard-tool compatibility around the known PDS contract.
+Investigate client and relay observations, interruption recovery and public-protocol compatibility around the known PDS contract.
 No PDS modification is proposed.
 
 ## 6. Decisions and corrections required
 
-| Item                                   | Required outcome                                                              |
-| -------------------------------------- | ----------------------------------------------------------------------------- |
-| Incoming tool contract                 | Pin tools and prove their public endpoint/credential sequence                 |
-| Custody policy                         | Define supported recovery authorities, priority and departure rules           |
-| Cutover recovery                       | Reconcile partial PLC publication, target creation and import                 |
-| Repeated moves                         | Many operations per DID; one active operation; safe return to an earlier host |
-| Empty repositories                     | Accept valid zero-record and zero-blob accounts                               |
-| Active client sessions during movement | Define refresh, audience and reauthorization behaviour                        |
-| Retention and retirement               | Keep source data until the agreed deletion conditions hold                    |
+| Item                                   | Required outcome                                                               |
+| -------------------------------------- | ------------------------------------------------------------------------------ |
+| Public migration contract              | Prove public endpoint/credential compliance; record tool versions only if used |
+| Custody implementation                 | Implement the approved key roles, valid priority and ordinary departure rules  |
+| Cutover recovery                       | Reconcile partial PLC publication, target creation and import                  |
+| Repeated moves                         | Many operations per DID; one active operation; safe return to an earlier host  |
+| Empty repositories                     | Accept valid zero-record and zero-blob accounts                                |
+| Active client sessions during movement | Define refresh, audience and reauthorization behaviour                         |
+| Retention and retirement               | Keep source data until the agreed deletion conditions hold                     |
 
-The independent-tool contract is an early delivery gate.
-The private source fixture remains valuable for deterministic failures, but cannot substitute for that gate.
+Public-protocol migration remains a release acceptance requirement. Tool selection
+is not a prerequisite. The private source fixture remains valuable for deterministic
+failures, but cannot substitute for public endpoint and credential coverage.
 
 ## Required recovery decisions
 
@@ -296,8 +344,11 @@ its implementation is pending. Import must establish the DID/email association
 under the account-authority contract. Email verification cannot substitute for
 that authority or merge identities.
 
-Recovery policy must define authority and available data when the old Entryway is
-offline or refuses assistance. Accounts without independent recovery authority
-need explicit limitations. Existing ePDS deployment conversion separately covers
-transferring account authority and protected keys. Decisions and their acceptance
-criteria live in the [Linear project](https://linear.app/hypercerts/project/epds-entryway-888a35a63fe4) and [project document](https://linear.app/hypercerts/document/m1-acceptance-matrices-epds-parity-protocol-and-migration-196f21e01e71).
+The key roles and normal departure rules are settled above. Remaining work covers
+provisioning, protection, backup/rotation procedures, recovery execution and data
+availability when the old Entryway is offline or refuses assistance. Accounts
+without independently usable rotation authority need explicit exit limitations;
+an operator offline key is not a substitute. Existing ePDS deployment conversion
+also needs its account-authority and key-transition implementation. These are
+later authentication, migration/fleet and operational delivery requirements, not
+new database or deployment foundation work. Decisions and acceptance criteria live in the [Linear project](https://linear.app/hypercerts/project/epds-entryway-888a35a63fe4) and [project document](https://linear.app/hypercerts/document/m1-acceptance-matrices-epds-parity-protocol-and-migration-196f21e01e71).

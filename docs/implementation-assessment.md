@@ -40,11 +40,18 @@ delivery priorities and approvals belong in the
   boundary can produce `exp - iat = 61`, violating the strict 60-second bound.
   This observed defect remains unfixed. Both claims need one time sample; later
   passing tests do not resolve it.
-- **Migration and custody:** the external migration helper uses private synthetic
-  APIs and assumed keys. Independent migration with unchanged tools and normal
-  credentials, existing ePDS conversion, repeatable transfer history and general
-  recovery custody remain required. Fresh schema initialization provides no
-  old-state upgrade path and does not replace those journeys.
+- **Migration and custody:** the external helper uses private synthetic APIs and
+  assumed keys. Public-protocol migration with normal credentials, whole-PDS
+  joining and repeatable transfer history remain unimplemented requirements;
+  selecting a tool/version is not a gate. Standard PLC authorization permits
+  individual migration with different source/destination emails; destination
+  email proof only establishes login binding. The approved hot/offline/optional
+  user key roles and normal departure rules still need their operational
+  implementation. An operator offline key alone cannot guarantee exit from a
+  refusing operator, and PLC control does not restore unavailable data. See
+  [custody and migration](data-custody.md#4-custody-boundaries). Fresh schema
+  initialization provides no old-state upgrade path and does not replace these
+  product journeys.
 - **Product coverage:** complete ePDS consent/freshness parity, XRPC integration,
   production email coverage and fleet eligibility/placement/drain/retirement remain
   separate work. Preserved MJS is outside strict TypeScript coverage.

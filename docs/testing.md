@@ -88,12 +88,26 @@ It prepares a synthetic external source, verifies the destination owner's email,
 pauses after authority handoff and repository import, restarts Entryway between
 steps, completes and checks the result with browser OAuth. It uses private source
 fixture APIs and assumed recovery custody. It does not prove migration from an
-arbitrary live provider or interoperability with an existing migration tool.
+arbitrary live provider or compliance with the complete public migration contract.
 
-Standard-tool migration remains a separate release gate. Its acceptance must use
-normal account credentials and public XRPC endpoints, preserve DID/repository/blob
-state and allow sign-in after transfer, without operator database edits or fixture
-private keys. Reference PDS containers remain unchanged.
+Public-protocol migration remains a separate release gate. Acceptance uses normal
+account credentials and public endpoints, preserves DID/repository/blob state and
+allows sign-in after transfer, without operator database edits or fixture private
+keys. A particular migration tool/version is not required; record versions for
+reproducibility if tools are used. Reference PDS containers remain unchanged.
+
+Cover standard PLC confirmation, signature and publication with different source
+and destination emails. Destination email proof establishes login binding, not an
+extra DID-ownership mechanism. Retain standard endpoint authentication and
+service-auth scope/audience checks. Separately cover whole-PDS joining with imported
+DID/email associations and retained valid PLC rotation authority. Custody cases
+must distinguish repository signing from rotation authority, optional user keys
+from operator offline recovery, and ordinary departure from uncertain-write
+reconciliation. Valid destination keys may replace former host authority without
+separate operator approval. Independent exit requires independently usable
+user-authorized rotation authority and available data; do not infer it from an
+operator-only offline key. These are pending product acceptance cases, not claims
+about the current synthetic suite.
 
 ## Acceptance groups
 
@@ -101,7 +115,7 @@ private keys. Reference PDS containers remain unchanged.
    fresh authentication, consent and recovery.
 2. Protocol: discovery, PAR, code/refresh, PKCE/DPoP, revocation and applicable XRPC
    contracts against the reference PDS.
-3. Migration: standard tools, internal and external movement, repeated operations,
+3. Migration: public protocol compliance, internal and external movement, repeated operations,
    interruptions, empty repositories and outward portability.
 4. Fleet: add, placement exclusion during drain, transfer and retirement.
 5. Operations: mail delivery, backups/restores, signing custody and reconciliation.
