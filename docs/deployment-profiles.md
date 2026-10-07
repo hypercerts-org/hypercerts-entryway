@@ -10,7 +10,31 @@ replicates PDS data.
 
 Database-aware admission, worker draining and three consumer-owned profile
 controllers are implemented. These managed checks do not establish complete
-production resilience or fleet qualification.
+production resilience or fleet qualification. The approved
+[operator onboarding gate](architecture.md#operator-onboarding) still needs its
+registry/tooling implementation; existing-PDS conversion qualification and
+operator runbooks remain later work.
+
+## Shared-authority outages
+
+Replicas serve one issuer and share authority state; they are not independently
+operated identity authorities. Another organization can deploy a separate,
+fully isolated Entryway. No inter-Entryway login federation or discovery router
+is required. Standard public protocol discovery and migration remain required.
+
+Losing every usable Entryway replica, or the shared authority database, disrupts
+login, token refresh, signup and delegated account operations for the associated
+PDS fleet. More replicas address process loss, not every shared dependency or
+custody failure. Recovery must restore the same authority and preserve durable
+pending operations; failover does not authorize a second issuer or a new key set.
+
+Already-issued tokens may still support PDS-local operations while they remain
+valid and the PDS can perform all required signature, audience, scope, proof,
+account-state and expiry checks. An endpoint that needs an Entryway callback
+remains dependent on that authority. Token expiry or a failed local check can end
+that access; there is no promise that all reads or writes continue throughout an
+Entryway outage. Current profiles prove their named node/database fault cases,
+not every endpoint or full-authority outage duration.
 
 ## Admission and shutdown
 
@@ -113,7 +137,7 @@ cleanup targets only the selected owned rootless projects. Existing `fresh` and
 `database-contracts` gates remain required alongside these profiles.
 
 Fleet eligibility/placement, PDS drain/retirement, complete restore/key coverage
-across every deployment combination, standard-tool migration and exhaustive
+across every deployment combination, public-protocol migration and exhaustive
 fault/abuse qualification remain separate work. The existing moderation blocker
 and [credential-lifetime defect](implementation-assessment.md#known-limits) remain unresolved. Delivery criteria
 live in the [project document](https://linear.app/hypercerts/document/m1-acceptance-matrices-epds-parity-protocol-and-migration-196f21e01e71).

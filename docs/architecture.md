@@ -39,6 +39,15 @@ existing ePDS deployment from product scope.
 
 ## 2. System overview
 
+One deployment is one Entryway authority: replicas share its issuer, signing
+configuration and account/authentication state. Another organization may run its
+own fully isolated Entryway, with separate authority, custody and state. No
+inter-Entryway federation, shared login or email-discovery router is expected;
+coordinating those authorities would add custody complexity. This does not remove
+public ATProto/OAuth discovery, endpoint compliance or account migration between
+hosts through the standard protocol. Earlier shared-discovery/router proposals
+are superseded historical context, not deferred implementation requirements.
+
 This is the target responsibility map. Fleet administration and public-protocol migration remain incomplete.
 The account page is part of Entryway. Better Auth and the provider run inside each
 application instance; feature boundaries do not prescribe separately deployed services.
@@ -54,8 +63,8 @@ may replace former host authority with valid destination keys. See
 flowchart LR
   browser["Browser<br/>Login and account pages"]
   client["ATProto application<br/>OAuth client"]
-  ingress["Request balancing<br/>Readiness and failover"]
-  subgraph entryway["Entryway application instances"]
+  ingress["One canonical issuer<br/>Request balancing and readiness"]
+  subgraph entryway["One Entryway authority: application replicas"]
     api["Web and XRPC adapters"]
     domains["Vertical features<br/>Accounts · Login · Authorization · Migration"]
     ba["Better Auth<br/>Email proof and browser sessions"]
@@ -227,16 +236,47 @@ Record the serving host, credential type, request/response schemas, error behavi
 Include PDS callbacks, handle resolution, account lifecycle, identity operations and scope references.
 Reference source and tests define the contract; endpoint presence does not prove conformance.
 
+### Operator onboarding
+
+The Entryway operator supplies the configuration that the PDS operator must apply
+before Entryway may effectively associate that PDS. Reuse the
+[Rust onboarding process](reuse-assessment.md#operator-onboarding-reference),
+adapted to unchanged reference PDS support:
+
+1. Supply the Entryway URL, DID, JWT verification public key and PLC rotation
+   public key: `PDS_ENTRYWAY_URL`, `PDS_ENTRYWAY_DID`,
+   `PDS_ENTRYWAY_JWT_VERIFY_KEY_K256_PUBLIC_KEY_HEX` and
+   `PDS_ENTRYWAY_PLC_ROTATION_KEY`. These are public configuration values, not
+   private signing keys. Additional recovery settings depend on the supported
+   PDS profile; Rust-only peer-secret settings are not requirements here.
+2. The PDS operator applies that configuration and restarts the PDS. A record
+   staged before this step must stay disabled and unassociated.
+3. Verify the live PDS identity against the intended DID, its protected-resource
+   metadata against this Entryway issuer, and authenticated admin callback access.
+   Use the PDS callback credential securely; do not log or expose it in reports.
+4. Only after configuration and verification may Entryway associate the PDS and
+   make it eligible under the separate placement policy. Failed or incomplete
+   verification must not activate an association or admit new placements.
+
+This is the approved onboarding gate, not an implemented operator CLI or registry
+workflow. Current hosts are statically configured. Whole-PDS conversion additionally
+needs its [account and custody import](data-custody.md#5-migration-and-whole-pds-joining);
+it does not waive this gate or permit early effective association.
+
+### Target registry lifecycle
+
 The proposed registry lifecycle is operator controlled:
 
 ```mermaid
 %%{init: {"theme":"base","themeVariables":{"primaryTextColor":"#172B4D","lineColor":"#45556C","edgeLabelBackground":"#FFFFFF","fontFamily":"Arial"}}}%%
 flowchart LR
-  registered["Registered<br/>Not eligible for placement"]
+  configured["PDS configured<br/>Supplied settings applied and restarted"]
+  registered["Associated after verification<br/>Not yet eligible for placement"]
   enabled["Enabled<br/>Accept new placements"]
   draining["Draining<br/>Move existing accounts"]
   retired["Retired<br/>Retain required history"]
-  registered -->|"Validate trust, routes and health"| enabled
+  configured -->|"Verify DID, issuer and callback access"| registered
+  registered -->|"Operator enables healthy host"| enabled
   enabled -->|"Operator stops new placement"| draining
   draining -->|"No placements, transfers or retention blockers"| retired
   draining -->|"Operator cancels drain"| enabled
@@ -244,7 +284,7 @@ flowchart LR
   classDef mint fill:#DCFCE7,stroke:#32694D,color:#172B4D,stroke-width:2px;
   classDef peach fill:#FFEDD5,stroke:#8A5A2B,color:#172B4D,stroke-width:2px;
   classDef violet fill:#EDE9FE,stroke:#65538A,color:#172B4D,stroke-width:2px;
-  class registered blue;
+  class configured,registered blue;
   class enabled mint;
   class draining peach;
   class retired violet;
@@ -263,7 +303,7 @@ Keep shared contracts narrow while features own their operation bodies.
 
 Still required: the approved multiple-DID email schema, joining-PDS association import
 and post-verification chooser, ePDS consent/freshness parity, complete XRPC adapters, production email delivery,
-fleet lifecycle, implementation of the approved custody model and public-protocol migration. The [Drizzle database boundary](database.md) provides asynchronous authority
+operator onboarding and fleet lifecycle, implementation of the approved custody model and public-protocol migration. The [Drizzle database boundary](database.md) provides asynchronous authority
 transactions. [Shared operation ownership](shared-operations.md) implements durable
 account/PDS admission, execution fences, operator-verified uncertain-write recovery,
 mail attempts and authentication ordering. [Deployment lifecycle](deployment-profiles.md)
@@ -297,15 +337,23 @@ and that old upstream work has completed or been drained. A matching status read
 or expired lease alone never clears its durable pending admission; see the
 [operator recovery contract](shared-operations.md#supported-operator-recovery).
 
+A complete outage of this shared authority disrupts login, refresh, signup and
+account operations delegated to Entryway across its associated PDS instances.
+PDS-local operations with already-issued valid tokens may continue only while
+the PDS can satisfy their authentication, scope, account-state and expiry checks
+without calling Entryway. This is not a blanket repository availability promise;
+see [outage boundaries](deployment-profiles.md#shared-authority-outages).
+
 Balancing Entryway requests does not relocate a repository or replicate PDS data.
 PDS placement, drain, transfer and disaster recovery retain their own authority,
 data-integrity and recovery requirements.
 
 ## Open design decisions
 
-Operator ownership, independent authentication, email discovery, operational key
-management, recovery execution and deployment-conversion details are maintained in the
-[Linear project](https://linear.app/hypercerts/project/epds-entryway-888a35a63fe4) and [project document](https://linear.app/hypercerts/document/m1-acceptance-matrices-epds-parity-protocol-and-migration-196f21e01e71). Scaling does not imply
-independent authentication operators. These decisions do not authorize reference
-PDS changes. See [implementation assessment](implementation-assessment.md) for source-grounded
+The onboarding order and isolated-deployment model are settled above. Remaining
+work covers registry implementation, operational key management, conversion and
+recovery qualification, and operator runbooks. Delivery details are maintained in
+the [Linear project](https://linear.app/hypercerts/project/epds-entryway-888a35a63fe4) and [project document](https://linear.app/hypercerts/document/m1-acceptance-matrices-epds-parity-protocol-and-migration-196f21e01e71).
+There is no deferred inter-Entryway discovery-router requirement. These decisions
+do not authorize reference PDS changes. See [implementation assessment](implementation-assessment.md) for source-grounded
 work required by the current architecture.

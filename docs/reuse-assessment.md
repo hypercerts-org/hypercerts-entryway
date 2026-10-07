@@ -69,6 +69,28 @@ This is design provenance, not imported runtime code or a claim of implementatio
 It does not adopt unrelated Rust migration restrictions or extensions. Operational
 key provisioning and recovery procedures remain separate delivery work.
 
+## Operator onboarding reference
+
+Use the process in the same Rust revision's `docs/deploy-entryway.md` section 4:
+`keys show`, apply the supplied PDS settings and restart, then `pds add` and
+`pds check`. The check verifies the `describeServer` DID, protected-resource
+`authorization_servers` against the Entryway issuer, and authenticated
+`admin.getAccountInfos` callback access. Rust's `registry::add` checks input shape
+and stores the record; the live check is separate. It does not itself enforce our
+[configuration-before-association gate](architecture.md#operator-onboarding).
+
+Reuse the process, not Rust-only peer-secret files, private adoption APIs or
+session-cutoff extensions unsupported by unchanged reference PDS. In particular,
+the reference's section 9 stages an existing PDS before its configuration switch;
+that does not authorize effective association here. Any preconfiguration staging
+must remain disabled and unassociated. The local operator workflow, registry,
+conversion qualification and runbooks remain unimplemented delivery work.
+
+Separate organizations may operate isolated Entryways without shared login,
+custody or an inter-Entryway discovery router. This isolation does not discard
+standard ATProto discovery or public migration compatibility. The earlier router
+proposal is historical context only.
+
 ## Source provenance
 
 The imported file mapping is preserved in [source-map.json](source-map.json).

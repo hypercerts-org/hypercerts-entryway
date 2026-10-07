@@ -22,6 +22,19 @@ delivery priorities and approvals belong in the
 
 ## Known limits
 
+- **Operator onboarding:** the approved order is operator-supplied PDS
+  configuration, PDS apply/restart, live identity/issuer/callback verification,
+  then effective association. Static host configuration is implemented; the
+  onboarding CLI/registry workflow is not. Existing-PDS conversion qualification
+  and operator runbooks remain later work. Separate organizations may operate
+  isolated Entryways; inter-Entryway federation and an email-discovery router are
+  not requirements. Public protocol and migration compatibility remain required.
+- **Shared-authority outages:** replicas retain one issuer. A full Entryway or
+  authority-database outage disrupts login, refresh, signup and delegated account
+  operations. Already-issued tokens permit only the PDS-local operations that
+  still pass required checks before expiry. The managed deployment profiles do
+  not establish blanket PDS availability or exhaustive endpoint outage coverage.
+
 - **Multiple accounts per email:** the approved target permits imported DID/email
   associations from an existing PDS joining Entryway. Sign-in verifies email,
   resolves associated DIDs and requires a choice when there are several, then

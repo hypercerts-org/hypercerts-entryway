@@ -109,6 +109,24 @@ user-authorized rotation authority and available data; do not infer it from an
 operator-only offline key. These are pending product acceptance cases, not claims
 about the current synthetic suite.
 
+## Operator onboarding and shared-authority coverage
+
+Future onboarding acceptance must reject effective association before the PDS
+applies the supplied configuration and passes live DID, issuer and authenticated
+callback checks. Incorrect or missing settings must leave it unassociated and
+ineligible for placement. Existing-PDS conversion must honor that order while
+preserving the approved account and custody rules. Current static-host harnesses
+do not establish a supported operator onboarding tool or conversion procedure.
+
+Distinguish loss of one replica from loss of the whole shared authority. Record
+which login, refresh, signup and delegated operations fail, which already-issued
+token operations remain PDS-local, and the checks/expiry that bound any continued
+access. Existing profile cases do not prove blanket PDS availability. Isolated
+Entryway deployments need no inter-Entryway federation or discovery-router suite;
+standard public protocol discovery and migration acceptance remain required.
+Registry coverage, conversion qualification and operator runbooks remain later
+work, not additional database/deployment-foundation implementation claims.
+
 ## Acceptance groups
 
 1. ePDS login behaviour: signup/returning OTP, account selection, session expiry,
