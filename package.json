@@ -23,7 +23,10 @@
     "test:experience": "node --test tests/contracts/experience.test.mjs && playwright test --config tests/playwright.config.mjs tests/browser/experience-browser.spec.mjs",
     "test:e2e:atmosphere": "bash tests/local.sh fresh",
     "schema:export": "node scripts/export-database-schema.mjs",
-    "schema:check": "node scripts/export-database-schema.mjs --check"
+    "schema:check": "node scripts/export-database-schema.mjs --check",
+    "changeset": "changeset",
+    "changeset:check": "changeset status",
+    "version-packages": "changeset version && npm install --package-lock-only --ignore-scripts --offline --no-audit --no-fund"
   },
   "dependencies": {
     "@atproto/common": "0.8.1",
@@ -50,6 +53,7 @@
     "smtp-server": "3.19.15"
   },
   "devDependencies": {
+    "@changesets/cli": "3.0.3",
     "@playwright/test": "1.58.2",
     "@types/better-sqlite3": "9.6.0",
     "@types/express": "4.17.25",

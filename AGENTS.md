@@ -119,15 +119,17 @@ operation IDs and safe error codes rather than request bodies or personal data.
 Record provenance for imported code and distinguish reusable code, unfinished
 implementation and unresolved integration behaviour.
 
-## Lasting documentation
+## Release notes and documentation
 
-Update existing architecture or domain docs by default. Use `docs/evidence/` only
-for a small, lasting design decision whose rationale is not already clear there:
-one decision, its reason, tradeoff and scope, with links to the canonical guide.
-Do not create a note for every change.
+Add a named Changeset for operator-visible behavior, configuration or recovery
+changes, following [.agents/skills/writing-changesets/SKILL.md](.agents/skills/writing-changesets/SKILL.md).
+Use the managed authoring/status/version commands in [RELEASING.md](RELEASING.md);
+writing a note does not itself authorize applying a version or making a release.
+Internal refactors, tests and prose alone do not require a Changeset.
 
-Do not commit routine task-completion reports, scanner triage, execution or agent
-ledgers, acceptance tables, generated source/hash inventories or per-run results.
-Report validation in PR checks, comments or the final handoff; keep raw private
-artifacts in ignored `tests/artifacts/` and working plans local. Preserve source
-provenance in the reuse assessment or harness provenance guide.
+Keep lasting design rationale in existing architecture or domain docs. Do not
+create a separate evidence folder or task-completion reports, scanner triage,
+agent ledgers, acceptance tables, generated source/hash inventories or per-run
+results. Report validation in PR checks, comments or the final handoff; keep raw
+private artifacts in ignored `tests/artifacts/` and working plans local. Preserve
+source provenance in the reuse assessment or harness provenance guide.

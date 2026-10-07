@@ -1,0 +1,32 @@
+services:
+  changesets:
+    build:
+      context: ${SOURCE_CHECKOUT:?}
+      dockerfile: tests/support/Dockerfile
+      target: changesets
+    working_dir: /app
+    network_mode: none
+    environment:
+      GIT_DIR: ${TOOLING_GIT_DIR:?}
+      GIT_COMMON_DIR: /git/common
+      GIT_WORK_TREE: /app
+      GIT_OPTIONAL_LOCKS: "0"
+      GIT_CONFIG_NOSYSTEM: "1"
+      GIT_CONFIG_GLOBAL: /dev/null
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: /app
+    volumes:
+      - type: bind
+        source: ${SOURCE_CHECKOUT:?}
+        target: /app
+      - type: volume
+        target: /app/node_modules
+      - type: bind
+        source: ${SOURCE_CHECKOUT:?}/.git
+        target: /app/.git
+        read_only: true
+      - type: bind
+        source: ${SOURCE_GIT_COMMON_DIR:?}
+        target: /git/common
+        read_only: true

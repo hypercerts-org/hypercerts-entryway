@@ -16,8 +16,8 @@ Entryway has three implemented foundations:
 
 The [testing guide](testing.md) describes repeatable regression gates. A passing
 managed scenario establishes its tested behavior, not every release requirement
-or production configuration. [Design notes](evidence/README.md) explain selected
-tradeoffs; delivery priorities and approvals belong in the
+or production configuration. The domain guides above explain the design tradeoffs;
+delivery priorities and approvals belong in the
 [project document](https://linear.app/hypercerts/document/m1-acceptance-matrices-epds-parity-protocol-and-migration-196f21e01e71).
 
 ## Known limits

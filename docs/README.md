@@ -1,7 +1,7 @@
 # Project design and delivery documents
 
 These documents describe current architecture, domain contracts, implementation
-limits and a few lasting design decisions. Linear owns delivery planning and
+limits and release-note guidance. Linear owns delivery planning and
 acceptance criteria. The repository is self-contained; public design and source
 references do not require a sibling checkout. The [test-plan index](../tests/plans/README.md)
 links repeatable checks and the maintained project acceptance inventory.
@@ -12,13 +12,15 @@ links repeatable checks and the maintained project acceptance inventory.
 | [Delivery planning](delivery-plan.md)                     | Links to the maintained Linear project and document                                                                   |
 | [Terminology](glossary.md)                                | Shared vocabulary and protocol references                                                                             |
 | [Implementation assessment](implementation-assessment.md) | Source-grounded database, coordination and resilience gaps                                                            |
-| [Design decisions](evidence/README.md)                    | Short rationale notes linked to canonical guides                                                                      |
 | [Data model and custody](data-custody.md)                 | DID-based account model, provider boundaries, key custody, transfer cases and observed test migration order           |
 | [Reuse assessment](reuse-assessment.md)                   | Reusable code, required implementation and investigation findings                                                     |
 | [Testing](testing.md)                                     | Local Atmosphere in a Box commands, repeatable flows and evidence limits                                              |
 | [Database configuration](database.md)                     | Drizzle adapters, deployment selection, transactions and single-node profile checks                                   |
 | [Deployment lifecycle](deployment-profiles.md)            | Bounded readiness/draining, three-profile harness and limits                                                          |
 | [Source mapping](source-map.json)                         | Original spike modules, imported locations and current ownership                                                      |
+
+See [release preparation](../RELEASING.md) for named Changesets and the managed
+version/changelog workflow. Design rationale stays in the domain guides above.
 
 ## Diagram conventions
 

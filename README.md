@@ -80,6 +80,7 @@ other's internals. The source boundary checker enforces this structure.
 - [Reusable code, required work and investigations](docs/reuse-assessment.md)
 - [Delivery planning in Linear](docs/delivery-plan.md)
 - [Testing and evidence limits](docs/testing.md)
+- [Release notes and managed version preparation](RELEASING.md)
 - [Agent and contributor rules](AGENTS.md)
 
 ## Provenance

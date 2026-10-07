@@ -120,8 +120,8 @@ results when a later attempt passes. Keep raw logs, screenshots, inventories and
 execution ledgers in ignored `tests/artifacts/`, not in versioned design docs.
 Never put captured OTPs, access tokens, private keys or generated runtime
 configuration in public reports. Historical spike reports establish provenance only.
-[Design notes](evidence/README.md) are reserved for small lasting decisions, not
-routine test or scanner output.
+Keep design rationale in the existing domain guides and operator-facing release
+notes in [Changesets](../RELEASING.md), not routine test or scanner output.
 
 ## Feature tests and operational evidence
 
