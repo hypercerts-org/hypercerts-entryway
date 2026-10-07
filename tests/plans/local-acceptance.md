@@ -1,9 +1,8 @@
 # Local acceptance plan
 
-Status: the [October 5 baseline](../../docs/evidence/baseline-2026-10-05.md) records two isolated runs
-at `89589ca6`, including the inherited raw moderation failure. No new application
-run is claimed by the October 6 matrix publication. Unchanged baseline evidence
-does not close the [outstanding acceptance cases](README.md).
+These checks cover the current managed sandbox. They do not close every
+[outstanding acceptance requirement](README.md), and the raw moderation failure
+remains explicit.
 
 ## Preparation
 
@@ -58,9 +57,9 @@ Reports/screenshots are under `tests/artifacts/`. Keep generated configuration,
 private credentials, CA keys and volume data out of commits. The external flow
 uses a privileged synthetic source adapter; it does not prove compatibility
 with goat or PDS MOOver. Earlier browser cases read the test outbox directly;
-newer experience cases use Mailpit. The linked baseline reports runs performed in
-this repository at the recorded revision; older spike reports establish provenance
-only. It distinguishes wrapper equivalence from the failing moderation requirement.
+newer experience cases use Mailpit. Report actual results in the PR or final
+handoff, distinguishing wrapper equivalence from the failing moderation requirement.
+Historical spike reports establish provenance only.
 
 Use `fresh` for a clean replay. Persistent lifecycle commands never reset existing
 accounts implicitly. Only the explicitly disposable `fresh` command removes its
@@ -70,4 +69,5 @@ Deployment-foundation acceptance additionally runs `./tests/local.sh database-co
 and `./tests/local.sh resilience-profiles` after `fresh`. The latter requires all
 three fresh profiles and rejects missing or single-process-only replica evidence.
 See [deployment lifecycle and bounds](../../docs/deployment-profiles.md). Existing
-raw moderation and recorded credential-lifetime limitations remain separate.
+raw moderation and [credential-lifetime limits](../../docs/implementation-assessment.md#known-limits)
+remain unresolved.

@@ -1,25 +1,24 @@
 # Project design and delivery documents
 
-These documents capture the Entryway architecture, implementation context and
-recorded technical evidence. Linear owns delivery planning and acceptance criteria.
-They distinguish reusable spike code, proposed behaviour and unresolved release requirements.
-This repository is self-contained: use the source, harness, documentation and
-baseline records here. Project-specific acceptance matrices live in [Linear](https://linear.app/hypercerts/document/m1-acceptance-matrices-epds-parity-protocol-and-migration-196f21e01e71), referenced from the repository’s test plans. Public design/source references do not require a sibling
-checkout. The [test-plan index](../tests/plans/README.md) links the baseline and the maintained Linear inventory of source provenance and unresolved cases.
+These documents describe current architecture, domain contracts, implementation
+limits and a few lasting design decisions. Linear owns delivery planning and
+acceptance criteria. The repository is self-contained; public design and source
+references do not require a sibling checkout. The [test-plan index](../tests/plans/README.md)
+links repeatable checks and the maintained project acceptance inventory.
 
-| Document | Contents |
-| --- | --- |
-| [Architecture](architecture.md) | System overview, vertical feature ownership, three port boundaries, source layout, login sequence and fleet lifecycle |
-| [Delivery planning](delivery-plan.md) | Links to the maintained Linear project and document |
-| [Terminology](glossary.md) | Shared vocabulary and protocol references |
-| [Implementation assessment](implementation-assessment.md) | Source-grounded database, coordination and resilience gaps |
-| [Evidence](evidence/README.md) | Retained baseline, verification and source-parity receipts |
-| [Data model and custody](data-custody.md) | DID-based account model, provider boundaries, key custody, transfer cases and observed test migration order |
-| [Reuse assessment](reuse-assessment.md) | Reusable code, required implementation and investigation findings |
-| [Testing](testing.md) | Local Atmosphere in a Box commands, repeatable flows and evidence limits |
-| [Database configuration](database.md) | Drizzle adapters, deployment selection, transactions and verified single-node profiles |
-| [Deployment lifecycle](deployment-profiles.md) | Bounded readiness/draining, independently verified three-profile harness and limits |
-| [Source mapping](source-map.json) | Original spike modules, imported locations and current ownership |
+| Document                                                  | Contents                                                                                                              |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| [Architecture](architecture.md)                           | System overview, vertical feature ownership, three port boundaries, source layout, login sequence and fleet lifecycle |
+| [Delivery planning](delivery-plan.md)                     | Links to the maintained Linear project and document                                                                   |
+| [Terminology](glossary.md)                                | Shared vocabulary and protocol references                                                                             |
+| [Implementation assessment](implementation-assessment.md) | Source-grounded database, coordination and resilience gaps                                                            |
+| [Design decisions](evidence/README.md)                    | Short rationale notes linked to canonical guides                                                                      |
+| [Data model and custody](data-custody.md)                 | DID-based account model, provider boundaries, key custody, transfer cases and observed test migration order           |
+| [Reuse assessment](reuse-assessment.md)                   | Reusable code, required implementation and investigation findings                                                     |
+| [Testing](testing.md)                                     | Local Atmosphere in a Box commands, repeatable flows and evidence limits                                              |
+| [Database configuration](database.md)                     | Drizzle adapters, deployment selection, transactions and single-node profile checks                                   |
+| [Deployment lifecycle](deployment-profiles.md)            | Bounded readiness/draining, three-profile harness and limits                                                          |
+| [Source mapping](source-map.json)                         | Original spike modules, imported locations and current ownership                                                      |
 
 ## Diagram conventions
 

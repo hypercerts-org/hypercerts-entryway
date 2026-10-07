@@ -9,27 +9,18 @@ architecture and acceptance documentation live here; no sibling Entryway checkou
 is required. External repositories and [Lexidraw designs](docs/README.md#core-design-references)
 are references, not runtime or documentation dependencies.
 
-**Status:** one application organized by vertical features. Ports/adapters are
+**Status:** one application organized by vertical features, with ports/adapters
 limited to browser authentication, mail sending and database. Preserved MJS is
-owned by its feature; standard-tool migration, moderation coordination and fleet
-registry remain product gaps. The [database foundation](docs/database.md) now uses
-Drizzle ORM `1.0.0-rc.4` with fresh SQLite and PostgreSQL schemas and asynchronous
-operations. Two isolated runs passed full fresh acceptance, both database contract
-suites and single-node PostgreSQL login/restart/restore; see the
-[database verification record](docs/evidence/database-foundation-2026-10-06.md).
-Single-node operation accepts either database; multi-node configuration requires
-PostgreSQL. [Shared operation ownership](docs/shared-operations.md) now coordinates
-account/PDS orchestration, verified recovery, mail and authentication. Revised
-application and dual-database acceptance passed independent rootless verification;
-the [shared-operation evidence](docs/evidence/shared-operations-2026-10-07.md)
-retains an earlier failed unit run and its deferred credential-lifetime defect.
-[Deployment lifecycle and profile controllers](docs/deployment-profiles.md) now
-implement bounded readiness/draining and fresh one/one/two-process checks. Full
-application, dual-database and all three deployment-profile gates passed twice,
-including independent verification; see the
-[deployment evidence](docs/evidence/deployment-foundation-2026-10-07.md).
-Fleet placement and complete production qualification remain separate work. Google/GitHub OIDC is roadmap
-work excluded from initial delivery.
+owned by its feature. The [database boundary](docs/database.md) uses Drizzle ORM
+`1.0.0-rc.4` with fresh schemas and asynchronous operations: SQLite or PostgreSQL
+on one node, PostgreSQL on multiple nodes. [Shared operation ownership](docs/shared-operations.md)
+coordinates account/PDS orchestration, verified recovery, mail and authentication.
+[Deployment lifecycle](docs/deployment-profiles.md) supplies bounded readiness and
+draining, with repeatable single-node and replica checks.
+
+Standard-tool migration, moderation coordination, fleet management and complete
+production qualification remain open; see [implementation limits](docs/implementation-assessment.md).
+Google/GitHub OIDC is roadmap work excluded from initial delivery.
 
 ## Start the sandbox
 
@@ -60,8 +51,8 @@ KEEP_FAILED_SANDBOX=1 ./tests/local.sh fresh
 Reports go to `tests/artifacts/<project>`. Migration in this suite exercises a
 private synthetic source helper; it is **not** standard-tool migration acceptance.
 For persistent development and selective commands, read [testing](docs/testing.md).
-The [published baseline and acceptance matrices](tests/plans/README.md) describe
-current evidence and remaining gaps; historical spike passes are not new acceptance.
+The [acceptance plans](tests/plans/README.md) describe the repeatable checks and
+link to current delivery requirements; historical passes are not new acceptance.
 
 ## Layout
 

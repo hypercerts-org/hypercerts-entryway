@@ -2,8 +2,7 @@
 
 ## Product boundaries
 
-This repository is self-contained. Keep source, harness instructions, architecture
-and acceptance evidence usable without sibling checkouts. Link the published
+This repository is self-contained. Keep source, architecture and test instructions usable without sibling checkouts. Link the published
 Lexidraw diagrams for original product-design references; retain relevant findings
 in repository-owned documents rather than pointing readers at local spike paths.
 Project-specific acceptance matrices belong in the linked Linear document; keep
@@ -14,12 +13,10 @@ Email OTP and ePDS login behaviour are in scope. Google/GitHub OIDC is roadmap
 work excluded from initial delivery. Scaling, balancing and failover are in scope
 for resilience. The database target is SQLite and PostgreSQL through Drizzle ORM
 `1.0.0-rc.4`: single-node operation supports SQLite or PostgreSQL; multi-node
-operation requires PostgreSQL. The asynchronous Drizzle foundation, shared operation ownership and bounded
-readiness/draining have passed independent rootless verification, including fresh
-SQLite single-node, PostgreSQL single-node and two-process PostgreSQL profiles.
-See [database configuration](docs/database.md) and the current
-[deployment verification record](docs/evidence/deployment-foundation-2026-10-07.md)
-for exact results and remaining production, fleet and protocol limits.
+operation requires PostgreSQL. The async Drizzle boundary, shared operation
+ownership and deployment lifecycle are implemented. See [database configuration](docs/database.md),
+[shared operations](docs/shared-operations.md) and
+[deployment profiles](docs/deployment-profiles.md) for behavior and limits.
 Code refactors require neither backward compatibility nor existing-data upgrades.
 Public account migration and existing ePDS deployment conversion remain in scope.
 Use the existing PDS Entryway hooks and XRPC contracts. Do not fork, patch, or
@@ -121,3 +118,16 @@ runtime configuration, databases, sandbox state or browser profiles. Log stable
 operation IDs and safe error codes rather than request bodies or personal data.
 Record provenance for imported code and distinguish reusable code, unfinished
 implementation and unresolved integration behaviour.
+
+## Lasting documentation
+
+Update existing architecture or domain docs by default. Use `docs/evidence/` only
+for a small, lasting design decision whose rationale is not already clear there:
+one decision, its reason, tradeoff and scope, with links to the canonical guide.
+Do not create a note for every change.
+
+Do not commit routine task-completion reports, scanner triage, execution or agent
+ledgers, acceptance tables, generated source/hash inventories or per-run results.
+Report validation in PR checks, comments or the final handoff; keep raw private
+artifacts in ignored `tests/artifacts/` and working plans local. Preserve source
+provenance in the reuse assessment or harness provenance guide.

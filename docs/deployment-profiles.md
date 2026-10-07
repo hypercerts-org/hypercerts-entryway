@@ -9,11 +9,8 @@ node registry. Balancing Entryway requests neither relocates repositories nor
 replicates PDS data.
 
 Database-aware admission, worker draining and three consumer-owned profile
-controllers are implemented. Full fresh application, dual-database and all three
-profile gates passed in the executor run and a separate independent rootless run.
-The [deployment verification record](evidence/deployment-foundation-2026-10-07.md)
-gives the exact source, commands, results and limits. These managed checks do not
-establish complete production resilience or fleet qualification.
+controllers are implemented. These managed checks do not establish complete
+production resilience or fleet qualification.
 
 ## Admission and shutdown
 
@@ -27,10 +24,10 @@ start and offers a return to the previous page. It does not claim unsent details
 were saved. This refusal differs from an already-dispatched account operation's
 [durable pending recovery](shared-operations.md).
 
-| Setting | Default | Accepted range |
-| --- | --- | --- |
-| `DATABASE_PROBE_TIMEOUT_MS` | 2000ms | Integer 1–10000ms |
-| `SHUTDOWN_TIMEOUT_MS` | 15000ms | Integer 1–60000ms |
+| Setting                     | Default | Accepted range    |
+| --------------------------- | ------- | ----------------- |
+| `DATABASE_PROBE_TIMEOUT_MS` | 2000ms  | Integer 1–10000ms |
+| `SHUTDOWN_TIMEOUT_MS`       | 15000ms | Integer 1–60000ms |
 
 A database instance has at most one physical probe in flight. SQLite uses its
 existing connection gate and a bounded native busy timeout; an expired queued
@@ -82,16 +79,16 @@ claim. Both paths require refusal, liveness, recovery and a real browser journey
 that retains an entered draft through Back and successful resubmission. Desktop,
 narrow and keyboard-focus images cover application and ordinary-ingress refusal.
 
-| Bound | Scope |
-| --- | --- |
-| 8 seconds | Ingress withdrawal/readiness loss from the recorded fault trigger |
-| 10 seconds | Readiness recovery from the recorded recovery trigger |
-| 20 seconds | Application stop, including the default 15-second drain deadline |
-| 30 seconds | Node rejoin and browser/controller coordination marker |
-| 75 seconds | Mail takeover after held-owner process loss |
-| 190 seconds | Account reconciliation takeover after held-owner process loss |
-| 195 seconds | Controlled worker case, including teardown |
-| 480 seconds | Entire profile exercise after managed startup, not each phase |
+| Bound       | Scope                                                             |
+| ----------- | ----------------------------------------------------------------- |
+| 8 seconds   | Ingress withdrawal/readiness loss from the recorded fault trigger |
+| 10 seconds  | Readiness recovery from the recorded recovery trigger             |
+| 20 seconds  | Application stop, including the default 15-second drain deadline  |
+| 30 seconds  | Node rejoin and browser/controller coordination marker            |
+| 75 seconds  | Mail takeover after held-owner process loss                       |
+| 190 seconds | Account reconciliation takeover after held-owner process loss     |
+| 195 seconds | Controlled worker case, including teardown                        |
+| 480 seconds | Entire profile exercise after managed startup, not each phase     |
 
 Ingress withdrawal is observed concurrently with graceful stopping, since these
 have different deadlines. Probe attempts consume the remaining fault budget,
@@ -118,5 +115,5 @@ cleanup targets only the selected owned rootless projects. Existing `fresh` and
 Fleet eligibility/placement, PDS drain/retirement, complete restore/key coverage
 across every deployment combination, standard-tool migration and exhaustive
 fault/abuse qualification remain separate work. The existing moderation blocker
-and documented credential-lifetime defect remain unresolved. Delivery criteria
+and [credential-lifetime defect](implementation-assessment.md#known-limits) remain unresolved. Delivery criteria
 live in the [project document](https://linear.app/hypercerts/document/m1-acceptance-matrices-epds-parity-protocol-and-migration-196f21e01e71).

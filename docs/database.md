@@ -2,32 +2,24 @@
 
 Entryway uses Drizzle ORM and Drizzle Kit `1.0.0-rc.4`, `pg` `8.16.3`, and
 Better Auth `1.7.3`. Existing account password and app-password APIs remain active.
-The [October 6 verification record](evidence/database-foundation-2026-10-06.md)
-binds the implementation commit to two isolated acceptance runs, including both
-database suites and actual-main PostgreSQL login, restart and dump/restore.
 
-| Setting | Values and behavior |
-| --- | --- |
-| `DATABASE_BACKEND` | `sqlite` (default), or `postgresql` |
-| `DEPLOYMENT_MODE` | `single-node` (default), or `multi-node` |
-| `DATABASE_URL` | Required PostgreSQL URL for `postgresql`; forbidden for SQLite |
-| `STATE_DIRECTORY` | SQLite authority location; defaults to `/data` |
+| Setting            | Values and behavior                                            |
+| ------------------ | -------------------------------------------------------------- |
+| `DATABASE_BACKEND` | `sqlite` (default), or `postgresql`                            |
+| `DEPLOYMENT_MODE`  | `single-node` (default), or `multi-node`                       |
+| `DATABASE_URL`     | Required PostgreSQL URL for `postgresql`; forbidden for SQLite |
+| `STATE_DIRECTORY`  | SQLite authority location; defaults to `/data`                 |
 
 Single-node mode accepts either backend. Multi-node mode requires PostgreSQL;
 SQLite plus multi-node fails with `InvalidDatabaseConfiguration` before startup.
 Configuration errors exclude the supplied URL. Accepting the PostgreSQL multi-node
 configuration is not evidence of replica failover or of operation lease behavior.
 Those contracts have separate acceptance gates. [Shared operation ownership](shared-operations.md)
-documents durable admissions and attempt fences, integrated account/PDS workflows,
-operator-verified recovery, mail attempts and authentication ordering. Revised
-application and both-backend suites passed independent rootless verification;
-see the [shared-operation record](evidence/shared-operations-2026-10-07.md), which
-separately retains a failed unit run and deferred credential-lifetime defect.
-[Deployment lifecycle and profiles](deployment-profiles.md) implement bounded
-database probing and request/worker drain. Full fresh, dual-database and all three
-profile gates passed in two rootless runs, including independent verification;
-see the [deployment record](evidence/deployment-foundation-2026-10-07.md).
-Fleet placement is separate work.
+documents durable admissions, attempt fences, integrated account/PDS workflows,
+operator-verified recovery, mail attempts and authentication ordering.
+[Deployment lifecycle and profiles](deployment-profiles.md) define bounded
+database probing, request/worker drain and replica checks. Fleet placement is
+separate work.
 
 Schemas are fresh, explicit dialect assets in `src/database/schema/`. Startup
 serializes initialization, stores the schema asset hash in `schema_identity`, and

@@ -1,22 +1,10 @@
 # Shared account operation ownership and recovery
 
-Account, registration, security, PLC and both migration orchestrators now use
-shared database admissions and fenced execution claims. Mail and supported
-Better Auth OTP operations also coordinate through the authority database.
-The revised application suites and both database contracts passed independent
-rootless verification, including separate PostgreSQL worker processes. The
-[October 7 evidence](evidence/shared-operations-2026-10-07.md) records those results
-and retains an earlier failed unit run with a deferred credential-lifetime defect.
-[Deployment lifecycle and profile controllers](deployment-profiles.md) now implement
-readiness/draining and bounded replica checks. Full application, dual-database and
-all three profile gates passed independent rootless verification; see the
-[deployment record](evidence/deployment-foundation-2026-10-07.md).
-Fleet placement remains separate work.
-
-The [database foundation](evidence/database-foundation-2026-10-06.md) is the
-accepted baseline. Historical receipts did not explicitly pin the Docker daemon;
-they must not be presented as rootless execution. Current controllers explicitly
-select and verify rootless Docker, with no default-daemon fallback.
+Account, registration, security, PLC and both migration orchestrators use shared
+database admissions and fenced execution claims. Mail and supported Better Auth
+OTP operations also coordinate through the [authority database](database.md).
+[Deployment lifecycle](deployment-profiles.md) adds readiness and draining without
+changing the recovery requirements below. Fleet placement remains separate work.
 
 ## Authority claim primitives
 
@@ -247,23 +235,18 @@ separate from the unchanged 120-second production default. SQLite and PostgreSQL
 claim and mail outcomes.
 
 Controlled transport responses isolate mail and route ordering in focused tests;
-they are not SMTP conformance or application replica acceptance. The existing
-full browser, real Mailpit, migration and single-node application gates passed
-on the frozen candidate and again independently. Use the repository's
-[managed testing workflow](testing.md) and preserve the raw moderation
-interoperability blocker separately. Those shared-operation runs alone do not
-establish application replicas. The later [deployment verification](evidence/deployment-foundation-2026-10-07.md)
-adds bounded actual replica checks; complete production recovery qualification
-remains separate.
+they are not SMTP conformance or application replica acceptance. Use the
+[managed testing workflow](testing.md) for real browser, Mailpit, migration and
+application checks. The [deployment profiles](deployment-profiles.md) add bounded
+actual replica checks. Complete production recovery qualification remains separate.
 
 The real SIGKILL/browser harness uses the default lease and bounded waits, verifies
 old Entryway exit/removal and affected unchanged-PDS stop/restart, captures desktop
 and narrow pending context, attempts a retry that remains pending, and retains
-same-DID/operation, sign-in, OAuth and PDS-write assertions after recovery. Both interruption modes passed in the executor's complete fresh run and the independent
-run, with the production lease unchanged. The managed-migration gate included in
-`fresh`/`all` passed both consumed-success recovery and rejected-request
-observe-to-retry authorization upgrade, preserving record/blob and session/write
-assertions. Desktop/narrow pending and completion outputs were inspected. The
-[evidence record](evidence/shared-operations-2026-10-07.md) gives exact counts,
-commands, identities, failures and limits; focused diagnostics alone are not
-reported as final acceptance.
+same-DID/operation, sign-in, OAuth and PDS-write assertions after recovery. The
+managed-migration gate included in `fresh`/`all` checks both consumed-success
+recovery and rejected-request observe-to-retry authorization upgrade, preserving
+record/blob and session/write assertions. Desktop/narrow pending and completion
+outputs support visual inspection; focused diagnostics alone do not replace full
+acceptance. See [implementation limits](implementation-assessment.md#known-limits)
+for the unresolved moderation and credential-lifetime defects.

@@ -1,38 +1,33 @@
 # Reuse assessment
 
-This is a source review of the original spike, replay and next spike. No fresh
-acceptance result is implied. The latest spike is the import baseline; earlier
-spike/replay runtime sources were found identical and are historical references.
+The implementation began with the Entryway next-spike application and operational
+tooling. Earlier spike/replay sources are historical provenance. Current module
+locations and owners are recorded in [source-map.json](source-map.json).
 
-## Keep and extract
+## Preserve the useful boundaries
 
-| Component | Why it is useful | Remaining work |
-| --- | --- | --- |
-| Upstream OAuth provider wiring | Supported middleware handles protocol functions | Concrete provider feature and validated composition |
-| Better Auth OTP integration | Uses public server API, verified email and browser proof | ePDS behaviour parity and adapter isolation |
-| Account reader/transactor and SQL constraints | DID authority, claims and identity binding already explicit | Remove cross-domain orchestration from persistence |
-| Indexed DID/device lookup | Account device retrieval is already implemented | Database-owned indexed membership reader |
-| Transactional provider stores | Replay/code/refresh operations have existing semantics | Database interfaces, retention and contract coverage |
-| Browser and lifecycle scenarios | Independent browser client exercises PDS access and grant/session distinctions | Rerun in imported harness; complete parity cases |
-| Brand tokens and secure page shell | Server-selected styling, escaping, CSP and responsive layout | Product account-page composition |
-| Mail ports/outbox and sandbox delivery | Retry, expiry and superseding are represented | Production sender adapter and remove capture dependency |
-| Migration validation and durable state | Useful invariants, phase records and recovery structure | Correct generic integration and repeatable operation model |
+- Keep the upstream OAuth provider and Better Auth's supported browser-proof API;
+  Better Auth does not become the ATProto identity model.
+- Keep account constraints, indexed device membership and transactional provider
+  stores behind the [database boundary](database.md).
+- Keep mail transport separate from templates, durable outbox and retry policy.
+- Keep feature-owned orchestration, server-selected branding, escaping and CSP.
+- Keep browser, lifecycle and failure scenarios as regression checks, while
+  distinguishing synthetic migration from independent-tool compatibility.
 
-## Reimplement or complete
+The database adapters, shared operation ownership and bounded deployment lifecycle
+are implemented; see [database contracts](database.md), [shared operations](shared-operations.md)
+and [deployment profiles](deployment-profiles.md).
 
-| Area | Required change |
-| --- | --- |
-| MJS orchestration | Feature operation bodies and thin handlers are extracted; retained MJS remains outside strict TS coverage |
-| ePDS consent behaviour | Preserve approved returning-client and eligible trusted-signup behaviour |
-| Account UI composition | Consume domain APIs instead of direct grant/store mutations |
-| Better Auth table integration | Shared physical Drizzle transactions and atomic email binding verified on both dialects; two isolated full acceptance runs passed ([record](evidence/database-foundation-2026-10-06.md)) |
-| Database boundary | Exact Drizzle ORM `1.0.0-rc.4`, async operations and fresh SQLite/PostgreSQL schemas implemented; see [database contracts](database.md) for verification limits |
-| Replica coordination | Atomic counters/challenges and grant mutation accepted in the database foundation; durable operation ownership, mail claims and verified recovery have [independent application and dual-database evidence](evidence/shared-operations-2026-10-07.md); bounded replica readiness and all three deployment profiles have [independent application evidence](evidence/deployment-foundation-2026-10-07.md) |
-| Resilience deployment | Shared authority, bounded readiness/draining and real two-instance profile controllers passed two full rootless runs, including independent verification; complete production qualification remains separate |
-| Production mail | Configure real transport/sender; some extra XRPC email paths only record captured mail and report sent |
-| Fleet registry | Replace static-only configuration with add, placement exclusion, drain and retirement operations |
-| Migration journal | Allow multiple operations per DID; do not reject valid empty repositories solely for zero indexed records |
-| Target provisioning orchestration | Model actual create-then-deactivate and PLC ordering honestly |
+## Remaining integration work
+
+Preserved MJS remains outside strict TypeScript coverage. Complete ePDS consent and
+freshness parity, production email delivery across the XRPC surface, fleet
+placement/drain/retirement, repeatable migration history and independent-tool
+migration still require work. Valid empty repositories and actual create-then-
+deactivate/PLC ordering must be covered by the complete migration contract.
+See [implementation limits](implementation-assessment.md#known-limits) for unresolved
+moderation, credential lifetime and production qualification.
 
 ## Investigate before committing contracts
 
@@ -54,23 +49,23 @@ The imported file mapping is preserved in [source-map.json](source-map.json).
 
 The following historical source labels describe the pre-import spike; they are
 provenance, not paths needed to use this repository. Use [source-map.json](source-map.json)
-for current modules and the [self-contained acceptance inventories](../tests/plans/README.md)
-for the retained findings and source pins.
+for current modules and [acceptance plans](../tests/plans/README.md) for repeatable
+checks and outstanding requirements.
 
-| Evidence in source checkout | Observation |
-| --- | --- |
-| `next-spike/app/src/provider.mjs:62` | Provider construction and middleware |
-| `next-spike/app/src/auth.mjs:78` | Better Auth email OTP configuration |
-| `next-spike/app/src/auth.mjs:221` | Post-OTP consent rendering |
-| `next-spike/app/src/account-security.mjs:23` | Explicit pinned Better Auth schema coupling |
-| `next-spike/app/src/infra/storage/oauth-device-accounts.ts:5` | Indexed account/device retrieval |
-| `next-spike/app/src/infra/storage/account-schema.ts:10` | DID-primary schema and unique claims |
-| `next-spike/app/test/browser-oauth.spec.mjs:6` | Independent browser-client scenario |
-| `next-spike/app/test/oauth-lifecycle.spec.mjs:161` | Recorded unresolved freshness/identity case |
-| `next-spike/app/src/infra/mail/smtp-transport.ts:9` | Sandbox transport |
-| `next-spike/app/tsconfig.json:19` | MJS excluded from strict typing |
-| `ePDS/features/consent-screen.feature:50` | Required returning-user consent behaviour |
-| `ePDS/features/session-reuse-bugs.feature:183` | Required reauthentication behaviour |
+| Evidence in source checkout                                   | Observation                                 |
+| ------------------------------------------------------------- | ------------------------------------------- |
+| `next-spike/app/src/provider.mjs:62`                          | Provider construction and middleware        |
+| `next-spike/app/src/auth.mjs:78`                              | Better Auth email OTP configuration         |
+| `next-spike/app/src/auth.mjs:221`                             | Post-OTP consent rendering                  |
+| `next-spike/app/src/account-security.mjs:23`                  | Explicit pinned Better Auth schema coupling |
+| `next-spike/app/src/infra/storage/oauth-device-accounts.ts:5` | Indexed account/device retrieval            |
+| `next-spike/app/src/infra/storage/account-schema.ts:10`       | DID-primary schema and unique claims        |
+| `next-spike/app/test/browser-oauth.spec.mjs:6`                | Independent browser-client scenario         |
+| `next-spike/app/test/oauth-lifecycle.spec.mjs:161`            | Recorded unresolved freshness/identity case |
+| `next-spike/app/src/infra/mail/smtp-transport.ts:9`           | Sandbox transport                           |
+| `next-spike/app/tsconfig.json:19`                             | MJS excluded from strict typing             |
+| `ePDS/features/consent-screen.feature:50`                     | Required returning-user consent behaviour   |
+| `ePDS/features/session-reuse-bugs.feature:183`                | Required reauthentication behaviour         |
 
 The sibling ePDS harness is a model for orchestration and isolation, not proof
 that all ePDS behaviour scenarios pass. Its session-reuse suite has a known
@@ -80,13 +75,15 @@ These line references describe the pre-import checkout and may differ after
 extraction. Historical spike test reports remain historical; use current sandbox
 runs for release evidence. Do not import captured credentials or old runtime state.
 
-## October source parity and restructuring
+## Import lineage
 
-The follow-up import restores the hosted-handle pre-publication guard, five account
-regressions, three real PDS integration tests and two service-auth rejection inputs.
-Reference PDS aligns to 0.5.36. Exact selected source hashes and pre/post-import
-managed results are recorded in [the retained evidence](evidence/feature-slices/); the later operational snapshot was
-test-only and did not supersede the newer production guard.
+The import combined the next-spike main/interop application with later operational
+tooling from its verification snapshot. The spike parent was
+`f7d3572499efc759f0329330a63010464189ba01`, but working changes also contributed;
+that commit alone is not the complete imported snapshot. The later operational
+snapshot supplied test tooling, not a replacement for the newer hosted-handle
+pre-publication guard. That guard and its account, PDS and service-auth regressions
+were retained. Reference PDS remains pinned to `0.5.36` without an upstream patch.
 
 The current source map preserves original/imported locations alongside current
 feature owners. Operational probes have consumer-owned guards, locks and cleanup;

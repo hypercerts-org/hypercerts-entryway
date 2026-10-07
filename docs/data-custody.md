@@ -13,18 +13,18 @@ Multiple accounts on a device do not imply multiple DIDs under one email identit
 Changing that cardinality requires an explicit product decision and a revised schema.
 The current code refactor does not require upgrading existing databases.
 
-| State | Domain or system owner | Current representation |
-| --- | --- | --- |
-| Account identity and status | Accounts | `accounts`, keyed by DID |
-| Login identity binding | Accounts | `account_bindings`, unique DID and Better Auth user |
-| Email and handle claims | Accounts | Transactional claim tables with uniqueness constraints |
-| Verified browser identity and sessions | Access / Better Auth adapter | Better Auth-owned tables |
-| Device-to-account membership | Access | Indexed provider membership by DID and device ID |
-| Clients, grants and protocol state | Access / OAuth provider adapter | Provider stores, partly using namespaced JSON storage |
-| Current placement | PDS fleet, exposed through Accounts | `pds_id` in the account row; static configuration supplies hosts |
-| Transfer progress | PDS fleet workflow | Legacy operation store and newer versioned workflow/checkpoint tables |
-| Public custody evidence | Identity | Import-time custody inventory; not a complete key lifecycle registry |
-| Repository, blobs and repository key | Hosting PDS | Reference PDS-managed storage |
+| State                                  | Domain or system owner              | Current representation                                                |
+| -------------------------------------- | ----------------------------------- | --------------------------------------------------------------------- |
+| Account identity and status            | Accounts                            | `accounts`, keyed by DID                                              |
+| Login identity binding                 | Accounts                            | `account_bindings`, unique DID and Better Auth user                   |
+| Email and handle claims                | Accounts                            | Transactional claim tables with uniqueness constraints                |
+| Verified browser identity and sessions | Access / Better Auth adapter        | Better Auth-owned tables                                              |
+| Device-to-account membership           | Access                              | Indexed provider membership by DID and device ID                      |
+| Clients, grants and protocol state     | Access / OAuth provider adapter     | Provider stores, partly using namespaced JSON storage                 |
+| Current placement                      | PDS fleet, exposed through Accounts | `pds_id` in the account row; static configuration supplies hosts      |
+| Transfer progress                      | PDS fleet workflow                  | Legacy operation store and newer versioned workflow/checkpoint tables |
+| Public custody evidence                | Identity                            | Import-time custody inventory; not a complete key lifecycle registry  |
+| Repository, blobs and repository key   | Hosting PDS                         | Reference PDS-managed storage                                         |
 
 The database boundary stores account authority, browser authentication, OAuth
 state, mail and workflow journals in one selected database: `account-authority.sqlite`
@@ -47,15 +47,11 @@ PostgreSQL. Single-node operation supports either database; multi-node operation
 requires PostgreSQL. Both must preserve the same identity, uniqueness and atomicity rules;
 dialect-specific indexes, JSON queries, timestamps and error translation stay
 inside the database adapter. Fresh schemas replace old layouts without a data
-conversion path. Both dialect contracts, full fresh acceptance and the single-node
-PostgreSQL application restart/restore profile passed in two isolated runs; see the
-[verification record](evidence/database-foundation-2026-10-06.md).
-Shared operation/mail ownership and verified recovery passed revised application
-and dual-database verification, including a separate independent rootless run;
-see the [evidence and retained limitations](evidence/shared-operations-2026-10-07.md).
-Bounded application replica checks now have [independent deployment evidence](evidence/deployment-foundation-2026-10-07.md), including node loss and shared-database refusal/recovery. This does not qualify general disaster recovery or change custody. See [shared ownership and recovery](shared-operations.md).
-See [database configuration](database.md). The existing ePDS deployment-conversion
-requirement is separate.
+conversion path. [Shared ownership and recovery](shared-operations.md) defines
+account/mail coordination and operator-verified recovery. [Deployment profiles](deployment-profiles.md)
+cover bounded node loss and shared-database refusal/recovery; they do not qualify
+general disaster recovery or change custody. See [database configuration](database.md).
+The existing ePDS deployment-conversion requirement is separate.
 
 ## 2. Logical model
 
@@ -160,9 +156,9 @@ The target allows many historical transfers per DID, with at most one active tra
 The database foundation retains the imported account constraints and journal
 invariants in fresh Drizzle schemas and transactional operations. Namespaced JSON
 state and pinned provider-table integration stay inside the database boundary.
-Repeatable transfer history remains separate work. Durable operation ownership and
-verified recovery have [independent integration evidence](evidence/shared-operations-2026-10-07.md);
-this does not establish a complete custody or repeated-transfer product.
+Repeatable transfer history remains separate work. [Durable operation ownership and
+verified recovery](shared-operations.md) do not establish a complete custody or
+repeated-transfer product.
 
 ## 4. Custody boundaries
 
@@ -194,14 +190,14 @@ flowchart LR
   class plc peach;
 ```
 
-| Material | Custody direction | Required decision or control |
-| --- | --- | --- |
-| Email proof and browser credentials | Access / Better Auth | Expiry, revocation, freshness and data retention |
-| PLC rotation signing key | Entryway signer adapter | Provisioning, authorized operations, backup, rotation and recovery |
-| User recovery key, when present | User or explicitly agreed recovery custodian | Supported key set, priority and proof requirements |
-| Repository signing private key | Hosting PDS | Never copy into Entryway account or workflow state |
-| OAuth issuer key | Access / provider adapter | Key lifecycle distinct from PLC and repository keys |
-| Public custody records | Identity | Purpose, fingerprint, custodian, lifecycle and change history |
+| Material                            | Custody direction                            | Required decision or control                                       |
+| ----------------------------------- | -------------------------------------------- | ------------------------------------------------------------------ |
+| Email proof and browser credentials | Access / Better Auth                         | Expiry, revocation, freshness and data retention                   |
+| PLC rotation signing key            | Entryway signer adapter                      | Provisioning, authorized operations, backup, rotation and recovery |
+| User recovery key, when present     | User or explicitly agreed recovery custodian | Supported key set, priority and proof requirements                 |
+| Repository signing private key      | Hosting PDS                                  | Never copy into Entryway account or workflow state                 |
+| OAuth issuer key                    | Access / provider adapter                    | Key lifecycle distinct from PLC and repository keys                |
+| Public custody records              | Identity                                     | Purpose, fingerprint, custodian, lifecycle and change history      |
 
 The current custody validator assumes four fixture-specific key purposes, including a user-held source recovery key.
 That is useful import evidence, not a complete policy for all new and imported accounts.
@@ -210,11 +206,11 @@ A specific production key-management product has not been selected.
 
 ## 5. Three migration cases
 
-| Case | Stable state | Changing state | Required behavior |
-| --- | --- | --- | --- |
-| External PDS into Entryway | DID and user data | Account binding, host and permitted custody | Existing tool, normal credentials, no operator database edits |
+| Case                           | Stable state                                   | Changing state                                           | Required behavior                                                   |
+| ------------------------------ | ---------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------- |
+| External PDS into Entryway     | DID and user data                              | Account binding, host and permitted custody              | Existing tool, normal credentials, no operator database edits       |
 | PDS A to PDS B within Entryway | DID, account binding and Entryway relationship | Placement, repository key reference and hosting endpoint | Resumable move with record/blob integrity and working client access |
-| Entryway to external PDS | DID and user data | Host and custody relationship | User can leave through supported public protocol operations |
+| Entryway to external PDS       | DID and user data                              | Host and custody relationship                            | User can leave through supported public protocol operations         |
 
 Email verification proves control of the destination login identity.
 It does not prove control of an incoming DID.
@@ -259,15 +255,15 @@ No PDS modification is proposed.
 
 ## 6. Decisions and corrections required
 
-| Item | Required outcome |
-| --- | --- |
-| Incoming tool contract | Pin tools and prove their public endpoint/credential sequence |
-| Custody policy | Define supported recovery authorities, priority and departure rules |
-| Cutover recovery | Reconcile partial PLC publication, target creation and import |
-| Repeated moves | Many operations per DID; one active operation; safe return to an earlier host |
-| Empty repositories | Accept valid zero-record and zero-blob accounts |
-| Active client sessions during movement | Define refresh, audience and reauthorization behaviour |
-| Retention and retirement | Keep source data until the agreed deletion conditions hold |
+| Item                                   | Required outcome                                                              |
+| -------------------------------------- | ----------------------------------------------------------------------------- |
+| Incoming tool contract                 | Pin tools and prove their public endpoint/credential sequence                 |
+| Custody policy                         | Define supported recovery authorities, priority and departure rules           |
+| Cutover recovery                       | Reconcile partial PLC publication, target creation and import                 |
+| Repeated moves                         | Many operations per DID; one active operation; safe return to an earlier host |
+| Empty repositories                     | Accept valid zero-record and zero-blob accounts                               |
+| Active client sessions during movement | Define refresh, audience and reauthorization behaviour                        |
+| Retention and retirement               | Keep source data until the agreed deletion conditions hold                    |
 
 The independent-tool contract is an early delivery gate.
 The private source fixture remains valuable for deterministic failures, but cannot substitute for that gate.

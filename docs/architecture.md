@@ -26,14 +26,10 @@ backups and explicit transaction boundaries remain required.
 
 The database boundary implements SQLite and PostgreSQL through Drizzle ORM,
 pinned to `1.0.0-rc.4`, with asynchronous operations and shared authority transactions.
-Both dialect contract suites, full fresh acceptance and the single-node PostgreSQL
-application login/restart/restore profile passed in two isolated runs; see the
-[verification record](evidence/database-foundation-2026-10-06.md). Shared operation
-and mail coordination have since passed [independent verification](evidence/shared-operations-2026-10-07.md);
-bounded readiness/draining and consumer-owned replica profile controllers have also
-passed [independent full verification](evidence/deployment-foundation-2026-10-07.md).
-See [deployment lifecycle](deployment-profiles.md) for behavior and limits. Single-node operation
-accepts SQLite or PostgreSQL; multi-node configuration requires PostgreSQL.
+[Shared operation ownership](shared-operations.md) coordinates account work, mail
+and authentication; [deployment lifecycle](deployment-profiles.md) defines bounded
+readiness, draining and replica checks. Single-node operation accepts SQLite or
+PostgreSQL; multi-node configuration requires PostgreSQL.
 See [database configuration and contracts](database.md). These code changes start
 from fresh state: no backward-compatibility layer or existing-data conversion is
 required. This does not remove public account migration or conversion of an
@@ -98,18 +94,18 @@ Arrows describe interactions, not direct permission to read another component's 
 Each application instance contains the same vertical features. Each feature owns the operation that a
 user performs, its HTTP/XRPC handlers, feature-specific page and tests.
 
-| Feature | Owns |
-| --- | --- |
-| email-login | Email proof, login flow and browser-session ending |
-| account-registration | Reservation/provisioning, signup proof, invitations and signup page |
-| account-settings | Email/backup/password changes, status and account summary |
-| account-deletion | Deletion proof and durable PDS deletion completion |
-| handle-change | Hosted-handle validation, PLC publication and PDS callback |
-| account-recovery | Backup proof and replacement email recovery |
-| oauth-authorization | Provider configuration, authorization/consent and scope references |
-| connected-apps | Grants, device memberships, browser sessions and app passwords |
-| pds-migration | Existing-account movement and its proof/progress |
-| external-migration | Typed import journal/state machine and synthetic import orchestration |
+| Feature              | Owns                                                                  |
+| -------------------- | --------------------------------------------------------------------- |
+| email-login          | Email proof, login flow and browser-session ending                    |
+| account-registration | Reservation/provisioning, signup proof, invitations and signup page   |
+| account-settings     | Email/backup/password changes, status and account summary             |
+| account-deletion     | Deletion proof and durable PDS deletion completion                    |
+| handle-change        | Hosted-handle validation, PLC publication and PDS callback            |
+| account-recovery     | Backup proof and replacement email recovery                           |
+| oauth-authorization  | Provider configuration, authorization/consent and scope references    |
+| connected-apps       | Grants, device memberships, browser sessions and app passwords        |
+| pds-migration        | Existing-account movement and its proof/progress                      |
+| external-migration   | Typed import journal/state machine and synthetic import orchestration |
 
 A feature does not import another feature. Short root compose modules wire explicit
 operations together. Shared accounts code owns common facts, validation and proof
@@ -120,11 +116,11 @@ schema initialization require coordinated review. See AGENTS.md for enforceable 
 
 ## 4. Three boundaries
 
-| Boundary | Port | Implementation |
-| --- | --- | --- |
-| Browser authentication | Normalized verified identity/session operations | Better Auth |
-| Mail sending | Deliver a fully formed message | SMTP |
-| Database | Focused asynchronous readers and atomic state operations | Drizzle ORM `1.0.0-rc.4`; fresh SQLite/PostgreSQL schemas and async operations. Single node accepts either backend; multi-node configuration requires PostgreSQL; bounded replica checks passed independent verification; complete production qualification remains separate |
+| Boundary               | Port                                                     | Implementation                                                                                                                                                                                                       |
+| ---------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Browser authentication | Normalized verified identity/session operations          | Better Auth                                                                                                                                                                                                          |
+| Mail sending           | Deliver a fully formed message                           | SMTP                                                                                                                                                                                                                 |
+| Database               | Focused asynchronous readers and atomic state operations | Drizzle ORM `1.0.0-rc.4`; fresh SQLite/PostgreSQL schemas and async operations. Single node accepts either backend; multi-node configuration requires PostgreSQL; complete production qualification remains separate |
 
 PDS, PLC, OAuth provider and signing operations are concrete modules. They do not
 have parallel interchangeable port hierarchies. Provider state storage belongs to
@@ -236,18 +232,14 @@ PDS call sequences, journals, branding, mail ports and regression scenarios.
 Keep shared contracts narrow while features own their operation bodies.
 
 Still required: ePDS consent/freshness parity, complete XRPC adapters, production email delivery,
-fleet lifecycle, general custody policy and standard-tool migration. The Drizzle
-SQLite/PostgreSQL foundation has passed full fresh and single-node PostgreSQL
-application acceptance in two isolated runs. [Shared operation ownership](shared-operations.md)
-implements durable account/PDS admission, execution fences, operator-verified
-uncertain-write recovery, mail attempts and authentication ordering. Revised
-application and dual-database suites passed independent rootless verification;
-the [record](evidence/shared-operations-2026-10-07.md) retains the earlier unit
-failure and deferred credential-lifetime defect. [Deployment lifecycle](deployment-profiles.md)
-implements readiness/draining and three profile controllers; full application,
-database and deployment gates passed in two isolated rootless runs, including
-independent verification. The [deployment record](evidence/deployment-foundation-2026-10-07.md)
-retains their exact scope. Fleet placement remains separate required work.
+fleet lifecycle, general custody policy and standard-tool migration. The [Drizzle database boundary](database.md) provides asynchronous authority
+transactions. [Shared operation ownership](shared-operations.md) implements durable
+account/PDS admission, execution fences, operator-verified uncertain-write recovery,
+mail attempts and authentication ordering. [Deployment lifecycle](deployment-profiles.md)
+provides readiness/draining and three profile controllers. Fleet placement and
+complete production qualification remain separate work. The
+[implementation assessment](implementation-assessment.md#known-limits) records
+remaining limits, including moderation and the credential-lifetime defect.
 The typed external workflow is invoked by the synthetic harness; managed account moves live in pds-migration.
 The existing fixture proves useful mechanics but uses its own source-control API.
 
@@ -259,9 +251,8 @@ No current build, runtime or conformance result is asserted by these diagrams.
 Request balancing must preserve one issuer and consistent signing configuration.
 Multi-node application instances use PostgreSQL for shared durable account,
 authentication and operation state. A single-node deployment can use SQLite or
-PostgreSQL; both have bounded local restart and restore coverage documented in the
-[verification record](evidence/database-foundation-2026-10-06.md). SQLite is not a multi-node
-failover store. Configuration
+PostgreSQL; the [database guide](database.md) describes bounded restart and restore
+checks. SQLite is not a multi-node failover store. Configuration
 must reject SQLite in multi-node mode. Each deployment profile must state database
 availability, readiness, draining, worker ownership and recovery behavior explicitly.
 

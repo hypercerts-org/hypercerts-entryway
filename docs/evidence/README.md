@@ -1,23 +1,17 @@
-# Technical evidence
+# Design decisions
 
-- [October 7 deployment foundation](deployment-foundation-2026-10-07.md): bounded readiness/draining, cross-node authentication and three fresh deployment profiles, with independent full verification and retained limits.
-- [October 5 baseline](baseline-2026-10-05.md): two isolated runs of the published SQLite baseline.
-- [October 7 shared operations](shared-operations-2026-10-07.md): durable ownership/recovery, mail and authentication ordering; independent rootless application and dual-database verification, with the original credential-lifetime failure retained.
-- [October 6 database foundation](database-foundation-2026-10-06.md): reviewed Drizzle SQLite/PostgreSQL implementation, two isolated acceptance runs and single-node PostgreSQL restart/restore.
-- [October 6 naming verification](naming-2026-10-06.md): fresh-state storage/configuration rename and its bounded results.
-- [Source reuse audit](spike-reuse-audit.md): source comparison supporting the feature extraction.
-- [Feature extraction receipts](feature-slices/): original source manifests, review, execution ledger and redacted acceptance records.
+Small notes here explain lasting choices whose rationale benefits from a separate
+record. Update the canonical architecture or domain guide first; a note is not
+required for every change.
 
-These records describe the revisions they name. The database foundation record
-establishes bounded SQLite/PostgreSQL single-node behavior. The shared-operation
-record adds durable worker/process contention and verified recovery. The deployment
-record adds actual two-instance application checks, node loss and database refusal
-in the managed sandbox; it does not establish complete production availability.
-Earlier records remain historical. File paths and command names inside those
-receipts are preserved as evidence. One-off extraction scripts are retained only in Git history and local working
-plans; they are not current setup or runtime dependencies. The receipts and
-source hashes here preserve the relevant evidence.
+- [Atomic database authority](atomic-database-authority.md)
+- [Uncertain external writes](uncertain-external-writes.md)
+- [Readiness and draining](readiness-and-draining.md)
 
-The [Linear project document](https://linear.app/hypercerts/document/m1-acceptance-matrices-epds-parity-protocol-and-migration-196f21e01e71)
-tracks current requirements and acceptance status. Generated private runtime state,
-credentials, databases and raw sandbox artifacts remain excluded from Git.
+Keep validation results in PR checks, comments or the final handoff, and raw
+artifacts in ignored `tests/artifacts/`. Do not add task-completion reports, scanner
+triage, agent ledgers, acceptance tables or generated inventories here.
+
+The previous reports and source inventories remain in
+[Git history](https://github.com/hypercerts-org/hypercerts-entryway/tree/eef5e018d3fa6ba1cc115e218cb2980c002d410b/docs/evidence).
+For current behavior and limitations, use the [documentation index](../README.md).
