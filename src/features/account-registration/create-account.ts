@@ -3,15 +3,77 @@ import {
   signingKeyResult,
 } from "../../accounts/operation-ownership.js";
 import { cidForCbor } from "@atproto/common";
+import { createCustodyInventoryStorage } from "../../database/drizzle/migration-custody.js";
 import * as plc from "@did-plc/lib";
+import { genesisRotationKeys } from "../../plc/policy.js";
 import { HttpError } from "../../http/http-error.mjs";
 import { xrpc } from "../../pds/client.mjs";
 
+import type { AuthorityDatabase } from "../../database/connection.js";
+import type { AccountRow } from "../../accounts/types.js";
+import type { AccountTransactor } from "../../database/accounts.port.js";
+import type { createOperationOwnership } from "../../accounts/operation-ownership.js";
+import type { Secp256k1MigrationPlcSigner } from "../../plc/signing.js";
+interface RegistrationInput {
+  email: string;
+  handle: string;
+  pdsId: string;
+  recoveryKey?: string | null | undefined;
+  inviteCode?: string | undefined;
+}
+interface ProvisionPolicy {
+  reserve(inviteCode: string | undefined, email: string): Promise<void>;
+  complete(row: AccountRow): Promise<void>;
+}
+interface Context {
+  db: AuthorityDatabase;
+  config: {
+    plcRecoveryKeyDid: string;
+    pds: { id: string; url: string; internalUrl: string }[];
+  };
+  plcSigner: Secp256k1MigrationPlcSigner;
+  plcClient: plc.Client;
+  observeCustody?(did: string): Promise<unknown>;
+  storage: AccountTransactor;
+  get(id: string): Promise<AccountRow | null>;
+  save(row: AccountRow): Promise<void>;
+  claimHandle(handle: string, did: string): Promise<void>;
+  validateHandle(handle: string, did?: string): Promise<void>;
+  journal(operation: {
+    id: string;
+    kind: string;
+    did: string;
+    phase: string;
+    at: Date;
+  }): Promise<void>;
+  ownership: ReturnType<typeof createOperationOwnership>;
+}
+function safeCode(error: unknown): string {
+  if (typeof error === "object" && error !== null) {
+    for (const key of ["code", "error", "name"]) {
+      if (
+        key in error &&
+        typeof (error as Record<string, unknown>)[key] === "string"
+      )
+        return (error as Record<string, string>)[key]!;
+    }
+  }
+  return "OperationFailed";
+}
+function notFound(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "status" in error &&
+    error.status === 404
+  );
+}
 export function createRegistration({
   db,
   config,
-  rotation,
+  plcSigner,
   plcClient,
+  observeCustody,
   storage,
   get,
   save,
@@ -19,13 +81,27 @@ export function createRegistration({
   validateHandle,
   journal,
   ownership,
-}) {
-  const pending = new Map();
-  let provisionPolicy;
-  const setProvisionPolicy = (policy) => {
+}: Context) {
+  const pending = new Map<
+    string,
+    {
+      promise: Promise<AccountRow>;
+      handle: string;
+      pdsId: string;
+      recoveryKey: string | null;
+    }
+  >();
+  let provisionPolicy: ProvisionPolicy | undefined;
+  const setProvisionPolicy = (policy: ProvisionPolicy) => {
     provisionPolicy = policy;
   };
-  const create = async ({ email, handle, pdsId, recoveryKey, inviteCode }) => {
+  const create = async ({
+    email,
+    handle,
+    pdsId,
+    recoveryKey,
+    inviteCode,
+  }: RegistrationInput) => {
     email = String(email).trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254)
       throw new HttpError(400, "InvalidEmail", "Provide a valid email address");
@@ -35,7 +111,7 @@ export function createRegistration({
           type: "plc_operation",
           prev: null,
           sig: "",
-          rotationKeys: [recoveryKey, rotation.did()],
+          rotationKeys: [recoveryKey, plcSigner.publicKey()],
           verificationMethods: {},
           alsoKnownAs: [],
           services: {},
@@ -49,7 +125,7 @@ export function createRegistration({
       }
     }
     if (pending.has(email)) {
-      const inFlight = pending.get(email);
+      const inFlight = pending.get(email)!;
       if (
         inFlight.handle !== handle ||
         inFlight.pdsId !== pdsId ||
@@ -75,7 +151,12 @@ export function createRegistration({
       pending.delete(email);
     }
   };
-  const intentFor = ({ email, handle, pdsId, recoveryKey }) => ({
+  const intentFor = ({
+    email,
+    handle,
+    pdsId,
+    recoveryKey,
+  }: RegistrationInput) => ({
     kind: "create",
     request: { email, handle, pdsId, recoveryKey: recoveryKey ?? null },
     completeOnReturn: true,
@@ -88,11 +169,14 @@ export function createRegistration({
     pdsId,
     recoveryKey,
     inviteCode,
-  }) => {
+  }: RegistrationInput): Promise<AccountRow> => {
     let row = await get(email);
     let emailClaim = await storage.getEmailClaim(email);
     if (emailClaim?.purpose === "pending") {
-      const change = await db.get("security:pending-email", emailClaim.did);
+      const change = (await db.get(
+        "security:pending-email",
+        emailClaim.did,
+      )) as { expiresAt: number } | null;
       if (!change || change.expiresAt <= Date.now()) {
         await storage.releaseEmail(email, emailClaim.did, "pending");
         emailClaim = null;
@@ -127,14 +211,19 @@ export function createRegistration({
     if (!pds) throw new HttpError(400, "InvalidPds", "Unknown PDS");
     await provisionPolicy?.reserve(inviteCode, email);
     if (!row) {
-      if (!ownership.currentClaim.resumed)
+      if (!ownership.currentClaim!.resumed)
         await db.transact(async () => {
           await db.set("registration:intents", email, {
-            authorityOperationId: ownership.currentClaim.operationId,
+            authorityOperationId: ownership.currentClaim!.operationId,
             email,
             handle,
             pdsId,
             recoveryKey: recoveryKey ?? null,
+            rotationKeys: genesisRotationKeys({
+              user: recoveryKey,
+              offline: config.plcRecoveryKeyDid,
+              hot: plcSigner.publicKey(),
+            }),
           });
           await ownership.checkpoint(
             "registration-prepared",
@@ -142,7 +231,26 @@ export function createRegistration({
             false,
           );
         });
-      const { signingKey } = await ownership.dispatch(
+      // Recovery reuses custody selected before allocation, not deployment defaults.
+      const savedIntent = (await db.get("registration:intents", email)) as
+        | (RegistrationInput & { rotationKeys: string[] })
+        | null;
+      if (
+        !savedIntent?.rotationKeys ||
+        savedIntent.recoveryKey !== (recoveryKey ?? null)
+      )
+        throw new HttpError(
+          409,
+          "AccountExists",
+          "Saved registration custody differs",
+        );
+      if (!savedIntent.rotationKeys.includes(plcSigner.publicKey()))
+        throw new HttpError(
+          409,
+          "RequiredSignerUnavailable",
+          "The selected genesis signer is unavailable",
+        );
+      const reserved = await ownership.dispatch<unknown>(
         {
           step: "reserve-signing-key",
           target: pds.url,
@@ -158,15 +266,14 @@ export function createRegistration({
           observe: async () => ({ state: "replay-safe" }),
         },
       );
-      const { did, op } = await plc.createOp({
+      const { signingKey } = signingKeyResult.resume(reserved);
+      const { did, op } = await plcSigner.signGenesis({
         signingKey,
-        rotationKeys: recoveryKey
-          ? [recoveryKey, rotation.did()]
-          : [rotation.did()],
+        rotationKeys: savedIntent.rotationKeys,
         handle,
         pds: pds.url,
-        signer: rotation,
       });
+      const createdAt = new Date().toISOString();
       row = {
         did,
         email,
@@ -175,13 +282,29 @@ export function createRegistration({
         pdsUrl: pds.url,
         status: "provisioning",
         op,
-        createdAt: new Date().toISOString(),
+        createdAt,
+        genesisRotationKeys: savedIntent.rotationKeys,
         ...(recoveryKey ? { recoveryKey } : {}),
       };
+      const { sig: _signature, ...facts } = op;
+      const cid = String(await cidForCbor(op));
+      const operationId = ownership.currentClaim!.operationId;
       try {
         await db.transact(async () => {
-          await storage.insertAccount(row);
-          await ownership.bindResource(row.did);
+          await storage.insertAccount(row!);
+          await ownership.bindResource(row!.did);
+          // The exact signed row and its unsigned authorization history commit
+          // before PDS dispatch. Resume reuses both, without promoting authority.
+          await createCustodyInventoryStorage(db).recordSigned({
+            id: `${operationId}:genesis`,
+            did,
+            cid,
+            operation: facts,
+            kind: "signed",
+            operationId,
+            provenance: "entryway-authorized",
+            at: createdAt,
+          });
         });
       } catch (e) {
         // The failed insert/binding transaction published no DID or account.
@@ -191,7 +314,7 @@ export function createRegistration({
           null,
           false,
         );
-        if (e.code?.startsWith("SQLITE_CONSTRAINT"))
+        if (safeCode(e).startsWith("SQLITE_CONSTRAINT"))
           throw new HttpError(
             409,
             "AccountExists",
@@ -233,8 +356,7 @@ export function createRegistration({
           try {
             head = await plcClient.getLastOp(row.did);
           } catch (error) {
-            if (error.response?.status !== 404 && error.status !== 404)
-              throw error;
+            if (!notFound(error)) throw error;
           }
           const matches =
             head &&
@@ -261,6 +383,7 @@ export function createRegistration({
         },
       },
     );
+    await observeCustody?.(row.did);
     row.status = "active";
     delete row.op;
     await db.transact(async () => {
@@ -272,19 +395,24 @@ export function createRegistration({
     });
     return row;
   };
-  const execute = (input) =>
+  const execute = (input: RegistrationInput) =>
     ownership.run(`email:${input.email}`, intentFor(input), () =>
       provision(input),
     );
-  const reconcileRegistration = (input, operationId) =>
+  const reconcileRegistration = (
+    input: RegistrationInput,
+    operationId: string,
+  ) =>
     ownership.resumePending(
       `email:${input.email}`,
       operationId,
       intentFor(input),
       () => provision(input),
     );
-  const pendingIntent = async (email) => {
-    const record = await db.get("registration:intents", email);
+  const pendingIntent = async (email: string) => {
+    const record = (await db.get("registration:intents", email)) as
+      | (RegistrationInput & { authorityOperationId: string })
+      | null;
     if (!record || typeof record.authorityOperationId !== "string") return null;
     const saved = {
       email: record.email,
@@ -297,10 +425,10 @@ export function createRegistration({
       request: saved,
     });
     return operationId === record.authorityOperationId
-      ? { saved, operationId }
+      ? { saved, operationId: record.authorityOperationId }
       : null;
   };
-  const pendingRegistration = async (email) =>
+  const pendingRegistration = async (email: string) =>
     (await pendingIntent(email))?.saved ?? null;
   const reconcileRegistrations = async () => {
     const results = [];
@@ -310,8 +438,11 @@ export function createRegistration({
       if (!nomination) continue;
       const { saved, operationId } = nomination;
       try {
-        const inviteCode = (await db.get("entryway:invite-reservations", email))
-          ?.code;
+        const inviteCode = (
+          (await db.get("entryway:invite-reservations", email)) as {
+            code?: string;
+          } | null
+        )?.code;
         const row = await ownership.resumePending(
           `email:${email}`,
           operationId,
@@ -323,7 +454,7 @@ export function createRegistration({
                 new Error("The nominated registration is no longer pending"),
                 { code: "OperationNoLongerPending" },
               );
-            return provision({ ...current.saved, inviteCode });
+            return provision({ ...current!.saved, inviteCode });
           },
         );
         results.push({ id: `create:${row.did}`, status: "complete" });
@@ -331,7 +462,7 @@ export function createRegistration({
         results.push({
           id: "create:pre-did",
           status: "pending",
-          error: error.code ?? error.error ?? error.name,
+          error: safeCode(error),
         });
       }
     }

@@ -1,11 +1,51 @@
-import {
-  noExternalResult,
-  signingKeyResult,
-} from "../../accounts/operation-ownership.js";
-import * as plc from "@did-plc/lib";
+import { noExternalResult } from "../../accounts/operation-ownership.js";
 import { cidForCbor } from "@atproto/common";
 import { HttpError } from "../../http/http-error.mjs";
+import { createCustodyInventoryStorage } from "../../database/drizzle/migration-custody.js";
 
+import type { AuthorityDatabase } from "../../database/connection.js";
+import type { AccountRow } from "../../accounts/types.js";
+import type { AccountTransactor } from "../../database/accounts.port.js";
+import type { createOperationOwnership } from "../../accounts/operation-ownership.js";
+import type { Secp256k1MigrationPlcSigner } from "../../plc/signing.js";
+import type { Client, Operation } from "@did-plc/lib";
+interface HandleOperation {
+  id: string;
+  kind: string;
+  did: string;
+  handle: string;
+  previousHandle: string;
+  phase: string;
+  at: Date;
+  plcOp?: Operation;
+  plcOpCid?: string;
+}
+interface Context {
+  db: AuthorityDatabase;
+  config: { handleDomains: string[]; plcUrl: string };
+  storage: AccountTransactor;
+  get(did: string): Promise<AccountRow | null>;
+  save(row: AccountRow): Promise<void>;
+  claimHandle(handle: string, did: string): Promise<void>;
+  validateHandle(handle: string, did: string): Promise<void>;
+  journal(operation: HandleOperation): Promise<void>;
+  serialized<T>(
+    did: string,
+    perform: () => Promise<T>,
+    intent: { kind: string; request: unknown },
+  ): Promise<T>;
+  assertNoMigration(did: string): Promise<void>;
+  admin(
+    row: AccountRow,
+    method: string,
+    body: unknown,
+    options: { previousHandle: string },
+  ): Promise<unknown>;
+  plcClient: Client;
+  observeCustody?(did: string): Promise<unknown>;
+  plcSigner: Secp256k1MigrationPlcSigner;
+  ownership: ReturnType<typeof createOperationOwnership>;
+}
 export function createHandleChange({
   db,
   config,
@@ -19,10 +59,11 @@ export function createHandleChange({
   assertNoMigration,
   admin,
   plcClient,
-  rotation,
+  observeCustody,
+  plcSigner,
   ownership,
-}) {
-  const updateHandle = (did, handle) =>
+}: Context) {
+  const updateHandle = (did: string, handle: string) =>
     serialized(
       did,
       async () => {
@@ -34,7 +75,10 @@ export function createHandleChange({
             "AccountUnavailable",
             "Account is unavailable",
           );
-        const existingOp = await db.get("operations", `handle:${did}`);
+        const existingOp = (await db.get(
+          "operations",
+          `handle:${did}`,
+        )) as HandleOperation | null;
         if (
           existingOp &&
           existingOp.phase !== "complete" &&
@@ -47,7 +91,10 @@ export function createHandleChange({
           );
         await validateHandle(handle, did);
         if (row.handle === handle) {
-          const pendingOp = await db.get("operations", `handle:${did}`);
+          const pendingOp = (await db.get(
+            "operations",
+            `handle:${did}`,
+          )) as HandleOperation | null;
           if (pendingOp?.phase === "pds-pending") {
             await admin(
               row,
@@ -68,6 +115,8 @@ export function createHandleChange({
         const domain = config.handleDomains.find((suffix) =>
           handle.endsWith(suffix),
         );
+        if (!domain)
+          throw new HttpError(400, "InvalidHandle", "Choose a hosted handle");
         const label = handle.slice(0, -domain.length);
         // Match the pinned stock PDS service-label limits before publishing PLC changes.
         if (label.length < 3 || label.length > 18)
@@ -77,7 +126,7 @@ export function createHandleChange({
             "Hosted handle labels must contain 3 to 18 characters",
           );
         await claimHandle(handle, did);
-        const op =
+        const op: HandleOperation =
           existingOp?.phase === "plc-pending"
             ? existingOp
             : {
@@ -90,14 +139,54 @@ export function createHandleChange({
                 at: new Date(),
               };
         if (!op.plcOp) {
-          op.plcOp = await plc.updateHandleOp(
+          await observeCustody?.(did);
+          op.plcOp = await plcSigner.signHandleUpdate(
             await plcClient.getLastOp(did),
-            rotation,
             handle,
+            async (signed, facts, cid) => {
+              // Internal handle authorization reuses admission, not a new email proof.
+              // Exact signed bytes and custody history commit together. A crash
+              // after this callback resumes the journal, never another signature.
+              await db.transact(async () => {
+                const fresh = await get(did);
+                if (
+                  !fresh ||
+                  fresh.status !== "active" ||
+                  fresh.handle !== row.handle
+                )
+                  throw new HttpError(
+                    409,
+                    "AccountUnavailable",
+                    "Handle authority changed",
+                  );
+                await assertNoMigration(did);
+                await createCustodyInventoryStorage(db).recordSigned({
+                  id: crypto.randomUUID(),
+                  did,
+                  cid,
+                  operation: facts,
+                  kind: "signed",
+                  operationId: ownership.currentClaim!.operationId,
+                  provenance: "entryway-authorized",
+                  at: new Date().toISOString(),
+                });
+                await journal({
+                  ...op,
+                  plcOp: structuredClone(signed),
+                  plcOpCid: cid,
+                });
+                await ownership.checkpoint("handle-signed", {
+                  did,
+                  handle,
+                  cid,
+                });
+              });
+            },
           );
           op.plcOpCid = (await cidForCbor(op.plcOp)).toString();
         }
         await journal(op);
+        const signed = op.plcOp;
         await ownership.dispatch(
           {
             step: "publish-handle",
@@ -107,22 +196,24 @@ export function createHandleChange({
           },
           {
             ...noExternalResult,
-            send: () => plcClient.sendOperation(did, op.plcOp),
+            send: () => plcClient.sendOperation(did, signed),
             observe: async () => {
               const head = (
                 await cidForCbor(await plcClient.getLastOp(did))
               ).toString();
               return {
+                result: undefined,
                 state:
                   head === op.plcOpCid
                     ? "applied"
-                    : head === op.plcOp.prev
+                    : head === signed.prev
                       ? "unapplied"
                       : "diverged",
               };
             },
           },
         );
+        await observeCustody?.(did);
         // Persist authority before callback. A failed callback remains explicitly
         // journaled and may be retried by reconciliation.
         row.handle = handle;

@@ -1,3 +1,4 @@
+import { cidForCbor } from "@atproto/common";
 import { Secp256k1Keypair } from "@atproto/crypto";
 import { createAccounts } from "../../dist/src/compose-accounts.mjs";
 import { openTestDatabase } from "./database-fixture.mjs";
@@ -8,7 +9,9 @@ export async function fixture(
   { path = ":memory:", ownershipFactory } = {},
 ) {
   const rotation = await Secp256k1Keypair.create({ exportable: true });
+  const offline = await Secp256k1Keypair.create();
   const config = {
+    plcRecoveryKeyDid: offline.did(),
     plcRotationKeyHex: Buffer.from(await rotation.export()).toString("hex"),
     plcUrl: "https://plc.invalid",
     handleDomains: [".entryway.atmosbox.test"],
@@ -25,6 +28,7 @@ export async function fixture(
   const calls = [];
   const remote = new Map();
   const plcHeads = new Map();
+  const plcHistory = new Map();
   const previous = globalThis.fetch;
   globalThis.fetch = async (url, init = {}) => {
     const method = new URL(url).pathname.split("/").at(-1);
@@ -46,6 +50,7 @@ export async function fixture(
         active: true,
       });
       plcHeads.set(body.did, body.plcOp);
+      plcHistory.set(body.did, [body.plcOp]);
     }
     if (method === "com.atproto.admin.updateSubjectStatus")
       remote.get(body.subject.did).active = !body.deactivated.applied;
@@ -92,7 +97,18 @@ export async function fixture(
       ...(ownershipFactory ? { ownership: ownershipFactory(db) } : {}),
     });
     accounts.plcClient.getLastOp = async (did) => plcHeads.get(did);
+    accounts.plcClient.getAuditableLog = async (did) =>
+      Promise.all(
+        (plcHistory.get(did) ?? [plcHeads.get(did)]).map(async (operation) => ({
+          did,
+          operation,
+          cid: String(await cidForCbor(operation)),
+          nullified: false,
+          createdAt: new Date().toISOString(),
+        })),
+      );
     accounts.plcClient.sendOperation = async (did, operation) => {
+      plcHistory.set(did, [...(plcHistory.get(did) ?? []), operation]);
       plcHeads.set(did, operation);
     };
   };

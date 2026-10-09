@@ -225,6 +225,43 @@ export const migration_custody_inventory = table(
   },
   (t) => [],
 );
+// Immutable unsigned facts are separate from release-authorization events.
+export const custody_operations = table(
+  "custody_operations",
+  {
+    did: text("did").notNull(),
+    cid: text("cid").notNull(),
+    operation: text("operation").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.did, t.cid] })],
+);
+// Retain the supporting directory evidence even after the snapshot advances.
+export const custody_observations = table(
+  "custody_observations",
+  {
+    id: text("id").primaryKey(),
+    did: text("did").notNull(),
+    directory: text("directory").notNull(),
+    value: text("value").notNull(),
+  },
+  (t) => [],
+);
+export const custody_history = table(
+  "custody_history",
+  {
+    id: text("id").primaryKey(),
+    did: text("did").notNull(),
+    cid: text("cid").notNull(),
+    kind: text("kind").notNull(),
+    supporting_observation_id: text("supporting_observation_id").references(
+      () => custody_observations.id,
+    ),
+    operation_id: text("operation_id"),
+    provenance: text("provenance").notNull(),
+    at: text("at").notNull(),
+  },
+  (t) => [index("custody_history_did").on(t.did)],
+);
 export const authority_operations = table(
   "authority_operations",
   {

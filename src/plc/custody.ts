@@ -1,4 +1,90 @@
-import { MigrationError } from "../features/external-migration/errors.js";
+import { PlcError } from "./errors.js";
+import * as plc from "@did-plc/lib";
+import { validateUnsignedOperation } from "./policy.js";
+import type { CustodySignedEvent } from "./types.js";
+
+// Signed CIDs include the signature, unlike these unsigned public facts. Their
+// binding is supplied by the concrete signer or validated directory observation,
+// never by hashing this projection. Enforce the canonical DAG-CBOR SHA-256 shape.
+const validEventEvidence = (event: Record<string, unknown>): boolean => {
+  if (event.kind === "signed")
+    return (
+      ["entryway-authorized", "synthetic-fixture"].includes(
+        String(event.provenance),
+      ) && event.supportingObservationId === undefined
+    );
+  // The synthetic producer records fixture-confirmed publication only. It cannot
+  // assert directory nullification or borrow directory evidence as fixture proof.
+  if (event.provenance === "synthetic-fixture")
+    return (
+      event.kind === "observed" && event.supportingObservationId === undefined
+    );
+  return (
+    typeof event.supportingObservationId === "string" &&
+    event.provenance ===
+      (event.kind === "observed"
+        ? "directory-observed-publication"
+        : "directory-asserted-nullification")
+  );
+};
+
+/** Reject transport, proof and signature fields rather than retaining them. */
+export function validateSignedEvent(value: unknown): CustodySignedEvent {
+  if (
+    !record(value) ||
+    !exactKeys(value, [
+      "id",
+      "did",
+      "cid",
+      "operation",
+      "kind",
+      "operationId",
+      "provenance",
+      "at",
+      ...(value.supportingObservationId === undefined
+        ? []
+        : ["supportingObservationId"]),
+    ]) ||
+    typeof value.id !== "string" ||
+    !value.id ||
+    typeof value.did !== "string" ||
+    !/^did:plc:[a-z2-7]{24}$/.test(value.did) ||
+    typeof value.cid !== "string" ||
+    !/^bafyrei[a-z2-7]{51}[aeimquy4]$/.test(value.cid) ||
+    !["signed", "observed", "nullified"].includes(String(value.kind)) ||
+    (value.operationId !== null &&
+      (typeof value.operationId !== "string" || !value.operationId)) ||
+    !validEventEvidence(value) ||
+    (value.supportingObservationId !== undefined &&
+      (typeof value.supportingObservationId !== "string" ||
+        !value.supportingObservationId)) ||
+    typeof value.at !== "string" ||
+    !Number.isFinite(Date.parse(value.at))
+  )
+    throw new PlcError(
+      "InvalidCustodyEvent",
+      "Public custody event is invalid",
+    );
+  return {
+    ...(value.supportingObservationId === undefined
+      ? {}
+      : { supportingObservationId: value.supportingObservationId as string }),
+    id: value.id,
+    did: value.did,
+    cid: value.cid,
+    operation:
+      record(value.operation) && value.operation.type === "plc_tombstone"
+        ? {
+            type: "plc_tombstone",
+            prev: plc.def.tombstone.parse({ ...value.operation, sig: "" }).prev,
+          }
+        : validateUnsignedOperation(value.operation),
+    kind: value.kind as CustodySignedEvent["kind"],
+    operationId: value.operationId as string | null,
+    provenance: value.provenance as CustodySignedEvent["provenance"],
+    at: value.at,
+  };
+}
 import type {
   CustodyInventory,
   KeyCustodian,
@@ -7,19 +93,25 @@ import type {
 } from "./types.js";
 
 const purposes: readonly KeyPurpose[] = [
+  "operator-offline",
+  "user-recovery",
+  "unknown-rotation",
   "source-recovery",
   "entryway-plc",
   "pds-repository",
   "oauth-issuer",
 ];
 const custodians: Record<KeyPurpose, KeyCustodian> = {
+  "operator-offline": "operator",
+  "user-recovery": "user",
+  "unknown-rotation": "unknown",
   "source-recovery": "user",
   "entryway-plc": "entryway",
   "pds-repository": "pds",
   "oauth-issuer": "oauth-issuer",
 };
 const invalid = (): never => {
-  throw new MigrationError(
+  throw new PlcError(
     "InvalidCustodyInventory",
     "Public custody metadata is invalid",
   );
@@ -43,7 +135,12 @@ export function publicKeyAlgorithm(reference: string): "secp256k1" | "P-256" {
 export function validateCustodyInventory(value: unknown): CustodyInventory {
   if (
     !record(value) ||
-    !exactKeys(value, ["did", "keys"]) ||
+    !exactKeys(
+      value,
+      value.observation === undefined
+        ? ["did", "keys"]
+        : ["did", "keys", "observation"],
+    ) ||
     typeof value.did !== "string" ||
     !/^did:plc:[a-z2-7]{24}$/.test(value.did) ||
     !Array.isArray(value.keys)
@@ -61,6 +158,7 @@ export function validateCustodyInventory(value: unknown): CustodyInventory {
         "algorithm",
         "fingerprint",
         "lifecycle",
+        ...(item.provenance === undefined ? [] : ["provenance"]),
       ])
     )
       return invalid();
@@ -71,13 +169,23 @@ export function validateCustodyInventory(value: unknown): CustodyInventory {
     )
       return invalid();
     const typedPurpose = purpose as KeyPurpose;
-    if (seen.has(typedPurpose))
-      throw new MigrationError(
+    if (seen.has(typedPurpose) && typedPurpose !== "unknown-rotation")
+      throw new PlcError(
         "DuplicateCustodyPurpose",
         "Custody purpose is duplicated",
       );
     if (
-      item.custodian !== custodians[typedPurpose] ||
+      (item.provenance !== undefined &&
+        ![
+          "synthetic-fixture",
+          "configured-public-reference",
+          "directory-observed-unknown-custodian",
+        ].includes(String(item.provenance))) ||
+      (item.custodian !== custodians[typedPurpose] &&
+        !(
+          item.custodian === "unknown" &&
+          item.provenance === "directory-observed-unknown-custodian"
+        )) ||
       typeof item.keyReference !== "string" ||
       typeof item.algorithm !== "string" ||
       typeof item.fingerprint !== "string" ||
@@ -97,19 +205,70 @@ export function validateCustodyInventory(value: unknown): CustodyInventory {
     keys.push({
       keyReference: item.keyReference,
       purpose: typedPurpose,
-      custodian: custodians[typedPurpose],
+      custodian: item.custodian as KeyCustodian,
       algorithm: item.algorithm,
       fingerprint: item.fingerprint,
       lifecycle: item.lifecycle as PublicKeyInventoryItem["lifecycle"],
+      ...(item.provenance === undefined
+        ? {}
+        : {
+            provenance: item.provenance as NonNullable<
+              PublicKeyInventoryItem["provenance"]
+            >,
+          }),
     });
     seen.add(typedPurpose);
   }
-  for (const purpose of purposes)
+  for (const purpose of value.observation === undefined &&
+  !keys.some((item) => item.provenance)
+    ? ([
+        "source-recovery",
+        "entryway-plc",
+        "pds-repository",
+        "oauth-issuer",
+      ] as const)
+    : [])
     if (!seen.has(purpose))
-      throw new MigrationError(
+      throw new PlcError(
         "MissingCustodyPurpose",
         "Required custody purpose is absent",
       );
+  if (value.observation !== undefined) {
+    const observed = value.observation;
+    if (
+      !record(observed) ||
+      !exactKeys(observed, [
+        "headCid",
+        "at",
+        "eventId",
+        "chain",
+        "nullified",
+        "tombstone",
+      ]) ||
+      typeof observed.headCid !== "string" ||
+      typeof observed.at !== "string" ||
+      !Number.isFinite(Date.parse(observed.at)) ||
+      typeof observed.eventId !== "string" ||
+      !Array.isArray(observed.chain) ||
+      !observed.chain.every((cid) => typeof cid === "string") ||
+      observed.chain.at(-1) !== observed.headCid ||
+      !Array.isArray(observed.nullified) ||
+      !observed.nullified.every(
+        (cid) =>
+          typeof cid === "string" &&
+          !(observed.chain as unknown[]).includes(cid),
+      ) ||
+      typeof observed.tombstone !== "boolean"
+    )
+      return invalid();
+    return {
+      did: value.did,
+      keys,
+      observation: structuredClone(observed) as unknown as NonNullable<
+        CustodyInventory["observation"]
+      >,
+    };
+  }
   return { did: value.did, keys };
 }
 

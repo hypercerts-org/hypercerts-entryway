@@ -9,6 +9,7 @@ import * as plc from "@did-plc/lib";
 import { cidForCbor } from "@atproto/common";
 import { HttpError } from "../../http/http-error.mjs";
 import { xrpc } from "../../pds/client.mjs";
+import { createCustodyInventoryStorage } from "../../database/drizzle/migration-custody.js";
 
 const error = (name, message, status = 400) =>
   new HttpError(status, name, message);
@@ -254,7 +255,73 @@ export async function createAccountMigration({
       importedBlobs: [],
     });
   };
-  const prepareOperation = async (operation, target) => {
+  const authorizeSigned = async (
+    operation,
+    signed,
+    facts,
+    cid,
+    changes,
+    authorize,
+  ) => {
+    const result = await db.transact(async () => {
+      const row = await accounts.get(operation.did);
+      if (
+        !row ||
+        !["active", "deactivated"].includes(row.status) ||
+        row.pdsId !== operation.sourcePdsId ||
+        row.handle !== operation.handle
+      )
+        throw error("AccountUnavailable", "Migration authority changed", 409);
+      if (authorize) {
+        try {
+          await authorize();
+        } catch (failure) {
+          if (
+            ["InvalidToken", "ExpiredToken", "RateLimitExceeded"].includes(
+              failure.error ?? failure.code,
+            )
+          )
+            return { failure };
+          throw failure;
+        }
+      } else {
+        const saved = await read(operation.did);
+        if (
+          !saved ||
+          saved.authorityOperationId !== ownership.currentClaim.operationId ||
+          saved.targetPdsId !== operation.targetPdsId ||
+          saved.phase === "complete"
+        )
+          throw error(
+            "OperationPending",
+            "The authorized migration journal changed",
+            409,
+          );
+      }
+      await createCustodyInventoryStorage(db).recordSigned({
+        id: randomUUID(),
+        did: operation.did,
+        cid,
+        operation: facts,
+        kind: "signed",
+        operationId: ownership.currentClaim.operationId,
+        provenance: "entryway-authorized",
+        at: new Date().toISOString(),
+      });
+      // Proof/admission, custody and exact signed dispatch intent share one commit.
+      // Nothing after this callback may overwrite it with an older in-memory journal.
+      await journal(operation, { ...changes, plcOp: signed, plcOpCid: cid });
+      await ownership.checkpoint("migration-authorized", {
+        did: operation.did,
+        targetPdsId: operation.targetPdsId,
+      });
+      return { failure: null };
+    });
+    // Wrong guesses commit counters; history/fence failures roll back everything.
+    if (result.failure) throw result.failure;
+  };
+  const prepareOperation = async (operation, target, authorize) => {
+    await accounts.observeCustody?.(operation.did);
     const current = await accounts.plcClient.getLastOp(operation.did);
     if (current.type === "plc_tombstone")
       throw error(
@@ -262,7 +329,7 @@ export async function createAccountMigration({
         "Cannot migrate a tombstoned identity",
       );
     const normalized = plc.normalizeOp(current);
-    if (!normalized.rotationKeys.includes(await accounts.rotation.did()))
+    if (!normalized.rotationKeys.includes(accounts.plcSigner.publicKey()))
       throw error(
         "AuthorityNotManaged",
         "This entryway is not an authorized PLC rotation signer",
@@ -282,27 +349,41 @@ export async function createAccountMigration({
       target,
       (await cidForCbor(current)).toString(),
     );
-    const expected = await plc.createUpdateOp(
+    const expected = await accounts.plcSigner.signManagedMove(
       current,
-      accounts.rotation,
-      (op) => ({
-        ...op,
-        verificationMethods: {
-          ...op.verificationMethods,
-          atproto: reservedKey,
-        },
-        services: {
-          ...op.services,
-          atproto_pds: {
-            type: "AtprotoPersonalDataServer",
-            endpoint: target.url,
-          },
-        },
-      }),
+      reservedKey,
+      target.url,
+      async (candidate, facts, cid) => {
+        if (operation.requestedPlcOp) {
+          await plc.assureValidOp(operation.requestedPlcOp);
+          await plc.assureValidSig(
+            [accounts.plcSigner.publicKey()],
+            operation.requestedPlcOp,
+          );
+          const { sig: _sig, ...supplied } = operation.requestedPlcOp;
+          if (
+            String(await cidForCbor(facts)) !==
+            String(await cidForCbor(supplied))
+          )
+            throw error(
+              "InvalidPlcOperation",
+              "Migration operation differs from the reserved target intent",
+            );
+        }
+        const signed = operation.requestedPlcOp ?? candidate;
+        await authorizeSigned(
+          operation,
+          signed,
+          facts,
+          String(await cidForCbor(signed)),
+          { signingKey: reservedKey },
+          authorize,
+        );
+      },
     );
     const signed = operation.requestedPlcOp ?? expected;
     await plc.assureValidOp(signed);
-    await plc.assureValidSig([await accounts.rotation.did()], signed);
+    await plc.assureValidSig([accounts.plcSigner.publicKey()], signed);
     const { sig: _expectedSig, ...expectedUnsigned } = expected;
     const { sig: _suppliedSig, ...suppliedUnsigned } = signed;
     if (
@@ -532,16 +613,17 @@ export async function createAccountMigration({
             target,
             operation.plcOpCid,
           );
-          const repaired = await plc.createUpdateOp(
+          const repaired = await accounts.plcSigner.signManagedRepair(
             head,
-            accounts.rotation,
-            (op) => ({
-              ...op,
-              verificationMethods: {
-                ...op.verificationMethods,
-                atproto: reservedKey,
-              },
-            }),
+            reservedKey,
+            (signed, facts, cid) =>
+              authorizeSigned(operation, signed, facts, cid, {
+                previousPlcOps: [
+                  ...(operation.previousPlcOps ?? []),
+                  operation.plcOp,
+                ],
+                signingKey: reservedKey,
+              }),
           );
           operation = await journal(operation, {
             previousPlcOps: [
@@ -559,6 +641,7 @@ export async function createAccountMigration({
               409,
             );
         }
+        await accounts.observeCustody?.(operation.did);
         await setActive(operation.did, target, false, "target-freeze");
         operation = await journal(operation, { phase: "target-created" });
       }
@@ -852,7 +935,9 @@ export async function createAccountMigration({
         reauthenticationRequired: true,
       };
     } catch (failure) {
-      await journal(operation, {
+      // A signer callback may have committed exact bytes before return failed.
+      // Read that committed journal rather than erasing it with our older object.
+      await journal((await read(operation.did)) ?? operation, {
         lastError: failure.error ?? failure.name,
         lastErrorMessage: failure.message,
       });
@@ -919,31 +1004,31 @@ export async function createAccountMigration({
               originalStatus: row.status,
             },
             target,
-          );
-          const confirmed = await db.transact(async () => {
-            try {
-              await security.confirmMigrationProof(principal, {
-                pdsId: target.id,
-                token: input.token,
+            async () => {
+              await requireOwner(principal, row.did);
+              const confirmed = await db.transact(async () => {
+                try {
+                  await security.confirmMigrationProof(principal, {
+                    pdsId: target.id,
+                    token: input.token,
+                  });
+                } catch (failure) {
+                  if (
+                    ![
+                      "InvalidToken",
+                      "ExpiredToken",
+                      "RateLimitExceeded",
+                    ].includes(failure.error ?? failure.code ?? failure.message)
+                  )
+                    throw failure;
+                  return { failure };
+                }
+                return { failure: null };
               });
-            } catch (failure) {
-              if (
-                !["InvalidToken", "ExpiredToken", "RateLimitExceeded"].includes(
-                  failure.error ?? failure.code ?? failure.message,
-                )
-              )
-                throw failure;
-              return { failure };
-            }
-            const saved = await journal(prepared);
-            await ownership.checkpoint("migration-authorized", {
-              did: row.did,
-              targetPdsId: target.id,
-            });
-            return { saved };
-          });
-          if (confirmed.failure) throw confirmed.failure;
-          operation = confirmed.saved;
+              if (confirmed.failure) throw confirmed.failure;
+            },
+          );
+          operation = await journal(prepared);
           return await resume(operation);
         } catch (failure) {
           const saved = await read(input.did);

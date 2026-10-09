@@ -132,11 +132,6 @@
       "kind": "preserved/extracted MJS; checkJs remains false"
     },
     {
-      "path": "src/features/account-registration/create-account.mjs",
-      "owner": "account-registration",
-      "kind": "preserved/extracted MJS; checkJs remains false"
-    },
-    {
       "path": "src/features/account-registration/invites.mjs",
       "owner": "account-registration",
       "kind": "preserved/extracted MJS; checkJs remains false"
@@ -228,11 +223,6 @@
     },
     {
       "path": "src/features/handle-change/actions.mjs",
-      "owner": "handle-change",
-      "kind": "preserved/extracted MJS; checkJs remains false"
-    },
-    {
-      "path": "src/features/handle-change/change-handle.mjs",
       "owner": "handle-change",
       "kind": "preserved/extracted MJS; checkJs remains false"
     },
@@ -364,11 +354,6 @@
     {
       "path": "src/pds/client.mjs",
       "owner": "pds",
-      "kind": "preserved/extracted MJS; checkJs remains false"
-    },
-    {
-      "path": "src/plc/operations.mjs",
-      "owner": "plc",
       "kind": "preserved/extracted MJS; checkJs remains false"
     },
     {
