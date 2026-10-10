@@ -84,6 +84,7 @@ export async function createApp({ config, db, mail, lifecycle }) {
     mail,
   });
   const protocolOperations = await createProtocolOperations({
+    plcMail: mail,
     db,
     config,
     accounts,
@@ -93,6 +94,7 @@ export async function createApp({ config, db, mail, lifecycle }) {
     complete: protocolOperations.completeInvite,
   });
   const migration = await createAccountMigration({
+    custody: accounts.custody,
     db,
     config,
     accounts,

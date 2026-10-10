@@ -2,6 +2,10 @@ import { readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 
 const unitContracts = new Set([
+  "external-workflow.test.mjs",
+  "custody-history.test.mjs",
+  "plc-policy.test.mjs",
+  "plc-signing.test.mjs",
   "oauth-stores.test.mjs",
   "database-boundary.test.mjs",
   "lifecycle.test.mjs",

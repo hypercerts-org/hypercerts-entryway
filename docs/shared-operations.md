@@ -97,6 +97,13 @@ then conditionally reacquires that same pending admission. A stale nomination
 cannot create a new operation. It completes local continuation without repeating
 an external effect. Any unresolved external attempt excludes this path.
 
+Ancillary registration evidence outages nominate only durable
+`custody:refresh-pending` markers for the existing account reconciler. Refresh
+uses a separate `custody-observe` admission, so conflicting or uncertain account
+work blocks directory access. Successful observation and marker removal commit
+together; failed refresh retains the marker without activating pending accounts
+or settling external attempts. This is not a new fleet scan.
+
 ## Supported operator recovery
 
 The existing Entryway administrator authorization protects `POST
@@ -168,8 +175,28 @@ Recovery observations are operation-specific:
   with unmodified external tools.
 
 Local proof consumption and its resulting authority change commit together;
-expected invalid attempts retain their existing committed counters. SMTP and
-upstream HTTP remain outside these transactions.
+expected invalid attempts retain their existing committed counters. For public PLC
+signing, the candidate remains inside the concrete signer until a fenced physical
+transaction rechecks account authority, consumes confirmation and inserts signing
+history. Ordinary wrong guesses return a rejection result inside that transaction
+and throw after commit, retaining their counters. History/database/fence failures
+roll back proof consumption and release no signature. SMTP and upstream HTTP
+remain outside these transactions.
+
+Signing history means release authorization, not successful HTTP delivery or PLC
+publication. Internal handle and managed move/repair methods instead pass the full
+signed operation to a dedicated persistence callback under existing admission.
+The owning feature commits exact signed bytes/CID, pending obligation and unsigned
+custody history in one fenced transaction before the signer returns for dispatch.
+A failure between history and journal rolls back both; a failure after commit
+resumes the retained signed operation without re-signing or a new email proof.
+Supplied managed operations retain their exact signature and signed CID. Synthetic
+external moves use the same atomic signed-journal seam with fixture provenance.
+Public signing never uses this internal persistence capability.
+
+Response loss after public authorization leaves a spent proof and requires
+fresh confirmation; there is no bearer-proof replay retrieval. Independent
+publication after release cannot be serialized by Entryway.
 
 ## Durable mail attempts
 

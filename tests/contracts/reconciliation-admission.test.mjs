@@ -10,7 +10,8 @@ import { createOperationOwnership } from "../../dist/src/accounts/operation-owne
 import { createOperationOwnershipStore } from "../../dist/src/database/drizzle/operation-ownership.js";
 import { createAccountStorage } from "../../dist/src/database/drizzle/account-storage.js";
 import { createAccountPrimitives } from "../../dist/src/accounts/primitives.mjs";
-import { createHandleChange } from "../../dist/src/features/handle-change/change-handle.mjs";
+import { createCustodyInventoryStorage } from "../../dist/src/database/drizzle/migration-custody.js";
+import { createHandleChange } from "../../dist/src/features/handle-change/change-handle.js";
 import { createDeletion } from "../../dist/src/features/account-deletion/delete-account.mjs";
 import { createStatusChange } from "../../dist/src/features/account-settings/change-status.mjs";
 const backend = process.env.CONTRACT_DATABASE_BACKEND ?? "sqlite";
@@ -30,10 +31,11 @@ async function pair(t, ownershipFactory, reply) {
   const storage = createAccountStorage(db, config.pds);
   const shared = createAccountPrimitives({ db, config, storage, ownership });
   const context = {
+    custody: createCustodyInventoryStorage(db),
     db,
     config,
     ...shared,
-    rotation: f.accounts.rotation,
+    plcSigner: f.accounts.plcSigner,
     plcClient: f.accounts.plcClient,
   };
   const current = {
@@ -438,6 +440,7 @@ for (const nomination of ["pending-status", "scheduled-delete"])
       const signer = await Secp256k1Keypair.create({ exportable: true });
       const config = {
         plcRotationKeyHex: Buffer.from(await signer.export()).toString("hex"),
+        plcRecoveryKeyDid: (await Secp256k1Keypair.create()).did(),
         plcUrl: origin,
         handleDomains: [".example.test"],
         pds: [

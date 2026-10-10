@@ -11,6 +11,7 @@ export function createAccountReconciler({
   setStatus,
   deleteAccount,
   deleteScheduledAccount,
+  refreshCustodyObservation,
 }) {
   const noLongerPending = () =>
     new DomainError(
@@ -131,6 +132,20 @@ export function createAccountReconciler({
     for (const { value: nomination } of await db.list("operations")) {
       const result = await reconcileOperation(nomination);
       if (result) results.push(result);
+    }
+    // Nominate only durable ancillary refresh work, never a new fleet scan.
+    // Existing custody admission excludes conflicting and uncertain mutations.
+    for (const { key: did } of await db.list("custody:refresh-pending")) {
+      try {
+        await refreshCustodyObservation(did);
+        results.push({ id: `custody-refresh:${did}`, status: "complete" });
+      } catch (error) {
+        results.push({
+          id: `custody-refresh:${did}`,
+          status: "pending",
+          error: error.code ?? error.error ?? error.name,
+        });
+      }
     }
     return results;
   };
