@@ -178,12 +178,34 @@ export function createCustodyInventoryStorage(
         // Directory authority does not identify custodians or govern issuer keys.
         // Retain attributed inventory independently; the snapshot/immutable head
         // supplies effective PLC authority, including removed or replaced keys.
-        const attributed = (previous?.keys ?? []).filter(
-          (item) => item.provenance !== "directory-observed-unknown-custodian",
-        );
+        const attributed = (previous?.keys ?? [])
+          .filter(
+            (item) =>
+              item.provenance !== "directory-observed-unknown-custodian",
+          )
+          .map((item) => {
+            if (item.purpose === "oauth-issuer") return item;
+            const effective = keys.some(
+              (current) =>
+                current.keyReference === item.keyReference &&
+                (current.purpose === "pds-repository") ===
+                  (item.purpose === "pds-repository"),
+            );
+            return {
+              ...item,
+              lifecycle:
+                item.lifecycle === "active" && !effective
+                  ? ("retired" as const)
+                  : item.lifecycle,
+            };
+          });
         const observed = keys.filter((item) =>
           item.purpose === "pds-repository"
-            ? !attributed.some((known) => known.purpose === item.purpose)
+            ? !attributed.some(
+                (known) =>
+                  known.purpose === item.purpose &&
+                  known.keyReference === item.keyReference,
+              )
             : !attributed.some(
                 (known) =>
                   known.keyReference === item.keyReference &&

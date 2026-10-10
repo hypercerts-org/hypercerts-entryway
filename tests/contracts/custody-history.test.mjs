@@ -158,6 +158,7 @@ test("directory transitions retain attributed custody and issuer inventory separ
   const user = await Secp256k1Keypair.create();
   const repository = await Secp256k1Keypair.create();
   const destination = await Secp256k1Keypair.create();
+  const destinationRepository = await Secp256k1Keypair.create();
   const { did, op } = await plc.createOp({
     signingKey: repository.did(),
     rotationKeys: [user.did(), offline.did(), hot.did()],
@@ -206,7 +207,12 @@ test("directory transitions retain attributed custody and issuer inventory separ
   assert.deepEqual((await store.getByDid(did)).keys, keys);
   const { sig: _sig, ...facts } = op;
   const replacement = await plc.signOperation(
-    { ...facts, prev: genesis.cid, rotationKeys: [destination.did()] },
+    {
+      ...facts,
+      prev: genesis.cid,
+      rotationKeys: [destination.did()],
+      verificationMethods: { atproto: destinationRepository.did() },
+    },
     hot,
   );
   const second = await validateAuditObservation(
@@ -217,9 +223,23 @@ test("directory transitions retain attributed custody and issuer inventory separ
   );
   await store.recordObservation(second);
   const inventory = await store.getByDid(did);
-  assert.deepEqual(inventory.keys.slice(0, keys.length), keys);
-  assert.equal(inventory.keys.at(-1).keyReference, destination.did());
-  assert.equal(inventory.keys.at(-1).purpose, "unknown-rotation");
+  assert.deepEqual(
+    inventory.keys.slice(0, keys.length),
+    keys.map((key) => ({
+      ...key,
+      lifecycle: key.purpose === "oauth-issuer" ? "active" : "retired",
+    })),
+  );
+  assert.equal(inventory.keys.at(-2).keyReference, destination.did());
+  assert.equal(inventory.keys.at(-2).purpose, "unknown-rotation");
+  assert.equal(inventory.keys.at(-1).keyReference, destinationRepository.did());
+  assert.equal(inventory.keys.at(-1).purpose, "pds-repository");
+  assert.equal(inventory.keys.at(-1).lifecycle, "active");
+  assert.equal(inventory.keys.at(-1).custodian, "unknown");
+  assert.equal(
+    inventory.keys.at(-1).provenance,
+    "directory-observed-unknown-custodian",
+  );
   assert.deepEqual(
     (await store.getObservation(second.id)).entries.at(-1).operation
       .rotationKeys,

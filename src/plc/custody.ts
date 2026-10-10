@@ -177,7 +177,20 @@ export function validateCustodyInventory(value: unknown): CustodyInventory {
     )
       return invalid();
     const typedPurpose = purpose as KeyPurpose;
-    if (seen.has(typedPurpose) && typedPurpose !== "unknown-rotation")
+    const priorPurpose = keys.filter((key) => key.purpose === typedPurpose);
+    const repositoryHistory =
+      value.observation !== undefined &&
+      typedPurpose === "pds-repository" &&
+      priorPurpose.every(
+        (key) =>
+          key.keyReference !== item.keyReference &&
+          (key.lifecycle !== "active" || item.lifecycle !== "active"),
+      );
+    if (
+      seen.has(typedPurpose) &&
+      typedPurpose !== "unknown-rotation" &&
+      !repositoryHistory
+    )
       throw new PlcError(
         "DuplicateCustodyPurpose",
         "Custody purpose is duplicated",
