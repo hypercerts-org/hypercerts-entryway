@@ -8,6 +8,69 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fixture, alice } from "../../../tests/support/account-fixture.mjs";
 
+test("acknowledged registration activates during transient evidence outage and retains refresh pending", async (t) => {
+  const f = await fixture(t);
+  const read = f.accounts.plcClient.getAuditableLog;
+  f.accounts.plcClient.getAuditableLog = async () => {
+    throw Object.assign(new Error("unavailable"), { status: 503 });
+  };
+  const row = await f.accounts.create(alice);
+  assert.equal(row.status, "active");
+  const store = createCustodyInventoryStorage(f.db);
+  assert.equal(await store.getByDid(row.did), null);
+  assert.deepEqual(
+    (await store.getHistory(row.did)).map((event) => event.kind),
+    ["signed"],
+  );
+  assert.equal(
+    (await f.db.get("custody:refresh-pending", row.did)).error,
+    "CustodyEvidenceUnavailable",
+  );
+  assert.equal(
+    (await f.db.get("operations", `create:${row.did}`)).phase,
+    "complete",
+  );
+  assert.equal(await f.db.get("registration:intents", alice.email), null);
+  assert.equal((await f.accounts.create(alice)).did, row.did);
+  assert.equal(
+    f.calls.filter((call) => call.method === "com.atproto.server.createAccount")
+      .length,
+    1,
+  );
+  f.accounts.plcClient.getAuditableLog = read;
+  await f.accounts.refreshCustodyObservation(row.did);
+  assert.equal(await f.db.get("custody:refresh-pending", row.did), null);
+  assert.ok((await store.getByDid(row.did)).observation);
+});
+
+for (const code of [
+  "CustodyConflict",
+  "InvalidCustodyObservation",
+  "OperationLeaseLost",
+  "UnknownFailure",
+]) {
+  test(`registration does not activate on ${code} evidence failure`, async (t) => {
+    const f = await fixture(t);
+    f.accounts.plcClient.getAuditableLog = async () => {
+      throw Object.assign(new Error("injected"), { code });
+    };
+    await assert.rejects(f.accounts.create(alice), { code });
+    const row = await f.accounts.get(alice.email);
+    assert.equal(row.status, "provisioning");
+    assert.ok(row.op);
+    assert.ok(await f.db.get("registration:intents", alice.email));
+    assert.equal(await f.db.get("custody:refresh-pending", row.did), null);
+    assert.equal(
+      await createCustodyInventoryStorage(f.db).getByDid(row.did),
+      null,
+    );
+    assert.equal(
+      (await f.db.get("operations", `create:${row.did}`)).phase,
+      "pds-pending",
+    );
+  });
+}
+
 test("provisioning retries reuse the persisted DID and signed operation after a PDS failure", async (t) => {
   let failed = false;
   const { db, accounts, calls, recover } = await fixture(t, ({ method }) => {

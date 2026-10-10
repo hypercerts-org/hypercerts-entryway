@@ -383,12 +383,26 @@ export function createRegistration({
         },
       },
     );
-    await observeCustody?.(row.did);
+    // Remote creation is acknowledged. Only a classified evidence transport
+    // outage is ancillary; validation, custody conflicts and fence loss still fail.
+    let refreshPending = false;
+    try {
+      await observeCustody?.(row.did);
+    } catch (error) {
+      if (safeCode(error) !== "CustodyEvidenceUnavailable") throw error;
+      refreshPending = true;
+    }
     row.status = "active";
     delete row.op;
     await db.transact(async () => {
       await save(row);
       await claimHandle(handle, row.did);
+      if (refreshPending)
+        await db.set("custody:refresh-pending", row.did, {
+          operationId: ownership.currentClaim!.operationId,
+          error: "CustodyEvidenceUnavailable",
+        });
+      else await db.delete("custody:refresh-pending", row.did);
       await journal({ ...operation, phase: "complete" });
       await provisionPolicy?.complete(row);
       await db.delete("registration:intents", email);

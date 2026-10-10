@@ -82,10 +82,34 @@ export async function readCustodyObservation(
   did: string,
   operationId: string | null = null,
 ): Promise<CustodyObservation> {
-  return validateAuditObservation(
-    did,
-    await client.getAuditableLog(did),
-    operationId,
-    client.url,
-  );
+  let input: unknown;
+  try {
+    input = await client.getAuditableLog(did);
+  } catch (error) {
+    const failure = error as {
+      status?: unknown;
+      name?: unknown;
+      cause?: { code?: unknown };
+    };
+    const transient =
+      typeof failure?.status === "number"
+        ? failure.status === 408 ||
+          failure.status === 429 ||
+          failure.status >= 500
+        : ["TimeoutError", "AbortError"].includes(String(failure?.name)) ||
+          [
+            "ECONNRESET",
+            "ECONNREFUSED",
+            "ETIMEDOUT",
+            "EAI_AGAIN",
+            "ENETUNREACH",
+          ].includes(String(failure?.cause?.code));
+    if (transient)
+      throw new PlcError(
+        "CustodyEvidenceUnavailable",
+        "Directory evidence is temporarily unavailable",
+      );
+    throw error;
+  }
+  return validateAuditObservation(did, input, operationId, client.url);
 }

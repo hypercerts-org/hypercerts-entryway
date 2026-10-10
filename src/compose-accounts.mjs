@@ -47,7 +47,10 @@ export async function createAccounts({
       did,
       ownership.currentClaim.operationId,
     );
-    await createCustodyInventoryStorage(db).recordObservation(observation);
+    await db.transact(async () => {
+      await createCustodyInventoryStorage(db).recordObservation(observation);
+      await db.delete("custody:refresh-pending", did);
+    });
     return observation;
   };
   const context = {

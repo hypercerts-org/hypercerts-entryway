@@ -14,3 +14,9 @@ have distinct provenance; forged observation kinds or missing evidence are rejec
 Internal handle changes and managed moves/repairs atomically retain exact signed
 operations with custody history before dispatch, so interrupted return resumes the
 saved operation without re-signing or another confirmation.
+
+A successful PDS registration can activate while directory evidence is temporarily
+unavailable. The database retains an explicit `custody:refresh-pending` error;
+no observed authority snapshot is fabricated. A successful privileged custody
+refresh clears that marker atomically with the observation. Invalid evidence,
+custody contradictions and lost operation ownership still block activation.
