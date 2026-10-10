@@ -61,7 +61,7 @@ function inputRecord(value: unknown): Record<string, unknown> {
  * Inject custody on db so confirmation consumption and release authorization
  * share one fenced transaction. Invalid proofs/candidates reject without release;
  * signed history proves authorization, not delivery or directory publication. */
-export async function createPlcOperations({
+export function createPlcOperations({
   db,
   custody,
   config,
@@ -97,7 +97,7 @@ export async function createPlcOperations({
       {
         ...signingKeyResult,
         send,
-        observe: async () => ({ state: "replay-safe" }),
+        observe: () => Promise.resolve({ state: "replay-safe" as const }),
       },
     );
   };
@@ -120,14 +120,14 @@ export async function createPlcOperations({
     const current = await accounts.plcClient.getLastOp(row.did);
     if (current.type === "plc_tombstone")
       fail("InvalidRequest", "The identity is tombstoned");
-    const allowed = [
+    const allowed = new Set([
       "token",
       "rotationKeys",
       "alsoKnownAs",
       "verificationMethods",
       "services",
-    ];
-    if (Object.keys(body).some((k) => !allowed.includes(k)))
+    ]);
+    if (Object.keys(body).some((k) => !allowed.has(k)))
       fail("InvalidRequest", "Unknown operation field");
     let operation;
     let authorizing = false;
@@ -141,8 +141,7 @@ export async function createPlcOperations({
           const accepted = await db.transact(async () => {
             const currentAccount = await accounts.get(row.did);
             if (
-              !currentAccount ||
-              currentAccount.did !== row.did ||
+              currentAccount?.did !== row.did ||
               currentAccount.email !== row.email ||
               ["deleted", "provisioning"].includes(currentAccount.status)
             )

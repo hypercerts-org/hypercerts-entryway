@@ -278,14 +278,14 @@ export async function createAccountMigration({
       if (authorize) {
         try {
           await authorize();
-        } catch (failure) {
+        } catch (error_) {
           if (
             ["InvalidToken", "ExpiredToken", "RateLimitExceeded"].includes(
-              failure.error ?? failure.code,
+              error_.error ?? error_.code,
             )
           )
-            return { failure };
-          throw failure;
+            return { failure: error_ };
+          throw error_;
         }
       } else {
         const saved = await read(operation.did);
@@ -363,7 +363,11 @@ export async function createAccountMigration({
             [accounts.plcSigner.publicKey()],
             operation.requestedPlcOp,
           );
-          const { sig: _sig, ...supplied } = operation.requestedPlcOp;
+          const supplied = Object.fromEntries(
+            Object.entries(operation.requestedPlcOp).filter(
+              ([key]) => key !== "sig",
+            ),
+          );
           if (
             String(await cidForCbor(facts)) !==
             String(await cidForCbor(supplied))
@@ -415,15 +419,15 @@ export async function createAccountMigration({
         1_000_000,
       );
       return JSON.parse(result.bytes.toString());
-    } catch (failure) {
+    } catch (error_) {
       if (
         ["AccountNotFound", "RepoNotFound", "NotFound"].includes(
-          failure.error,
+          error_.error,
         ) ||
-        failure.status === 404
+        error_.status === 404
       )
         return null;
-      throw failure;
+      throw error_;
     }
   };
   const createTarget = (operation, target) =>
@@ -795,10 +799,10 @@ export async function createAccountMigration({
                       : "diverged",
                     result: {},
                   };
-                } catch (failure) {
-                  if (["BlobNotFound", "NotFound"].includes(failure.error))
+                } catch (error_) {
+                  if (["BlobNotFound", "NotFound"].includes(error_.error))
                     return { state: "unapplied" };
-                  throw failure;
+                  throw error_;
                 }
               },
             },
@@ -937,14 +941,14 @@ export async function createAccountMigration({
         status: "complete",
         reauthenticationRequired: true,
       };
-    } catch (failure) {
+    } catch (error_) {
       // A signer callback may have committed exact bytes before return failed.
       // Read that committed journal rather than erasing it with our older object.
       await journal((await read(operation.did)) ?? operation, {
-        lastError: failure.error ?? failure.name,
-        lastErrorMessage: failure.message,
+        lastError: error_.error ?? error_.name,
+        lastErrorMessage: error_.message,
       });
-      throw failure;
+      throw error_;
     }
   };
   return {
@@ -1015,16 +1019,16 @@ export async function createAccountMigration({
                     pdsId: target.id,
                     token: input.token,
                   });
-                } catch (failure) {
+                } catch (error_) {
                   if (
                     ![
                       "InvalidToken",
                       "ExpiredToken",
                       "RateLimitExceeded",
-                    ].includes(failure.error ?? failure.code ?? failure.message)
+                    ].includes(error_.error ?? error_.code ?? error_.message)
                   )
-                    throw failure;
-                  return { failure };
+                    throw error_;
+                  return { failure: error_ };
                 }
                 return { failure: null };
               });
@@ -1033,7 +1037,7 @@ export async function createAccountMigration({
           );
           operation = await journal(prepared);
           return await resume(operation);
-        } catch (failure) {
+        } catch (error_) {
           const saved = await read(input.did);
           if (
             (!saved || saved.phase === "complete") &&
@@ -1047,7 +1051,7 @@ export async function createAccountMigration({
               false,
             );
           }
-          throw failure;
+          throw error_;
         }
       });
     },
@@ -1092,12 +1096,12 @@ export async function createAccountMigration({
               },
             ),
           );
-        } catch (failure) {
-          if (failure.code === "OperationNoLongerPending") continue;
+        } catch (error_) {
+          if (error_.code === "OperationNoLongerPending") continue;
           results.push({
             did: value.did,
             status: "pending",
-            error: failure.error ?? failure.name,
+            error: error_.error ?? error_.name,
           });
         }
       }

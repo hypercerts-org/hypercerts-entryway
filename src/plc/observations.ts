@@ -8,7 +8,7 @@ import type { CustodyObservation } from "./types.js";
 export async function validateAuditObservation(
   did: string,
   input: unknown,
-  operationId: string | null = null,
+  operationId: string | null,
   directory: string,
 ): Promise<CustodyObservation> {
   try {

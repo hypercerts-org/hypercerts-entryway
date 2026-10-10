@@ -92,8 +92,7 @@ export function validateUnsignedOperation(
   try {
     if (!op.verificationMethods.atproto) return invalid();
     const service = op.services.atproto_pds;
-    if (!service || service.type !== "AtprotoPersonalDataServer")
-      return invalid();
+    if (service?.type !== "AtprotoPersonalDataServer") return invalid();
     const url = new URL(service.endpoint);
     if (
       url.protocol !== "https:" ||

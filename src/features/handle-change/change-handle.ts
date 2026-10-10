@@ -75,7 +75,7 @@ export function createHandleChange({
       async () => {
         await assertNoMigration(did);
         const row = await get(did);
-        if (!row || row.status !== "active")
+        if (row?.status !== "active")
           throw new HttpError(
             403,
             "AccountUnavailable",
@@ -155,11 +155,7 @@ export function createHandleChange({
               // after this callback resumes the journal, never another signature.
               await db.transact(async () => {
                 const fresh = await get(did);
-                if (
-                  !fresh ||
-                  fresh.status !== "active" ||
-                  fresh.handle !== row.handle
-                )
+                if (fresh?.status !== "active" || fresh.handle !== row.handle)
                   throw new HttpError(
                     409,
                     "AccountUnavailable",
@@ -207,15 +203,10 @@ export function createHandleChange({
               const head = (
                 await cidForCbor(await plcClient.getLastOp(did))
               ).toString();
-              return {
-                result: undefined,
-                state:
-                  head === op.plcOpCid
-                    ? "applied"
-                    : head === signed.prev
-                      ? "unapplied"
-                      : "diverged",
-              };
+              let state: "applied" | "unapplied" | "diverged" = "diverged";
+              if (head === op.plcOpCid) state = "applied";
+              else if (head === signed.prev) state = "unapplied";
+              return { result: undefined, state };
             },
           },
         );
