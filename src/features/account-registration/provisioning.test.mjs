@@ -8,6 +8,23 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fixture, alice } from "../../../tests/support/account-fixture.mjs";
 
+test("registration rejects malformed and oversized email before external work", async (t) => {
+  const f = await fixture(t);
+  for (const email of [
+    "missing-at",
+    "a@@b.c",
+    "a@.c",
+    "a@b.",
+    "a b@c.d",
+    `${"a".repeat(10000)}@b.c`,
+  ]) {
+    await assert.rejects(f.accounts.create({ ...alice, email }), {
+      error: "InvalidEmail",
+    });
+  }
+  assert.equal(f.calls.length, 0);
+});
+
 test("acknowledged registration activates during transient evidence outage and retains refresh pending", async (t) => {
   const f = await fixture(t);
   const read = f.accounts.plcClient.getAuditableLog;

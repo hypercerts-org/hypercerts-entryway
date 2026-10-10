@@ -69,6 +69,15 @@ function notFound(error: unknown): boolean {
     error.status === 404
   );
 }
+// Bounded, linear validation preserves the existing simple email policy.
+function validEmail(email: string): boolean {
+  if (email.length > 254 || /\s/.test(email)) return false;
+  const at = email.indexOf("@");
+  if (at <= 0 || at !== email.lastIndexOf("@")) return false;
+  const domain = email.slice(at + 1);
+  const dot = domain.lastIndexOf(".");
+  return dot > 0 && dot < domain.length - 1;
+}
 /** Assemble DID provisioning using custody storage on the same database/fence.
  * Persist exact genesis before PDS dispatch and resume it after interruption.
  * Only classified evidence outages permit activation with a durable refresh
@@ -109,7 +118,7 @@ export function createRegistration({
     inviteCode,
   }: RegistrationInput) => {
     email = String(email).trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254)
+    if (!validEmail(email))
       throw new HttpError(400, "InvalidEmail", "Provide a valid email address");
     if (recoveryKey) {
       try {
