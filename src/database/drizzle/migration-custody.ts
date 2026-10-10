@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { publicKeyAlgorithm } from "../../plc/custody.js";
 import { and, asc, eq } from "drizzle-orm";
 import { PlcError } from "../../plc/errors.js";
 import {
+  publicKeyAlgorithm,
   validateCustodyInventory,
   validateSignedEvent,
 } from "../../plc/custody.js";
@@ -22,7 +22,7 @@ export function createCustodyInventoryStorage(
     if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
     if (typeof value === "object" && value !== null)
       return `{${Object.entries(value)
-        .sort(([a], [b]) => a.localeCompare(b))
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
         .map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`)
         .join(",")}}`;
     return JSON.stringify(value);
@@ -103,6 +103,78 @@ export function createCustodyInventoryStorage(
       );
     }
   };
+  const observedInventory = (
+    observation: CustodyObservation,
+    previous: CustodyInventory | null,
+  ): CustodyInventory["keys"] => {
+    const next = observation.snapshot;
+    const head = observation.entries.find(
+      (entry) => entry.cid === next.headCid,
+    )!;
+    const keys: CustodyInventory["keys"] =
+      head.operation.type === "plc_tombstone"
+        ? []
+        : [
+            ...head.operation.rotationKeys.map((keyReference) => ({
+              keyReference,
+              purpose: "unknown-rotation" as const,
+              custodian: "unknown" as const,
+              algorithm: publicKeyAlgorithm(keyReference),
+              fingerprint: `sha256:${createHash("sha256").update(keyReference).digest("hex")}`,
+              lifecycle: "active" as const,
+              provenance: "directory-observed-unknown-custodian" as const,
+            })),
+            ...[head.operation.verificationMethods.atproto]
+              .filter((key): key is string => typeof key === "string")
+              .map((keyReference) => ({
+                keyReference,
+                purpose: "pds-repository" as const,
+                custodian: "unknown" as const,
+                algorithm: publicKeyAlgorithm(keyReference),
+                fingerprint: `sha256:${createHash("sha256").update(keyReference).digest("hex")}`,
+                lifecycle: "active" as const,
+                provenance: "directory-observed-unknown-custodian" as const,
+              })),
+          ];
+    // Directory authority does not identify custodians or govern issuer keys.
+    // Retain attributed inventory independently; the snapshot/immutable head
+    // supplies effective PLC authority, including removed or replaced keys.
+    const attributed = (previous?.keys ?? [])
+      .filter(
+        (item) => item.provenance !== "directory-observed-unknown-custodian",
+      )
+      .map((item) => {
+        if (item.purpose === "oauth-issuer") return item;
+        const effective = keys.some(
+          (current) =>
+            current.keyReference === item.keyReference &&
+            (current.purpose === "pds-repository") ===
+              (item.purpose === "pds-repository"),
+        );
+        return {
+          ...item,
+          lifecycle:
+            item.lifecycle === "active" && !effective
+              ? ("retired" as const)
+              : item.lifecycle,
+        };
+      });
+    const observed = keys.filter((item) =>
+      item.purpose === "pds-repository"
+        ? !attributed.some(
+            (known) =>
+              known.purpose === item.purpose &&
+              known.keyReference === item.keyReference,
+          )
+        : !attributed.some(
+            (known) =>
+              known.keyReference === item.keyReference &&
+              known.purpose !== "pds-repository" &&
+              known.purpose !== "oauth-issuer",
+          ),
+    );
+    return [...attributed, ...observed];
+  };
   const store: CustodyInventoryReader & CustodyInventoryTransactor = {
     async recordObservation(input) {
       const observation = validateObservation(input);
@@ -177,75 +249,9 @@ export function createCustodyInventoryStorage(
             at: observation.at,
           });
         }
-        const head = observation.entries.find(
-          (entry) => entry.cid === next.headCid,
-        )!;
-        const keys: CustodyInventory["keys"] =
-          head.operation.type === "plc_tombstone"
-            ? []
-            : [
-                ...head.operation.rotationKeys.map((keyReference) => ({
-                  keyReference,
-                  purpose: "unknown-rotation" as const,
-                  custodian: "unknown" as const,
-                  algorithm: publicKeyAlgorithm(keyReference),
-                  fingerprint: `sha256:${createHash("sha256").update(keyReference).digest("hex")}`,
-                  lifecycle: "active" as const,
-                  provenance: "directory-observed-unknown-custodian" as const,
-                })),
-                ...[head.operation.verificationMethods.atproto]
-                  .filter((key): key is string => typeof key === "string")
-                  .map((keyReference) => ({
-                    keyReference,
-                    purpose: "pds-repository" as const,
-                    custodian: "unknown" as const,
-                    algorithm: publicKeyAlgorithm(keyReference),
-                    fingerprint: `sha256:${createHash("sha256").update(keyReference).digest("hex")}`,
-                    lifecycle: "active" as const,
-                    provenance: "directory-observed-unknown-custodian" as const,
-                  })),
-              ];
-        // Directory authority does not identify custodians or govern issuer keys.
-        // Retain attributed inventory independently; the snapshot/immutable head
-        // supplies effective PLC authority, including removed or replaced keys.
-        const attributed = (previous?.keys ?? [])
-          .filter(
-            (item) =>
-              item.provenance !== "directory-observed-unknown-custodian",
-          )
-          .map((item) => {
-            if (item.purpose === "oauth-issuer") return item;
-            const effective = keys.some(
-              (current) =>
-                current.keyReference === item.keyReference &&
-                (current.purpose === "pds-repository") ===
-                  (item.purpose === "pds-repository"),
-            );
-            return {
-              ...item,
-              lifecycle:
-                item.lifecycle === "active" && !effective
-                  ? ("retired" as const)
-                  : item.lifecycle,
-            };
-          });
-        const observed = keys.filter((item) =>
-          item.purpose === "pds-repository"
-            ? !attributed.some(
-                (known) =>
-                  known.purpose === item.purpose &&
-                  known.keyReference === item.keyReference,
-              )
-            : !attributed.some(
-                (known) =>
-                  known.keyReference === item.keyReference &&
-                  known.purpose !== "pds-repository" &&
-                  known.purpose !== "oauth-issuer",
-              ),
-        );
         await store.save({
           did: observation.did,
-          keys: [...attributed, ...observed],
+          keys: observedInventory(observation, previous),
           observation: next,
         });
       });

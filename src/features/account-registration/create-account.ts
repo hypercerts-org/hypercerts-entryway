@@ -176,6 +176,119 @@ export function createRegistration({
     request: { email, handle, pdsId, recoveryKey: recoveryKey ?? null },
     completeOnReturn: true,
   });
+  const allocateIdentity = async (
+    { email, handle, pdsId, recoveryKey }: RegistrationInput,
+    pds: Context["config"]["pds"][number],
+  ): Promise<AccountRow> => {
+    if (!ownership.currentClaim!.resumed)
+      await db.transact(async () => {
+        await db.set("registration:intents", email, {
+          authorityOperationId: ownership.currentClaim!.operationId,
+          email,
+          handle,
+          pdsId,
+          recoveryKey: recoveryKey ?? null,
+          rotationKeys: genesisRotationKeys({
+            user: recoveryKey,
+            offline: config.plcRecoveryKeyDid,
+            hot: plcSigner.publicKey(),
+          }),
+        });
+        await ownership.checkpoint(
+          "registration-prepared",
+          { email, handle, pdsId, recoveryKey: recoveryKey ?? null },
+          false,
+        );
+      });
+    // Recovery reuses custody selected before allocation, not deployment defaults.
+    const savedIntent = (await db.get("registration:intents", email)) as
+      | (RegistrationInput & { rotationKeys: string[] })
+      | null;
+    if (
+      !savedIntent?.rotationKeys ||
+      savedIntent.recoveryKey !== (recoveryKey ?? null)
+    )
+      throw new HttpError(
+        409,
+        "AccountExists",
+        "Saved registration custody differs",
+      );
+    if (!savedIntent.rotationKeys.includes(plcSigner.publicKey()))
+      throw new HttpError(
+        409,
+        "RequiredSignerUnavailable",
+        "The selected genesis signer is unavailable",
+      );
+    const reserved = await ownership.dispatch<unknown>(
+      {
+        step: "reserve-signing-key",
+        target: pds.url,
+        method: "com.atproto.server.reserveSigningKey",
+        intent: {},
+      },
+      {
+        send: () =>
+          xrpc(pds.internalUrl, "com.atproto.server.reserveSigningKey", {}),
+        ...signingKeyResult,
+        // An unbound reserved key has no DID/account effect; after dispatcher
+        // isolation and upstream drain a fresh allocation is safe.
+        observe: () => Promise.resolve({ state: "replay-safe" as const }),
+      },
+    );
+    const { signingKey } = signingKeyResult.resume(reserved);
+    const { did, op } = await plcSigner.signGenesis({
+      signingKey,
+      rotationKeys: savedIntent.rotationKeys,
+      handle,
+      pds: pds.url,
+    });
+    const createdAt = new Date().toISOString();
+    const row: AccountRow = {
+      did,
+      email,
+      handle,
+      pdsId,
+      pdsUrl: pds.url,
+      status: "provisioning",
+      op,
+      createdAt,
+      genesisRotationKeys: savedIntent.rotationKeys,
+      ...(recoveryKey ? { recoveryKey } : {}),
+    };
+    const { sig: _signature, ...facts } = op;
+    const cid = String(await cidForCbor(op));
+    const operationId = ownership.currentClaim!.operationId;
+    try {
+      await db.transact(async () => {
+        await storage.insertAccount(row!);
+        await ownership.bindResource(row!.did);
+        // The exact signed row and its unsigned authorization history commit
+        // before PDS dispatch. Resume reuses both, without promoting authority.
+        await custody.recordSigned({
+          id: `${operationId}:genesis`,
+          did,
+          cid,
+          operation: facts,
+          kind: "signed",
+          operationId,
+          provenance: "entryway-authorized",
+          at: createdAt,
+        });
+      });
+    } catch (e) {
+      // The failed insert/binding transaction published no DID or account.
+      // An acknowledged unbound key allocation is safe to abandon here.
+      await ownership.checkpoint("registration-validation-failed", null, false);
+      if (safeCode(e).startsWith("SQLITE_CONSTRAINT"))
+        throw new HttpError(
+          409,
+          "AccountExists",
+          "Email or handle is already reserved",
+        );
+      throw e;
+    }
+    return row;
+  };
   // Reconciliation invokes this admitted body directly. Calling public create()
   // here could await a matching request queued behind our own admission.
   const provision = async ({
@@ -192,7 +305,7 @@ export function createRegistration({
         "security:pending-email",
         emailClaim.did,
       )) as { expiresAt: number } | null;
-      if (!change || change.expiresAt <= Date.now()) {
+      if (!change?.expiresAt || change.expiresAt <= Date.now()) {
         await storage.releaseEmail(email, emailClaim.did, "pending");
         emailClaim = null;
       }
@@ -225,119 +338,7 @@ export function createRegistration({
     const pds = config.pds.find((p) => p.id === pdsId);
     if (!pds) throw new HttpError(400, "InvalidPds", "Unknown PDS");
     await provisionPolicy?.reserve(inviteCode, email);
-    if (!row) {
-      if (!ownership.currentClaim!.resumed)
-        await db.transact(async () => {
-          await db.set("registration:intents", email, {
-            authorityOperationId: ownership.currentClaim!.operationId,
-            email,
-            handle,
-            pdsId,
-            recoveryKey: recoveryKey ?? null,
-            rotationKeys: genesisRotationKeys({
-              user: recoveryKey,
-              offline: config.plcRecoveryKeyDid,
-              hot: plcSigner.publicKey(),
-            }),
-          });
-          await ownership.checkpoint(
-            "registration-prepared",
-            { email, handle, pdsId, recoveryKey: recoveryKey ?? null },
-            false,
-          );
-        });
-      // Recovery reuses custody selected before allocation, not deployment defaults.
-      const savedIntent = (await db.get("registration:intents", email)) as
-        | (RegistrationInput & { rotationKeys: string[] })
-        | null;
-      if (
-        !savedIntent?.rotationKeys ||
-        savedIntent.recoveryKey !== (recoveryKey ?? null)
-      )
-        throw new HttpError(
-          409,
-          "AccountExists",
-          "Saved registration custody differs",
-        );
-      if (!savedIntent.rotationKeys.includes(plcSigner.publicKey()))
-        throw new HttpError(
-          409,
-          "RequiredSignerUnavailable",
-          "The selected genesis signer is unavailable",
-        );
-      const reserved = await ownership.dispatch<unknown>(
-        {
-          step: "reserve-signing-key",
-          target: pds.url,
-          method: "com.atproto.server.reserveSigningKey",
-          intent: {},
-        },
-        {
-          send: () =>
-            xrpc(pds.internalUrl, "com.atproto.server.reserveSigningKey", {}),
-          ...signingKeyResult,
-          // An unbound reserved key has no DID/account effect; after dispatcher
-          // isolation and upstream drain a fresh allocation is safe.
-          observe: async () => ({ state: "replay-safe" }),
-        },
-      );
-      const { signingKey } = signingKeyResult.resume(reserved);
-      const { did, op } = await plcSigner.signGenesis({
-        signingKey,
-        rotationKeys: savedIntent.rotationKeys,
-        handle,
-        pds: pds.url,
-      });
-      const createdAt = new Date().toISOString();
-      row = {
-        did,
-        email,
-        handle,
-        pdsId,
-        pdsUrl: pds.url,
-        status: "provisioning",
-        op,
-        createdAt,
-        genesisRotationKeys: savedIntent.rotationKeys,
-        ...(recoveryKey ? { recoveryKey } : {}),
-      };
-      const { sig: _signature, ...facts } = op;
-      const cid = String(await cidForCbor(op));
-      const operationId = ownership.currentClaim!.operationId;
-      try {
-        await db.transact(async () => {
-          await storage.insertAccount(row!);
-          await ownership.bindResource(row!.did);
-          // The exact signed row and its unsigned authorization history commit
-          // before PDS dispatch. Resume reuses both, without promoting authority.
-          await custody.recordSigned({
-            id: `${operationId}:genesis`,
-            did,
-            cid,
-            operation: facts,
-            kind: "signed",
-            operationId,
-            provenance: "entryway-authorized",
-            at: createdAt,
-          });
-        });
-      } catch (e) {
-        // The failed insert/binding transaction published no DID or account.
-        // An acknowledged unbound key allocation is safe to abandon here.
-        await ownership.checkpoint(
-          "registration-validation-failed",
-          null,
-          false,
-        );
-        if (safeCode(e).startsWith("SQLITE_CONSTRAINT"))
-          throw new HttpError(
-            409,
-            "AccountExists",
-            "Email or handle is already reserved",
-          );
-        throw e;
-      }
-    }
+    row ??= await allocateIdentity({ email, handle, pdsId, recoveryKey }, pds);
     const operation = {
       id: `create:${row.did}`,
       kind: "create",

@@ -4,7 +4,6 @@ import {
   validateHistoryOperation,
   validateUnsignedOperation,
 } from "./policy.js";
-import type { CustodySignedEvent } from "./types.js";
 
 // Signed CIDs include the signature, unlike these unsigned public facts. Their
 // binding is supplied by the concrete signer or validated directory observation,
@@ -94,6 +93,7 @@ export function validateSignedEvent(value: unknown): CustodySignedEvent {
   };
 }
 import type {
+  CustodySignedEvent,
   CustodyInventory,
   KeyCustodian,
   KeyPurpose,
@@ -139,6 +139,93 @@ export function publicKeyAlgorithm(reference: string): "secp256k1" | "P-256" {
   return invalid();
 }
 
+function validateInventoryItem(
+  item: unknown,
+  keys: PublicKeyInventoryItem[],
+  seen: Set<KeyPurpose>,
+  hasObservation: boolean,
+): PublicKeyInventoryItem {
+  if (
+    !record(item) ||
+    !exactKeys(item, [
+      "keyReference",
+      "purpose",
+      "custodian",
+      "algorithm",
+      "fingerprint",
+      "lifecycle",
+      ...(item.provenance === undefined ? [] : ["provenance"]),
+    ])
+  )
+    return invalid();
+  const purpose = item.purpose;
+  if (typeof purpose !== "string" || !purposes.includes(purpose as KeyPurpose))
+    return invalid();
+  const typedPurpose = purpose as KeyPurpose;
+  const priorPurpose = keys.filter((key) => key.purpose === typedPurpose);
+  const repositoryHistory =
+    hasObservation &&
+    typedPurpose === "pds-repository" &&
+    priorPurpose.every(
+      (key) =>
+        key.keyReference !== item.keyReference &&
+        (key.lifecycle !== "active" || item.lifecycle !== "active"),
+    );
+  if (
+    seen.has(typedPurpose) &&
+    typedPurpose !== "unknown-rotation" &&
+    !repositoryHistory
+  )
+    throw new PlcError(
+      "DuplicateCustodyPurpose",
+      "Custody purpose is duplicated",
+    );
+  if (
+    (item.provenance !== undefined &&
+      (typeof item.provenance !== "string" ||
+        ![
+          "synthetic-fixture",
+          "configured-public-reference",
+          "directory-observed-unknown-custodian",
+        ].includes(item.provenance))) ||
+    (item.custodian !== custodians[typedPurpose] &&
+      !(
+        item.custodian === "unknown" &&
+        item.provenance === "directory-observed-unknown-custodian"
+      )) ||
+    typeof item.keyReference !== "string" ||
+    typeof item.algorithm !== "string" ||
+    typeof item.fingerprint !== "string" ||
+    typeof item.lifecycle !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/.test(item.fingerprint) ||
+    !["active", "retired", "revoked"].includes(item.lifecycle)
+  )
+    return invalid();
+  if (typedPurpose === "oauth-issuer") {
+    if (
+      !/^jwk-thumbprint:[A-Za-z0-9_-]{43}$/.test(item.keyReference) ||
+      item.algorithm !== "ES256K"
+    )
+      return invalid();
+  } else if (item.algorithm !== publicKeyAlgorithm(item.keyReference))
+    return invalid();
+  return {
+    keyReference: item.keyReference,
+    purpose: typedPurpose,
+    custodian: item.custodian as KeyCustodian,
+    algorithm: item.algorithm,
+    fingerprint: item.fingerprint,
+    lifecycle: item.lifecycle as PublicKeyInventoryItem["lifecycle"],
+    ...(item.provenance === undefined
+      ? {}
+      : {
+          provenance: item.provenance as NonNullable<
+            PublicKeyInventoryItem["provenance"]
+          >,
+        }),
+  };
+}
+
 /** Validate JSON input before storing it as public authority evidence. */
 export function validateCustodyInventory(value: unknown): CustodyInventory {
   if (
@@ -157,88 +244,14 @@ export function validateCustodyInventory(value: unknown): CustodyInventory {
   const seen = new Set<KeyPurpose>();
   const keys: PublicKeyInventoryItem[] = [];
   for (const item of value.keys) {
-    if (
-      !record(item) ||
-      !exactKeys(item, [
-        "keyReference",
-        "purpose",
-        "custodian",
-        "algorithm",
-        "fingerprint",
-        "lifecycle",
-        ...(item.provenance === undefined ? [] : ["provenance"]),
-      ])
-    )
-      return invalid();
-    const purpose = item.purpose;
-    if (
-      typeof purpose !== "string" ||
-      !purposes.includes(purpose as KeyPurpose)
-    )
-      return invalid();
-    const typedPurpose = purpose as KeyPurpose;
-    const priorPurpose = keys.filter((key) => key.purpose === typedPurpose);
-    const repositoryHistory =
-      value.observation !== undefined &&
-      typedPurpose === "pds-repository" &&
-      priorPurpose.every(
-        (key) =>
-          key.keyReference !== item.keyReference &&
-          (key.lifecycle !== "active" || item.lifecycle !== "active"),
-      );
-    if (
-      seen.has(typedPurpose) &&
-      typedPurpose !== "unknown-rotation" &&
-      !repositoryHistory
-    )
-      throw new PlcError(
-        "DuplicateCustodyPurpose",
-        "Custody purpose is duplicated",
-      );
-    if (
-      (item.provenance !== undefined &&
-        ![
-          "synthetic-fixture",
-          "configured-public-reference",
-          "directory-observed-unknown-custodian",
-        ].includes(String(item.provenance))) ||
-      (item.custodian !== custodians[typedPurpose] &&
-        !(
-          item.custodian === "unknown" &&
-          item.provenance === "directory-observed-unknown-custodian"
-        )) ||
-      typeof item.keyReference !== "string" ||
-      typeof item.algorithm !== "string" ||
-      typeof item.fingerprint !== "string" ||
-      typeof item.lifecycle !== "string" ||
-      !/^sha256:[0-9a-f]{64}$/.test(item.fingerprint) ||
-      !["active", "retired", "revoked"].includes(item.lifecycle)
-    )
-      return invalid();
-    if (typedPurpose === "oauth-issuer") {
-      if (
-        !/^jwk-thumbprint:[A-Za-z0-9_-]{43}$/.test(item.keyReference) ||
-        item.algorithm !== "ES256K"
-      )
-        return invalid();
-    } else if (item.algorithm !== publicKeyAlgorithm(item.keyReference))
-      return invalid();
-    keys.push({
-      keyReference: item.keyReference,
-      purpose: typedPurpose,
-      custodian: item.custodian as KeyCustodian,
-      algorithm: item.algorithm,
-      fingerprint: item.fingerprint,
-      lifecycle: item.lifecycle as PublicKeyInventoryItem["lifecycle"],
-      ...(item.provenance === undefined
-        ? {}
-        : {
-            provenance: item.provenance as NonNullable<
-              PublicKeyInventoryItem["provenance"]
-            >,
-          }),
-    });
-    seen.add(typedPurpose);
+    const key = validateInventoryItem(
+      item,
+      keys,
+      seen,
+      value.observation !== undefined,
+    );
+    keys.push(key);
+    seen.add(key.purpose);
   }
   for (const purpose of value.observation === undefined &&
   !keys.some((item) => item.provenance)
