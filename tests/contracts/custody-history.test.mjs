@@ -36,6 +36,28 @@ test("directory observations validate surviving history and reject regressions a
   const observe = (entries) =>
     validateAuditObservation(did, entries, null, directory);
   const observed = await observe([genesis, second]);
+  for (const malformed of [
+    null,
+    [],
+    {},
+    { ...observed, directory: "http://[" },
+    { ...observed, snapshot: null },
+    { ...observed, entries: [null] },
+    { ...observed, entries: [{ ...observed.entries[0], operation: null }] },
+    { ...observed, id: "" },
+    { ...observed, operationId: {} },
+  ]) {
+    await assert.rejects(store.recordObservation(malformed), {
+      code: "InvalidCustodyObservation",
+    });
+    for (const table of [
+      "custody_operations",
+      "custody_history",
+      "custody_observations",
+      "migration_custody_inventory",
+    ])
+      assert.deepEqual(await db.read(table), []);
+  }
   await store.recordObservation(observed);
   await store.recordObservation(observed);
   assert.equal((await store.getHistory(did)).length, 2);

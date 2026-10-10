@@ -27,10 +27,14 @@ export function createCustodyInventoryStorage(
         .join(",")}}`;
     return JSON.stringify(value);
   };
-  const store: CustodyInventoryReader & CustodyInventoryTransactor = {
-    async recordObservation(observation) {
-      const exact = (value: object, keys: string[]) =>
-        Object.keys(value).sort().join(",") === keys.sort().join(",");
+  const validateObservation = (input: unknown): CustodyObservation => {
+    try {
+      const observation = input as CustodyObservation;
+      const exact = (value: unknown, keys: string[]) =>
+        typeof value === "object" &&
+        value !== null &&
+        !Array.isArray(value) &&
+        Object.keys(value).sort().join(",") === [...keys].sort().join(",");
       if (
         !exact(observation, [
           "directory",
@@ -76,6 +80,32 @@ export function createCustodyInventoryStorage(
         keys: [],
         observation: observation.snapshot,
       });
+      for (const entry of observation.entries) {
+        validateSignedEvent({
+          id: `${observation.id}:${entry.cid}`,
+          did: observation.did,
+          cid: entry.cid,
+          operation: entry.operation,
+          kind: entry.nullified ? "nullified" : "observed",
+          supportingObservationId: observation.id,
+          operationId: observation.operationId,
+          provenance: entry.nullified
+            ? "directory-asserted-nullification"
+            : "directory-observed-publication",
+          at: observation.at,
+        });
+      }
+      return observation;
+    } catch {
+      throw new PlcError(
+        "InvalidCustodyObservation",
+        "Public observation projection is inconsistent",
+      );
+    }
+  };
+  const store: CustodyInventoryReader & CustodyInventoryTransactor = {
+    async recordObservation(input) {
+      const observation = validateObservation(input);
       await db.transact(async () => {
         // This immutable public projection is the explicit support for every
         // observed/nullified event. Snapshot replacement cannot erase provenance.

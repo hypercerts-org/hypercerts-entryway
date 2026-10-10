@@ -26,5 +26,5 @@ export interface CustodyInventoryTransactor {
   /** Retain validated audit evidence, events and last-observed authority atomically.
    * Preserve attributed inventory independently. Regressions/conflicts reject and
    * roll back; an exact old retry cannot replace a newer snapshot. */
-  recordObservation(observation: CustodyObservation): Promise<void>;
+  recordObservation(observation: unknown): Promise<void>;
 }
