@@ -29,6 +29,9 @@ const basic = (pds) =>
 /** Known-account migration between configured PDSs sharing this entryway's trust.
  * The persisted journal is authorization to finish that exact operation after a
  * crash; reconcile() is an internal administrator operation, never a public API.
+ * Inject custody bound to db so proof/admission, exact signed intent and history
+ * roll back together under the operation fence. Ownership/custody conflicts reject;
+ * uncertain writes require recovery authorization and observation before replay.
  * Source data is retained. PLC publication and PDS imports are not one transaction.
  */
 export async function createAccountMigration({

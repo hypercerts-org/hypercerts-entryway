@@ -77,6 +77,10 @@ export async function validateAuditObservation(
   }
 }
 
+/** Read one DID audit from the configured directory and validate public history.
+ * Classified transport outages throw CustodyEvidenceUnavailable; malformed or
+ * contradictory history throws InvalidCustodyObservation. No state is persisted
+ * and directory branch assertions are not independent recovery-timing proof. */
 export async function readCustodyObservation(
   client: plc.Client,
   did: string,

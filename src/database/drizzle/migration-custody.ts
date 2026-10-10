@@ -12,6 +12,9 @@ import type {
   CustodyInventoryTransactor,
 } from "../custody.port.js";
 import type { CustodyObservation, CustodyInventory } from "../../plc/types.js";
+/** Bind public custody persistence to this executor. Nested writes join its
+ * physical transaction and mutation fence; no separate connection is opened.
+ * Reads/writes reject inconsistent or non-public evidence with stable PLC errors. */
 export function createCustodyInventoryStorage(
   db: DatabaseExecutor,
 ): CustodyInventoryReader & CustodyInventoryTransactor {

@@ -41,7 +41,9 @@ export function genesisRotationKeys(input: {
   return keys;
 }
 
-/** Validate normalized public PLC facts without imposing ATProto issuance policy. */
+/** Validate normalized unsigned public PLC facts from untrusted history.
+ * Enforce schema and supported public keys, not ATProto handles or HTTPS services.
+ * Throws InvalidPlcOperation; CID/signature/chain checks belong to audit validation. */
 export function validateHistoryOperation(
   value: unknown,
 ): plc.UnsignedOperation {

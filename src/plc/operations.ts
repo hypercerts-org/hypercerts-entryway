@@ -57,6 +57,10 @@ function inputRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+/** Assemble account-authorized PLC confirmation, signing and submission.
+ * Inject custody on db so confirmation consumption and release authorization
+ * share one fenced transaction. Invalid proofs/candidates reject without release;
+ * signed history proves authorization, not delivery or directory publication. */
 export async function createPlcOperations({
   db,
   custody,

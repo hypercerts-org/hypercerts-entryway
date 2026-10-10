@@ -47,6 +47,10 @@ interface Context {
   plcSigner: Secp256k1MigrationPlcSigner;
   ownership: ReturnType<typeof createOperationOwnership>;
 }
+/** Return an admitted hosted-handle update for an active DID. The supplied
+ * custody writer must share db: signed intent, history and checkpoint commit
+ * together before publication. Invalid handles, conflicts and fence loss reject;
+ * uncertain publication requires observation/recovery, never blind re-signing. */
 export function createHandleChange({
   db,
   custody,

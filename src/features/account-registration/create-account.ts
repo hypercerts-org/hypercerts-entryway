@@ -69,6 +69,10 @@ function notFound(error: unknown): boolean {
     error.status === 404
   );
 }
+/** Assemble DID provisioning using custody storage on the same database/fence.
+ * Persist exact genesis before PDS dispatch and resume it after interruption.
+ * Only classified evidence outages permit activation with a durable refresh
+ * marker; custody contradictions and ownership loss leave provisioning pending. */
 export function createRegistration({
   db,
   custody,

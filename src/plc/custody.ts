@@ -31,7 +31,10 @@ const validEventEvidence = (event: Record<string, unknown>): boolean => {
   );
 };
 
-/** Reject transport, proof and signature fields rather than retaining them. */
+/** Validate untrusted public event metadata and unsigned operation facts.
+ * Signed events obey issuance policy; observed/nullified facts obey PLC schema.
+ * Reject transport/proof/signature fields and invalid provenance/CID shape.
+ * Storage must additionally bind directory events to retained observation evidence. */
 export function validateSignedEvent(value: unknown): CustodySignedEvent {
   if (
     !record(value) ||
