@@ -41,8 +41,8 @@ export function genesisRotationKeys(input: {
   return keys;
 }
 
-/** Validate unsigned facts before any private-capable operation is invoked. */
-export function validateUnsignedOperation(
+/** Validate normalized public PLC facts without imposing ATProto issuance policy. */
+export function validateHistoryOperation(
   value: unknown,
 ): plc.UnsignedOperation {
   if (
@@ -67,10 +67,6 @@ export function validateUnsignedOperation(
       return invalid();
     op.rotationKeys.forEach(publicRotationKey);
     Object.values(op.verificationMethods).forEach(publicRotationKey);
-    if (!op.verificationMethods.atproto) return invalid();
-    const service = op.services.atproto_pds;
-    if (!service || service.type !== "AtprotoPersonalDataServer")
-      return invalid();
     for (const entry of Object.values(
       value.services as Record<string, unknown>,
     )) {
@@ -80,6 +76,22 @@ export function validateUnsignedOperation(
       )
         return invalid();
     }
+  } catch {
+    return invalid();
+  }
+  return op;
+}
+
+/** Validate unsigned facts before any private-capable operation is invoked. */
+export function validateUnsignedOperation(
+  value: unknown,
+): plc.UnsignedOperation {
+  const op = validateHistoryOperation(value);
+  try {
+    if (!op.verificationMethods.atproto) return invalid();
+    const service = op.services.atproto_pds;
+    if (!service || service.type !== "AtprotoPersonalDataServer")
+      return invalid();
     const url = new URL(service.endpoint);
     if (
       url.protocol !== "https:" ||

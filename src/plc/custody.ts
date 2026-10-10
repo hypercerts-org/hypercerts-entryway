@@ -1,6 +1,9 @@
 import { PlcError } from "./errors.js";
 import * as plc from "@did-plc/lib";
-import { validateUnsignedOperation } from "./policy.js";
+import {
+  validateHistoryOperation,
+  validateUnsignedOperation,
+} from "./policy.js";
 import type { CustodySignedEvent } from "./types.js";
 
 // Signed CIDs include the signature, unlike these unsigned public facts. Their
@@ -78,7 +81,9 @@ export function validateSignedEvent(value: unknown): CustodySignedEvent {
             type: "plc_tombstone",
             prev: plc.def.tombstone.parse({ ...value.operation, sig: "" }).prev,
           }
-        : validateUnsignedOperation(value.operation),
+        : value.kind === "signed"
+          ? validateUnsignedOperation(value.operation)
+          : validateHistoryOperation(value.operation),
     kind: value.kind as CustodySignedEvent["kind"],
     operationId: value.operationId as string | null,
     provenance: value.provenance as CustodySignedEvent["provenance"],

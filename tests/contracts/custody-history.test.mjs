@@ -230,6 +230,99 @@ test("directory transitions retain attributed custody and issuer inventory separ
   assert.equal((await store.getHistory(did)).length, 3);
 });
 
+test("observed and nullified PLC history accepts non-ATProto facts without relaxing issuance", async (t) => {
+  const db = await openTestDatabase(":memory:");
+  t.after(() => db.close());
+  const key = await Secp256k1Keypair.create();
+  const facts = {
+    type: "plc_operation",
+    prev: null,
+    rotationKeys: [key.did()],
+    verificationMethods: {},
+    alsoKnownAs: [],
+    services: {},
+  };
+  const genesis = await plc.signOperation(facts, key);
+  const did = await plc.didForCreateOp(genesis);
+  const genesisCid = String(await cidForCbor(genesis));
+  const old = await plc.signOperation(
+    {
+      ...facts,
+      prev: genesisCid,
+      verificationMethods: { other: key.did() },
+      alsoKnownAs: ["https://example.com/identity"],
+      services: {
+        other: { type: "OtherService", endpoint: "http://example.com/service" },
+      },
+    },
+    key,
+  );
+  const current = await plc.signOperation(
+    {
+      ...facts,
+      prev: genesisCid,
+      verificationMethods: { atproto: key.did() },
+      alsoKnownAs: ["at://alice.example.com"],
+      services: {
+        atproto_pds: {
+          type: "AtprotoPersonalDataServer",
+          endpoint: "https://pds.example.com",
+        },
+      },
+    },
+    key,
+  );
+  const entries = await Promise.all(
+    [genesis, old, current].map(async (operation, index) => ({
+      did,
+      operation,
+      cid: String(await cidForCbor(operation)),
+      nullified: index === 1,
+      createdAt: "2020-01-01T00:00:00.000Z",
+    })),
+  );
+  const observation = await validateAuditObservation(
+    did,
+    entries,
+    null,
+    "https://plc.example.com",
+  );
+  const store = createCustodyInventoryStorage(db);
+  await store.recordObservation(observation);
+  const history = await store.getHistory(did);
+  assert.equal(history.length, 3);
+  assert.deepEqual(
+    history.find((event) => event.cid === genesisCid).operation
+      .verificationMethods,
+    {},
+  );
+  assert.equal(
+    history.find((event) => event.kind === "nullified").operation.services.other
+      .endpoint,
+    "http://example.com/service",
+  );
+  assert.equal((await store.getByDid(did)).observation.headCid, entries[2].cid);
+  await assert.rejects(
+    store.recordSigned({
+      id: "issuance",
+      did,
+      cid: genesisCid,
+      operation: facts,
+      kind: "signed",
+      operationId: null,
+      provenance: "entryway-authorized",
+      at: observation.at,
+    }),
+    { code: "InvalidPlcOperation" },
+  );
+  const forged = structuredClone(entries);
+  forged[2].operation.sig = "invalid";
+  await assert.rejects(
+    validateAuditObservation(did, forged, null, "https://plc.example.com"),
+    { code: "InvalidCustodyObservation" },
+  );
+});
+
 test("managed operator refresh observes departed authority without restoring account access", async (t) => {
   const f = await fixture(t);
   const repository = await Secp256k1Keypair.create();
