@@ -417,6 +417,14 @@ test("managed operator refresh rejects pending admission without clearing uncert
   await assert.rejects(refreshCustodyObservation(f.accounts, row.did), {
     code: "OperationPending",
   });
+  const marker = { error: "CustodyEvidenceUnavailable" };
+  await f.db.set("custody:refresh-pending", row.did, marker);
+  const results = await f.accounts.reconcile();
+  assert.equal(
+    results.find((result) => result.id === `custody-refresh:${row.did}`).status,
+    "pending",
+  );
+  assert.deepEqual(await f.db.get("custody:refresh-pending", row.did), marker);
   assert.equal(reads, 0);
   assert.deepEqual(await f.accounts.ownership.pendingExternal(row.did), before);
   assert.deepEqual(await store.getByDid(row.did), snapshot);

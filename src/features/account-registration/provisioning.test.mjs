@@ -38,7 +38,11 @@ test("acknowledged registration activates during transient evidence outage and r
     1,
   );
   f.accounts.plcClient.getAuditableLog = read;
-  await f.accounts.refreshCustodyObservation(row.did);
+  const results = await f.accounts.reconcile();
+  assert.deepEqual(
+    results.find((result) => result.id === `custody-refresh:${row.did}`),
+    { id: `custody-refresh:${row.did}`, status: "complete" },
+  );
   assert.equal(await f.db.get("custody:refresh-pending", row.did), null);
   assert.ok((await store.getByDid(row.did)).observation);
 });

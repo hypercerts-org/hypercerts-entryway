@@ -21,6 +21,7 @@ remain visible by public reference; OAuth issuer lifecycle is independent.
 
 A successful PDS registration can activate while directory evidence is temporarily
 unavailable. The database retains an explicit `custody:refresh-pending` error;
-no observed authority snapshot is fabricated. A successful privileged custody
-refresh clears that marker atomically with the observation. Invalid evidence,
+no observed authority snapshot is fabricated. The existing account reconciler
+retries nominated markers through custody admission and clears them atomically
+with a successful observation. Conflicting or uncertain operations block refresh. Invalid evidence,
 custody contradictions and lost operation ownership still block activation.

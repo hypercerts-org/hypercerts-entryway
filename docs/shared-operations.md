@@ -97,6 +97,13 @@ then conditionally reacquires that same pending admission. A stale nomination
 cannot create a new operation. It completes local continuation without repeating
 an external effect. Any unresolved external attempt excludes this path.
 
+Ancillary registration evidence outages nominate only durable
+`custody:refresh-pending` markers for the existing account reconciler. Refresh
+uses a separate `custody-observe` admission, so conflicting or uncertain account
+work blocks directory access. Successful observation and marker removal commit
+together; failed refresh retains the marker without activating pending accounts
+or settling external attempts. This is not a new fleet scan.
+
 ## Supported operator recovery
 
 The existing Entryway administrator authorization protects `POST

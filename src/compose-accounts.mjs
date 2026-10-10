@@ -70,6 +70,11 @@ export async function createAccounts({
     setStatus: createStatusChange(context),
     ...createDeletion(context),
   };
+  const refreshCustodyObservation = (did) =>
+    shared.serialized(did, () => observeCustody(did), {
+      kind: "custody-observe",
+      request: {},
+    });
   return {
     ...shared,
     ...operations,
@@ -79,11 +84,12 @@ export async function createAccounts({
     custody,
     // Internal operator harness only. Observation never settles pending dispatch
     // and admission rejects a conflicting operation, including uncertain writes.
-    refreshCustodyObservation: (did) =>
-      shared.serialized(did, () => observeCustody(did), {
-        kind: "custody-observe",
-        request: {},
-      }),
-    reconcile: createAccountReconciler({ db, ...shared, ...operations }),
+    refreshCustodyObservation,
+    reconcile: createAccountReconciler({
+      db,
+      ...shared,
+      ...operations,
+      refreshCustodyObservation,
+    }),
   };
 }
