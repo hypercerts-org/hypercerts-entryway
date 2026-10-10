@@ -172,7 +172,27 @@ export function createCustodyInventoryStorage(
                     provenance: "directory-observed-unknown-custodian" as const,
                   })),
               ];
-        await store.save({ did: observation.did, keys, observation: next });
+        // Directory authority does not identify custodians or govern issuer keys.
+        // Retain attributed inventory independently; the snapshot/immutable head
+        // supplies effective PLC authority, including removed or replaced keys.
+        const attributed = (previous?.keys ?? []).filter(
+          (item) => item.provenance !== "directory-observed-unknown-custodian",
+        );
+        const observed = keys.filter((item) =>
+          item.purpose === "pds-repository"
+            ? !attributed.some((known) => known.purpose === item.purpose)
+            : !attributed.some(
+                (known) =>
+                  known.keyReference === item.keyReference &&
+                  known.purpose !== "pds-repository" &&
+                  known.purpose !== "oauth-issuer",
+              ),
+        );
+        await store.save({
+          did: observation.did,
+          keys: [...attributed, ...observed],
+          observation: next,
+        });
       });
     },
     async recordSigned(input) {

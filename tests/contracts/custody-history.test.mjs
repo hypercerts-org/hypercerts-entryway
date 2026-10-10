@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Secp256k1Keypair } from "@atproto/crypto";
@@ -147,6 +148,86 @@ test("directory observations validate surviving history and reject regressions a
     /rollback/,
   );
   assert.equal((await store.getHistory(did)).length, beforeRollback);
+});
+
+test("directory transitions retain attributed custody and issuer inventory separately from authority", async (t) => {
+  const db = await openTestDatabase(":memory:");
+  t.after(() => db.close());
+  const hot = await Secp256k1Keypair.create();
+  const offline = await Secp256k1Keypair.create();
+  const user = await Secp256k1Keypair.create();
+  const repository = await Secp256k1Keypair.create();
+  const destination = await Secp256k1Keypair.create();
+  const { did, op } = await plc.createOp({
+    signingKey: repository.did(),
+    rotationKeys: [user.did(), offline.did(), hot.did()],
+    handle: "alice.example.com",
+    pds: "https://pds.example.com",
+    signer: hot,
+  });
+  const item = (keyReference, purpose, custodian, algorithm = "secp256k1") => ({
+    keyReference,
+    purpose,
+    custodian,
+    algorithm,
+    fingerprint: `sha256:${createHash("sha256").update(keyReference).digest("hex")}`,
+    lifecycle: "active",
+    provenance: "configured-public-reference",
+  });
+  const keys = [
+    item(user.did(), "user-recovery", "user"),
+    item(offline.did(), "operator-offline", "operator"),
+    item(hot.did(), "entryway-plc", "entryway"),
+    item(repository.did(), "pds-repository", "pds"),
+    item(
+      `jwk-thumbprint:${"a".repeat(43)}`,
+      "oauth-issuer",
+      "oauth-issuer",
+      "ES256K",
+    ),
+  ];
+  const store = createCustodyInventoryStorage(db);
+  await store.save({ did, keys });
+  const envelope = async (operation) => ({
+    did,
+    operation,
+    cid: String(await cidForCbor(operation)),
+    nullified: false,
+    createdAt: "2020-01-01T00:00:00.000Z",
+  });
+  const genesis = await envelope(op);
+  const first = await validateAuditObservation(
+    did,
+    [genesis],
+    null,
+    "https://plc.example.com",
+  );
+  await store.recordObservation(first);
+  assert.deepEqual((await store.getByDid(did)).keys, keys);
+  const { sig: _sig, ...facts } = op;
+  const replacement = await plc.signOperation(
+    { ...facts, prev: genesis.cid, rotationKeys: [destination.did()] },
+    hot,
+  );
+  const second = await validateAuditObservation(
+    did,
+    [genesis, await envelope(replacement)],
+    null,
+    "https://plc.example.com",
+  );
+  await store.recordObservation(second);
+  const inventory = await store.getByDid(did);
+  assert.deepEqual(inventory.keys.slice(0, keys.length), keys);
+  assert.equal(inventory.keys.at(-1).keyReference, destination.did());
+  assert.equal(inventory.keys.at(-1).purpose, "unknown-rotation");
+  assert.deepEqual(
+    (await store.getObservation(second.id)).entries.at(-1).operation
+      .rotationKeys,
+    [destination.did()],
+  );
+  assert.equal(inventory.observation.headCid, second.snapshot.headCid);
+  assert.deepEqual(await store.getObservation(first.id), first);
+  assert.equal((await store.getHistory(did)).length, 3);
 });
 
 test("managed operator refresh observes departed authority without restoring account access", async (t) => {
