@@ -181,9 +181,6 @@ await writeFile(
 }
 `,
 );
-console.log(
-  JSON.stringify({
-    issuer: config.issuer,
-    pds: config.pds.map(({ id, url }) => ({ id, url })),
-  }),
-);
+// Persisted configuration can contain credential-bearing URLs. Keep startup
+// diagnostics independent of configuration values, including public projections.
+console.log("Sandbox identity configuration ready");
