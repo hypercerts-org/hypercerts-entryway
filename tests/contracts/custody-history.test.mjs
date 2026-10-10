@@ -403,6 +403,43 @@ test("managed operator refresh rejects pending admission without clearing uncert
   assert.deepEqual(await store.getHistory(row.did), history);
 });
 
+test("custody history presentation orders timestamps then IDs including ties in either dialect", async (t) => {
+  const db = await openTestDatabase(":memory:");
+  t.after(() => db.close());
+  const key = await Secp256k1Keypair.create();
+  const { did, op } = await plc.createOp({
+    signingKey: key.did(),
+    rotationKeys: [key.did()],
+    handle: "alice.example.com",
+    pds: "https://pds.example.com",
+    signer: key,
+  });
+  const { sig: _sig, ...operation } = op;
+  const store = createCustodyInventoryStorage(db);
+  for (const [id, at] of [
+    ["z", "2020-01-02T00:00:00.000Z"],
+    ["b", "2020-01-01T00:00:00.000Z"],
+    ["a", "2020-01-01T00:00:00.000Z"],
+    ["c", "2020-01-03T00:00:00.000Z"],
+  ]) {
+    await store.recordSigned({
+      id,
+      at,
+      did,
+      cid: String(await cidForCbor(op)),
+      operation,
+      kind: "signed",
+      operationId: null,
+      provenance: "entryway-authorized",
+    });
+  }
+  for (let i = 0; i < 3; i++)
+    assert.deepEqual(
+      (await store.getHistory(did)).map((event) => event.id),
+      ["a", "b", "z", "c"],
+    );
+});
+
 test("authorization history is immutable, idempotent and never promotes authority", async (t) => {
   const db = await openTestDatabase(":memory:");
   t.after(() => db.close());

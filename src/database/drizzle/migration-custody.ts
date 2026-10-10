@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { publicKeyAlgorithm } from "../../plc/custody.js";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { PlcError } from "../../plc/errors.js";
 import {
   validateCustodyInventory,
@@ -271,6 +271,11 @@ export function createCustodyInventoryStorage(
     async getHistory(did) {
       const events = await db.read("custody_history", {
         where: eq(db.tables.custody_history.did, did),
+        // Presentation order only; PLC causality is predecessor-linked evidence.
+        orderBy: [
+          asc(db.tables.custody_history.at),
+          asc(db.tables.custody_history.id),
+        ],
       });
       return Promise.all(
         events.map(async (event) => {
