@@ -3,6 +3,40 @@ import { cidForCbor } from "@atproto/common";
 import { PlcError } from "./errors.js";
 import type { CustodyObservation } from "./types.js";
 
+export class CustodyPlcClient extends plc.Client {
+  override async getAuditableLog(did: string): Promise<plc.ExportedOp[]> {
+    let response: Response;
+    let data: unknown;
+    try {
+      response = await fetch(
+        `${this.url}/${encodeURIComponent(did)}/log/audit`,
+        {
+          signal: AbortSignal.timeout(15_000),
+        },
+      );
+      const body = await response.text();
+      try {
+        data = JSON.parse(body);
+      } catch {
+        data = body;
+      }
+    } catch (error) {
+      throw new plc.PlcClientError(
+        500,
+        undefined,
+        error instanceof Error ? error.message : "Directory request failed",
+      );
+    }
+    if (!response.ok)
+      throw new plc.PlcClientError(
+        response.status,
+        data,
+        `Request failed with status code ${response.status}`,
+      );
+    return data as plc.ExportedOp[];
+  }
+}
+
 /** The configured directory asserts historic branch selection and timestamps.
  * Cryptographic validation covers the surviving chain, not historic recovery timing. */
 export async function validateAuditObservation(

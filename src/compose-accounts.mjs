@@ -1,8 +1,10 @@
 import { createOperationOwnership } from "./accounts/operation-ownership.js";
 import { createOperationOwnershipStore } from "./database/drizzle/operation-ownership.js";
-import * as plc from "@did-plc/lib";
 import { genesisRotationKeys } from "./plc/policy.js";
-import { readCustodyObservation } from "./plc/observations.js";
+import {
+  CustodyPlcClient,
+  readCustodyObservation,
+} from "./plc/observations.js";
 import { createCustodyInventoryStorage } from "./database/drizzle/migration-custody.js";
 import { Secp256k1MigrationPlcSigner } from "./plc/signing.js";
 import { createAccountStorage } from "./database/drizzle/account-storage.js";
@@ -38,7 +40,7 @@ export async function createAccounts({
       new Error("PLC public configuration does not match the signer"),
       { code: "InvalidPlcConfiguration" },
     );
-  const plcClient = new plc.Client(config.plcUrl);
+  const plcClient = new CustodyPlcClient(config.plcUrl);
   const storage = createAccountStorage(db, config.pds);
   const custody = createCustodyInventoryStorage(db);
   const shared = createAccountPrimitives({ db, config, storage, ownership });
