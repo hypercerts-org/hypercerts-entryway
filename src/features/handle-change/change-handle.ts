@@ -1,7 +1,7 @@
 import { noExternalResult } from "../../accounts/operation-ownership.js";
 import { cidForCbor } from "@atproto/common";
 import { HttpError } from "../../http/http-error.mjs";
-import { createCustodyInventoryStorage } from "../../database/drizzle/migration-custody.js";
+import type { CustodyInventoryTransactor } from "../../database/custody.port.js";
 
 import type { AuthorityDatabase } from "../../database/connection.js";
 import type { AccountRow } from "../../accounts/types.js";
@@ -22,6 +22,7 @@ interface HandleOperation {
 }
 interface Context {
   db: AuthorityDatabase;
+  custody: CustodyInventoryTransactor;
   config: { handleDomains: string[]; plcUrl: string };
   storage: AccountTransactor;
   get(did: string): Promise<AccountRow | null>;
@@ -48,6 +49,7 @@ interface Context {
 }
 export function createHandleChange({
   db,
+  custody,
   config,
   storage,
   get,
@@ -160,7 +162,7 @@ export function createHandleChange({
                     "Handle authority changed",
                   );
                 await assertNoMigration(did);
-                await createCustodyInventoryStorage(db).recordSigned({
+                await custody.recordSigned({
                   id: crypto.randomUUID(),
                   did,
                   cid,

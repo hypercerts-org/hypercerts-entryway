@@ -94,6 +94,7 @@ export async function createApp({ config, db, mail, lifecycle }) {
     complete: protocolOperations.completeInvite,
   });
   const migration = await createAccountMigration({
+    custody: accounts.custody,
     db,
     config,
     accounts,

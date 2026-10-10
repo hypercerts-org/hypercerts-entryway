@@ -40,6 +40,7 @@ export async function createAccounts({
     );
   const plcClient = new plc.Client(config.plcUrl);
   const storage = createAccountStorage(db, config.pds);
+  const custody = createCustodyInventoryStorage(db);
   const shared = createAccountPrimitives({ db, config, storage, ownership });
   const observeCustody = async (did) => {
     const observation = await readCustodyObservation(
@@ -48,7 +49,7 @@ export async function createAccounts({
       ownership.currentClaim.operationId,
     );
     await db.transact(async () => {
-      await createCustodyInventoryStorage(db).recordObservation(observation);
+      await custody.recordObservation(observation);
       await db.delete("custody:refresh-pending", did);
     });
     return observation;
@@ -59,6 +60,7 @@ export async function createAccounts({
     plcSigner,
     plcClient,
     observeCustody,
+    custody,
     ...shared,
   };
   const registration = createRegistration(context);
@@ -74,6 +76,7 @@ export async function createAccounts({
     plcSigner,
     plcClient,
     observeCustody,
+    custody,
     // Internal operator harness only. Observation never settles pending dispatch
     // and admission rejects a conflicting operation, including uncertain writes.
     refreshCustodyObservation: (did) =>

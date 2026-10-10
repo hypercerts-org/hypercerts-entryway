@@ -1,5 +1,5 @@
 import { signingKeyResult } from "../accounts/operation-ownership.js";
-import { createCustodyInventoryStorage } from "../database/drizzle/migration-custody.js";
+import type { CustodyInventoryTransactor } from "../database/custody.port.js";
 
 import { fail } from "../accounts/input.mjs";
 import { xrpc } from "../pds/client.mjs";
@@ -20,6 +20,7 @@ interface Pds {
 }
 interface Context {
   db: AuthorityDatabase;
+  custody: CustodyInventoryTransactor;
   config: unknown;
   accounts: {
     plcSigner: Secp256k1MigrationPlcSigner;
@@ -58,6 +59,7 @@ function inputRecord(value: unknown): Record<string, unknown> {
 
 export async function createPlcOperations({
   db,
+  custody,
   config,
   accounts,
   sendCode,
@@ -65,7 +67,6 @@ export async function createPlcOperations({
   pdsCall,
   choosePds,
 }: Context) {
-  const custody = createCustodyInventoryStorage(db);
   const signer = accounts.plcSigner;
   const reserveSigningKey = async ({
     did,

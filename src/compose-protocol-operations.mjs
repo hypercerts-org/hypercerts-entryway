@@ -33,7 +33,13 @@ export async function createProtocolOperations({
   );
   Object.assign(
     operations,
-    await createPlcOperations({ db, config, accounts, ...operations }),
+    await createPlcOperations({
+      db,
+      config,
+      accounts,
+      custody: accounts.custody,
+      ...operations,
+    }),
   );
   Object.assign(
     operations,

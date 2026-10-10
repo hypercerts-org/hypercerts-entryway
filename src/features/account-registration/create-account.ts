@@ -3,7 +3,7 @@ import {
   signingKeyResult,
 } from "../../accounts/operation-ownership.js";
 import { cidForCbor } from "@atproto/common";
-import { createCustodyInventoryStorage } from "../../database/drizzle/migration-custody.js";
+import type { CustodyInventoryTransactor } from "../../database/custody.port.js";
 import * as plc from "@did-plc/lib";
 import { genesisRotationKeys } from "../../plc/policy.js";
 import { HttpError } from "../../http/http-error.mjs";
@@ -27,6 +27,7 @@ interface ProvisionPolicy {
 }
 interface Context {
   db: AuthorityDatabase;
+  custody: CustodyInventoryTransactor;
   config: {
     plcRecoveryKeyDid: string;
     pds: { id: string; url: string; internalUrl: string }[];
@@ -70,6 +71,7 @@ function notFound(error: unknown): boolean {
 }
 export function createRegistration({
   db,
+  custody,
   config,
   plcSigner,
   plcClient,
@@ -295,7 +297,7 @@ export function createRegistration({
           await ownership.bindResource(row!.did);
           // The exact signed row and its unsigned authorization history commit
           // before PDS dispatch. Resume reuses both, without promoting authority.
-          await createCustodyInventoryStorage(db).recordSigned({
+          await custody.recordSigned({
             id: `${operationId}:genesis`,
             did,
             cid,

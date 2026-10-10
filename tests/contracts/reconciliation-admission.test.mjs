@@ -10,6 +10,7 @@ import { createOperationOwnership } from "../../dist/src/accounts/operation-owne
 import { createOperationOwnershipStore } from "../../dist/src/database/drizzle/operation-ownership.js";
 import { createAccountStorage } from "../../dist/src/database/drizzle/account-storage.js";
 import { createAccountPrimitives } from "../../dist/src/accounts/primitives.mjs";
+import { createCustodyInventoryStorage } from "../../dist/src/database/drizzle/migration-custody.js";
 import { createHandleChange } from "../../dist/src/features/handle-change/change-handle.js";
 import { createDeletion } from "../../dist/src/features/account-deletion/delete-account.mjs";
 import { createStatusChange } from "../../dist/src/features/account-settings/change-status.mjs";
@@ -30,6 +31,7 @@ async function pair(t, ownershipFactory, reply) {
   const storage = createAccountStorage(db, config.pds);
   const shared = createAccountPrimitives({ db, config, storage, ownership });
   const context = {
+    custody: createCustodyInventoryStorage(db),
     db,
     config,
     ...shared,

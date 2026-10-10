@@ -49,6 +49,7 @@ async function fixture(t, plcMail) {
     store: createOperationOwnershipStore(db),
   });
   const accounts = {
+    custody: createCustodyInventoryStorage(db),
     ownership,
     serialized: (did, perform, intent) =>
       ownership.accountStep(did, intent, perform),

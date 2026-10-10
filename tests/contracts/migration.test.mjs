@@ -19,6 +19,7 @@ import { Secp256k1MigrationPlcSigner } from "../../dist/src/plc/signing.js";
 import { Secp256k1Keypair } from "@atproto/crypto";
 import { cidForCbor } from "@atproto/common";
 import { openTestDatabase } from "../support/database-fixture.mjs";
+import { createCustodyInventoryStorage } from "../../dist/src/database/drizzle/migration-custody.js";
 import { createAccountMigration } from "../../dist/src/features/pds-migration/move-between-pds.mjs";
 
 async function fixture(t, { interruptCompletion = false } = {}) {
@@ -340,6 +341,7 @@ async function fixture(t, { interruptCompletion = false } = {}) {
   const boot = async () => {
     f.db = db;
     f.migration = await createAccountMigration({
+      custody: createCustodyInventoryStorage(db),
       db,
       config,
       accounts,

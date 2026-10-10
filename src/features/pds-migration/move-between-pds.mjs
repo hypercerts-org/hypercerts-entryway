@@ -9,7 +9,6 @@ import * as plc from "@did-plc/lib";
 import { cidForCbor } from "@atproto/common";
 import { HttpError } from "../../http/http-error.mjs";
 import { xrpc } from "../../pds/client.mjs";
-import { createCustodyInventoryStorage } from "../../database/drizzle/migration-custody.js";
 
 const error = (name, message, status = 400) =>
   new HttpError(status, name, message);
@@ -36,6 +35,7 @@ export async function createAccountMigration({
   db,
   config,
   accounts,
+  custody,
   legacy,
   security,
 }) {
@@ -298,7 +298,7 @@ export async function createAccountMigration({
             409,
           );
       }
-      await createCustodyInventoryStorage(db).recordSigned({
+      await custody.recordSigned({
         id: randomUUID(),
         did: operation.did,
         cid,
