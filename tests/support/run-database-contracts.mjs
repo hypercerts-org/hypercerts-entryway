@@ -10,6 +10,7 @@ const files = [
   "custody-history",
   "plc-policy",
   "plc-signing",
+  "account-access",
   "account-schema",
   "account-security",
   "account-completion",

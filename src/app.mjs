@@ -2,6 +2,7 @@ import { mountOperationRecoveryRoutes } from "./features/account-settings/operat
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import express from "express";
 import { createAccounts } from "./compose-accounts.mjs";
+import { createAccountAccess } from "./accounts/account-access.mjs";
 import { createOAuth } from "./features/oauth-authorization/provider.mjs";
 import { mountXrpc } from "./compose-protocol.mjs";
 import { mountAccountUi } from "./compose-account-ui.mjs";
@@ -18,6 +19,7 @@ export async function createApp({ config, db, mail, lifecycle }) {
     config,
     workerId: lifecycle?.instanceId,
   });
+  const accountAccess = createAccountAccess(accounts.storage);
   const app = express();
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
@@ -73,12 +75,20 @@ export async function createApp({ config, db, mail, lifecycle }) {
       return res.sendStatus(404);
     next();
   });
-  const oauth = await createOAuth({ app, db, config, accounts, mail });
+  const oauth = await createOAuth({
+    app,
+    db,
+    config,
+    accounts,
+    accountAccess,
+    mail,
+  });
   const legacy = await createLegacy({ db, config, accounts });
   const security = await createAccountSecurity({
     db,
     config,
     accounts,
+    accountAccess,
     oauth,
     legacy,
     mail,
@@ -148,6 +158,7 @@ export async function createApp({ config, db, mail, lifecycle }) {
     app,
     db,
     accounts,
+    accountAccess,
     oauth,
     config,
     legacy,
@@ -161,6 +172,7 @@ export async function createApp({ config, db, mail, lifecycle }) {
     db,
     config,
     accounts,
+    accountAccess,
     oauth,
     legacy,
     security,

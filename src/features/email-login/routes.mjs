@@ -6,7 +6,6 @@ const RESEND_COOLDOWN = 5_000;
 export function mountEmailLogin({
   app,
   db,
-  accounts,
   authentication,
   mail,
   flows,
@@ -164,18 +163,20 @@ export function mountEmailLogin({
           identity.email.toLowerCase() !== flow.email
         )
           throw new InvalidRequestError("Email verification did not complete");
+        let resolution;
         await db.transact(async () => {
           await readCurrentIntent(flow, browser);
-          await getAccountSecurity()?.assertLoginEmail({
-            email: flow.email,
-            userId: identity.userId,
-          });
+          resolution = await getAccountSecurity()?.assertLoginEmail(identity);
         });
         // Rotate the provider's browser session after successful identity verification.
         const rotated = await loadBrowser(req, res, true);
         const verifiedEmail = identity.email.toLowerCase();
-        const row = await accounts.get(verifiedEmail);
-        if (!row || row.status === "provisioning") {
+        if (
+          !resolution ||
+          resolution.kind === "unbound" ||
+          (resolution.kind === "single" &&
+            resolution.account.status === "provisioning")
+        ) {
           const body = await signupForm(
             { ...flow, authEmail: verifiedEmail },
             rotated,
@@ -189,8 +190,16 @@ export function mountEmailLogin({
           response.commitCookies(res);
           return pageForFlow(res, "Create your account", body, current);
         }
-        await authenticated(req, res, flow, rotated, row, {
-          verifiedEmail,
+        if (resolution.kind === "selection-required")
+          return pageForFlow(
+            res,
+            "Account selection required",
+            "<p role=\"alert\">This verified identity is linked to multiple accounts. Account selection is not available yet.</p>",
+            flow,
+            409,
+          );
+        await authenticated(req, res, flow, rotated, resolution.account, {
+          identity,
           commitCookies: () => response.commitCookies(res),
         });
       } catch (error) {

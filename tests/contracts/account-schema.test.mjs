@@ -116,6 +116,30 @@ test("reopening the database preserves account ownership, claims and stored date
   }
 });
 
+test("bound-account lookup returns only accounts with an established user binding", async (t) => {
+  const { path } = fixture(t);
+  const db = await openTestDatabase(path);
+  try {
+    const storage = createAccountStorage(db, pds);
+    await storage.insertAccount(alice);
+    await verifiedUser(db, "verified-owner", alice.email);
+
+    assert.deepEqual(await storage.listBoundAccounts("verified-owner"), []);
+    await storage.bindVerifiedIdentity({
+      did: alice.did,
+      email: alice.email,
+      userId: "verified-owner",
+    });
+    assert.deepEqual(
+      await storage.listBoundAccounts("verified-owner"),
+      [alice],
+    );
+    assert.deepEqual(await storage.listBoundAccounts("unrelated-user"), []);
+  } finally {
+    await db.close();
+  }
+});
+
 test("account and claims roll back on unique collision", async (t) => {
   const { path } = fixture(t);
   const db = await openTestDatabase(path);

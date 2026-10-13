@@ -23,13 +23,19 @@ and [deployment profiles](deployment-profiles.md).
 
 ## Remaining integration work
 
+The access-first rule is implemented for the current single-binding schema:
+verified browser access resolves only an established Better Auth user-ID-to-DID
+binding, and signup activation records the original owner in its existing durable
+intent before binding atomically with activation. Startup and login do not infer
+bindings from email matches; existing unbound active rows are not backfilled and
+cannot be claimed by signup or retry. See [identity custody](data-custody.md#1-account-identity-and-ownership)
+for current behavior and recovery limits.
+
 The approved [multiple-DID email policy](data-custody.md#1-account-identity-and-ownership)
-requires schema changes and import of DID/email associations when an existing PDS
-joins Entryway. Reuse Better Auth's email proof, then resolve associated DIDs and
-require an explicit choice for multiple accounts before continuing the original
-flow and establishing a selected-DID session. These changes are not implemented;
-the current schema remains unique per email and bound auth user. Email matching
-alone must not establish authority over an unimported DID or merge accounts.
+still requires schema changes and import of DID/email associations when an existing
+PDS joins Entryway. The post-verification chooser is not implemented; multiple
+bindings fail closed under current routing. Email matching alone must not establish
+authority over an unimported DID or merge accounts.
 
 Preserved MJS remains outside strict TypeScript coverage. Complete ePDS consent and
 freshness parity, production email delivery across the XRPC surface, fleet

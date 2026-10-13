@@ -329,10 +329,21 @@ async function verificationFixture(t, stage) {
       clientUrl: "https://client.example.test",
     },
   });
+  const loadBrowser = flows.loadBrowser;
+  flows.loadBrowser = async (req, res, rotate) => {
+    const loaded = await loadBrowser(req, res, rotate);
+    if (stage === "continuation" && rotate) await gate.pause();
+    return loaded;
+  };
   const { authenticated } = createConsent({
     db,
     provider,
     flows,
+    accountAccess: {
+      async requireBoundAccount(_identity, did) {
+        return { ...row, did };
+      },
+    },
     stores: {
       async account() {
         if (stage === "consent") await gate.pause();
@@ -364,12 +375,6 @@ async function verificationFixture(t, stage) {
     db,
     flows,
     authenticated,
-    accounts: {
-      async get(email) {
-        if (stage === "continuation") await gate.pause();
-        return stage === "signup" ? null : { ...row, email };
-      },
-    },
     authentication: {
       async queueSignInCode() {
         return { async deliver() {} };
@@ -395,7 +400,13 @@ async function verificationFixture(t, stage) {
       if (stage === "signup") await gate.pause();
       return "Signup form";
     },
-    getAccountSecurity: () => ({ async assertLoginEmail() {} }),
+    getAccountSecurity: () => ({
+      async assertLoginEmail() {
+        return stage === "signup"
+          ? { kind: "unbound" }
+          : { kind: "single", account: row };
+      },
+    }),
   });
   return {
     db,

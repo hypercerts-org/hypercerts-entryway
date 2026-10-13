@@ -2,6 +2,11 @@
   "note": "MJS ownership, not a claim of full strict typed conversion",
   "files": [
     {
+      "path": "src/accounts/account-access.mjs",
+      "owner": "accounts",
+      "kind": "new MJS helper; checkJs remains false"
+    },
+    {
       "path": "src/accounts/challenges.mjs",
       "owner": "accounts",
       "kind": "preserved/extracted MJS; checkJs remains false"

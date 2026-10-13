@@ -86,7 +86,7 @@ export function createAccountAuthority({ db, accounts }) {
         );
       const linked = userId
         ? await accounts.storage.bindVerifiedIdentity({ did, email, userId })
-        : await accounts.storage.ensureLegacyVerifiedIdentity({ did, email });
+        : await accounts.storage.bindAccountToVerifiedEmailUser({ did, email });
       if (userId && row.emailVerified === false)
         await accounts.save({ ...row, emailVerified: true });
       return linked;
@@ -146,19 +146,8 @@ export function createAccountAuthority({ db, accounts }) {
     bindVerifiedIdentity,
     async initializeClaims() {
       await tx(async () => {
-        for (const row of await accounts.list()) {
+        for (const row of await accounts.list())
           await reserve(row.email, row.did, "primary");
-          const user = await userByEmail(row.email);
-          if (
-            !["deleted", "provisioning"].includes(row.status) &&
-            user?.emailVerified
-          )
-            await bindVerifiedIdentity({
-              did: row.did,
-              email: row.email,
-              userId: user.id,
-            });
-        }
       });
     },
     async hasLiveSession(sessionId, userId) {
