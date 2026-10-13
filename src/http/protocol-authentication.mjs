@@ -42,6 +42,7 @@ export async function createProtocolRouting({
   db,
   config,
   accounts,
+  accountAccess,
   oauth,
   legacy,
   security,
@@ -271,9 +272,16 @@ export async function createProtocolRouting({
   const migrationPrincipal = async (req) => {
     const session = await oauth.requireSession(req);
     if (session?.emailVerified) {
-      const account = await accounts.get(session.email.toLowerCase());
-      if (!account)
+      const resolution = await accountAccess.resolveBoundAccounts(session);
+      if (resolution.kind === "unbound")
         throw new HttpError(404, "AccountNotFound", "Account not found");
+      if (resolution.kind === "selection-required")
+        throw new HttpError(
+          409,
+          "AccountSelectionRequired",
+          "Choose a linked account before continuing",
+        );
+      const account = resolution.account;
       const browser = await oauth.loadBrowser(req, req.res);
       oauth.checkCsrf(req, browser);
       return {

@@ -12,6 +12,7 @@ import type {
 
 export interface AccountReader {
   getByDid(did: string): Promise<AccountRow | null>;
+  listBoundAccounts(userId: string): Promise<AccountRow[]>;
   getByEmail(email: string): Promise<AccountRow | null>;
   getByHandle(handle: string): Promise<AccountRow | null>;
   getEmailClaim(
@@ -35,7 +36,12 @@ export interface AccountTransactor extends AccountReader {
   insertAccount(row: AccountRow): Promise<void>;
   saveAccount(row: AccountRow): Promise<void>;
   bindVerifiedIdentity(input: BindVerifiedIdentity): Promise<string>;
-  ensureLegacyVerifiedIdentity(input: LegacyVerifiedEmail): Promise<string>;
+  /** Persist a verified email identity before signup provisions its DID.
+   * Callers must validate mailbox proof first.
+   */
+  ensureVerifiedEmailUser(email: string): Promise<string>;
+  /** Bind an account to its verified email user. Callers must validate mailbox proof first. */
+  bindAccountToVerifiedEmailUser(input: LegacyVerifiedEmail): Promise<string>;
   reserveExternalMigration(input: ExternalMigrationReservation): Promise<void>;
   finalizeImportedAccount(input: FinalizeImportedAccount): Promise<AccountRow>;
   activateImportedAccount(input: ActivateImportedAccount): Promise<AccountRow>;

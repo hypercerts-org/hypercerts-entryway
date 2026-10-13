@@ -7,6 +7,7 @@ if (!["sqlite", "postgresql"].includes(backend))
 const directory = process.env.DATABASE_REPORT_DIR ?? "/app/artifacts";
 mkdirSync(directory, { recursive: true });
 const files = [
+  "account-access",
   "account-schema",
   "account-security",
   "account-completion",

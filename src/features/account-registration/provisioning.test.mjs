@@ -2,6 +2,134 @@ import { Secp256k1Keypair } from "@atproto/crypto";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fixture, alice } from "../../../tests/support/account-fixture.mjs";
+import {
+  failureTrigger,
+  query,
+  removeFailureTrigger,
+  verifiedUser,
+} from "../../../tests/support/database-fixture.mjs";
+
+test("verified registration activates and binds the original browser user", async (t) => {
+  const { db, accounts } = await fixture(t);
+  const userId = "registration-owner";
+  await verifiedUser(db, userId, alice.email);
+
+  const row = await accounts.create({
+    ...alice,
+    registrationIdentity: {
+      kind: "better-auth",
+      userId,
+      email: alice.email,
+      emailVerified: true,
+    },
+  });
+
+  assert.equal(row.status, "active");
+  assert.deepEqual(await accounts.storage.getVerifiedBinding(row.did), {
+    did: row.did,
+    userId,
+    email: alice.email,
+  });
+  assert.equal(await db.get("registration:intents", alice.email), null);
+  assert.equal(
+    (await db.get("operations", `create:${row.did}`)).registrationIdentity
+      .userId,
+    userId,
+  );
+});
+
+test("registration cannot acquire an already active unbound row by verified email", async (t) => {
+  const { accounts, db } = await fixture(t);
+  await accounts.storage.insertAccount(alice);
+  const userId = "unrelated-registration-owner";
+  await verifiedUser(db, userId, alice.email);
+
+  await assert.rejects(
+    accounts.create({
+      ...alice,
+      registrationIdentity: {
+        kind: "better-auth",
+        userId,
+        email: alice.email,
+        emailVerified: true,
+      },
+    }),
+    { error: "AccountMismatch" },
+  );
+  assert.equal(await accounts.storage.getVerifiedBinding(alice.did), null);
+});
+
+test("registration reconciliation uses persisted user ID and atomically retries binding after local rollback", async (t) => {
+  const f = await fixture(t);
+  const userId = "original-registration-owner";
+  await verifiedUser(f.db, userId, alice.email);
+  const registrationIdentity = {
+    kind: "better-auth",
+    userId,
+    email: alice.email,
+    emailVerified: true,
+  };
+  await failureTrigger(
+    f.db,
+    "registration_binding_failure",
+    "account_bindings",
+    "forced binding failure",
+  );
+  await assert.rejects(
+    f.accounts.create({ ...alice, registrationIdentity }),
+    /forced binding failure/i,
+  );
+  await removeFailureTrigger(
+    f.db,
+    "registration_binding_failure",
+    "account_bindings",
+  );
+  const pending = await f.accounts.get(alice.email);
+  assert.equal(pending.status, "provisioning");
+  assert.equal(await f.accounts.storage.getVerifiedBinding(pending.did), null);
+  assert.equal(
+    (await f.db.get("registration:intents", alice.email)).registrationIdentity
+      .userId,
+    userId,
+  );
+
+  await query(
+    f.db,
+    'UPDATE "user" SET email=? WHERE id=?',
+    ["changed@example.com", userId],
+    "run",
+  );
+  await verifiedUser(f.db, "replacement-owner", alice.email);
+  const blocked = await f.accounts.reconcile();
+  assert.ok(blocked.some((item) => item.status === "pending"));
+  assert.equal(await f.accounts.storage.getVerifiedBinding(pending.did), null);
+  assert.equal((await f.accounts.get(pending.did)).status, "provisioning");
+
+  await query(
+    f.db,
+    'DELETE FROM "user" WHERE id=?',
+    ["replacement-owner"],
+    "run",
+  );
+  await query(
+    f.db,
+    'UPDATE "user" SET email=? WHERE id=?',
+    [alice.email, userId],
+    "run",
+  );
+  await f.accounts.reconcile();
+  assert.equal((await f.accounts.get(pending.did)).status, "active");
+  assert.deepEqual(await f.accounts.storage.getVerifiedBinding(pending.did), {
+    did: pending.did,
+    userId,
+    email: alice.email,
+  });
+  assert.equal(
+    f.calls.filter((call) => call.method === "com.atproto.server.createAccount")
+      .length,
+    1,
+  );
+});
 
 test("provisioning retries reuse the persisted DID and signed operation after a PDS failure", async (t) => {
   let failed = false;

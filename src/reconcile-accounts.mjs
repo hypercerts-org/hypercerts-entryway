@@ -26,6 +26,9 @@ export function createAccountReconciler({
           handle: row.handle,
           pdsId: row.pdsId,
           recoveryKey: row.recoveryKey ?? null,
+          ...(op.registrationIdentity
+            ? { registrationIdentity: op.registrationIdentity }
+            : {}),
         };
       case "handle":
         return { handle: op.handle };
@@ -74,6 +77,9 @@ export function createAccountReconciler({
             handle: current.handle,
             pdsId: current.pdsId,
             recoveryKey: current.recoveryKey,
+            ...(op.registrationIdentity
+              ? { registrationIdentity: op.registrationIdentity }
+              : {}),
           },
           operationId,
         );

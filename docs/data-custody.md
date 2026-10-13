@@ -20,12 +20,26 @@ choice. The selected DID then continues the original authentication or
 authorization flow before a session for that DID is established. Better Auth's
 email-level browser session is distinct from this selected-account session.
 
-The current implementation still enforces a unique account email and a unique
-Better Auth user in the DID binding. The schema changes, joining-PDS association
-import and post-verification chooser are not implemented. The table below records
-current storage, not the approved target. Internal refactoring does not require
-upgrading existing databases; public account migration and existing ePDS deployment
-conversion remain separate requirements.
+The current implementation resolves browser access only through an established
+`account_bindings` row for the persisted, verified Better Auth user. Matching an
+email neither selects an account nor creates a binding. Registration records the
+verified owner user ID in its existing intent and commits the binding in the same
+database transaction that activates the account; retries and reconciliation use
+that saved ID rather than discovering an owner by email. Startup initializes email
+claims only and does not create bindings. Existing active rows without a binding
+are denied browser access and cannot be acquired through signup or retry.
+Restoring access requires an explicit trusted repair. No repair command is
+currently available, and no automatic backfill is performed.
+
+Account access is resolved through explicit DID-to-user bindings. The resolver
+supports a multiple-account result, but the current database schemas enforce one
+account per email and one DID per Better Auth user. Joining-PDS association import
+and the account chooser are not implemented. Browser sign-in rejects
+multiple-account results rather than selecting an account automatically.
+
+The table below records current storage, not the full approved target. Internal
+refactoring does not require upgrading existing databases; public account migration
+and existing ePDS deployment conversion remain separate requirements.
 
 | State                                  | Domain or system owner              | Current representation                                                |
 | -------------------------------------- | ----------------------------------- | --------------------------------------------------------------------- |

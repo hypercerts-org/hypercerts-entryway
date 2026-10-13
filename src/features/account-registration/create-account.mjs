@@ -25,10 +25,57 @@ export function createRegistration({
   const setProvisionPolicy = (policy) => {
     provisionPolicy = policy;
   };
-  const create = async ({ email, handle, pdsId, recoveryKey, inviteCode }) => {
+  const registrationIdentityFor = async (identity, email) => {
+    if (identity === undefined) return undefined;
+    if (
+      !identity ||
+      identity.email !== email ||
+      identity.kind !== "better-auth" ||
+      typeof identity.userId !== "string" ||
+      !identity.userId ||
+      !(await storage.isVerifiedUserEmail({ userId: identity.userId, email }))
+    )
+      throw new HttpError(
+        403,
+        "AccountMismatch",
+        "A verified registration identity for this email is required",
+      );
+    return {
+      kind: "better-auth",
+      userId: identity.userId,
+      email,
+    };
+  };
+  const bindRegistrationIdentity = async (row, identity) => {
+    if (!identity) return;
+    if (identity.kind === "better-auth")
+      await storage.bindVerifiedIdentity({
+        did: row.did,
+        email: identity.email,
+        userId: identity.userId,
+      });
+    else
+      throw new HttpError(
+        503,
+        "RegistrationProvenanceInvalid",
+        "The saved registration owner cannot be verified",
+      );
+  };
+  const create = async ({
+    email,
+    handle,
+    pdsId,
+    recoveryKey,
+    inviteCode,
+    registrationIdentity: untrustedIdentity,
+  }) => {
     email = String(email).trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254)
       throw new HttpError(400, "InvalidEmail", "Provide a valid email address");
+    const registrationIdentity = await registrationIdentityFor(
+      untrustedIdentity,
+      email,
+    );
     if (recoveryKey) {
       try {
         await plc.assureValidOp({
@@ -53,7 +100,9 @@ export function createRegistration({
       if (
         inFlight.handle !== handle ||
         inFlight.pdsId !== pdsId ||
-        inFlight.recoveryKey !== (recoveryKey ?? null)
+        inFlight.recoveryKey !== (recoveryKey ?? null) ||
+        JSON.stringify(inFlight.registrationIdentity ?? null) !==
+          JSON.stringify(registrationIdentity ?? null)
       )
         throw new HttpError(
           409,
@@ -62,12 +111,21 @@ export function createRegistration({
         );
       return inFlight.promise;
     }
-    const work = execute({ email, handle, pdsId, recoveryKey, inviteCode });
+    const input = {
+      email,
+      handle,
+      pdsId,
+      recoveryKey,
+      inviteCode,
+      ...(registrationIdentity ? { registrationIdentity } : {}),
+    };
+    const work = execute(input);
     pending.set(email, {
       promise: work,
       handle,
       pdsId,
       recoveryKey: recoveryKey ?? null,
+      registrationIdentity,
     });
     try {
       return await work;
@@ -75,9 +133,21 @@ export function createRegistration({
       pending.delete(email);
     }
   };
-  const intentFor = ({ email, handle, pdsId, recoveryKey }) => ({
+  const intentFor = ({
+    email,
+    handle,
+    pdsId,
+    recoveryKey,
+    registrationIdentity,
+  }) => ({
     kind: "create",
-    request: { email, handle, pdsId, recoveryKey: recoveryKey ?? null },
+    request: {
+      email,
+      handle,
+      pdsId,
+      recoveryKey: recoveryKey ?? null,
+      ...(registrationIdentity ? { registrationIdentity } : {}),
+    },
     completeOnReturn: true,
   });
   // Reconciliation invokes this admitted body directly. Calling public create()
@@ -88,6 +158,7 @@ export function createRegistration({
     pdsId,
     recoveryKey,
     inviteCode,
+    registrationIdentity,
   }) => {
     let row = await get(email);
     let emailClaim = await storage.getEmailClaim(email);
@@ -119,7 +190,18 @@ export function createRegistration({
         "This email already has an account",
       );
     if (row) await ownership.bindResource(row.did);
-    if (row?.status === "active") return row;
+    if (row?.status === "active") {
+      if (registrationIdentity) {
+        const binding = await storage.getVerifiedBinding(row.did);
+        if (binding?.userId !== registrationIdentity.userId)
+          throw new HttpError(
+            403,
+            "AccountMismatch",
+            "An active account cannot be acquired through registration",
+          );
+      }
+      return row;
+    }
     if (row && row.status !== "provisioning")
       throw new HttpError(409, "AccountUnavailable", "Account is unavailable");
     await validateHandle(handle, row?.did);
@@ -135,10 +217,17 @@ export function createRegistration({
             handle,
             pdsId,
             recoveryKey: recoveryKey ?? null,
+            ...(registrationIdentity ? { registrationIdentity } : {}),
           });
           await ownership.checkpoint(
             "registration-prepared",
-            { email, handle, pdsId, recoveryKey: recoveryKey ?? null },
+            {
+              email,
+              handle,
+              pdsId,
+              recoveryKey: recoveryKey ?? null,
+              ...(registrationIdentity ? { registrationIdentity } : {}),
+            },
             false,
           );
         });
@@ -206,6 +295,7 @@ export function createRegistration({
       did: row.did,
       phase: "pds-pending",
       at: new Date(),
+      ...(registrationIdentity ? { registrationIdentity } : {}),
     };
     await journal(operation);
     await ownership.dispatch(
@@ -266,6 +356,7 @@ export function createRegistration({
     await db.transact(async () => {
       await save(row);
       await claimHandle(handle, row.did);
+      await bindRegistrationIdentity(row, registrationIdentity);
       await journal({ ...operation, phase: "complete" });
       await provisionPolicy?.complete(row);
       await db.delete("registration:intents", email);
@@ -276,26 +367,67 @@ export function createRegistration({
     ownership.run(`email:${input.email}`, intentFor(input), () =>
       provision(input),
     );
-  const reconcileRegistration = (input, operationId) =>
-    ownership.resumePending(
+  const reconcileRegistration = async (input, operationId) => {
+    const nomination = await pendingIntent(input.email);
+    if (nomination && nomination.operationId !== operationId)
+      throw Object.assign(new Error("Registration intent changed"), {
+        code: "OperationNoLongerPending",
+      });
+    const saved = nomination?.saved ?? input;
+    if (
+      nomination &&
+      input.registrationIdentity &&
+      JSON.stringify(input.registrationIdentity) !==
+        JSON.stringify(saved.registrationIdentity)
+    )
+      throw Object.assign(new Error("Registration owner changed"), {
+        code: "OperationNoLongerPending",
+      });
+    const intent = intentFor(saved);
+    const inviteCode = (
+      await db.get("entryway:invite-reservations", input.email)
+    )?.code;
+    return ownership.resumePending(
       `email:${input.email}`,
       operationId,
-      intentFor(input),
-      () => provision(input),
+      intent,
+      () => provision({ ...saved, inviteCode }),
     );
+  };
   const pendingIntent = async (email) => {
     const record = await db.get("registration:intents", email);
     if (!record || typeof record.authorityOperationId !== "string") return null;
+    let registrationIdentity;
+    if (record.registrationIdentity) {
+      const identity = record.registrationIdentity;
+      if (
+        identity.email !== record.email ||
+        identity.kind !== "better-auth" ||
+        typeof identity.userId !== "string" ||
+        !identity.userId
+      )
+        throw new HttpError(
+          503,
+          "RegistrationProvenanceInvalid",
+          "The saved registration owner cannot be verified",
+        );
+      registrationIdentity = {
+        kind: "better-auth",
+        userId: identity.userId,
+        email: identity.email,
+      };
+    }
     const saved = {
       email: record.email,
       handle: record.handle,
       pdsId: record.pdsId,
       recoveryKey: record.recoveryKey ?? null,
+      ...(registrationIdentity ? { registrationIdentity } : {}),
     };
-    const operationId = await ownership.pendingIntentId(`email:${email}`, {
-      kind: "create",
-      request: saved,
-    });
+    const operationId = await ownership.pendingIntentId(
+      `email:${email}`,
+      intentFor(saved),
+    );
     return operationId === record.authorityOperationId
       ? { saved, operationId }
       : null;
