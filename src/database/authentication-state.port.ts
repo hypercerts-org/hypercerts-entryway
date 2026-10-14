@@ -27,12 +27,16 @@ export interface AuthenticationState {
   account(did: string): Promise<AccountRow>;
   identity(did: string): Promise<string | undefined>;
   version(did: string): Promise<number>;
+  claims(email: string): Promise<{ did: string; purpose: string }[]>;
   claim(email: string): Promise<{ did: string; purpose: string } | null>;
   pendingEmail(did: string): Promise<PendingEmail | null>;
   assertEmailAvailable(
     email: string,
     did: string,
-    options?: { allowOwnBackup?: boolean },
+    options?: {
+      allowOwnBackup?: boolean;
+      purpose?: "primary" | "pending" | "backup";
+    },
   ): Promise<string>;
   bindVerifiedIdentity(input: {
     did: string;

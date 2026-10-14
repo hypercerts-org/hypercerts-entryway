@@ -12,7 +12,6 @@ export function createAccountSettingsSecurity({
   const {
     account,
     principal,
-    claim,
     pendingEmail,
     assertEmailAvailable,
     requireAdmin,
@@ -23,26 +22,33 @@ export function createAccountSettingsSecurity({
     serialized,
   } = proofs;
   const readLoginEmailUsage = async (email) => ({
-    account: await accounts.get(email),
-    reservation: await claim(email),
+    claims: await accounts.storage.listEmailClaims(email),
+    reservations:
+      await accounts.storage.listExternalReservationsByEmail(email),
   });
   const assertLoginEmailUsage = async (identity, email, usage) => {
     if (identity?.emailVerified !== true)
       throw fail(403, "AccountMismatch", "Verify your email before signing in");
-    if (usage.reservation?.purpose === "external" && !usage.account) {
-      const owner =
-        await accounts.storage.getExternalReservationByEmail(email);
-      const verified = await accounts.storage.isVerifiedUserEmail({
-        userId: identity.userId,
-        email,
-      });
-      if (owner?.userId === identity.userId && verified) return;
-    }
+    const hasPrimaryClaim = usage.claims.some(
+      ({ purpose }) => purpose === "primary",
+    );
+    const hasBlockingClaim = usage.claims.some(
+      ({ purpose }) =>
+        purpose === "backup" || (purpose === "pending" && !hasPrimaryClaim),
+    );
+    const activeReservations = usage.reservations.filter(
+      ({ state }) => state !== "complete",
+    );
+    const ownsUnhostedReservation =
+      activeReservations.length === 0 ||
+      (activeReservations.some(({ userId }) => userId === identity.userId) &&
+        (await accounts.storage.isVerifiedUserEmail({
+          userId: identity.userId,
+          email,
+        })));
     if (
-      usage.reservation &&
-      (!usage.account ||
-        usage.reservation.did !== usage.account.did ||
-        usage.reservation.purpose !== "primary")
+      hasBlockingClaim ||
+      (!hasPrimaryClaim && !ownsUnhostedReservation)
     )
       throw fail(
         409,
@@ -125,7 +131,9 @@ export function createAccountSettingsSecurity({
         );
       if (!token)
         throw fail(400, "TokenRequired", "Verify the current email first");
-      email = await assertEmailAvailable(email, row.did);
+      email = await assertEmailAvailable(email, row.did, {
+        purpose: "pending",
+      });
       const proof = await commitProof(
         token,
         "email-old",
@@ -143,7 +151,9 @@ export function createAccountSettingsSecurity({
     },
     async requestBackupEmail(actor, { email }) {
       const row = await principal(actor, true);
-      email = await assertEmailAvailable(email, row.did);
+      email = await assertEmailAvailable(email, row.did, {
+        purpose: "backup",
+      });
       if (row.email === email)
         throw fail(
           400,
@@ -160,7 +170,9 @@ export function createAccountSettingsSecurity({
     },
     async confirmBackupEmail(actor, { email, token }) {
       const row = await principal(actor, true);
-      email = await assertEmailAvailable(email, row.did);
+      email = await assertEmailAvailable(email, row.did, {
+        purpose: "backup",
+      });
       return commitProof(token, "backup-add", { did: row.did, email }, () =>
         authority.addBackupEmail(row.did, email),
       );

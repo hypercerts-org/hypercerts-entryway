@@ -95,11 +95,6 @@ export class ExternalMigrationService {
         "OwnerBindingChanged",
         "A recent verified destination session is required",
       );
-    if (owner.email.toLowerCase() !== input.sourceEmail.toLowerCase())
-      throw new MigrationError(
-        "OwnerBindingChanged",
-        "Verified destination email differs from source identity",
-      );
     if (await this.d.workflows.getByDid(input.did))
       throw new MigrationError(
         "ManualRecoveryRequired",

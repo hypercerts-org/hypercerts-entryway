@@ -86,7 +86,7 @@ export const accounts = table(
     sequence: count("sequence").notNull().unique(),
   },
   (t) => [
-    uniqueIndex("accounts_email_ci").on(sql`lower(${t.email})`),
+    index("accounts_email_ci").on(sql`lower(${t.email})`),
     uniqueIndex("accounts_handle_ci").on(sql`lower(${t.handle})`),
     index("accounts_pds_status").on(t.pds_id, t.status),
   ],
@@ -104,13 +104,18 @@ export const handle_claims = table(
 export const email_claims = table(
   "email_claims",
   {
-    email: text("email").primaryKey(),
+    email: text("email").notNull(),
     did: text("did")
       .notNull()
       .references(() => accounts.did),
     purpose: text("purpose").notNull(),
   },
-  (t) => [uniqueIndex("email_claims_ci").on(sql`lower(${t.email})`)],
+  (t) => [
+    primaryKey({ columns: [t.email, t.did] }),
+    uniqueIndex("email_claims_exclusive_ci")
+      .on(sql`lower(${t.email})`)
+      .where(sql`${t.purpose} IN ('backup','pending')`),
+  ],
 );
 export const account_bindings = table(
   "account_bindings",
@@ -120,10 +125,9 @@ export const account_bindings = table(
       .references(() => accounts.did),
     user_id: text("user_id")
       .notNull()
-      .unique()
       .references(() => user.id),
   },
-  (t) => [],
+  (t) => [index("account_bindings_user_id").on(t.user_id)],
 );
 export const backup_emails = table(
   "backup_emails",
@@ -143,7 +147,7 @@ export const migration_reservations = table(
     did: text("did").notNull().unique(),
     handle: text("handle").notNull(),
     email: text("email").notNull(),
-    user_id: text("user_id").notNull().unique(),
+    user_id: text("user_id").notNull(),
     session_id: text("session_id").notNull(),
     target_pds_id: text("target_pds_id").notNull(),
     target_pds_url: text("target_pds_url").notNull(),
@@ -151,7 +155,8 @@ export const migration_reservations = table(
     created_at: text("created_at").notNull(),
   },
   (t) => [
-    uniqueIndex("migration_email_ci").on(sql`lower(${t.email})`),
+    index("migration_email_ci").on(sql`lower(${t.email})`),
+    index("migration_user_id").on(t.user_id),
     uniqueIndex("migration_handle_ci").on(sql`lower(${t.handle})`),
     check(
       "migration_reservation_state",

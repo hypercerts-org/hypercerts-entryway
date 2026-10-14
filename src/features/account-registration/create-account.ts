@@ -391,25 +391,28 @@ export function createRegistration({
     }
     return row;
   };
-  // Expired pending email changes no longer reserve the address.
+  // Expired pending email changes no longer reserve the address. Primary
+  // claims may be shared, but only by the account being registered.
   const assertEmailAvailable = async (
     email: string,
     row: AccountRow | null,
   ) => {
-    let emailClaim = await storage.getEmailClaim(email);
-    if (emailClaim?.purpose === "pending") {
-      const change = (await db.get(
-        "security:pending-email",
-        emailClaim.did,
-      )) as { expiresAt: number } | null;
-      if (!change?.expiresAt || change.expiresAt <= Date.now()) {
-        await storage.releaseEmail(email, emailClaim.did, "pending");
-        emailClaim = null;
-      }
+    const claims = await storage.listEmailClaims(email);
+    for (const pending of claims.filter(
+      ({ purpose }) => purpose === "pending",
+    )) {
+      const change = (await db.get("security:pending-email", pending.did)) as {
+        expiresAt: number;
+      } | null;
+      if (!change?.expiresAt || change.expiresAt <= Date.now())
+        await storage.releaseEmail(email, pending.did, "pending");
     }
+    const current = await storage.listEmailClaims(email);
     if (
-      emailClaim &&
-      (emailClaim.did !== row?.did || emailClaim.purpose !== "primary")
+      current.some(
+        (claim) =>
+          claim.purpose !== "primary" || !row || claim.did !== row.did,
+      )
     )
       throw new HttpError(
         409,

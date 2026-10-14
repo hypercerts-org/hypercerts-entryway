@@ -179,12 +179,14 @@ owned boundaries, feature-internal imports, runtime cycles and impure rule modul
 
 The sequence shows the target sign-in journey for existing associated accounts,
 not a claim of ePDS parity today.
-The approved sign-in policy verifies email before resolving associated DIDs, then
-requires an explicit choice if more than one is associated. The joining-PDS
-association import, schema changes and chooser remain unimplemented; see
-[account identity](data-custody.md#1-account-identity-and-ownership). Proof freshness
-and consent remain separate policy decisions. Public and confidential clients
-both need acceptance coverage.
+The approved sign-in policy verifies email before resolving established DID
+bindings, then requires an explicit choice if more than one is associated. The
+schema supports repeated primary-email claims and multiple DID bindings per
+verified user; the joining-PDS association import and interactive chooser remain
+unimplemented. The resolver returns `selection-required` and does not choose a DID
+from email alone; see [account identity](data-custody.md#1-account-identity-and-ownership).
+Proof freshness and consent remain separate policy decisions. Public and
+confidential clients both need acceptance coverage.
 
 ```mermaid
 %%{init: {"theme":"base","themeVariables":{"primaryTextColor":"#172B4D","lineColor":"#45556C","actorBkg":"#DBEAFE","actorBorder":"#315582","actorTextColor":"#172B4D","signalColor":"#45556C","signalTextColor":"#172B4D","noteBkgColor":"#FFF1D6","noteTextColor":"#172B4D","noteBorderColor":"#8A5A2B","activationBkgColor":"#EDE9FE","activationBorderColor":"#65538A","fontFamily":"Arial"}}}%%
@@ -221,11 +223,13 @@ sequenceDiagram
 ```
 
 The Better Auth session proves the email identity; it does not itself select or
-authenticate a DID. Only established associations are eligible for account choice;
-matching an email cannot add authority over an unimported DID. The current code
-supports the single-binding path and fails closed if multiple bindings are found;
-the chooser is not implemented. Preserve the original client request and
-authorization context through verification and choice.
+authenticate a DID. Only established bindings are eligible for account choice;
+matching an email cannot add authority over an unbound DID. The current resolver
+returns `selection-required` when multiple bindings are found, but no chooser or
+continuation path is implemented. Revoking one DID invalidates all Better Auth
+sessions for its shared user; OAuth and account data remain DID-scoped. Preserve
+the original client request and authorization context through verification and
+any future choice.
 
 Confidential clients also supply client authentication where required.
 The account page distinguishes ending a browser session, forgetting device membership,
@@ -303,9 +307,10 @@ Reuse provider wiring, OTP integration, atomic account/DID invariants, indexed d
 PDS call sequences, journals, branding, mail ports and regression scenarios.
 Keep shared contracts narrow while features own their operation bodies.
 
-Still required: the approved multiple-DID email schema, joining-PDS association import
-and post-verification chooser, ePDS consent/freshness parity, complete XRPC adapters, production email delivery,
-operator onboarding and fleet lifecycle, implementation of the approved custody model and public-protocol migration. The [Drizzle database boundary](database.md) provides asynchronous authority
+Still required: joining-PDS association import and post-verification chooser,
+ePDS consent/freshness parity, complete XRPC adapters, production email delivery,
+operator onboarding and fleet lifecycle, implementation of the approved custody
+model and public-protocol migration. The [Drizzle database boundary](database.md) provides asynchronous authority
 transactions. [Shared operation ownership](shared-operations.md) implements durable
 account/PDS admission, execution fences, operator-verified uncertain-write recovery,
 mail attempts and authentication ordering. [Deployment lifecycle](deployment-profiles.md)

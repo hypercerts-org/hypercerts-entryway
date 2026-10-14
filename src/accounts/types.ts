@@ -15,6 +15,23 @@ export interface AccountRow {
   [key: string]: unknown;
 }
 
+// `external` represents an active external-migration reservation, not a stored email claim.
+export type EmailClaimPurpose = "primary" | "pending" | "backup" | "external";
+
+export interface EmailClaim {
+  did: string;
+  purpose: EmailClaimPurpose;
+}
+
+export type ExternalEmailReservationState = "reserved" | "placed" | "complete";
+
+export interface ExternalEmailReservation {
+  workflowId: string;
+  did: string;
+  userId: string;
+  state: ExternalEmailReservationState;
+}
+
 export interface VerifiedBinding {
   did: string;
   userId: string;
