@@ -20,6 +20,7 @@ export function createEmailAuthorityChange({
           const old = await account(did);
           email = await assertEmailAvailable(email, did, {
             allowOwnBackup: recovery,
+            purpose: verified ? "pending" : "primary",
           });
           // Quarantine old service/browser credentials before the first async yield.
           await authority.revokeLocal(did);

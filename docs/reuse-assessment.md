@@ -9,9 +9,9 @@ locations and owners are recorded in [source-map.json](source-map.json).
 - Keep the upstream OAuth provider and Better Auth's supported browser-proof API;
   Better Auth does not become the ATProto identity model.
 - Keep DID identity, indexed device membership and transactional provider stores
-  behind the [database boundary](database.md). Current email and auth-user binding
-  uniqueness must change for the approved multiple-DID email target; preserve
-  atomic authority changes and one binding per DID.
+  behind the [database boundary](database.md). Primary account email claims may
+  repeat across DIDs and a verified user may bind multiple DIDs; keep Better Auth
+  email unique, each DID bound at most once, and authority changes atomic.
 - Keep mail transport separate from templates, durable outbox and retry policy.
 - Keep feature-owned orchestration, server-selected branding, escaping and CSP.
 - Keep browser, lifecycle and failure scenarios as regression checks, while
@@ -23,19 +23,19 @@ and [deployment profiles](deployment-profiles.md).
 
 ## Remaining integration work
 
-The access-first rule is implemented for the current single-binding schema:
-verified browser access resolves only an established Better Auth user-ID-to-DID
-binding, and signup activation records the original owner in its existing durable
-intent before binding atomically with activation. Startup and login do not infer
-bindings from email matches; existing unbound active rows are not backfilled and
-cannot be claimed by signup or retry. See [identity custody](data-custody.md#1-account-identity-and-ownership)
+The access-first rule resolves browser access only through an established Better
+Auth user-ID-to-DID binding. Signup activation records the original owner in its
+existing durable intent before binding atomically with activation. Startup and
+login do not infer bindings from email matches; existing unbound active rows are
+not backfilled and cannot be claimed by signup or retry. See [identity custody](data-custody.md#1-account-identity-and-ownership)
 for current behavior and recovery limits.
 
 The approved [multiple-DID email policy](data-custody.md#1-account-identity-and-ownership)
-still requires schema changes and import of DID/email associations when an existing
-PDS joins Entryway. The post-verification chooser is not implemented; multiple
-bindings fail closed under current routing. Email matching alone must not establish
-authority over an unimported DID or merge accounts.
+is implemented in the fresh schemas and account authority operations. Authorized
+migration finalization may add a DID binding beside an unbound account with the
+same email, without binding that sibling. The post-verification chooser and
+joining-PDS association import remain unimplemented; the resolver returns
+`selection-required` and no DID is selected by email alone.
 
 Preserved MJS remains outside strict TypeScript coverage. Complete ePDS consent and
 freshness parity, production email delivery across the XRPC surface, fleet

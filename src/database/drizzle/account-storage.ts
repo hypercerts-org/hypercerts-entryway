@@ -87,13 +87,26 @@ export function createAccountStorage(
       );
       return rows.filter((row): row is AccountRow => row !== null);
     });
-  const getByEmail = async (email: string) =>
-    parseAccount(
-      await one(
-        "accounts",
-        eq(sql`lower(${t.accounts.email})`, email.trim().toLowerCase()),
-      ),
-    );
+  const listByEmail = async (email: string) =>
+    (
+      await db.read("accounts", {
+        where: eq(
+          sql`lower(${t.accounts.email})`,
+          email.trim().toLowerCase(),
+        ),
+        orderBy: [asc(t.accounts.sequence)],
+      })
+    ).map((row) => parseAccount(row)!);
+  const getByEmail = async (email: string) => {
+    const rows = await listByEmail(email);
+    if (rows.length > 1)
+      throw new DomainError(
+        "AccountSelectionRequired",
+        409,
+        "This email matches multiple accounts; select one by DID",
+      );
+    return rows[0] ?? null;
+  };
   const getByHandle = async (handle: string) =>
     parseAccount(
       await one(
@@ -101,15 +114,48 @@ export function createAccountStorage(
         eq(sql`lower(${t.accounts.handle})`, handle.trim().toLowerCase()),
       ),
     );
-  const getEmailClaim = async (email: string) => {
-    email = normalizeEmail(email);
-    const claim = await one("email_claims", eq(t.email_claims.email, email));
-    if (claim) return { did: claim.did, purpose: claim.purpose };
-    const external = await one(
-      "migration_reservations",
-      eq(t.migration_reservations.email, email),
+  const listExternalReservationsByEmail = async (email: string) =>
+    (
+      await db.read("migration_reservations", {
+        where: eq(
+          sql`lower(${t.migration_reservations.email})`,
+          normalizeEmail(email),
+        ),
+        orderBy: [asc(t.migration_reservations.created_at)],
+      })
+    ).map((row) => ({
+      workflowId: row.workflow_id,
+      did: row.did,
+      userId: row.user_id,
+      state: row.state,
+    }));
+  const listEmailClaims = async (email: string) => {
+    const [claims, reservations] = await Promise.all([
+      db.read("email_claims", {
+        where: eq(sql`lower(${t.email_claims.email})`, normalizeEmail(email)),
+        orderBy: [asc(t.email_claims.did)],
+      }),
+      listExternalReservationsByEmail(email),
+    ]);
+    const claimedDids = new Set(claims.map(({ did }) => did));
+    return [
+      ...claims.map(({ did, purpose }) => ({ did, purpose })),
+      ...reservations
+        .filter(({ did, state }) => state !== "complete" && !claimedDids.has(did))
+        .map(({ did }) => ({ did, purpose: "external" })),
+    ].sort(
+      (a, b) => a.did.localeCompare(b.did) || a.purpose.localeCompare(b.purpose),
     );
-    return external ? { did: external.did, purpose: "external" } : null;
+  };
+  const getEmailClaim = async (email: string) => {
+    const claims = await listEmailClaims(email);
+    if (claims.length > 1)
+      throw new DomainError(
+        "AccountSelectionRequired",
+        409,
+        "This email has multiple claims; select an account explicitly"
+      );
+    return claims[0] ?? null;
   };
   const getHandleClaim = async (handle: string) =>
     (
@@ -151,27 +197,47 @@ export function createAccountStorage(
       return null;
     return { userId: user.id, email: user.email, authenticatedAt };
   };
-  const reserveEmail = async (email: string, did: string, purpose: string) =>
+  const reserveEmail = async (
+    email: string,
+    did: string,
+    purpose: string,
+    ownerUserId?: string,
+  ) =>
     db.transact(async () => {
       email = normalizeEmail(email);
-      const external = await one(
-        "migration_reservations",
-        eq(t.migration_reservations.email, email),
-      );
-      const existing = await one(
-        "email_claims",
-        eq(t.email_claims.email, email),
-      );
+      const [claims, reservations] = await Promise.all([
+        db.read("email_claims", {
+          where: eq(sql`lower(${t.email_claims.email})`, email),
+        }),
+        listExternalReservationsByEmail(email),
+      ]);
+      const own = claims.find((claim) => claim.did === did);
+      const conflictsWithOtherClaim = claims.some((claim) => {
+        if (claim.did === did) return false;
+        if (purpose === "primary") return claim.purpose !== "primary";
+        if (purpose === "pending") return claim.purpose !== "primary";
+        return true;
+      });
+      const conflictingReservation =
+        !own &&
+        reservations.some(
+          (reservation) =>
+            reservation.state !== "complete" &&
+            (purpose !== "primary" ||
+              !ownerUserId ||
+              reservation.userId !== ownerUserId),
+        );
       if (
-        (external && external.did !== did) ||
-        (existing && (existing.did !== did || existing.purpose !== purpose))
+        conflictsWithOtherClaim ||
+        conflictingReservation ||
+        (own && own.purpose !== purpose)
       )
         throw new DomainError(
           "EmailNotAvailable",
           409,
           "Email address is reserved",
         );
-      if (!existing) {
+      if (!own) {
         try {
           await db.insert("email_claims", { email, did, purpose });
         } catch (error) {
@@ -216,7 +282,7 @@ export function createAccountStorage(
     status: row.status,
     data: JSON.stringify(row),
   });
-  const insertAccount = async (row: AccountRow) => {
+  const insertAccount = async (row: AccountRow, ownerUserId?: string) => {
     assertAccountShape(row);
     assertPds(row);
     try {
@@ -231,27 +297,48 @@ export function createAccountStorage(
           ...indexed(row),
           sequence: (previous?.sequence ?? 0) + 1,
         });
-        await reserveEmail(row.email, row.did, "primary");
+        await reserveEmail(row.email, row.did, "primary", ownerUserId);
         await reserveHandle(row.handle, row.did);
       });
     } catch (error) {
       translateConstraint(error, "IdentityConflict");
     }
   };
-  const saveAccount = async (row: AccountRow) => {
+  const saveAccount = async (row: AccountRow, ownerUserId?: string) => {
     assertAccountShape(row);
     assertPds(row);
     try {
       await db.transact(async () => {
-        if (!(await getByDid(row.did)))
+        const previous = await getByDid(row.did);
+        if (!previous)
           throw new DomainError("AccountNotFound", 404, "Account not found");
-        const email = await getEmailClaim(row.email);
-        if (email && email.did !== row.did)
-          throw new DomainError(
-            "EmailNotAvailable",
-            409,
-            "Email address is reserved",
-          );
+        if (previous.email !== row.email) {
+          const claims = await listEmailClaims(row.email);
+          if (
+            claims.some(
+              (claim) => claim.did !== row.did && claim.purpose !== "primary",
+            )
+          )
+            throw new DomainError(
+              "EmailNotAvailable",
+              409,
+              "Email address is reserved",
+            );
+          const reservations = await listExternalReservationsByEmail(row.email);
+          if (
+            reservations.some(
+              (reservation) =>
+                reservation.state !== "complete" &&
+                reservation.did !== row.did &&
+                (!ownerUserId || reservation.userId !== ownerUserId),
+            )
+          )
+            throw new DomainError(
+              "EmailNotAvailable",
+              409,
+              "Email address is reserved",
+            );
+        }
         const handle = await getHandleClaim(row.handle);
         const external = await one(
           "migration_reservations",
@@ -291,17 +378,7 @@ export function createAccountStorage(
           409,
           "Account already has an owner",
         );
-      const other = await one(
-        "account_bindings",
-        eq(t.account_bindings.user_id, user.id),
-      );
-      if (other && other.did !== row.did)
-        throw new DomainError(
-          "IdentityConflict",
-          409,
-          "Verified user already owns an account",
-        );
-      await reserveEmail(row.email, row.did, "primary");
+      await reserveEmail(row.email, row.did, "primary", user.id);
       try {
         await db.insert(
           "account_bindings",
@@ -312,6 +389,48 @@ export function createAccountStorage(
         translateConstraint(error, "IdentityConflict");
       }
       return user.id;
+    });
+  const unbindAccount = async (did: string, expectedUserId?: string) =>
+    db.transact(async () => {
+      const binding = await one(
+        "account_bindings",
+        eq(t.account_bindings.did, did),
+      );
+      if (!binding) return;
+      if (expectedUserId && binding.user_id !== expectedUserId)
+        throw new DomainError(
+          "IdentityConflict",
+          409,
+          "Account owner changed before unbinding",
+        );
+      await db.remove("account_bindings", eq(t.account_bindings.did, did));
+    });
+  const rebindVerifiedIdentity = async (input: BindVerifiedIdentity) =>
+    db.transact(async () => {
+      const row = assertBindingMatchesAccount(await getByDid(input.did), input);
+      const user = await one("user", eq(t.user.id, input.userId));
+      if (!user?.emailVerified || user.email !== row.email)
+        throw new DomainError(
+          "AccountMismatch",
+          403,
+          "Verified user does not own account",
+        );
+      await reserveEmail(row.email, row.did, "primary", user.id);
+      const changed = await db.update(
+        "account_bindings",
+        { user_id: user.id },
+        eq(t.account_bindings.did, row.did),
+      );
+      if (changed === 0) {
+        try {
+          await db.insert("account_bindings", {
+            did: row.did,
+            user_id: user.id,
+          });
+        } catch (error) {
+          translateConstraint(error, "IdentityConflict");
+        }
+      }
     });
   const ensureVerifiedEmailUser = async (email: string): Promise<string> =>
     db.transact(async () => {
@@ -370,17 +489,25 @@ export function createAccountStorage(
           "Recent verified owner session required",
         );
       const email = normalizeEmail(owner.email);
-      if (
-        (await getByEmail(email)) ||
-        (await one(
-          "email_claims",
-          eq(sql`lower(${t.email_claims.email})`, email),
-        ))
-      )
+      const [emailClaims, emailReservations] = await Promise.all([
+        db.read("email_claims", {
+          where: eq(sql`lower(${t.email_claims.email})`, email),
+        }),
+        listExternalReservationsByEmail(email),
+      ]);
+      const sharedEmailConflict =
+        emailClaims.some((claim) => claim.purpose !== "primary") ||
+        emailReservations.some(
+          (reservation) =>
+            reservation.state !== "complete" &&
+            reservation.workflowId !== input.workflowId &&
+            reservation.userId !== input.userId,
+        );
+      if (sharedEmailConflict)
         throw new DomainError(
           "EmailNotAvailable",
           409,
-          "Destination email is already hosted",
+          "Destination email is reserved by another identity or account operation",
         );
       if ((await getByDid(input.did)) || (await getVerifiedBinding(input.did)))
         throw new DomainError(
@@ -396,17 +523,6 @@ export function createAccountStorage(
           "HandleNotAvailable",
           409,
           "Handle is already hosted",
-        );
-      if (
-        await one(
-          "account_bindings",
-          eq(t.account_bindings.user_id, input.userId),
-        )
-      )
-        throw new DomainError(
-          "IdentityConflict",
-          409,
-          "Verified owner already linked to an account",
         );
       if (
         !configuredPds.some(
@@ -460,18 +576,25 @@ export function createAccountStorage(
   return {
     getByDid,
     listBoundAccounts,
+    listByEmail,
     getByEmail,
     getByHandle,
+    listEmailClaims,
     getEmailClaim,
     getHandleClaim,
     getVerifiedBinding,
     getVerifiedOwner,
+    listExternalReservationsByEmail,
     async getExternalReservationByEmail(email) {
-      const row = await one(
-        "migration_reservations",
-        eq(t.migration_reservations.email, normalizeEmail(email)),
-      );
-      return row ? { did: row.did, userId: row.user_id } : null;
+      const rows = await listExternalReservationsByEmail(email);
+      if (rows.length > 1)
+        throw new DomainError(
+          "AccountSelectionRequired",
+          409,
+          "Email has multiple migration reservations; use the plural lookup",
+        );
+      const row = rows[0];
+      return row ? { did: row.did, userId: row.userId } : null;
     },
     async isVerifiedUserEmail({ userId, email }) {
       return Boolean(
@@ -504,6 +627,8 @@ export function createAccountStorage(
     insertAccount,
     saveAccount,
     bindVerifiedIdentity,
+    unbindAccount,
+    rebindVerifiedIdentity,
     ensureVerifiedEmailUser,
     bindAccountToVerifiedEmailUser,
     reserveExternalMigration,
@@ -570,7 +695,6 @@ export function createAccountStorage(
         }
         if (
           (await getByDid(input.did)) ||
-          (await getByEmail(input.email)) ||
           (await getByHandle(input.handle)) ||
           (await getVerifiedBinding(input.did))
         )
@@ -589,18 +713,7 @@ export function createAccountStorage(
           status: "provisioning",
           createdAt: new Date().toISOString(),
         };
-        await insertAccount(row);
-        if (
-          await one(
-            "account_bindings",
-            eq(t.account_bindings.user_id, input.userId),
-          )
-        )
-          throw new DomainError(
-            "IdentityConflict",
-            409,
-            "Verified user already owns an account",
-          );
+        await insertAccount(row, input.userId);
         await db.insert("account_bindings", {
           did: input.did,
           user_id: input.userId,

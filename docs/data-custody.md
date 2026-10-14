@@ -8,11 +8,12 @@ See [architecture](architecture.md) for domain ownership and [delivery reference
 Use the DID as the account primary key. A separate account UUID is not required by the agreed scope.
 Better Auth user IDs, browser-session IDs, devices, grants and migration-operation IDs remain separate identifiers.
 
-The approved target permits one verified email identity to be associated with
-multiple DIDs when an existing PDS joins Entryway and its DID/email associations
-are imported. Each DID remains a separate account with at most one login binding;
-associations never merge DIDs. An email match alone cannot establish authority over
-an unimported DID.
+Primary account email claims may repeat across DIDs, and one verified Better Auth
+user may have multiple DID bindings. Each DID remains a separate account with at
+most one binding; associations never merge DIDs. A shared email claim does not
+bind or grant access to another DID. Binding a DID requires an authorized,
+account-specific verification path, including verified migration finalization.
+Ordinary signup cannot create another DID for an email that already has an account.
 
 Sign-in verifies the email before resolving its associated DIDs. One associated
 DID continues directly; multiple associated DIDs require an explicit account
@@ -31,11 +32,12 @@ are denied browser access and cannot be acquired through signup or retry.
 Restoring access requires an explicit trusted repair. No repair command is
 currently available, and no automatic backfill is performed.
 
-Account access is resolved through explicit DID-to-user bindings. The resolver
-supports a multiple-account result, but the current database schemas enforce one
-account per email and one DID per Better Auth user. Joining-PDS association import
-and the account chooser are not implemented. Browser sign-in rejects
-multiple-account results rather than selecting an account automatically.
+Account access is resolved only through explicit DID-to-user bindings. The
+schemas allow multiple DIDs to share a primary email claim and allow one Better
+Auth user to bind multiple DIDs; Better Auth email itself remains unique. The
+resolver returns `selection-required` for multiple established bindings, but the
+interactive chooser and joining-PDS association import are not implemented. No
+DID is selected or bound from an email match alone.
 
 The table below records current storage, not the full approved target. Internal
 refactoring does not require upgrading existing databases; public account migration
@@ -44,8 +46,8 @@ and existing ePDS deployment conversion remain separate requirements.
 | State                                  | Domain or system owner              | Current representation                                                |
 | -------------------------------------- | ----------------------------------- | --------------------------------------------------------------------- |
 | Account identity and status            | Accounts                            | `accounts`, keyed by DID                                              |
-| Login identity binding                 | Accounts                            | `account_bindings`, unique DID and Better Auth user                   |
-| Email and handle claims                | Accounts                            | Transactional claim tables with uniqueness constraints                |
+| Login identity binding                 | Accounts                            | `account_bindings`, unique DID and nonunique Better Auth user           |
+| Email and handle claims                | Accounts                            | Primary claims may repeat across DIDs and coexist with a pending primary-email change; backup claims cannot overlap primary claims, and backup and pending claims are mutually exclusive |
 | Verified browser identity and sessions | Access / Better Auth adapter        | Better Auth-owned tables                                              |
 | Device-to-account membership           | Access                              | Indexed provider membership by DID and device ID                      |
 | Clients, grants and protocol state     | Access / OAuth provider adapter     | Provider stores, partly using namespaced JSON storage                 |
@@ -161,11 +163,14 @@ erDiagram
   }
 ```
 
-In the target, account email and the binding's `auth_user_id` are nonunique; the
-DID remains the account primary key and permits only one binding per DID.
+The current schema permits repeated account email claims and repeated
+`account_bindings.user_id` values; the DID remains the account primary key and
+permits only one binding per DID. Better Auth email remains unique.
 `BROWSER_SESSION` represents the email-level Better Auth session, not selected-DID
-authentication. The [login sequence](architecture.md#5-login-and-application-authorization)
-keeps those steps separate.
+authentication. Revoking a DID conservatively invalidates every Better Auth
+session for its shared user, while OAuth and account data remain DID-scoped. The
+[login sequence](architecture.md#5-login-and-application-authorization) keeps
+those steps separate.
 
 Device membership requires uniqueness for its device/DID pair.
 Grant/session implementation must retain the provider's real cardinalities and token-family semantics.
@@ -353,10 +358,9 @@ failures, but cannot substitute for public endpoint and credential coverage.
 
 ## Required recovery decisions
 
-The multiple-DID email policy is settled as described [above](#1-account-identity-and-ownership);
-its implementation is pending. Import must establish the DID/email association
-under the account-authority contract. Email verification cannot substitute for
-that authority or merge identities.
+Any import that associates an existing PDS identity with an Entryway account
+must establish the DID/email association under the account-authority contract.
+Email verification cannot substitute for that authority or merge identities.
 
 The key roles and normal departure rules are settled above. Remaining work covers
 provisioning, protection, backup/rotation procedures, recovery execution and data

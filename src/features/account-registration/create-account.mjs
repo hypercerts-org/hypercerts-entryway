@@ -161,17 +161,20 @@ export function createRegistration({
     registrationIdentity,
   }) => {
     let row = await get(email);
-    let emailClaim = await storage.getEmailClaim(email);
-    if (emailClaim?.purpose === "pending") {
-      const change = await db.get("security:pending-email", emailClaim.did);
-      if (!change || change.expiresAt <= Date.now()) {
-        await storage.releaseEmail(email, emailClaim.did, "pending");
-        emailClaim = null;
-      }
+    let emailClaims = await storage.listEmailClaims(email);
+    for (const pending of emailClaims.filter(
+      ({ purpose }) => purpose === "pending",
+    )) {
+      const change = await db.get("security:pending-email", pending.did);
+      if (!change || change.expiresAt <= Date.now())
+        await storage.releaseEmail(email, pending.did, "pending");
     }
+    emailClaims = await storage.listEmailClaims(email);
     if (
-      emailClaim &&
-      (!row || emailClaim.did !== row.did || emailClaim.purpose !== "primary")
+      emailClaims.some(
+        (claim) =>
+          claim.purpose !== "primary" || !row || claim.did !== row.did,
+      )
     )
       throw new HttpError(
         409,

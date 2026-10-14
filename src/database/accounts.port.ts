@@ -1,5 +1,7 @@
 import type {
   AccountRow,
+  EmailClaim,
+  ExternalEmailReservation,
   ActivateImportedAccount,
   BindVerifiedIdentity,
   ExternalMigrationReservation,
@@ -13,11 +15,14 @@ import type {
 export interface AccountReader {
   getByDid(did: string): Promise<AccountRow | null>;
   listBoundAccounts(userId: string): Promise<AccountRow[]>;
+  listByEmail(email: string): Promise<AccountRow[]>;
   getByEmail(email: string): Promise<AccountRow | null>;
   getByHandle(handle: string): Promise<AccountRow | null>;
-  getEmailClaim(
+  listEmailClaims(email: string): Promise<EmailClaim[]>;
+  getEmailClaim(email: string): Promise<EmailClaim | null>;
+  listExternalReservationsByEmail(
     email: string,
-  ): Promise<{ did: string; purpose: string } | null>;
+  ): Promise<ExternalEmailReservation[]>;
   getExternalReservationByEmail(
     email: string,
   ): Promise<{ did: string; userId: string } | null>;
@@ -34,7 +39,7 @@ export interface AccountReader {
 
 export interface AccountTransactor extends AccountReader {
   insertAccount(row: AccountRow): Promise<void>;
-  saveAccount(row: AccountRow): Promise<void>;
+  saveAccount(row: AccountRow, ownerUserId?: string): Promise<void>;
   bindVerifiedIdentity(input: BindVerifiedIdentity): Promise<string>;
   /** Persist a verified email identity before signup provisions its DID.
    * Callers must validate mailbox proof first.
@@ -45,8 +50,15 @@ export interface AccountTransactor extends AccountReader {
   reserveExternalMigration(input: ExternalMigrationReservation): Promise<void>;
   finalizeImportedAccount(input: FinalizeImportedAccount): Promise<AccountRow>;
   activateImportedAccount(input: ActivateImportedAccount): Promise<AccountRow>;
-  reserveEmail(email: string, did: string, purpose: string): Promise<void>;
+  reserveEmail(
+    email: string,
+    did: string,
+    purpose: string,
+    ownerUserId?: string,
+  ): Promise<void>;
   releaseEmail(email: string, did: string, purpose: string): Promise<void>;
+  unbindAccount(did: string, expectedUserId?: string): Promise<void>;
+  rebindVerifiedIdentity(input: BindVerifiedIdentity): Promise<void>;
   reserveHandle(handle: string, did: string): Promise<void>;
   releaseHandle(handle: string, did: string): Promise<void>;
 }

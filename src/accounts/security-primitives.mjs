@@ -24,7 +24,7 @@ export function createSecurityPrimitives({
   authority,
   ownership,
 }) {
-  const { account, identity, version, claim, pendingEmail } = authority;
+  const { account, identity, version, claims, claim, pendingEmail } = authority;
   const assertEmailAvailable = async (email, did, options) =>
     await authority.assertEmailAvailable(normalizeEmail(email), did, options);
   const bindVerifiedIdentity = async (input) =>
@@ -236,6 +236,7 @@ export function createSecurityPrimitives({
     account,
     identity,
     version,
+    claims,
     claim,
     pendingEmail,
     assertEmailAvailable,

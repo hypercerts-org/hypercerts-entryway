@@ -2,6 +2,7 @@ import { Secp256k1Keypair } from "@atproto/crypto";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fixture, alice } from "../../../tests/support/account-fixture.mjs";
+import { createAccountAccess } from "../../../dist/src/accounts/account-access.mjs";
 import {
   failureTrigger,
   query,
@@ -39,30 +40,93 @@ test("verified registration activates and binds the original browser user", asyn
 });
 
 test("registration cannot acquire an already active unbound row by verified email", async (t) => {
-  const { accounts, db } = await fixture(t);
+  const f = await fixture(t);
   const unbound = {
     ...alice,
     did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
     emailVerified: true,
     status: "active",
   };
-  await accounts.storage.insertAccount(unbound);
+  await f.accounts.storage.insertAccount(unbound);
+  const callsBeforeAttempt = f.calls.length;
   const userId = "unrelated-registration-owner";
-  await verifiedUser(db, userId, alice.email);
+  await verifiedUser(f.db, userId, alice.email);
+  const identity = {
+    kind: "better-auth",
+    userId,
+    email: alice.email,
+    emailVerified: true,
+  };
 
+  assert.deepEqual(
+    await f.accounts.storage.listExternalReservationsByEmail(alice.email),
+    [],
+  );
   await assert.rejects(
-    accounts.create({
-      ...alice,
-      registrationIdentity: {
-        kind: "better-auth",
-        userId,
-        email: alice.email,
-        emailVerified: true,
-      },
-    }),
+    f.accounts.create({ ...alice, registrationIdentity: identity }),
     { error: "AccountMismatch" },
   );
-  assert.equal(await accounts.storage.getVerifiedBinding(unbound.did), null);
+
+  assert.equal(f.calls.length, callsBeforeAttempt);
+  assert.deepEqual(
+    (await f.accounts.storage.listAccounts()).map(({ did }) => did),
+    [unbound.did],
+  );
+  assert.equal((await f.accounts.get(unbound.did)).status, "active");
+  assert.equal(await f.accounts.storage.getVerifiedBinding(unbound.did), null);
+  const access = createAccountAccess(f.accounts.storage);
+  await assert.rejects(access.requireBoundAccount(identity, unbound.did), {
+    code: "AccountMismatch",
+  });
+  await assert.rejects(
+    access.requireBoundAccount(
+      { ...identity, userId: "different-user" },
+      unbound.did,
+    ),
+    { code: "AccountMismatch" },
+  );
+});
+
+test("ordinary registration fails closed when an email maps to multiple established DIDs", async (t) => {
+  const f = await fixture(t);
+  const first = await f.accounts.create(alice);
+  const sibling = await f.accounts.create({
+    ...alice,
+    email: "sibling@example.com",
+    handle: "sibling.entryway.atmosbox.test",
+  });
+  await f.db.transact(async () => {
+    await f.accounts.storage.releaseEmail(
+      sibling.email,
+      sibling.did,
+      "primary",
+    );
+    await f.accounts.storage.saveAccount({ ...sibling, email: first.email });
+    await f.accounts.storage.reserveEmail(first.email, sibling.did, "primary");
+  });
+
+  const established = await f.accounts.storage.listAccounts();
+  const establishedDids = established.map(({ did }) => did).sort();
+  const pdsCallsBeforeSignup = f.calls.length;
+  const plcOperationsBeforeSignup = f.plcHeads.size;
+  assert.deepEqual(
+    await f.accounts.storage.listExternalReservationsByEmail(first.email),
+    [],
+  );
+  await assert.rejects(f.accounts.create(alice), {
+    error: "AccountSelectionRequired",
+  });
+
+  assert.equal(f.calls.length, pdsCallsBeforeSignup);
+  assert.equal(f.plcHeads.size, plcOperationsBeforeSignup);
+  assert.deepEqual(
+    (await f.accounts.storage.listAccounts())
+      .map(({ did }) => did)
+      .sort(),
+    establishedDids,
+  );
+  for (const { did } of established)
+    assert.equal(await f.accounts.storage.getVerifiedBinding(did), null);
 });
 
 test("registration reconciliation uses persisted user ID and atomically retries binding after local rollback", async (t) => {

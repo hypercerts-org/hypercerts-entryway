@@ -356,15 +356,16 @@ test("stale journal CAS rejects second transition", async (t) => {
   );
 });
 
-test("verified owner must match the source email before reservation", async (t) => {
+test("verified destination email may differ from the source email", async (t) => {
   const f = await fixture();
   t.after(async () => await f.sqlite.close());
-  await assert.rejects(
-    f.make().start({ ...f.input, sourceEmail: "other@example.test" }),
-    { code: "OwnerBindingChanged" },
-  );
-  assert.deepEqual(f.calls, []);
-  assert.equal(await f.workflows.getById("workflow-1"), null);
+  const started = await f.make().start({
+    ...f.input,
+    sourceEmail: "source@example.test",
+  });
+  assert.equal(started.ownerEmail, "owner@example.test");
+  assert.equal(started.ownerUserId, f.actor.userId);
+  assert.equal(f.calls.filter((call) => call === "reserve").length, 1);
 });
 
 test("a second start cannot replace the immutable target or handle", async (t) => {
