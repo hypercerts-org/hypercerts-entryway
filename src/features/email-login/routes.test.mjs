@@ -373,9 +373,10 @@ async function verificationFixture(t, stage) {
     },
     getAccountSecurity: () => ({
       async assertLoginEmail() {
-        return stage === "signup"
-          ? { kind: "unbound" }
-          : { kind: "single", account: row };
+        if (stage === "signup") return { kind: "unbound" };
+        if (stage === "repair-required")
+          return { kind: "account-requires-repair" };
+        return { kind: "single", account: row };
       },
     }),
   });
@@ -463,6 +464,22 @@ for (const stage of ["verification", "continuation", "consent", "signup"]) {
     assert.equal(f.cookies, 1);
   });
 }
+
+test("an existing unbound account gets a repair page instead of signup", async (t) => {
+  const f = await verificationFixture(t, "repair-required");
+  const response = await f.request("/auth/verify", {
+    otp: "controlled-proof",
+  });
+
+  assert.equal(response.statusCode, 409);
+  assert.match(response.body, /Account requires repair/);
+  assert.doesNotMatch(response.body, /Signup form/);
+  assert.equal(f.cookies, 0);
+  assert.equal(await f.db.get("fixture-device-accounts", "browser"), null);
+  const current = await f.db.get("auth-flows", f.flow.id);
+  assert.equal(current.authEmail, undefined);
+  assert.equal(current.authDid, undefined);
+});
 
 test("consent association and final flow save roll back together before committing proof cookies", async (t) => {
   const f = await verificationFixture(t, "rollback");
