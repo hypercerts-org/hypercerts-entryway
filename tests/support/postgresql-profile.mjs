@@ -70,9 +70,15 @@ const fields = (html) =>
   );
 try {
   if (stage === "login") {
-    // This profile starts from an existing hosted authority row. It verifies
-    // login and persistence, not account signup or external migration support.
+    // This profile starts from an existing hosted account. Seed its trusted
+    // Better Auth owner explicitly; login must not infer the binding by email.
     await storage.insertAccount(account);
+    const userId = await storage.ensureVerifiedEmailUser(account.email);
+    await storage.bindVerifiedIdentity({
+      did: account.did,
+      email: account.email,
+      userId,
+    });
     const login = await request("/login");
     assert.equal(login.status, 200);
     const form = fields(await login.text()),

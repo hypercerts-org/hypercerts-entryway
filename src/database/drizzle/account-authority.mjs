@@ -1,6 +1,7 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { and, asc, eq, gt, ne, sql } from "drizzle-orm";
 import { HttpError } from "../../http/http-error.mjs";
+import { normalizeEmail } from "../../accounts/rules.js";
 const fail = (status, error, message) => new HttpError(status, error, message);
 
 /** Pinned Better Auth schema and account authority share one physical executor.
@@ -86,10 +87,32 @@ export function createAccountAuthority({ db, accounts }) {
         );
       const linked = userId
         ? await accounts.storage.bindVerifiedIdentity({ did, email, userId })
-        : await accounts.storage.ensureLegacyVerifiedIdentity({ did, email });
+        : await accounts.storage.bindAccountToVerifiedEmailUser({ did, email });
       if (userId && row.emailVerified === false)
         await accounts.save({ ...row, emailVerified: true });
       return linked;
+    });
+  const syncBoundAccountEmailVerification = ({ did, email, userId }) =>
+    tx(async () => {
+      const row = await account(did);
+      const normalizedEmail = normalizeEmail(email);
+      if (
+        typeof userId !== "string" ||
+        !userId ||
+        row.email !== normalizedEmail ||
+        (await identity(did)) !== userId ||
+        !(await accounts.storage.isVerifiedUserEmail({
+          userId,
+          email: normalizedEmail,
+        }))
+      )
+        throw fail(
+          403,
+          "AccountMismatch",
+          "Verified identity does not own account",
+        );
+      if (row.emailVerified !== true)
+        await accounts.save({ ...row, emailVerified: true });
     });
   const clearEmailProofs = async (email) => {
     for (const type of ["sign-in", "email-verification", "forget-password"])
@@ -144,21 +167,11 @@ export function createAccountAuthority({ db, accounts }) {
     pendingEmail,
     assertEmailAvailable,
     bindVerifiedIdentity,
+    syncBoundAccountEmailVerification,
     async initializeClaims() {
       await tx(async () => {
-        for (const row of await accounts.list()) {
+        for (const row of await accounts.list())
           await reserve(row.email, row.did, "primary");
-          const user = await userByEmail(row.email);
-          if (
-            !["deleted", "provisioning"].includes(row.status) &&
-            user?.emailVerified
-          )
-            await bindVerifiedIdentity({
-              did: row.did,
-              email: row.email,
-              userId: user.id,
-            });
-        }
       });
     },
     async hasLiveSession(sessionId, userId) {

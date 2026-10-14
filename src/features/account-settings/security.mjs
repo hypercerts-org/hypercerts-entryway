@@ -5,6 +5,7 @@ export function createAccountSettingsSecurity({
   proofs,
   authority,
   accounts,
+  accountAccess,
   legacy,
   changeEmailAuthority,
 }) {
@@ -14,7 +15,6 @@ export function createAccountSettingsSecurity({
     claim,
     pendingEmail,
     assertEmailAvailable,
-    bindVerifiedIdentity,
     requireAdmin,
     issue,
     commitProof,
@@ -22,33 +22,53 @@ export function createAccountSettingsSecurity({
     currentPassword,
     serialized,
   } = proofs;
+  const readLoginEmailUsage = async (email) => ({
+    account: await accounts.get(email),
+    reservation: await claim(email),
+  });
+  const assertLoginEmailUsage = async (identity, email, usage) => {
+    if (identity?.emailVerified !== true)
+      throw fail(403, "AccountMismatch", "Verify your email before signing in");
+    if (usage.reservation?.purpose === "external" && !usage.account) {
+      const owner =
+        await accounts.storage.getExternalReservationByEmail(email);
+      const verified = await accounts.storage.isVerifiedUserEmail({
+        userId: identity.userId,
+        email,
+      });
+      if (owner?.userId === identity.userId && verified) return;
+    }
+    if (
+      usage.reservation &&
+      (!usage.account ||
+        usage.reservation.did !== usage.account.did ||
+        usage.reservation.purpose !== "primary")
+    )
+      throw fail(
+        409,
+        "EmailReserved",
+        "This address is reserved for account security. Use the recovery page if needed.",
+      );
+  };
   const operations = {
-    async assertLoginEmail({ email, userId }) {
-      email = normalizeEmail(email);
-      const row = await accounts.get(email);
-      const reservation = await claim(email);
-      if (reservation?.purpose === "external" && !row) {
-        const owner =
-          await accounts.storage.getExternalReservationByEmail(email);
-        const verified = await accounts.storage.isVerifiedUserEmail({
-          userId,
-          email,
-        });
-        if (owner?.userId === userId && verified) return;
-      }
+    async assertLoginEmail(identity) {
+      const email = normalizeEmail(identity?.email);
+      const usage = await readLoginEmailUsage(email);
+      await assertLoginEmailUsage(identity, email, usage);
+      const resolution = await accountAccess.resolveBoundAccounts(identity);
       if (
-        reservation &&
-        (!row ||
-          reservation.did !== row.did ||
-          reservation.purpose !== "primary")
+        resolution.kind === "unbound" &&
+        usage.account &&
+        usage.account.status !== "provisioning"
       )
-        throw fail(
-          409,
-          "EmailReserved",
-          "This address is reserved for account security. Use the recovery page if needed.",
-        );
-      if (row && !["deleted", "provisioning"].includes(row.status))
-        await bindVerifiedIdentity({ did: row.did, email, userId });
+        return { kind: "account-requires-repair" };
+      if (resolution.kind === "single")
+        await authority.syncBoundAccountEmailVerification({
+          did: resolution.account.did,
+          email,
+          userId: identity.userId,
+        });
+      return resolution;
     },
     async summary(actor) {
       const row = await principal(actor);

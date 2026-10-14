@@ -73,6 +73,18 @@ async function signup(label, pdsId = 'pds1', extra = {}) {
     verificationCode: mail(email).otp,
     ...extra,
   })
+  const binding = db
+    .prepare('SELECT user_id FROM account_bindings WHERE did=?')
+    .get(session.did)
+  assert.ok(
+    binding?.user_id,
+    'verified signup must persist its original Better Auth owner',
+  )
+  const owner = db
+    .prepare('SELECT email,"emailVerified" FROM "user" WHERE id=?')
+    .get(binding.user_id)
+  assert.equal(owner.email.toLowerCase(), email)
+  assert.ok(owner.emailVerified)
   return { ...session, email, handle, pds: config.pds.find((p) => p.id === pdsId) }
 }
 before(async () => {

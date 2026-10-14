@@ -1,12 +1,53 @@
 import { HttpError } from "../../http/http-error.mjs";
 
+async function verifiedRegistrationOwner({
+  accounts,
+  normalized,
+  prior,
+  session,
+  sessionMatches,
+  emailProofVerified,
+}) {
+  const savedIntent = await accounts.pendingRegistration(normalized);
+  const savedOwner = savedIntent?.registrationIdentity;
+  if ((prior || savedIntent) && (!savedIntent || !savedOwner))
+    throw new HttpError(
+      403,
+      "AccountMismatch",
+      "This account setup has no verified registration owner and cannot be resumed by email match",
+    );
+  if (
+    savedOwner &&
+    (savedOwner.email !== normalized || savedOwner.kind !== "better-auth")
+  )
+    throw new HttpError(
+      409,
+      "RegistrationProvenanceInvalid",
+      "The saved registration owner does not match this email",
+    );
+  if (savedOwner) {
+    const verifiedOwner = await accounts.storage.isVerifiedUserEmail({
+      userId: savedOwner.userId,
+      email: normalized,
+    });
+    const sessionMatchesOwner =
+      sessionMatches && session.userId === savedOwner.userId;
+    if (!verifiedOwner || (!sessionMatchesOwner && !emailProofVerified))
+      throw new HttpError(
+        403,
+        "AccountMismatch",
+        "The saved registration owner can no longer be verified",
+      );
+  }
+  return savedOwner;
+}
+
 export function mountAccountRegistrationXrpc({
   app,
   config,
   accounts,
   oauth,
   legacy,
-  security,
   protocolOperations,
   migration,
   route,
@@ -65,7 +106,10 @@ export function mountAccountRegistrationXrpc({
         "InvalidPassword",
         "Password must contain 12 to 256 characters",
       );
-    if (!(session?.emailVerified && session.email.toLowerCase() === normalized))
+    const sessionMatches =
+      session?.emailVerified && session.email.toLowerCase() === normalized;
+    const emailProofVerified = !sessionMatches;
+    if (emailProofVerified)
       await protocolOperations.verifySignup({
         email: normalized,
         token: verificationPhone
@@ -84,18 +128,32 @@ export function mountAccountRegistrationXrpc({
         "AccountExists",
         "This email already has an account",
       );
+    const savedOwner = await verifiedRegistrationOwner({
+      accounts,
+      normalized,
+      prior,
+      session,
+      sessionMatches,
+      emailProofVerified,
+    });
     await protocolOperations.reserveInvite(inviteCode, normalized);
+    const userId =
+      savedOwner?.userId ??
+      (sessionMatches
+        ? session.userId
+        : await accounts.storage.ensureVerifiedEmailUser(normalized));
+    const registrationIdentity = {
+      kind: "better-auth",
+      userId,
+      email: normalized,
+    };
     const account = await accounts.create({
       email: normalized,
       handle,
       pdsId,
       recoveryKey,
       inviteCode,
-    });
-    await security.bindVerifiedIdentity({
-      did: account.did,
-      email: normalized,
-      userId: session?.email === normalized ? session.userId : undefined,
+      registrationIdentity,
     });
     if (password) await legacy.setPassword(account.did, password);
     await protocolOperations.completeInvite(account);

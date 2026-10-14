@@ -45,16 +45,25 @@ export function createSecurityPrimitives({
         "AuthenticationRequired",
         "A live account-settings session is required",
       );
-    if (
-      actor.kind === "better-auth" &&
-      actor.userId &&
-      (await identity(row.did)) !== actor.userId
-    )
-      throw fail(
-        403,
-        "AccountMismatch",
-        "The authenticated identity does not own this account",
-      );
+    if (actor.kind === "better-auth" && actor.userId) {
+      if ((await identity(row.did)) !== actor.userId)
+        throw fail(
+          403,
+          "AccountMismatch",
+          "The authenticated identity does not own this account",
+        );
+      if (
+        !(await accounts.storage.isVerifiedUserEmail({
+          userId: actor.userId,
+          email: row.email,
+        }))
+      )
+        throw fail(
+          403,
+          "AccountMismatch",
+          "The authenticated identity is no longer verified for this account",
+        );
+    }
     if (
       actor.kind === "better-auth" &&
       actor.sessionId &&

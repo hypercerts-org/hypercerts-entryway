@@ -76,6 +76,17 @@ export function createAccountStorage(
   ) => (await db.read(name, { where, limit: 1 }))[0];
   const getByDid = async (did: string) =>
     parseAccount(await one("accounts", eq(t.accounts.did, did)));
+  const listBoundAccounts = async (userId: string) =>
+    db.transact(async () => {
+      const bindings = await db.read("account_bindings", {
+        where: eq(t.account_bindings.user_id, userId),
+        orderBy: [asc(t.account_bindings.did)],
+      });
+      const rows = await Promise.all(
+        bindings.map(({ did }) => getByDid(did)),
+      );
+      return rows.filter((row): row is AccountRow => row !== null);
+    });
   const getByEmail = async (email: string) =>
     parseAccount(
       await one(
@@ -302,18 +313,15 @@ export function createAccountStorage(
       }
       return user.id;
     });
-  // Active password/XRPC email challenges still establish verified local identity.
-  const ensureLegacyVerifiedIdentity = async (
-    input: LegacyVerifiedEmail,
-  ): Promise<string> =>
+  const ensureVerifiedEmailUser = async (email: string): Promise<string> =>
     db.transact(async () => {
-      const row = assertBindingMatchesAccount(await getByDid(input.did), input);
-      let user = await one("user", eq(sql`lower(${t.user.email})`, row.email));
+      email = normalizeEmail(email);
+      let user = await one("user", eq(sql`lower(${t.user.email})`, email));
       if (!user) {
         user = {
           id: randomUUID(),
-          name: row.handle,
-          email: row.email,
+          name: email,
+          email,
           emailVerified: true,
           image: null,
           createdAt: new Date(),
@@ -326,10 +334,19 @@ export function createAccountStorage(
           { emailVerified: true, updatedAt: new Date() },
           eq(t.user.id, user.id),
         );
+      return user.id;
+    });
+  // Active password/XRPC email challenges still establish verified local identity.
+  const bindAccountToVerifiedEmailUser = async (
+    input: LegacyVerifiedEmail,
+  ): Promise<string> =>
+    db.transact(async () => {
+      const row = assertBindingMatchesAccount(await getByDid(input.did), input);
+      const userId = await ensureVerifiedEmailUser(row.email);
       return bindVerifiedIdentity({
         did: row.did,
         email: row.email,
-        userId: user.id,
+        userId,
       });
     });
   const reserveExternalMigration = async (
@@ -442,6 +459,7 @@ export function createAccountStorage(
     });
   return {
     getByDid,
+    listBoundAccounts,
     getByEmail,
     getByHandle,
     getEmailClaim,
@@ -486,7 +504,8 @@ export function createAccountStorage(
     insertAccount,
     saveAccount,
     bindVerifiedIdentity,
-    ensureLegacyVerifiedIdentity,
+    ensureVerifiedEmailUser,
+    bindAccountToVerifiedEmailUser,
     reserveExternalMigration,
     reserveEmail,
     reserveHandle,

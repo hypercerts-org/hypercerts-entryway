@@ -39,6 +39,12 @@ export interface AuthenticationState {
     email: string;
     userId?: string;
   }): Promise<string>;
+  /** Sync verification only while the DID already has this verified user binding. */
+  syncBoundAccountEmailVerification(input: {
+    did: string;
+    email: string;
+    userId: string;
+  }): Promise<void>;
   initializeClaims(): Promise<void>;
   hasLiveSession(sessionId: string, userId: string): Promise<boolean>;
   revokeLocal(did: string): Promise<void>;

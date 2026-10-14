@@ -14,6 +14,7 @@ export async function createAuthentication({
   db,
   config,
   accounts,
+  accountAccess,
   provider,
   stores,
   mail,
@@ -49,11 +50,11 @@ export async function createAuthentication({
     provider,
     stores,
     flows,
+    accountAccess,
   });
   mountEmailLogin({
     app,
     db,
-    accounts,
     authentication,
     mail,
     flows,
@@ -76,11 +77,11 @@ export async function createAuthentication({
     app,
     db,
     accounts,
+    accountAccess,
     authentication,
     flows,
     signupForm,
     authenticated,
-    getAccountSecurity,
   });
   mountAuthorizationRoutes({
     app,

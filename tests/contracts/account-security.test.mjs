@@ -5,6 +5,7 @@ import {
   hasFailure,
 } from "../support/database-fixture.mjs";
 import { createSecurityPrimitives } from "../../dist/src/accounts/security-primitives.mjs";
+import { createAccountAccess } from "../../dist/src/accounts/account-access.mjs";
 import { createAccountAuthority } from "../../dist/src/database/drizzle/account-authority.mjs";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
@@ -22,7 +23,7 @@ import { createAccountStorage } from "../../dist/src/database/drizzle/account-st
 import { createMailFeature } from "../../dist/src/mail/create-mail.js";
 import { createMailOutbox } from "../../dist/src/database/drizzle/mail-outbox.js";
 
-async function fixture(t) {
+async function fixture(t, { initialLogin = true } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "entryway-account-security-"));
   const path = join(directory, "account-authority.sqlite");
   const { privateKey } = await generateKeyPair("ES256K", { extractable: true });
@@ -96,6 +97,7 @@ async function fixture(t) {
   const f = { accounts, config, alice, bob };
   async function boot() {
     f.db = db;
+    const accountAccess = createAccountAccess(storage);
     f.mail = createMailFeature({
       outbox: createMailOutbox(db),
       transport: { deliver: async () => {} },
@@ -105,6 +107,7 @@ async function fixture(t) {
       db,
       config,
       accounts,
+      accountAccess,
       mail: f.mail,
     });
     f.legacy = await createLegacy({ db, config, accounts });
@@ -112,6 +115,7 @@ async function fixture(t) {
       db,
       config,
       accounts,
+      accountAccess,
       oauth: f.oauth,
       legacy: f.legacy,
       mail: f.mail,
@@ -125,7 +129,15 @@ async function fixture(t) {
     });
     assert.equal(response.status, 200);
     const identity = response.principal;
-    await f.security.assertLoginEmail({ email, userId: identity.userId });
+    // This fixture explicitly establishes existing-account ownership; production sign-in only reads it.
+    const existing = await accounts.get(email);
+    if (existing)
+      await accounts.storage.bindVerifiedIdentity({
+        did: existing.did,
+        email: existing.email,
+        userId: identity.userId,
+      });
+    await f.security.assertLoginEmail(identity);
     const cookies = [];
     response.commitCookies({ append: (_name, value) => cookies.push(value) });
     const cookie = cookies.map((value) => value.split(";")[0]).join("; ");
@@ -155,10 +167,74 @@ async function fixture(t) {
     rmSync(directory, { recursive: true, force: true });
   });
   await boot();
-  f.login = await f.signIn(alice.email);
-  f.actor = f.login.actor;
+  if (initialLogin) {
+    f.login = await f.signIn(alice.email);
+    f.actor = f.login.actor;
+  }
   return f;
 }
+
+test("login validation requires repair for an email-matched account without a binding", async (t) => {
+  const f = await fixture(t, { initialLogin: false });
+  await f.accounts.save({ ...f.alice, emailVerified: false });
+  await f.oauth.sendSignInCode(f.alice.email);
+  const response = await f.oauth.verifySignInCode({
+    email: f.alice.email,
+    otp: (await f.db.get("outbox", f.alice.email)).otp,
+  });
+  assert.equal(response.status, 200);
+  const identity = response.principal;
+
+  assert.deepEqual(await f.security.assertLoginEmail(identity), {
+    kind: "account-requires-repair",
+  });
+  assert.equal(await f.accounts.storage.getVerifiedBinding(f.alice.did), null);
+  assert.equal((await f.accounts.get(f.alice.did)).emailVerified, false);
+  await f.accounts.save({
+    ...(await f.accounts.get(f.alice.did)),
+    status: "provisioning",
+  });
+  assert.deepEqual(await f.security.assertLoginEmail(identity), {
+    kind: "unbound",
+  });
+  assert.deepEqual(await f.accounts.storage.getEmailClaim(f.alice.email), {
+    did: f.alice.did,
+    purpose: "primary",
+  });
+
+  await createAccountAuthority({ db: f.db, accounts: f.accounts }).initializeClaims();
+  assert.equal(await f.accounts.storage.getVerifiedBinding(f.alice.did), null);
+});
+
+test("login validation leaves a genuinely new verified email available for signup", async (t) => {
+  const f = await fixture(t, { initialLogin: false });
+  const email = "new@example.com";
+  await f.oauth.sendSignInCode(email);
+  const response = await f.oauth.verifySignInCode({
+    email,
+    otp: (await f.db.get("outbox", email)).otp,
+  });
+  assert.equal(response.status, 200);
+
+  assert.deepEqual(await f.security.assertLoginEmail(response.principal), {
+    kind: "unbound",
+  });
+  assert.equal(await f.accounts.get(email), null);
+});
+
+test("account authorization rechecks the persisted Better Auth verification state", async (t) => {
+  const f = await fixture(t);
+  await query(
+    f.db,
+    'UPDATE "user" SET "emailVerified"=? WHERE id=?',
+    [f.db.backend === "sqlite" ? 0 : false, f.login.user.id],
+    "run",
+  );
+
+  await assert.rejects(f.security.summary(f.actor), {
+    error: "AccountMismatch",
+  });
+});
 
 test("security challenges are hashed, scoped, account-bound, single-use and persistent", async (t) => {
   const f = await fixture(t);
@@ -452,7 +528,11 @@ test("external reserved owner can renew verified sign-in while another user rema
   assert.equal((await f.signIn(email)).user.id, owner.user.id);
   await assert.rejects(
     async () =>
-      await f.security.assertLoginEmail({ email, userId: f.login.user.id }),
+      await f.security.assertLoginEmail({
+        email,
+        userId: f.login.user.id,
+        emailVerified: true,
+      }),
     {
       error: "EmailReserved",
     },

@@ -222,8 +222,10 @@ sequenceDiagram
 
 The Better Auth session proves the email identity; it does not itself select or
 authenticate a DID. Only established associations are eligible for account choice;
-matching an email cannot add authority over an unimported DID. Preserve the
-original client request and authorization context through verification and choice.
+matching an email cannot add authority over an unimported DID. The current code
+supports the single-binding path and fails closed if multiple bindings are found;
+the chooser is not implemented. Preserve the original client request and
+authorization context through verification and choice.
 
 Confidential clients also supply client authentication where required.
 The account page distinguishes ending a browser session, forgetting device membership,
