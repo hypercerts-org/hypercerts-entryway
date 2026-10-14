@@ -174,8 +174,9 @@ async function fixture(t, { initialLogin = true } = {}) {
   return f;
 }
 
-test("login validation and claim initialization do not bind an email-matched DID", async (t) => {
+test("login validation requires repair for an email-matched account without a binding", async (t) => {
   const f = await fixture(t, { initialLogin: false });
+  await f.accounts.save({ ...f.alice, emailVerified: false });
   await f.oauth.sendSignInCode(f.alice.email);
   const response = await f.oauth.verifySignInCode({
     email: f.alice.email,
@@ -185,9 +186,17 @@ test("login validation and claim initialization do not bind an email-matched DID
   const identity = response.principal;
 
   assert.deepEqual(await f.security.assertLoginEmail(identity), {
-    kind: "unbound",
+    kind: "account-requires-repair",
   });
   assert.equal(await f.accounts.storage.getVerifiedBinding(f.alice.did), null);
+  assert.equal((await f.accounts.get(f.alice.did)).emailVerified, false);
+  await f.accounts.save({
+    ...(await f.accounts.get(f.alice.did)),
+    status: "provisioning",
+  });
+  assert.deepEqual(await f.security.assertLoginEmail(identity), {
+    kind: "unbound",
+  });
   assert.deepEqual(await f.accounts.storage.getEmailClaim(f.alice.email), {
     did: f.alice.did,
     purpose: "primary",
@@ -195,6 +204,22 @@ test("login validation and claim initialization do not bind an email-matched DID
 
   await createAccountAuthority({ db: f.db, accounts: f.accounts }).initializeClaims();
   assert.equal(await f.accounts.storage.getVerifiedBinding(f.alice.did), null);
+});
+
+test("login validation leaves a genuinely new verified email available for signup", async (t) => {
+  const f = await fixture(t, { initialLogin: false });
+  const email = "new@example.com";
+  await f.oauth.sendSignInCode(email);
+  const response = await f.oauth.verifySignInCode({
+    email,
+    otp: (await f.db.get("outbox", email)).otp,
+  });
+  assert.equal(response.status, 200);
+
+  assert.deepEqual(await f.security.assertLoginEmail(response.principal), {
+    kind: "unbound",
+  });
+  assert.equal(await f.accounts.get(email), null);
 });
 
 test("account authorization rechecks the persisted Better Auth verification state", async (t) => {

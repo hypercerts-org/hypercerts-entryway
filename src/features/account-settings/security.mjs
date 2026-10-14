@@ -55,7 +55,20 @@ export function createAccountSettingsSecurity({
       const email = normalizeEmail(identity?.email);
       const usage = await readLoginEmailUsage(email);
       await assertLoginEmailUsage(identity, email, usage);
-      return await accountAccess.resolveBoundAccounts(identity);
+      const resolution = await accountAccess.resolveBoundAccounts(identity);
+      if (
+        resolution.kind === "unbound" &&
+        usage.account &&
+        usage.account.status !== "provisioning"
+      )
+        return { kind: "account-requires-repair" };
+      if (resolution.kind === "single")
+        await authority.syncBoundAccountEmailVerification({
+          did: resolution.account.did,
+          email,
+          userId: identity.userId,
+        });
+      return resolution;
     },
     async summary(actor) {
       const row = await principal(actor);

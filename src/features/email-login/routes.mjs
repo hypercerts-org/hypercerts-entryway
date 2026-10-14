@@ -171,6 +171,14 @@ export function mountEmailLogin({
         // Rotate the provider's browser session after successful identity verification.
         const rotated = await loadBrowser(req, res, true);
         const verifiedEmail = identity.email.toLowerCase();
+        if (resolution?.kind === "account-requires-repair")
+          return pageForFlow(
+            res,
+            "Account requires repair",
+            '<p role="alert">This email is associated with an existing account that needs repair before sign-in can continue. Signup is unavailable for this email. Contact support for help.</p>',
+            flow,
+            409,
+          );
         if (
           !resolution ||
           resolution.kind === "unbound" ||

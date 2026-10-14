@@ -45,7 +45,13 @@ test("verified registration activates and binds the original browser user", asyn
 
 test("registration cannot acquire an already active unbound row by verified email", async (t) => {
   const { accounts, db } = await fixture(t);
-  await accounts.storage.insertAccount(alice);
+  const unbound = {
+    ...alice,
+    did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
+    emailVerified: true,
+    status: "active",
+  };
+  await accounts.storage.insertAccount(unbound);
   const userId = "unrelated-registration-owner";
   await verifiedUser(db, userId, alice.email);
 
@@ -61,7 +67,7 @@ test("registration cannot acquire an already active unbound row by verified emai
     }),
     { error: "AccountMismatch" },
   );
-  assert.equal(await accounts.storage.getVerifiedBinding(alice.did), null);
+  assert.equal(await accounts.storage.getVerifiedBinding(unbound.did), null);
 });
 
 test("registration reconciliation uses persisted user ID and atomically retries binding after local rollback", async (t) => {
