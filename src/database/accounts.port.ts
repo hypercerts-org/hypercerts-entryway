@@ -1,6 +1,7 @@
 import type {
   AccountRow,
   EmailClaim,
+  StoredEmailClaimPurpose,
   ExternalEmailReservation,
   ActivateImportedAccount,
   BindVerifiedIdentity,
@@ -53,10 +54,14 @@ export interface AccountTransactor extends AccountReader {
   reserveEmail(
     email: string,
     did: string,
-    purpose: string,
+    purpose: StoredEmailClaimPurpose,
     ownerUserId?: string,
   ): Promise<void>;
-  releaseEmail(email: string, did: string, purpose: string): Promise<void>;
+  releaseEmail(
+    email: string,
+    did: string,
+    purpose: StoredEmailClaimPurpose,
+  ): Promise<void>;
   unbindAccount(did: string, expectedUserId?: string): Promise<void>;
   rebindVerifiedIdentity(input: BindVerifiedIdentity): Promise<void>;
   reserveHandle(handle: string, did: string): Promise<void>;

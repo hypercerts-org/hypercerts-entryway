@@ -174,6 +174,26 @@ async function fixture(t, { initialLogin = true } = {}) {
   return f;
 }
 
+async function bindSiblingToSharedEmail(f, sharedUserId) {
+  const sibling = { ...f.bob, email: f.alice.email };
+  await f.db.transact(async () => {
+    await f.accounts.storage.releaseEmail(f.bob.email, sibling.did, "primary");
+    await f.accounts.storage.saveAccount(sibling);
+    await f.accounts.storage.reserveEmail(
+      f.alice.email,
+      sibling.did,
+      "primary",
+      sharedUserId,
+    );
+    await f.accounts.storage.bindVerifiedIdentity({
+      did: sibling.did,
+      email: f.alice.email,
+      userId: sharedUserId,
+    });
+  });
+  return sibling;
+}
+
 test("login validation requires repair for an email-matched account without a binding", async (t) => {
   const f = await fixture(t, { initialLogin: false });
   await f.accounts.save({ ...f.alice, emailVerified: false });
@@ -259,23 +279,8 @@ test("security challenges are hashed, scoped, account-bound, single-use and pers
   );
 
   const sharedUserId = f.login.user.id;
-  const sibling = { ...f.bob, email: f.alice.email };
   // Keep the other principal valid so the proof's DID is the only mismatch.
-  await f.db.transact(async () => {
-    await f.accounts.storage.releaseEmail(f.bob.email, sibling.did, "primary");
-    await f.accounts.storage.saveAccount(sibling);
-    await f.accounts.storage.reserveEmail(
-      f.alice.email,
-      sibling.did,
-      "primary",
-      sharedUserId,
-    );
-    await f.accounts.storage.bindVerifiedIdentity({
-      did: sibling.did,
-      email: f.alice.email,
-      userId: sharedUserId,
-    });
-  });
+  const sibling = await bindSiblingToSharedEmail(f, sharedUserId);
   assert.deepEqual(await f.accounts.storage.getVerifiedBinding(sibling.did), {
     did: sibling.did,
     userId: sharedUserId,
@@ -522,22 +527,7 @@ test("verified email change preserves shared-user browser sessions and cleans on
   const sharedUserId = f.login.user.id;
   const secondLogin = await f.signIn(f.alice.email);
   assert.equal(secondLogin.user.id, sharedUserId);
-  const sibling = { ...f.bob, email: f.alice.email };
-  await f.db.transact(async () => {
-    await f.accounts.storage.releaseEmail(f.bob.email, sibling.did, "primary");
-    await f.accounts.storage.saveAccount(sibling);
-    await f.accounts.storage.reserveEmail(
-      f.alice.email,
-      sibling.did,
-      "primary",
-      sharedUserId,
-    );
-    await f.accounts.storage.bindVerifiedIdentity({
-      did: sibling.did,
-      email: f.alice.email,
-      userId: sharedUserId,
-    });
-  });
+  const sibling = await bindSiblingToSharedEmail(f, sharedUserId);
 
   await f.oauth.stores.createToken(
     "alice-previous-token",

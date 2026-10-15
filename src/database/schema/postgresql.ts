@@ -11,6 +11,10 @@ import {
   check,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import type {
+  ExternalEmailReservationState,
+  StoredEmailClaimPurpose,
+} from "../../accounts/types.js";
 const time = customType<{ data: Date; driverData: string }>({
   dataType: () => "bigint",
   toDriver: (value) => String(value.getTime()),
@@ -114,7 +118,7 @@ export const email_claims = table(
     did: text("did")
       .notNull()
       .references(() => accounts.did),
-    purpose: text("purpose").notNull(),
+    purpose: text("purpose").$type<StoredEmailClaimPurpose>().notNull(),
   },
   (t) => [
     primaryKey({ columns: [t.email, t.did] }),
@@ -157,7 +161,7 @@ export const migration_reservations = table(
     session_id: text("session_id").notNull(),
     target_pds_id: text("target_pds_id").notNull(),
     target_pds_url: text("target_pds_url").notNull(),
-    state: text("state").notNull(),
+    state: text("state").$type<ExternalEmailReservationState>().notNull(),
     created_at: text("created_at").notNull(),
   },
   (t) => [

@@ -16,14 +16,34 @@ export interface AccountRow {
 }
 
 // `external` represents an active external-migration reservation, not a stored email claim.
-export type EmailClaimPurpose = "primary" | "pending" | "backup" | "external";
+export const EmailClaimPurpose = {
+  Primary: "primary",
+  Pending: "pending",
+  Backup: "backup",
+  External: "external",
+} as const;
+
+export type EmailClaimPurpose =
+  (typeof EmailClaimPurpose)[keyof typeof EmailClaimPurpose];
+
+export type StoredEmailClaimPurpose = Exclude<
+  EmailClaimPurpose,
+  typeof EmailClaimPurpose.External
+>;
 
 export interface EmailClaim {
   did: string;
   purpose: EmailClaimPurpose;
 }
 
-export type ExternalEmailReservationState = "reserved" | "placed" | "complete";
+export const ExternalEmailReservationState = {
+  Reserved: "reserved",
+  Placed: "placed",
+  Complete: "complete",
+} as const;
+
+export type ExternalEmailReservationState =
+  (typeof ExternalEmailReservationState)[keyof typeof ExternalEmailReservationState];
 
 export interface ExternalEmailReservation {
   workflowId: string;
