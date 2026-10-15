@@ -24,8 +24,7 @@ export function createAccountSettingsSecurity({
   } = proofs;
   const readLoginEmailUsage = async (email) => ({
     claims: await accounts.storage.listEmailClaims(email),
-    reservations:
-      await accounts.storage.listExternalReservationsByEmail(email),
+    reservations: await accounts.storage.listExternalReservationsByEmail(email),
   });
   const requestEmailUpdate = async (
     actor,
@@ -89,6 +88,25 @@ export function createAccountSettingsSecurity({
       ...(issued.challengeId ? { challengeId: issued.challengeId } : {}),
     };
   };
+  const requestBackupEmail = async (
+    actor,
+    { email },
+    { exposeChallengeId = false } = {},
+  ) => {
+    const row = await principal(actor, true);
+    email = await assertEmailAvailable(email, row.did, {
+      purpose: "backup",
+    });
+    if (row.email === email)
+      throw fail(400, "InvalidEmail", "Backup email must differ from primary");
+    if ((await authority.backupCount(row.did)) >= 3)
+      throw fail(
+        400,
+        "BackupLimitExceeded",
+        "At most three verified backup emails are supported",
+      );
+    return await issue("backup-add", row, email, {}, { exposeChallengeId });
+  };
   const assertLoginEmailUsage = async (identity, email, usage) => {
     if (identity?.emailVerified !== true)
       throw fail(403, "AccountMismatch", "Verify your email before signing in");
@@ -109,10 +127,7 @@ export function createAccountSettingsSecurity({
           userId: identity.userId,
           email,
         })));
-    if (
-      hasBlockingClaim ||
-      (!hasPrimaryClaim && !ownsUnhostedReservation)
-    )
+    if (hasBlockingClaim || (!hasPrimaryClaim && !ownsUnhostedReservation))
       throw fail(
         409,
         "EmailReserved",
@@ -203,24 +218,13 @@ export function createAccountSettingsSecurity({
         exposeChallengeId: true,
       });
     },
-    async requestBackupEmail(actor, { email }) {
-      const row = await principal(actor, true);
-      email = await assertEmailAvailable(email, row.did, {
-        purpose: "backup",
+    async requestBackupEmail(actor, input) {
+      return await requestBackupEmail(actor, input);
+    },
+    async requestBackupEmailForBrowser(actor, input) {
+      return await requestBackupEmail(actor, input, {
+        exposeChallengeId: true,
       });
-      if (row.email === email)
-        throw fail(
-          400,
-          "InvalidEmail",
-          "Backup email must differ from primary",
-        );
-      if ((await authority.backupCount(row.did)) >= 3)
-        throw fail(
-          400,
-          "BackupLimitExceeded",
-          "At most three verified backup emails are supported",
-        );
-      return await issue("backup-add", row, email);
     },
     async confirmBackupEmail(actor, { email, token }) {
       const row = await principal(actor, true);

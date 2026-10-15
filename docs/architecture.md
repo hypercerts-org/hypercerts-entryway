@@ -127,6 +127,12 @@ A feature does not import another feature. Short root compose modules wire expli
 operations together. Shared accounts code owns common facts, validation and proof
 primitives. A shared account summary can display feature-owned panels supplied by
 composition without importing those features.
+
+Browser forms for emailed account proofs retain the opaque challenge ID separately
+from the visible code, then combine them server-side. Render selectors through the
+HTML-escaping hidden-field helper; never infer a selector by searching for a code.
+The primary-email change flow is the reference for browser-only proof issuance.
+Keep default protocol/XRPC proof-token behavior unchanged.
 Changes to shared transaction contracts, browser identity, signing custody and
 schema initialization require coordinated review. See AGENTS.md for enforceable source rules.
 
