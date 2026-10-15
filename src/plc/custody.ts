@@ -30,6 +30,19 @@ const validEventEvidence = (event: Record<string, unknown>): boolean => {
   );
 };
 
+function validateEventOperation(
+  operation: unknown,
+  kind: unknown,
+): CustodySignedEvent["operation"] {
+  if (record(operation) && operation.type === "plc_tombstone")
+    return {
+      type: "plc_tombstone",
+      prev: plc.def.tombstone.parse({ ...operation, sig: "" }).prev,
+    };
+  if (kind === "signed") return validateUnsignedOperation(operation);
+  return validateHistoryOperation(operation);
+}
+
 /** Validate untrusted public event metadata and unsigned operation facts.
  * Signed events obey issuance policy; observed/nullified facts obey PLC schema.
  * Reject transport/proof/signature fields and invalid provenance/CID shape.
@@ -77,15 +90,7 @@ export function validateSignedEvent(value: unknown): CustodySignedEvent {
     id: value.id,
     did: value.did,
     cid: value.cid,
-    operation:
-      record(value.operation) && value.operation.type === "plc_tombstone"
-        ? {
-            type: "plc_tombstone",
-            prev: plc.def.tombstone.parse({ ...value.operation, sig: "" }).prev,
-          }
-        : value.kind === "signed"
-          ? validateUnsignedOperation(value.operation)
-          : validateHistoryOperation(value.operation),
+    operation: validateEventOperation(value.operation, value.kind),
     kind: value.kind as CustodySignedEvent["kind"],
     operationId: value.operationId as string | null,
     provenance: value.provenance as CustodySignedEvent["provenance"],
