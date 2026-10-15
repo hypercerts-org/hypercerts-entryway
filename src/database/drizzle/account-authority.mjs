@@ -138,18 +138,21 @@ export function createAccountAuthority({ db, accounts }) {
         eq(t.verification.identifier, `${type}-otp-${email}`),
       );
   };
-  const revokeLocal = async (did, { preserveBrowserSessions = false } = {}) => {
-    const row = await accounts.get(did),
-      userId = await identity(did);
-    if (userId && !preserveBrowserSessions)
-      await db.remove("session", eq(t.session.userId, userId));
-    if (row) await clearEmailProofs(row.email);
+  const clearOAuthTokensForDid = async (did) => {
     for (const { key, value } of await db.list("oauth:tokens")) {
       if (value.data.did !== did) continue;
       await db.delete("oauth:tokens", key);
       for (const previous of value.previousIds ?? [])
         await db.delete("oauth:token-successors", previous);
     }
+  };
+  const revokeLocal = async (did, { preserveBrowserSessions = false } = {}) => {
+    const row = await accounts.get(did),
+      userId = await identity(did);
+    if (userId && !preserveBrowserSessions)
+      await db.remove("session", eq(t.session.userId, userId));
+    if (row) await clearEmailProofs(row.email);
+    await clearOAuthTokensForDid(did);
     for (const { key, value } of await db.list("oauth:device-accounts"))
       if (value.did === did) await db.delete("oauth:device-accounts", key);
     for (const { key, value } of await db.list("oauth:requests"))
