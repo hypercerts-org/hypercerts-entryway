@@ -56,16 +56,60 @@ export function createAccountAuthority({ db, accounts }) {
     if (value) await releasePending(did);
     return null;
   };
-  const assertEmailAvailable = async (
+  const sameOwnerActiveReservations = async (
     email,
     did,
-    { allowOwnBackup = false, purpose = "primary" } = {},
+    reservations,
+    allowSameOwnerActiveMigrationReservation,
+  ) => {
+    if (!allowSameOwnerActiveMigrationReservation)
+      return { userId: undefined, dids: new Set() };
+    const active = reservations.filter(
+      (reservation) =>
+        reservation.did !== did && reservation.state !== "complete",
+    );
+    if (!active.length) return { userId: undefined, dids: new Set() };
+    const userId = active[0].userId;
+    if (
+      active.some((reservation) => reservation.userId !== userId) ||
+      !(await accounts.storage.isVerifiedUserEmail({ userId, email }))
+    )
+      return { userId: undefined, dids: new Set() };
+    return {
+      userId,
+      dids: new Set(active.map(({ did: reservationDid }) => reservationDid)),
+    };
+  };
+  const exclusiveEmailClaims = (existing, allowedReservationDids) =>
+    existing.filter(
+      ({ did: claimDid, purpose }) =>
+        purpose !== "primary" &&
+        !(purpose === "external" && allowedReservationDids.has(claimDid)),
+    );
+  const emailAvailability = async (
+    email,
+    did,
+    {
+      allowOwnBackup = false,
+      purpose = "primary",
+      allowSameOwnerActiveMigrationReservation = false,
+    } = {},
   ) => {
     let existing = await claims(email);
     for (const pending of existing.filter(({ purpose }) => purpose === "pending"))
       await pendingEmail(pending.did);
     existing = await claims(email);
-    const exclusive = existing.filter(({ purpose }) => purpose !== "primary");
+    const reservations = await accounts.storage.listExternalReservationsByEmail(
+      email,
+    );
+    const { userId: reservationOwnerUserId, dids: allowedReservationDids } =
+      await sameOwnerActiveReservations(
+        email,
+        did,
+        reservations,
+        allowSameOwnerActiveMigrationReservation && purpose === "pending",
+      );
+    const exclusive = exclusiveEmailClaims(existing, allowedReservationDids);
     const ownBackup =
       allowOwnBackup &&
       exclusive.length === 1 &&
@@ -79,18 +123,21 @@ export function createAccountAuthority({ db, accounts }) {
     const backupOverlapsPrimary =
       purpose === "backup" &&
       existing.some(({ purpose: current }) => current === "primary");
-    const reservations = await accounts.storage.listExternalReservationsByEmail(
-      email,
-    );
     if (
       (exclusive.length > 0 && !ownBackup && !ownPending) ||
       backupOverlapsPrimary ||
       reservations.some(
         (reservation) =>
-          reservation.did !== did && reservation.state !== "complete",
+          reservation.did !== did &&
+          reservation.state !== "complete" &&
+          !allowedReservationDids.has(reservation.did),
       )
     )
       throw fail(409, "EmailNotAvailable", "This email address cannot be used");
+    return { exclusive, allowedReservationDids, reservationOwnerUserId };
+  };
+  const assertEmailAvailable = async (email, did, options) => {
+    await emailAvailability(email, did, options);
     return email;
   };
   const bindVerifiedIdentity = ({ did, email, userId }) =>
@@ -223,6 +270,7 @@ export function createAccountAuthority({ db, accounts }) {
         await assertEmailAvailable(email, did, {
           allowOwnBackup: recovery,
           purpose: verified ? "pending" : "primary",
+          allowSameOwnerActiveMigrationReservation: verified && !recovery,
         });
         const previousUserId = await identity(did);
         const destinationUserId = verified
@@ -253,6 +301,9 @@ export function createAccountAuthority({ db, accounts }) {
         await accounts.storage.saveAccount(
           { ...row, email, emailVerified: verified },
           destinationUserId,
+          {
+            allowSameOwnerActiveMigrationReservation: verified && !recovery,
+          },
         );
         await reserve(email, did, "primary", destinationUserId);
         if (verified)
@@ -291,16 +342,19 @@ export function createAccountAuthority({ db, accounts }) {
     }) {
       return tx(async () => {
         const row = await account(did);
-        await assertEmailAvailable(email, did, {
-          allowOwnBackup: recovery,
-          purpose: "pending",
-        });
+        const { allowedReservationDids, reservationOwnerUserId } =
+          await emailAvailability(email, did, {
+            allowOwnBackup: recovery,
+            purpose: "pending",
+            allowSameOwnerActiveMigrationReservation: !recovery,
+          });
         if (email === row.email)
           throw fail(400, "InvalidEmail", "Choose a different primary email");
         await releasePending(did);
         const existingClaims = await claims(email);
-        const exclusiveClaims = existingClaims.filter(
-          ({ purpose }) => purpose !== "primary",
+        const exclusiveClaims = exclusiveEmailClaims(
+          existingClaims,
+          allowedReservationDids,
         );
         const ownBackup =
           recovery &&
@@ -308,7 +362,7 @@ export function createAccountAuthority({ db, accounts }) {
           exclusiveClaims[0].did === did &&
           exclusiveClaims[0].purpose === "backup";
         if (exclusiveClaims.length === 0)
-          await reserve(email, did, "pending");
+          await reserve(email, did, "pending", reservationOwnerUserId);
         else if (!ownBackup)
           throw fail(
             409,

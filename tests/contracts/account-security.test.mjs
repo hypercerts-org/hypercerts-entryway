@@ -647,9 +647,19 @@ test("verified email change preserves shared-user browser sessions and cleans on
   });
 });
 
-test("verified email change can associate the selected DID with an existing primary email", async (t) => {
+test("verified email change can associate a DID with a primary email held by its migration owner", async (t) => {
   const f = await fixture(t);
   const destination = await f.signIn(f.bob.email);
+  const reservation = {
+    workflowId: "email-change-shared-destination",
+    did: "did:plc:cccccccccccccccccccccccc",
+    handle: "migration.entryway.atmosbox.test",
+    userId: destination.user.id,
+    sessionId: destination.actor.sessionId,
+    targetPdsId: "pds1",
+    targetPdsUrl: f.config.pds[0].url,
+  };
+  await f.accounts.storage.reserveExternalMigration(reservation);
   const aliceBefore = await f.accounts.get(f.alice.did);
   const aliceBindingBefore = await f.accounts.storage.getVerifiedBinding(
     f.alice.did,
@@ -674,6 +684,15 @@ test("verified email change can associate the selected DID with an existing prim
     userId: destination.user.id,
     email: f.bob.email,
   });
+  await assert.rejects(
+    f.accounts.storage.saveAccount(
+      { ...aliceBefore, email: f.bob.email },
+      f.login.user.id,
+      { allowSameOwnerActiveMigrationReservation: true },
+    ),
+    { code: "EmailNotAvailable" },
+  );
+  assert.deepEqual(await f.accounts.get(f.alice.did), aliceBefore);
 
   await f.security.requestEmailUpdate(f.actor);
   await f.security.updateEmail(f.actor, {
@@ -754,6 +773,65 @@ test("verified email change can associate the selected DID with an existing prim
     ).did,
     f.alice.did,
   );
+  assert.equal(await f.accounts.storage.getVerifiedBinding(reservation.did), null);
+  assert.deepEqual(
+    await f.accounts.storage.getExternalReservationByEmail(f.bob.email),
+    { did: reservation.did, userId: destination.user.id },
+  );
+});
+
+test("verified email change rejects mixed or stale migration reservation owners", async (t) => {
+  for (const scenario of ["mixed-owners", "stale-owner"]) {
+    await t.test(scenario, async (t) => {
+      const f = await fixture(t);
+      const destination = await f.signIn(f.bob.email);
+      const reservations = [
+        {
+          workflowId: `email-change-${scenario}-one`,
+          did: "did:plc:cccccccccccccccccccccccc",
+          handle: "migration-one.entryway.atmosbox.test",
+        },
+        {
+          workflowId: `email-change-${scenario}-two`,
+          did: "did:plc:dddddddddddddddddddddddd",
+          handle: "migration-two.entryway.atmosbox.test",
+        },
+      ];
+      for (const reservation of reservations)
+        await f.accounts.storage.reserveExternalMigration({
+          ...reservation,
+          userId: destination.user.id,
+          sessionId: destination.actor.sessionId,
+          targetPdsId: "pds1",
+          targetPdsUrl: f.config.pds[0].url,
+        });
+
+      if (scenario === "mixed-owners")
+        await query(
+          f.db,
+          "UPDATE migration_reservations SET user_id=? WHERE workflow_id=?",
+          [f.login.user.id, reservations[1].workflowId],
+          "run",
+        );
+      else
+        await query(
+          f.db,
+          'UPDATE "user" SET email=? WHERE id=?',
+          ["moved@example.test", destination.user.id],
+          "run",
+        );
+
+      await f.security.requestEmailUpdate(f.actor);
+      await assert.rejects(
+        f.security.updateEmail(f.actor, {
+          email: f.bob.email,
+          token: await f.token(f.alice.email),
+        }),
+        { error: "EmailNotAvailable" },
+      );
+      assert.equal((await f.security.summary(f.actor)).pendingEmail, null);
+    });
+  }
 });
 
 test("admin email change leaves the selected DID unbound and does not mutate the destination owner", async (t) => {
@@ -820,6 +898,12 @@ test("external reserved owner can renew verified sign-in while another user rema
       userId: owner.user.id,
     },
   );
+  await f.security.requestEmailUpdate(f.actor);
+  await f.security.updateEmail(f.actor, {
+    email,
+    token: await f.token(f.alice.email),
+  });
+  assert.equal((await f.security.summary(f.actor)).pendingEmail, email);
   assert.equal((await f.signIn(email)).user.id, owner.user.id);
   await assert.rejects(
     async () =>

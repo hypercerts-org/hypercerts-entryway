@@ -653,11 +653,13 @@ export function createRegistration({
   const reconcileRegistrations = async () => {
     const results = [];
     for (const { key: email } of await db.list("registration:intents")) {
-      if (await get(email)) continue;
-      const nomination = await pendingIntent(email);
-      if (!nomination) continue;
-      const { saved, operationId } = nomination;
       try {
+        const nomination = await pendingIntent(email);
+        if (!nomination) continue;
+        const { saved, operationId } = nomination;
+        // Email is shared; the saved handle identifies an account already persisted.
+        const existing = await storage.getByHandle(saved.handle);
+        if (existing?.email === saved.email) continue;
         const inviteCode = (
           (await db.get("entryway:invite-reservations", email)) as {
             code?: string;

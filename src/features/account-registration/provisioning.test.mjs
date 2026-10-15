@@ -134,6 +134,109 @@ test("ordinary registration fails closed when an email maps to multiple establis
     assert.equal(await f.accounts.storage.getVerifiedBinding(did), null);
 });
 
+test("registration reconciliation isolates shared-email intents and processes later registrations", async (t) => {
+  let failedSigningKeyReservations = 2;
+  const f = await fixture(t, ({ method }) => {
+    if (
+      method === "com.atproto.server.reserveSigningKey" &&
+      failedSigningKeyReservations > 0
+    ) {
+      failedSigningKeyReservations--;
+      return {
+        status: 503,
+        body: { error: "Unavailable", message: "Temporary signing-key failure" },
+      };
+    }
+  });
+  const sharedEmail = "a-shared@example.test";
+  const first = {
+    ...alice,
+    email: sharedEmail,
+    handle: "first.entryway.atmosbox.test",
+  };
+  const later = {
+    ...alice,
+    email: "z-later@example.test",
+    handle: "later.entryway.atmosbox.test",
+  };
+
+  for (const input of [first, later]) {
+    await assert.rejects(f.accounts.create(input), { error: "Unavailable" });
+    await f.recover(`email:${input.email}`);
+  }
+  for (const [did, handle] of [
+    ["did:plc:cccccccccccccccccccccccc", "shared-one.entryway.atmosbox.test"],
+    ["did:plc:dddddddddddddddddddddddd", "shared-two.entryway.atmosbox.test"],
+  ]) {
+    await f.accounts.storage.insertAccount({
+      did,
+      email: sharedEmail,
+      handle,
+      pdsId: "pds1",
+      status: "active",
+    });
+  }
+
+  const results = await f.accounts.reconcile();
+
+  assert.deepEqual(results, [
+    {
+      id: "create:pre-did",
+      status: "pending",
+      error: "AccountSelectionRequired",
+    },
+    {
+      id: `create:${(await f.accounts.get(later.email)).did}`,
+      status: "complete",
+    },
+  ]);
+  assert.equal((await f.accounts.get(later.email)).status, "active");
+});
+
+test("registration reconciliation recognizes a persisted intent account by handle with a shared email", async (t) => {
+  let failedSigningKeyReservations = 2;
+  const f = await fixture(t, ({ method }) => {
+    if (
+      method === "com.atproto.server.reserveSigningKey" &&
+      failedSigningKeyReservations > 0
+    ) {
+      failedSigningKeyReservations--;
+      return {
+        status: 503,
+        body: { error: "Unavailable", message: "Temporary signing-key failure" },
+      };
+    }
+  });
+  const intended = {
+    ...alice,
+    email: "a-shared@example.test",
+    handle: "persisted.entryway.atmosbox.test",
+  };
+  await assert.rejects(f.accounts.create(intended), { error: "Unavailable" });
+  await f.recover(`email:${intended.email}`);
+
+  const persisted = {
+    did: "did:plc:cccccccccccccccccccccccc",
+    email: intended.email,
+    handle: intended.handle,
+    pdsId: "pds1",
+    status: "active",
+  };
+  await f.accounts.storage.insertAccount(persisted);
+  await f.accounts.storage.insertAccount({
+    ...persisted,
+    did: "did:plc:dddddddddddddddddddddddd",
+    handle: "sibling.entryway.atmosbox.test",
+  });
+
+  const callsBeforeReconcile = f.calls.length;
+  assert.deepEqual(await f.accounts.reconcile(), []);
+  assert.equal(f.calls.length, callsBeforeReconcile);
+  const matched = await f.accounts.storage.getByHandle(intended.handle);
+  assert.equal(matched.did, persisted.did);
+  assert.equal(matched.email, intended.email);
+});
+
 test("registration reconciliation uses persisted user ID and atomically retries binding after local rollback", async (t) => {
   const f = await fixture(t);
   const userId = "original-registration-owner";

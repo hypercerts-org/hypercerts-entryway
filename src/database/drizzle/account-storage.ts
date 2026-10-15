@@ -225,9 +225,13 @@ export function createAccountStorage(
         reservations.some(
           (reservation) =>
             reservation.state !== "complete" &&
-            (purpose !== "primary" ||
-              !ownerUserId ||
-              reservation.userId !== ownerUserId),
+            (purpose === "pending"
+              ? reservation.did === did ||
+                !ownerUserId ||
+                reservation.userId !== ownerUserId
+              : purpose !== "primary" ||
+                !ownerUserId ||
+                reservation.userId !== ownerUserId),
         );
       if (
         conflictsWithOtherClaim ||
@@ -306,7 +310,13 @@ export function createAccountStorage(
       translateConstraint(error, "IdentityConflict");
     }
   };
-  const saveAccount = async (row: AccountRow, ownerUserId?: string) => {
+  const saveAccount = async (
+    row: AccountRow,
+    ownerUserId?: string,
+    {
+      allowSameOwnerActiveMigrationReservation = false,
+    }: { allowSameOwnerActiveMigrationReservation?: boolean } = {},
+  ) => {
     assertAccountShape(row);
     assertPds(row);
     try {
@@ -316,23 +326,33 @@ export function createAccountStorage(
           throw new DomainError("AccountNotFound", 404, "Account not found");
         if (previous.email !== row.email) {
           const claims = await listEmailClaims(row.email);
+          const activeReservations = (
+            await listExternalReservationsByEmail(row.email)
+          ).filter(
+            (reservation) =>
+              reservation.state !== "complete" && reservation.did !== row.did,
+          );
+          const allowedReservationDids =
+            allowSameOwnerActiveMigrationReservation &&
+            ownerUserId &&
+            activeReservations.length > 0 &&
+            activeReservations.every(
+              (reservation) => reservation.userId === ownerUserId,
+            )
+              ? new Set(activeReservations.map(({ did }) => did))
+              : new Set<string>();
           if (
             claims.some(
-              (claim) => claim.did !== row.did && claim.purpose !== "primary",
-            )
-          )
-            throw new DomainError(
-              "EmailNotAvailable",
-              409,
-              "Email address is reserved",
-            );
-          const reservations = await listExternalReservationsByEmail(row.email);
-          if (
-            reservations.some(
-              (reservation) =>
-                reservation.state !== "complete" &&
-                reservation.did !== row.did &&
-                (!ownerUserId || reservation.userId !== ownerUserId),
+              (claim) =>
+                claim.did !== row.did &&
+                claim.purpose !== "primary" &&
+                !(
+                  claim.purpose === "external" &&
+                  allowedReservationDids.has(claim.did)
+                ),
+            ) ||
+            activeReservations.some(
+              (reservation) => !allowedReservationDids.has(reservation.did),
             )
           )
             throw new DomainError(
