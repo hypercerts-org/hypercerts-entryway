@@ -913,6 +913,54 @@ test("backup enrollment requires recent real authentication and reserves the add
   assert.deepEqual((await f.security.summary(f.actor)).backupEmails, []);
 });
 
+test("browser recovery selectors mask unknown and ineligible emails without proof or mail", async (t) => {
+  const f = await fixture(t);
+  await f.security.requestBackupEmail(f.actor, { email: "backup@example.com" });
+  await f.security.confirmBackupEmail(f.actor, {
+    email: "backup@example.com",
+    token: await f.token("backup@example.com"),
+  });
+
+  const eligible = await f.security.requestRecoveryForBrowser({
+    email: "backup@example.com",
+  });
+  const unknown = await f.security.requestRecoveryForBrowser({
+    email: "missing-recovery@example.com",
+  });
+  const ineligible = await f.security.requestRecoveryForBrowser({
+    email: f.bob.email,
+  });
+  const selectors = [eligible.challengeId, unknown.challengeId, ineligible.challengeId];
+  for (const selector of selectors)
+    assert.match(selector, /^[A-Za-z0-9_-]{24}$/);
+  assert.equal(new Set(selectors).size, selectors.length);
+
+  assert.deepEqual(
+    await f.security.requestRecovery({ email: "missing-recovery@example.com" }),
+    {},
+  );
+  assert.deepEqual(await f.security.requestRecovery({ email: f.bob.email }), {});
+  const eligibleChallenge = await f.db.get(
+    "security:challenges",
+    eligible.challengeId,
+  );
+  assert.equal(eligibleChallenge.did, f.alice.did);
+  assert.equal(eligibleChallenge.email, "backup@example.com");
+  assert.equal(eligibleChallenge.purpose, "recovery-backup");
+  for (const selector of [unknown.challengeId, ineligible.challengeId])
+    assert.equal(await f.db.get("security:challenges", selector), null);
+  assert.equal(
+    (await f.db.list("security:challenges")).filter(
+      ({ value }) =>
+        value.purpose === "recovery-backup" &&
+        ["missing-recovery@example.com", f.bob.email].includes(value.email),
+    ).length,
+    0,
+  );
+  assert.equal(await f.db.get("outbox", "missing-recovery@example.com"), null);
+  assert.equal(await f.db.get("outbox", f.bob.email), null);
+});
+
 test("backup recovery verifies replacement email, retains DID and removes compromised credentials", async (t) => {
   const f = await fixture(t);
   await f.legacy.setPassword(f.alice.did, "old compromised password");

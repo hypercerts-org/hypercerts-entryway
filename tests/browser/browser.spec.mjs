@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { createPublicKey, randomUUID } from 'node:crypto'
 import { SignJWT, importJWK, exportJWK } from 'jose'
+import { waitForMailpitCode } from '../support/helpers/mailpit.mjs'
 
 const config = JSON.parse(
   readFileSync(process.env.SERVICE_CONFIG_PATH ?? './.runtime/config.json', 'utf8'),
@@ -424,9 +425,16 @@ test('handle update, deactivate, reactivate, revoke and delete use a disposable 
   })
   expect(revoked.ok()).toBe(false)
   await page.getByLabel('Type your handle to delete this test account').fill(updated)
+  const deletionSince = Date.now()
   await page.getByRole('button', { name: 'Delete test account' }).click()
   await expect(page.getByRole('heading', { name: 'Confirm account deletion' })).toBeVisible()
-  await page.getByLabel('Deletion code').fill(outbox(disposable.email).token)
+  const challengeSelector = page.locator('form[action="/account/delete-confirm"] input[name="challengeId"]')
+  expect(await challengeSelector.count()).toBe(1)
+  const challengeId = await challengeSelector.inputValue()
+  expect(challengeId).toBeTruthy()
+  const { code } = await waitForMailpitCode({ recipient: disposable.email, since: deletionSince })
+  expect(await page.content()).not.toContain(`${challengeId}.${code}`)
+  await page.getByLabel('Deletion code').fill(code)
   await page.getByRole('button', { name: 'Permanently delete account', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Test account deleted' })).toBeVisible()
 })

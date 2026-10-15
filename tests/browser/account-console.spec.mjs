@@ -32,11 +32,13 @@ const password = `Console spike ${run} password!`
 let browserRef, context, page, otherContext, otherPage
 const accountForm = (p, action) => p.locator(`form[action="/account/${action}"]`)
 const submit = (p, action) => accountForm(p, action).getByRole('button').click()
-async function code(email, type) {
-  await expect.poll(() => readMail(email)?.type).toBe(type)
-  const token = readMail(email)?.token
-  expect(typeof token === 'string' && token.includes('.')).toBe(true)
-  return token
+async function readChallengeId(form) {
+  const selector = form.locator('input[name="challengeId"]')
+  expect(await selector.count()).toBe(1)
+  return selector.inputValue()
+}
+async function visibleCode(recipient, since) {
+  return (await waitForMailpitCode({ recipient, since })).code
 }
 async function signIn(p, identity, create = false) {
   await p.goto(`${config.issuer}/login`)
@@ -101,20 +103,56 @@ test('console binds verified email to one DID and shows no browser bearer creden
   await page.screenshot({ path: 'artifacts/account-console-overview.png', fullPage: true })
 })
 
-test('backup email requires a code, enforces CSRF, and ignores a supplied foreign DID', async () => {
+test('backup email requires its visible code and rejects foreign selectors, wrong codes, CSRF, and supplied DIDs', async () => {
   const forged = await post(page, 'backup-request', { email: backup, csrf: 'invalid' })
   expect(forged.status()).toBe(400)
   expect(readMail(backup)).toBeNull()
-  const sent = await post(page, 'backup-request', { email: backup, did: bob.did })
-  expect(sent.status()).toBe(200)
-  const token = await code(backup, 'backup-add')
-  const invalid = await post(page, 'backup-confirm', { email: backup, token: 'invalid.code' })
-  expect(invalid.status()).toBe(400)
-  expect((await post(page, 'backup-confirm', { email: backup, token })).status()).toBe(303)
-  expect((await post(page, 'backup-confirm', { email: backup, token })).status()).toBe(409)
-  await page.reload()
+
+  const foreignBackup = `other-backup-${run}@example.com`
+  await otherPage.goto(`${config.issuer}/account`)
+  await otherPage.locator('#recovery').getByLabel('Recovery email address').fill(foreignBackup)
+  await submit(otherPage, 'backup-request')
+  const foreignChallengeId = await readChallengeId(accountForm(otherPage, 'backup-confirm'))
+  expect(foreignChallengeId).toBeTruthy()
+
+  await page.locator('#recovery').getByLabel('Recovery email address').fill(backup)
+  await accountForm(page, 'backup-request').evaluate((form, did) => {
+    const suppliedDid = document.createElement('input')
+    suppliedDid.name = 'did'
+    suppliedDid.value = did
+    form.append(suppliedDid)
+  }, bob.did)
+  const since = Date.now()
+  await submit(page, 'backup-request')
+  await expect(page.getByRole('heading', { name: 'Verify recovery email' })).toBeVisible()
+  const challengeId = await readChallengeId(accountForm(page, 'backup-confirm'))
+  expect(challengeId).toBeTruthy()
+  const code = await visibleCode(backup, since)
+  expect(await page.content()).not.toContain(`${challengeId}.${code}`)
+
+  const foreignSelector = await post(page, 'backup-confirm', {
+    email: backup,
+    challengeId: foreignChallengeId,
+    token: code,
+  })
+  expect(foreignSelector.status()).toBe(400)
+  const wrongCode = code === '00000000' ? '11111111' : '00000000'
+  const wrong = await post(page, 'backup-confirm', {
+    email: backup,
+    challengeId,
+    token: wrongCode,
+  })
+  expect(wrong.status()).toBe(400)
+
+  await page.getByLabel('Recovery email verification code').fill(code)
+  const confirmation = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === '/account/backup-confirm',
+  )
+  await submit(page, 'backup-confirm')
+  expect((await confirmation).status()).toBe(303)
   await expect(page.locator('#recovery')).toContainText(backup)
-  await otherPage.reload()
+  expect((await post(page, 'backup-confirm', { email: backup, challengeId, token: code })).status()).toBe(409)
+  await otherPage.goto(`${config.issuer}/account`)
   await expect(otherPage.locator('#recovery')).not.toContainText(backup)
 })
 
@@ -299,30 +337,89 @@ test('primary email change accepts visible mailbox codes and rejects a tampered 
   await expect(page.getByTestId('primary-email')).toContainText(nextEmail)
 })
 
-test('backup recovery proves the recovery and new primary mailboxes before restoring the same DID', async () => {
+test('backup recovery verifies visible codes with retained selectors for both mailboxes and restores the same DID', async () => {
   const previousDid = alice.did
   const nextEmail = `recovered-${run}@example.com`
   await page
     .locator('form[action="/auth/logout"]')
     .getByRole('button', { name: 'Sign out', exact: true })
     .click()
-  await page.goto(`${config.issuer}/recover`)
-  await page.getByLabel('Verified recovery email').fill(`unknown-${run}@example.com`)
-  await page.getByRole('button', { name: 'Send recovery code' }).click()
-  await expect(page.getByRole('heading', { name: 'Check your recovery email' })).toBeVisible()
-  expect(readMail(`unknown-${run}@example.com`)).toBeNull()
-  await page.goto(`${config.issuer}/recover`)
-  await page.getByLabel('Verified recovery email').fill(backup)
-  await page.getByRole('button', { name: 'Send recovery code' }).click()
-  await page
-    .getByLabel('Recovery code', { exact: true })
-    .fill(await code(backup, 'recovery-backup'))
+  const requestRecovery = async (email) => {
+    await page.goto(`${config.issuer}/recover`)
+    await page.getByLabel('Verified recovery email').fill(email)
+    await page.getByRole('button', { name: 'Send recovery code' }).click()
+    await expect(page.getByRole('heading', { name: 'Check your recovery email' })).toBeVisible()
+    const form = page.locator('form[action="/recover/verify"]')
+    const challengeId = await readChallengeId(form)
+    expect(challengeId).toMatch(/^[A-Za-z0-9_-]{24}$/)
+    const message = await page.getByText(
+      'If this is a verified recovery email, a code has been sent. Enter it and choose a new primary email.',
+      { exact: true },
+    ).innerText()
+    return {
+      challengeId,
+      csrf: await form.locator('input[name="csrf"]').inputValue(),
+      message,
+    }
+  }
+  const unknownEmail = `unknown-${run}@example.com`
+  const unknown = await requestRecovery(unknownEmail)
+  expect(readMail(unknownEmail)).toBeNull()
+  const ineligible = await requestRecovery(bob.email)
+  const recoverySince = Date.now()
+  const eligible = await requestRecovery(backup)
+  const backupChallengeId = eligible.challengeId
+  expect(new Set([unknown.challengeId, ineligible.challengeId, backupChallengeId]).size).toBe(3)
+  expect(ineligible.message).toBe(unknown.message)
+  expect(eligible.message).toBe(unknown.message)
+  const backupCode = await visibleCode(backup, recoverySince)
+  for (const challengeId of [unknown.challengeId, ineligible.challengeId]) {
+    const fakeSelector = await page.request.post(`${config.issuer}/recover/verify`, {
+      form: { csrf: eligible.csrf, challengeId, token: backupCode, newEmail: nextEmail },
+      headers: { origin: config.issuer },
+      maxRedirects: 0,
+    })
+    expect(fakeSelector.status()).toBe(400)
+  }
+  expect(await page.content()).not.toContain(`${backupChallengeId}.${backupCode}`)
+  const verifyCsrf = await page.locator('form[action="/recover/verify"] input[name="csrf"]').inputValue()
+  const wrongCode = backupCode === '00000000' ? '11111111' : '00000000'
+  const wrongBackupCode = await page.request.post(`${config.issuer}/recover/verify`, {
+    form: { csrf: verifyCsrf, challengeId: backupChallengeId, token: wrongCode, newEmail: nextEmail },
+    headers: { origin: config.issuer },
+    maxRedirects: 0,
+  })
+  expect(wrongBackupCode.status()).toBe(400)
+  const foreignBackupSelector = await page.request.post(`${config.issuer}/recover/verify`, {
+    form: { csrf: verifyCsrf, challengeId: 'another-browser-challenge', token: backupCode, newEmail: nextEmail },
+    headers: { origin: config.issuer },
+    maxRedirects: 0,
+  })
+  expect(foreignBackupSelector.status()).toBe(400)
+  await page.getByLabel('Recovery code', { exact: true }).fill(backupCode)
   await page.getByLabel('New primary email', { exact: true }).fill(nextEmail)
+  const emailCodeSince = Date.now()
   await page.getByRole('button', { name: 'Verify recovery code', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Verify your new primary email' })).toBeVisible()
-  await page
-    .getByLabel('New primary email verification code')
-    .fill(await code(nextEmail, 'recovery-new-email'))
+  const emailChallengeId = await readChallengeId(page.locator('form[action="/recover/complete"]'))
+  expect(emailChallengeId).toBeTruthy()
+  const emailCode = await visibleCode(nextEmail, emailCodeSince)
+  expect(await page.content()).not.toContain(`${emailChallengeId}.${emailCode}`)
+  const completeCsrf = await page.locator('form[action="/recover/complete"] input[name="csrf"]').inputValue()
+  const wrongEmailCode = emailCode === '00000000' ? '11111111' : '00000000'
+  const wrongNewEmailCode = await page.request.post(`${config.issuer}/recover/complete`, {
+    form: { csrf: completeCsrf, challengeId: emailChallengeId, token: wrongEmailCode },
+    headers: { origin: config.issuer },
+    maxRedirects: 0,
+  })
+  expect(wrongNewEmailCode.status()).toBe(400)
+  const foreignEmailSelector = await page.request.post(`${config.issuer}/recover/complete`, {
+    form: { csrf: completeCsrf, challengeId: 'another-browser-challenge', token: emailCode },
+    headers: { origin: config.issuer },
+    maxRedirects: 0,
+  })
+  expect(foreignEmailSelector.status()).toBe(400)
+  await page.getByLabel('New primary email verification code').fill(emailCode)
   await page.getByRole('button', { name: 'Complete account recovery' }).click()
   await expect(page.getByRole('heading', { name: 'Account recovered' })).toBeVisible()
   alice.email = nextEmail
@@ -341,11 +438,34 @@ test('recovery email removal and all-browser sign-out take effect', async () => 
   expect(account.status()).toBe(303)
 })
 
-test('deletion requires a fresh mailbox challenge after handle confirmation', async () => {
+test('deletion requires its visible mailbox code and retained selector after handle confirmation', async () => {
+  await otherPage.goto(`${config.issuer}/account`)
   await otherPage.getByLabel('Type your handle to delete this test account').fill(bob.handle)
+  const since = Date.now()
   await submit(otherPage, 'delete')
   await expect(otherPage.getByRole('heading', { name: 'Confirm account deletion' })).toBeVisible()
-  await otherPage.getByLabel('Deletion code').fill(await code(bob.email, 'account-delete'))
-  await otherPage.getByRole('button', { name: 'Permanently delete account' }).click()
+  const challengeId = await readChallengeId(accountForm(otherPage, 'delete-confirm'))
+  expect(challengeId).toBeTruthy()
+  const code = await visibleCode(bob.email, since)
+  expect(await otherPage.content()).not.toContain(`${challengeId}.${code}`)
+  const wrongCode = code === '00000000' ? '11111111' : '00000000'
+  const invalid = await post(otherPage, 'delete-confirm', {
+    confirm: bob.handle,
+    challengeId: 'another-browser-challenge',
+    token: code,
+  })
+  expect(invalid.status()).toBe(400)
+  const wrong = await post(otherPage, 'delete-confirm', {
+    confirm: bob.handle,
+    challengeId,
+    token: wrongCode,
+  })
+  expect(wrong.status()).toBe(400)
+  await otherPage.getByLabel('Deletion code').fill(code)
+  const confirmation = otherPage.waitForResponse(
+    (response) => new URL(response.url()).pathname === '/account/delete-confirm',
+  )
+  await submit(otherPage, 'delete-confirm')
+  expect((await confirmation).status()).toBe(200)
   await expect(otherPage.getByRole('heading', { name: 'Test account deleted' })).toBeVisible()
 })

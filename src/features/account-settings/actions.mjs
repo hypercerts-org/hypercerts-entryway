@@ -11,13 +11,16 @@ export function createAccountSettingsActions({
     "backup-request": async ({ res, browser, principal, value, token }) => {
       console.needed();
 
-      await security.requestBackupEmail(principal, { email: value("email") });
+      const issued = await security.requestBackupEmailForBrowser(principal, {
+        email: value("email"),
+      });
       return nextStep(
         res,
         "Verify recovery email",
         browser.csrf,
         "backup-confirm",
         hidden("email", value("email")) +
+          hidden("challengeId", issued.challengeId ?? "") +
           field(
             "token",
             "Recovery email verification code",
@@ -32,7 +35,7 @@ export function createAccountSettingsActions({
       console.needed();
       await security.confirmBackupEmail(principal, {
         email: value("email"),
-        token: token(),
+        token: `${value("challengeId")}.${token()}`,
       });
     },
     "backup-remove": async ({ principal, value }) => {
