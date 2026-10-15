@@ -51,7 +51,10 @@ export interface AuthenticationState {
   }): Promise<void>;
   initializeClaims(): Promise<void>;
   hasLiveSession(sessionId: string, userId: string): Promise<boolean>;
-  revokeLocal(did: string): Promise<void>;
+  revokeLocal(
+    did: string,
+    options?: { preserveBrowserSessions?: boolean },
+  ): Promise<void>;
   commitEmailChange(input: {
     did: string;
     email: string;

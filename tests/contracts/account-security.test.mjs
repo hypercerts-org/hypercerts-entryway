@@ -1,6 +1,5 @@
 import {
   query,
-  browserSession,
   failureTrigger,
   removeFailureTrigger,
   hasFailure,
@@ -388,7 +387,7 @@ test("abandoned email reservations expire and password reset invalidates outstan
   assert.equal((await f.accounts.get(f.alice.did)).email, f.alice.email);
 });
 
-test("email update needs old and new proofs then synchronizes authority and revokes every session family", async (t) => {
+test("email update requires both proofs, rebinds identity, and revokes DID credentials", async (t) => {
   const f = await fixture(t);
   const bob = await f.signIn(f.bob.email);
   await f.legacy.setPassword(f.alice.did, "a long existing password");
@@ -460,8 +459,9 @@ test("email update needs old and new proofs then synchronizes authority and revo
   assert.equal(user.email, "new@example.com");
   assert.equal(user.emailVerified, f.db.backend === "sqlite" ? 1 : true);
   assert.equal(
-    await f.oauth.requireSession({ headers: { cookie: f.login.cookie } }),
-    null,
+    (await f.oauth.requireSession({ headers: { cookie: f.login.cookie } }))
+      .sessionId,
+    f.actor.sessionId,
   );
   assert.ok(await f.oauth.requireSession({ headers: { cookie: bob.cookie } }));
   assert.equal(await f.db.get("oauth:tokens", "alice-token"), null);
@@ -485,16 +485,14 @@ test("email update needs old and new proofs then synchronizes authority and revo
   assert.equal(newSignIn.user.id, newBinding.userId);
 });
 
-test("email change revokes shared-user sessions but keeps sibling DID state scoped", async (t) => {
+test("verified email change preserves shared-user browser sessions and cleans only the selected DID provider state", async (t) => {
   const f = await fixture(t);
   const sharedUserId = f.login.user.id;
+  const secondLogin = await f.signIn(f.alice.email);
+  assert.equal(secondLogin.user.id, sharedUserId);
   const sibling = { ...f.bob, email: f.alice.email };
   await f.db.transact(async () => {
-    await f.accounts.storage.releaseEmail(
-      f.bob.email,
-      sibling.did,
-      "primary",
-    );
+    await f.accounts.storage.releaseEmail(f.bob.email, sibling.did, "primary");
     await f.accounts.storage.saveAccount(sibling);
     await f.accounts.storage.reserveEmail(
       f.alice.email,
@@ -508,21 +506,35 @@ test("email change revokes shared-user sessions but keeps sibling DID state scop
       userId: sharedUserId,
     });
   });
-  const now = Date.now();
-  await browserSession(
-    f.db,
-    "sibling-session",
-    sharedUserId,
-    now,
-    now + 600_000,
+
+  await f.oauth.stores.createToken(
+    "alice-previous-token",
+    { did: f.alice.did },
+    "alice-previous-refresh",
+  );
+  await f.oauth.stores.rotateToken(
+    "alice-previous-token",
+    "alice-token",
+    "alice-refresh",
+    {},
   );
   await f.db.set("oauth:tokens", "sibling-token", {
     data: { did: sibling.did },
   });
+  await f.db.set("oauth:device-accounts", "device/alice", {
+    did: f.alice.did,
+  });
   await f.db.set("oauth:device-accounts", "device/sibling", {
     did: sibling.did,
   });
+  await f.db.set("oauth:requests", "alice-request", { did: f.alice.did });
   await f.db.set("oauth:requests", "sibling-request", { did: sibling.did });
+  await f.db.set("oauth:grants", f.alice.did, { did: f.alice.did });
+  await f.db.set("oauth:grants", sibling.did, { did: sibling.did });
+  await f.db.set("auth-flows", "alice-flow", {
+    authDid: f.alice.did,
+    authEmail: f.alice.email,
+  });
   await f.db.set("auth-flows", "sibling-flow", {
     authDid: sibling.did,
     authEmail: f.alice.email,
@@ -548,6 +560,21 @@ test("email change revokes shared-user sessions but keeps sibling DID state scop
     (await f.accounts.storage.getVerifiedBinding(f.alice.did)).userId,
     sharedUserId,
   );
+  const oldSession = await f.oauth.requireSession({
+    headers: { cookie: f.login.cookie },
+  });
+  const secondOldSession = await f.oauth.requireSession({
+    headers: { cookie: secondLogin.cookie },
+  });
+  assert.ok(oldSession, "the first old-user browser cookie remains valid");
+  assert.ok(
+    secondOldSession,
+    "the second old-user browser cookie remains valid",
+  );
+  assert.equal(oldSession.sessionId, f.actor.sessionId);
+  assert.equal(secondOldSession.sessionId, secondLogin.actor.sessionId);
+  assert.equal(oldSession.userId, sharedUserId);
+  assert.equal(secondOldSession.userId, sharedUserId);
   assert.equal(
     (
       await query(
@@ -557,16 +584,39 @@ test("email change revokes shared-user sessions but keeps sibling DID state scop
         "get",
       )
     ).n,
-    0,
+    2,
   );
+  const oldIdentityResolution = await f.security.assertLoginEmail(oldSession);
+  assert.equal(oldIdentityResolution.kind, "single");
+  assert.equal(oldIdentityResolution.account.did, sibling.did);
+  const access = createAccountAccess(f.accounts.storage);
+  assert.equal(
+    (await access.requireBoundAccount(oldSession, sibling.did)).did,
+    sibling.did,
+  );
+  await assert.rejects(access.requireBoundAccount(oldSession, f.alice.did), {
+    code: "AccountMismatch",
+  });
+
+  assert.equal(await f.db.get("oauth:tokens", "alice-token"), null);
+  assert.equal(
+    await f.db.get("oauth:token-successors", "alice-previous-token"),
+    null,
+  );
+  assert.equal(await f.db.get("oauth:device-accounts", "device/alice"), null);
+  assert.equal(await f.db.get("oauth:requests", "alice-request"), null);
+  assert.equal(await f.db.get("oauth:grants", f.alice.did), null);
+  assert.equal(await f.db.get("auth-flows", "alice-flow"), null);
   assert.deepEqual(await f.db.get("oauth:tokens", "sibling-token"), {
     data: { did: sibling.did },
   });
-  assert.deepEqual(
-    await f.db.get("oauth:device-accounts", "device/sibling"),
-    { did: sibling.did },
-  );
+  assert.deepEqual(await f.db.get("oauth:device-accounts", "device/sibling"), {
+    did: sibling.did,
+  });
   assert.deepEqual(await f.db.get("oauth:requests", "sibling-request"), {
+    did: sibling.did,
+  });
+  assert.deepEqual(await f.db.get("oauth:grants", sibling.did), {
     did: sibling.did,
   });
   assert.deepEqual(await f.db.get("auth-flows", "sibling-flow"), {
@@ -669,7 +719,19 @@ test("verified email change can associate the selected DID with an existing prim
       ],
     },
   );
-  assert.ok(await f.oauth.requireSession({ headers: { cookie: destination.cookie } }));
+  const destinationSession = await f.oauth.requireSession({
+    headers: { cookie: destination.cookie },
+  });
+  assert.ok(destinationSession);
+  assert.equal(
+    (
+      await createAccountAccess(f.accounts.storage).requireBoundAccount(
+        destinationSession,
+        f.alice.did,
+      )
+    ).did,
+    f.alice.did,
+  );
 });
 
 test("admin email change leaves the selected DID unbound and does not mutate the destination owner", async (t) => {
@@ -1075,7 +1137,7 @@ test("email mutation quarantines old service credentials before asynchronous rev
   );
 });
 
-test("forced email claim failure rolls back account, binding, Better Auth and session changes together", async (t) => {
+test("forced email claim failure rolls back account and identity changes together", async (t) => {
   const f = await fixture(t);
   const authority = createAccountAuthority({ db: f.db, accounts: f.accounts });
   const sibling = { ...f.bob, email: f.alice.email };
@@ -1202,8 +1264,9 @@ test("forced email claim failure rolls back account, binding, Better Auth and se
     f.alice.did,
   );
   assert.equal(
-    await f.oauth.requireSession({ headers: { cookie: f.login.cookie } }),
-    null,
+    (await f.oauth.requireSession({ headers: { cookie: f.login.cookie } }))
+      .sessionId,
+    f.actor.sessionId,
   );
 });
 

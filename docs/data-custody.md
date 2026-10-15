@@ -167,10 +167,12 @@ The current schema permits repeated account email claims and repeated
 `account_bindings.user_id` values; the DID remains the account primary key and
 permits only one binding per DID. Better Auth email remains unique.
 `BROWSER_SESSION` represents the email-level Better Auth session, not selected-DID
-authentication. Revoking a DID conservatively invalidates every Better Auth
-session for its shared user, while OAuth and account data remain DID-scoped. The
-[login sequence](architecture.md#5-login-and-application-authorization) keeps
-those steps separate.
+authentication. Security-revocation flows invalidate every Better Auth session
+for the shared user. Ordinary verified email changes instead retain sessions on
+the previous user while atomically rebinding the selected DID to its verified
+destination user; those sessions are not migrated. OAuth and account data remain
+DID-scoped. The [login sequence](architecture.md#5-login-and-application-authorization)
+keeps those steps separate.
 
 Device membership requires uniqueness for its device/DID pair.
 Grant/session implementation must retain the provider's real cardinalities and token-family semantics.

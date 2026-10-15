@@ -91,7 +91,7 @@ export function createAccountSettingsActions({
       return page(
         res,
         "Primary email updated",
-        '<p>Your email was changed and existing sessions were ended.</p><a href="/login">Sign in with your new email</a>',
+        '<p>Your email was changed. Your browser sessions remain signed in for any other linked accounts, but no longer have access to this account.</p><a href="/login">Sign in with your new email</a>',
       );
     },
     "password-set": async ({ req, res, principal }) => {
