@@ -18,7 +18,7 @@ function renderEmailChange({ security, state, csrf }) {
         : state.pendingEmail.email;
     confirmation = `<p>Awaiting verification of ${esc(email)}.</p>${form("email-confirm", csrf, hidden("email", email) + field("token", "New email verification code", "text", 'autocomplete="one-time-code" maxlength="256"'), "Confirm new email")}`;
   }
-  return `<h3>Change primary email</h3><p>Verify your current email, then your new email. Existing browser and application sessions will end after the change.</p>${form("email-request", csrf, "", "Start email change")}${confirmation}`;
+  return `<h3>Change primary email</h3><p>Verify your current email, then your new email. Your browser sessions will stay signed in for any other linked accounts. Sign in with your new email to access this account after the change.</p>${form("email-request", csrf, "", "Start email change")}${confirmation}`;
 }
 
 function renderIdentityPanel({ a, csrf, security, state, renderHandle }) {

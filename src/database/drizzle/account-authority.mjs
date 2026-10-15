@@ -138,10 +138,11 @@ export function createAccountAuthority({ db, accounts }) {
         eq(t.verification.identifier, `${type}-otp-${email}`),
       );
   };
-  const revokeLocal = async (did) => {
+  const revokeLocal = async (did, { preserveBrowserSessions = false } = {}) => {
     const row = await accounts.get(did),
       userId = await identity(did);
-    if (userId) await db.remove("session", eq(t.session.userId, userId));
+    if (userId && !preserveBrowserSessions)
+      await db.remove("session", eq(t.session.userId, userId));
     if (row) await clearEmailProofs(row.email);
     for (const { key, value } of await db.list("oauth:tokens")) {
       if (value.data.did !== did) continue;
@@ -210,8 +211,8 @@ export function createAccountAuthority({ db, accounts }) {
         )[0],
       );
     },
-    async revokeLocal(did) {
-      await tx(() => revokeLocal(did));
+    async revokeLocal(did, { preserveBrowserSessions = false } = {}) {
+      await tx(() => revokeLocal(did, { preserveBrowserSessions }));
     },
     async commitEmailChange({ did, email, recovery, verified, previousEmail }) {
       await tx(async () => {
@@ -224,7 +225,9 @@ export function createAccountAuthority({ db, accounts }) {
         const destinationUserId = verified
           ? await accounts.storage.ensureVerifiedEmailUser(email)
           : undefined;
-        await revokeLocal(did);
+        await revokeLocal(did, {
+          preserveBrowserSessions: verified && !recovery,
+        });
         for (const address of [row.email, email])
           await clearEmailProofs(address);
         if (!verified)

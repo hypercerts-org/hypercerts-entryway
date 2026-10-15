@@ -226,10 +226,12 @@ The Better Auth session proves the email identity; it does not itself select or
 authenticate a DID. Only established bindings are eligible for account choice;
 matching an email cannot add authority over an unbound DID. The current resolver
 returns `selection-required` when multiple bindings are found, but no chooser or
-continuation path is implemented. Revoking one DID invalidates all Better Auth
-sessions for its shared user; OAuth and account data remain DID-scoped. Preserve
-the original client request and authorization context through verification and
-any future choice.
+continuation path is implemented. Security-revocation flows invalidate all Better
+Auth sessions for a DID's shared user. Ordinary verified email changes instead
+preserve sessions on the previous user while atomically moving only the selected
+DID binding to the verified destination user; sessions are not migrated to that
+user. OAuth and account data remain DID-scoped. Preserve the original client
+request and authorization context through verification and any future choice.
 
 Confidential clients also supply client authentication where required.
 The account page distinguishes ending a browser session, forgetting device membership,
