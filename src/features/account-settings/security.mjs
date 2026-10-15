@@ -13,6 +13,7 @@ export function createAccountSettingsSecurity({
     account,
     principal,
     pendingEmail,
+    activeChallengeId,
     assertEmailAvailable,
     requireAdmin,
     issue,
@@ -26,6 +27,68 @@ export function createAccountSettingsSecurity({
     reservations:
       await accounts.storage.listExternalReservationsByEmail(email),
   });
+  const requestEmailUpdate = async (
+    actor,
+    { exposeChallengeId = false } = {},
+  ) => {
+    const row = await principal(actor);
+    const issued = await issue(
+      "email-old",
+      row,
+      row.email,
+      {},
+      {
+        exposeChallengeId,
+      },
+    );
+    return {
+      tokenRequired: true,
+      ...(issued.challengeId ? { challengeId: issued.challengeId } : {}),
+    };
+  };
+  const performEmailUpdate = async (
+    actor,
+    { email, token, emailAuthFactor },
+    { exposeChallengeId = false } = {},
+  ) => {
+    const row = await principal(actor);
+    if (emailAuthFactor === false)
+      throw fail(
+        400,
+        "InvalidRequest",
+        "Email authentication cannot be disabled for an email-based account",
+      );
+    if (!token)
+      throw fail(400, "TokenRequired", "Verify the current email first");
+    email = await assertEmailAvailable(email, row.did, {
+      purpose: "pending",
+    });
+    const proof = await commitProof(
+      token,
+      "email-old",
+      { did: row.did, email: row.email },
+      () =>
+        authority.reservePendingEmail({
+          did: row.did,
+          email,
+          recovery: false,
+          expiresAt: Date.now() + 600_000,
+        }),
+    );
+    const issued = await issue(
+      "email-new",
+      proof.row,
+      proof.email,
+      {},
+      {
+        exposeChallengeId,
+      },
+    );
+    return {
+      pending: true,
+      ...(issued.challengeId ? { challengeId: issued.challengeId } : {}),
+    };
+  };
   const assertLoginEmailUsage = async (identity, email, usage) => {
     if (identity?.emailVerified !== true)
       throw fail(403, "AccountMismatch", "Verify your email before signing in");
@@ -86,6 +149,16 @@ export function createAccountSettingsSecurity({
         backupEmails: await authority.listBackupEmails(row.did),
       };
     },
+    async pendingEmailChallengeId(actor) {
+      const row = await principal(actor);
+      const pending = await pendingEmail(row.did);
+      return pending && !pending.recovery
+        ? await activeChallengeId("email-new", {
+            did: row.did,
+            email: pending.email,
+          })
+        : null;
+    },
     async requestEmailConfirmation(actor) {
       const row = await principal(actor);
       const pending = await pendingEmail(row.did);
@@ -117,37 +190,18 @@ export function createAccountSettingsSecurity({
       );
     },
     async requestEmailUpdate(actor) {
-      const row = await principal(actor);
-      await issue("email-old", row, row.email);
-      return { tokenRequired: true };
+      return await requestEmailUpdate(actor);
     },
-    async updateEmail(actor, { email, token, emailAuthFactor }) {
-      const row = await principal(actor);
-      if (emailAuthFactor === false)
-        throw fail(
-          400,
-          "InvalidRequest",
-          "Email authentication cannot be disabled for an email-based account",
-        );
-      if (!token)
-        throw fail(400, "TokenRequired", "Verify the current email first");
-      email = await assertEmailAvailable(email, row.did, {
-        purpose: "pending",
+    async requestEmailUpdateForBrowser(actor) {
+      return await requestEmailUpdate(actor, { exposeChallengeId: true });
+    },
+    async updateEmail(actor, input, options) {
+      return await performEmailUpdate(actor, input, options);
+    },
+    async updateEmailForBrowser(actor, input) {
+      return await operations.updateEmail(actor, input, {
+        exposeChallengeId: true,
       });
-      const proof = await commitProof(
-        token,
-        "email-old",
-        { did: row.did, email: row.email },
-        () =>
-          authority.reservePendingEmail({
-            did: row.did,
-            email,
-            recovery: false,
-            expiresAt: Date.now() + 600_000,
-          }),
-      );
-      await issue("email-new", proof.row, proof.email);
-      return { pending: true };
     },
     async requestBackupEmail(actor, { email }) {
       const row = await principal(actor, true);

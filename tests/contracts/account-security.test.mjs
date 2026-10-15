@@ -257,6 +257,38 @@ test("security challenges are hashed, scoped, account-bound, single-use and pers
     ),
     { error: "InvalidToken" },
   );
+
+  const sharedUserId = f.login.user.id;
+  const sibling = { ...f.bob, email: f.alice.email };
+  // Keep the other principal valid so the proof's DID is the only mismatch.
+  await f.db.transact(async () => {
+    await f.accounts.storage.releaseEmail(f.bob.email, sibling.did, "primary");
+    await f.accounts.storage.saveAccount(sibling);
+    await f.accounts.storage.reserveEmail(
+      f.alice.email,
+      sibling.did,
+      "primary",
+      sharedUserId,
+    );
+    await f.accounts.storage.bindVerifiedIdentity({
+      did: sibling.did,
+      email: f.alice.email,
+      userId: sharedUserId,
+    });
+  });
+  assert.deepEqual(await f.accounts.storage.getVerifiedBinding(sibling.did), {
+    did: sibling.did,
+    userId: sharedUserId,
+    email: f.alice.email,
+  });
+  await assert.rejects(
+    f.security.confirmEmail(
+      { ...f.actor, did: sibling.did },
+      { email: f.alice.email, token },
+    ),
+    { error: "InvalidToken" },
+  );
+
   await f.reopen();
   assert.deepEqual(
     await f.security.confirmEmail(f.actor, { email: f.alice.email, token }),

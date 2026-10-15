@@ -42,18 +42,20 @@ export function createAccountSettingsActions({
     "email-request": async ({ res, browser, principal, token }) => {
       console.needed();
 
-      await security.requestEmailUpdate(principal);
+      const issued = await security.requestEmailUpdateForBrowser(principal);
       return nextStep(
         res,
         "Verify current email",
         browser.csrf,
         "email-update",
-        field(
-          "token",
-          "Current email verification code",
-          "text",
-          'autocomplete="one-time-code" maxlength="256"',
-        ) + field("email", "New primary email", "email", 'maxlength="320"'),
+        hidden("challengeId", issued.challengeId ?? "") +
+          field(
+            "token",
+            "Current email verification code",
+            "text",
+            'autocomplete="one-time-code" maxlength="256"',
+          ) +
+          field("email", "New primary email", "email", 'maxlength="320"'),
         "Verify current email and continue",
         "A verification code was sent to your current primary email.",
       );
@@ -61,16 +63,17 @@ export function createAccountSettingsActions({
     "email-update": async ({ res, browser, principal, value, token }) => {
       console.needed();
 
-      await security.updateEmail(principal, {
+      const issued = await security.updateEmailForBrowser(principal, {
         email: value("email"),
-        token: token(),
+        token: `${value("challengeId")}.${token()}`,
       });
       return nextStep(
         res,
         "Verify new email",
         browser.csrf,
         "email-confirm",
-        hidden("email", value("email")) +
+        hidden("challengeId", issued.challengeId ?? "") +
+          hidden("email", value("email")) +
           field(
             "token",
             "New email verification code",
@@ -86,7 +89,7 @@ export function createAccountSettingsActions({
 
       await security.confirmEmail(principal, {
         email: value("email"),
-        token: token(),
+        token: `${value("challengeId")}.${token()}`,
       });
       return page(
         res,
