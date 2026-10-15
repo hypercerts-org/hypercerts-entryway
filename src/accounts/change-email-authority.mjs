@@ -21,6 +21,7 @@ export function createEmailAuthorityChange({
           email = await assertEmailAvailable(email, did, {
             allowOwnBackup: recovery,
             purpose: verified ? "pending" : "primary",
+            allowSameOwnerActiveMigrationReservation: verified && !recovery,
           });
           // Revoke DID-scoped credentials before legacy cleanup. Ordinary verified
           // email changes intentionally preserve sessions for the old shared user.

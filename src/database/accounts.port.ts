@@ -40,7 +40,11 @@ export interface AccountReader {
 
 export interface AccountTransactor extends AccountReader {
   insertAccount(row: AccountRow): Promise<void>;
-  saveAccount(row: AccountRow, ownerUserId?: string): Promise<void>;
+  saveAccount(
+    row: AccountRow,
+    ownerUserId?: string,
+    options?: { allowSameOwnerActiveMigrationReservation?: boolean },
+  ): Promise<void>;
   bindVerifiedIdentity(input: BindVerifiedIdentity): Promise<string>;
   /** Persist a verified email identity before signup provisions its DID.
    * Callers must validate mailbox proof first.

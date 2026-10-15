@@ -61,6 +61,7 @@ export function createAccountSettingsSecurity({
       throw fail(400, "TokenRequired", "Verify the current email first");
     email = await assertEmailAvailable(email, row.did, {
       purpose: "pending",
+      allowSameOwnerActiveMigrationReservation: true,
     });
     const proof = await commitProof(
       token,
@@ -113,20 +114,22 @@ export function createAccountSettingsSecurity({
     const hasPrimaryClaim = usage.claims.some(
       ({ purpose }) => purpose === "primary",
     );
-    const hasBlockingClaim = usage.claims.some(
-      ({ purpose }) =>
-        purpose === "backup" || (purpose === "pending" && !hasPrimaryClaim),
-    );
     const activeReservations = usage.reservations.filter(
       ({ state }) => state !== "complete",
     );
+    const ownsActiveReservation =
+      activeReservations.some(({ userId }) => userId === identity.userId) &&
+      (await accounts.storage.isVerifiedUserEmail({
+        userId: identity.userId,
+        email,
+      }));
+    const hasBlockingClaim = usage.claims.some(
+      ({ purpose }) =>
+        purpose === "backup" ||
+        (purpose === "pending" && !hasPrimaryClaim && !ownsActiveReservation),
+    );
     const ownsUnhostedReservation =
-      activeReservations.length === 0 ||
-      (activeReservations.some(({ userId }) => userId === identity.userId) &&
-        (await accounts.storage.isVerifiedUserEmail({
-          userId: identity.userId,
-          email,
-        })));
+      activeReservations.length === 0 || ownsActiveReservation;
     if (hasBlockingClaim || (!hasPrimaryClaim && !ownsUnhostedReservation))
       throw fail(
         409,
