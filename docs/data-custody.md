@@ -198,8 +198,52 @@ its existing PLC rotation authority subject to valid PLC rules and limits; do no
 replace it mechanically with the genesis arrangement or assume that its repository
 signing key is a recovery key.
 
-These are the target custody rules, not a claim that their provisioning, migration
-or recovery workflows are implemented.
+New registration now requires the public-only `plcRecoveryKeyDid` operator recovery
+reference. Its ordered genesis list is selected before PDS key allocation and
+retained in the pending intent; changing deployment defaults does not rewrite that
+selection. A saved signed genesis is reused unchanged. If unsigned pending work
+requires a hot signer no longer available, it remains pending with
+`RequiredSignerUnavailable`. Public references do not prove private-key backup,
+independent custody or operational recovery readiness.
+
+The concrete PLC signer keeps private material in an ECMAScript private field.
+Public-update authorization receives only unsigned facts and the candidate CID.
+`custody_operations` retains immutable unsigned public facts and `custody_history`
+retains signature-release authorization events. Identical event retries are no-ops;
+changed event identity or operation facts conflict. These fresh-schema tables do
+not implement a historical database upgrade.
+
+Directory audit observations retain immutable public operations and append-only
+publication/nullification events with explicit supporting observation IDs. Immutable
+`custody_observations` retain the public evidence and configured directory URL,
+even after a newer snapshot supersedes them. Observation retries with changed
+directory, owner or evidence conflict. These records commit with history and the
+atomically fenced last-observed
+snapshot. Signing events never promote authority. The configured PLC directory is
+trusted for canonical branch selection, historic timestamps and nullification;
+publication provenance is `directory-observed-publication`; nullification provenance
+is `directory-asserted-nullification`, not independently verified historic recovery
+timing. Both require matching immutable supporting observations. Synthetic fixtures
+may record fixture-confirmed publication but cannot assert directory nullification.
+Signed events cannot carry directory evidence. Signed operation CIDs include the
+signature: unsigned history cannot recompute that CID. The concrete signer or
+validated directory observation supplies the binding; storage validates its
+canonical DAG-CBOR SHA-256 CID shape. Envelopes, DIDs, recomputed CIDs, supported keys
+and predecessor-linked surviving signatures are validated with the pinned library.
+An unexplained regression or branch change without explicit nullification of the
+previous head preserves the old snapshot and fails. Tombstone is observed state,
+not an assertion of irreversible finality. No clock patch or custom recovery
+validator is used.
+
+The internal `refreshCustodyObservation(did)` operation admits `custody-observe`
+through existing ownership. It never grants account access, mutates account
+binding or clears uncertain writes. Conflicting pending admission blocks refresh;
+it is available only to internal operator tooling, not a new public route.
+PLC confirmation alone now reuses durable mail delivery: its challenge and mail
+queue commit together and SMTP runs afterward. Other legacy XRPC mail flows are
+unchanged. Public identity qualification covers optional-key addition and bounded
+departure using destination service authorization and the unchanged stock PDS;
+full repository/blob migration and recovery qualification remain separate requirements.
 
 ```mermaid
 %%{init: {"theme":"base","themeVariables":{"primaryTextColor":"#172B4D","lineColor":"#45556C","edgeLabelBackground":"#FFFFFF","fontFamily":"Arial"},"flowchart":{"nodeSpacing":40,"rankSpacing":50,"curve":"linear"}}}%%
@@ -248,9 +292,11 @@ provide that independence. Identity control also cannot recover repository or
 blob data that is unavailable; source availability or a usable backup remains a
 separate requirement.
 
-The current custody validator assumes four fixture-specific key purposes,
-including a user-held source recovery key. Those purposes are not a required
-rotation-key count or proof that every account has user recovery authority.
+Legacy fixture inventory retains its four-purpose validation and explicitly
+fixture-derived provenance. Directory observations accept account-mode inventories
+with any protocol-valid ordered rotation list and unknown custodians; public keys
+alone never establish who possesses their private counterparts. Configured public
+references and unknown directory-observed custody remain distinct assertions.
 A production key-management product, retention periods and detailed provisioning
 procedures are not selected by this policy.
 

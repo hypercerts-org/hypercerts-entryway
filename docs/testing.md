@@ -227,3 +227,46 @@ implemented foundation from remaining work. Database verification uses fresh
 state without old-schema upgrades; product account migration and existing ePDS
 conversion remain separate required journeys. Preserve the existing tests and
 their known moderation blocker alongside the deployment-profile gates.
+
+## Internal operator custody observation
+
+A privileged operator with access to the owned sandbox may refresh one DID's
+public custody evidence using the existing Entryway composition. No administrative
+HTTP route exists for this operation. Run it in the managed application container
+with its existing configuration and database, after rebuilding the current source:
+
+```sh
+compose build entryway
+compose run --rm --no-deps entryway \
+  node tests/support/refresh-custody-observation.mjs "$DID"
+```
+
+Container/configuration access is the operator privilege boundary, as for the
+other managed operator probes; this command is not available to browser users.
+The command accepts exactly one PLC DID and prints only its DID, observation ID
+and head CID. It uses the configured directory's validated audit evidence and
+retains its trust/provenance limitations. `custody-observe` admission rejects
+conflicting pending work before directory access and never clears uncertain
+external attempts. A departed DID need not have a local account: observation
+records public authority only, without restoring login access or mutating an
+account. There is no fleet-wide scan or automatic retry.
+
+## Bounded public PLC qualification
+
+After `up`, rebuild `browser` and explicitly run in the owned sandbox:
+
+```sh
+compose run --rm --no-deps -e PUBLIC_PLC_QUALIFICATION=1 \
+  -e PUBLIC_PLC_DESTINATION=https://pds3.atmosbox.test \
+  browser node --test tests/contracts/public-plc-qualification.test.mjs
+```
+
+The destination URL above is the independent stock PDS declared by the sandbox
+fixture stack. The case creates its source through browser signup and Mailpit,
+sets a normal password, adds a user key through public PLC confirmation/signing,
+and prepares the destination with a source-issued, method-bound service token.
+Destination email differs from source email. It submits destination recommendations
+without former-host authority and checks exact directory CID/keys and source
+signer rejection. It uses neither SQL nor private fixture APIs. This is bounded
+identity qualification, not repository/blob migration or destination activation.
+The case is opt-in because ordinary test containers do not contain a browser.

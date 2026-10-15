@@ -15,9 +15,11 @@ import { join } from "node:path";
 import test from "node:test";
 import { exportJWK, generateKeyPair, importJWK, jwtVerify } from "jose";
 import * as plc from "@did-plc/lib";
+import { Secp256k1MigrationPlcSigner } from "../../dist/src/plc/signing.js";
 import { Secp256k1Keypair } from "@atproto/crypto";
 import { cidForCbor } from "@atproto/common";
 import { openTestDatabase } from "../support/database-fixture.mjs";
+import { createCustodyInventoryStorage } from "../../dist/src/database/drizzle/migration-custody.js";
 import { createAccountMigration } from "../../dist/src/features/pds-migration/move-between-pds.mjs";
 
 async function fixture(t, { interruptCompletion = false } = {}) {
@@ -91,7 +93,9 @@ async function fixture(t, { interruptCompletion = false } = {}) {
       ownership.accountStep(did, intent, perform),
     get: async (did) => await db.get("accounts", did),
     save: async (value) => await db.set("accounts", value.did, value),
-    rotation,
+    plcSigner: await Secp256k1MigrationPlcSigner.fromHex(
+      Buffer.from(await rotation.export()).toString("hex"),
+    ),
     plcClient: { getLastOp: async () => currentOp },
   };
   let proofUsed = false;
@@ -337,6 +341,7 @@ async function fixture(t, { interruptCompletion = false } = {}) {
   const boot = async () => {
     f.db = db;
     f.migration = await createAccountMigration({
+      custody: createCustodyInventoryStorage(db),
       db,
       config,
       accounts,
@@ -358,6 +363,76 @@ async function fixture(t, { interruptCompletion = false } = {}) {
   await boot();
   return f;
 }
+
+for (const method of ["signManagedMove", "signManagedRepair"])
+  test(`${method} crash after signed journal commit resumes exact bytes without re-signing`, async (t) => {
+    const f = await fixture(t);
+    if (method === "signManagedRepair") {
+      f.state.failures.set("target-create-after-plc", true);
+      await assert.rejects(
+        f.migration.importAccount(f.actor, {
+          did: f.row.did,
+          pdsId: "pds2",
+          token: "migration-proof",
+        }),
+        /after PLC commit/,
+      );
+      await f.recover();
+    }
+    const signer = f.accounts.plcSigner;
+    const original = signer[method].bind(signer);
+    let retained;
+    let signs = 0;
+    signer[method] = async (...args) => {
+      const persist = args.pop();
+      signs++;
+      return original(...args, async (signed, facts, cid) => {
+        await persist(signed, facts, cid);
+        retained = structuredClone(signed);
+        throw new Error("fault after signed journal commit before return");
+      });
+    };
+    if (method === "signManagedMove")
+      await assert.rejects(
+        f.migration.importAccount(f.actor, {
+          did: f.row.did,
+          pdsId: "pds2",
+          token: "migration-proof",
+        }),
+        /fault after signed journal/,
+      );
+    else assert.equal((await f.migration.reconcile())[0].status, "pending");
+    const journal = await f.db.get(
+      "migration:operations",
+      `migrate:${f.row.did}`,
+    );
+    assert.deepEqual(journal.plcOp, retained);
+    assert.equal(journal.plcOpCid, String(await cidForCbor(retained)));
+    assert.equal(
+      f.state.calls.filter(
+        (call) => call === "pds2/com.atproto.server.createAccount",
+      ).length,
+      method === "signManagedMove" ? 0 : 1,
+    );
+    await f.reopen();
+    signer[method] = async () => {
+      throw new Error("must not re-sign");
+    };
+    assert.equal((await f.migration.reconcile())[0].status, "complete");
+    assert.deepEqual(f.getCurrent(), retained);
+    assert.equal(signs, 1);
+    const publications = f.state.calls.filter(
+      (call) => call === "pds2/com.atproto.server.createAccount",
+    ).length;
+    assert.equal(publications, method === "signManagedMove" ? 1 : 2);
+    await f.migration.reconcile();
+    assert.equal(
+      f.state.calls.filter(
+        (call) => call === "pds2/com.atproto.server.createAccount",
+      ).length,
+      publications,
+    );
+  });
 
 test("same-entryway migration preserves DID, snapshots before cutover, imports data and retains inactive source", async (t) => {
   const f = await fixture(t);

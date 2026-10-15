@@ -53,6 +53,31 @@ CREATE TABLE "backup_emails" (
 	"created_at" text NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "custody_history" (
+	"id" text PRIMARY KEY,
+	"did" text NOT NULL,
+	"cid" text NOT NULL,
+	"kind" text NOT NULL,
+	"supporting_observation_id" text,
+	"operation_id" text,
+	"provenance" text NOT NULL,
+	"at" text NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "custody_observations" (
+	"id" text PRIMARY KEY,
+	"did" text NOT NULL,
+	"directory" text NOT NULL,
+	"value" text NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "custody_operations" (
+	"did" text,
+	"cid" text,
+	"operation" text NOT NULL,
+	CONSTRAINT "custody_operations_pkey" PRIMARY KEY("did","cid")
+);
+--> statement-breakpoint
 CREATE TABLE "email_claims" (
 	"email" text PRIMARY KEY,
 	"did" text NOT NULL,
@@ -196,6 +221,7 @@ CREATE UNIQUE INDEX "accounts_handle_ci" ON "accounts" (lower("handle"));--> sta
 CREATE INDEX "accounts_pds_status" ON "accounts" ("pds_id","status");--> statement-breakpoint
 CREATE INDEX "authority_operation_lease" ON "authority_operations" ("state","lease_expires_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "backup_emails_ci" ON "backup_emails" (lower("email"));--> statement-breakpoint
+CREATE INDEX "custody_history_did" ON "custody_history" ("did");--> statement-breakpoint
 CREATE UNIQUE INDEX "email_claims_ci" ON "email_claims" (lower("email"));--> statement-breakpoint
 CREATE INDEX "external_operation_step" ON "external_operation_attempts" ("operation_id","step","created_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "handle_claims_ci" ON "handle_claims" (lower("handle"));--> statement-breakpoint
@@ -215,6 +241,7 @@ ALTER TABLE "account" ADD CONSTRAINT "account_userId_user_id_fkey" FOREIGN KEY (
 ALTER TABLE "account_bindings" ADD CONSTRAINT "account_bindings_did_accounts_did_fkey" FOREIGN KEY ("did") REFERENCES "accounts"("did");--> statement-breakpoint
 ALTER TABLE "account_bindings" ADD CONSTRAINT "account_bindings_user_id_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "user"("id");--> statement-breakpoint
 ALTER TABLE "backup_emails" ADD CONSTRAINT "backup_emails_did_accounts_did_fkey" FOREIGN KEY ("did") REFERENCES "accounts"("did");--> statement-breakpoint
+ALTER TABLE "custody_history" ADD CONSTRAINT "custody_history_Hb73d4yN25nV_fkey" FOREIGN KEY ("supporting_observation_id") REFERENCES "custody_observations"("id");--> statement-breakpoint
 ALTER TABLE "email_claims" ADD CONSTRAINT "email_claims_did_accounts_did_fkey" FOREIGN KEY ("did") REFERENCES "accounts"("did");--> statement-breakpoint
 ALTER TABLE "external_operation_attempts" ADD CONSTRAINT "external_operation_attempts_zQEprueDkA33_fkey" FOREIGN KEY ("operation_id") REFERENCES "authority_operations"("id");--> statement-breakpoint
 ALTER TABLE "handle_claims" ADD CONSTRAINT "handle_claims_did_accounts_did_fkey" FOREIGN KEY ("did") REFERENCES "accounts"("did");--> statement-breakpoint
