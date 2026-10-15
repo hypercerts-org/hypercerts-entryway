@@ -12,6 +12,25 @@ import type {
   CustodyInventoryTransactor,
 } from "../custody.port.js";
 import type { CustodyObservation, CustodyInventory } from "../../plc/types.js";
+function compareKeys(leftKey: string, rightKey: string): number {
+  if (leftKey < rightKey) return -1;
+  if (leftKey > rightKey) return 1;
+  return 0;
+}
+
+function validateChainPredecessor(
+  entry: CustodyObservation["entries"][number],
+  chain: readonly string[],
+): void {
+  if (entry.nullified) return;
+  const index = chain.indexOf(entry.cid);
+  if (entry.operation.prev !== (index === 0 ? null : chain[index - 1]))
+    throw new PlcError(
+      "InvalidCustodyObservation",
+      "Public observation chain is inconsistent",
+    );
+}
+
 /** Bind public custody persistence to this executor. Nested writes join its
  * physical transaction and mutation fence; no separate connection is opened.
  * Reads/writes reject inconsistent or non-public evidence with stable PLC errors. */
@@ -22,7 +41,7 @@ export function createCustodyInventoryStorage(
     if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
     if (typeof value === "object" && value !== null)
       return `{${Object.entries(value)
-        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .sort(([a], [b]) => compareKeys(a, b))
         .map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`)
         .join(",")}}`;
     return JSON.stringify(value);
@@ -224,17 +243,7 @@ export function createCustodyInventoryStorage(
             "Directory observation regresses or contradicts retained authority",
           );
         for (const entry of observation.entries) {
-          if (!entry.nullified) {
-            const index = next.chain.indexOf(entry.cid);
-            if (
-              entry.operation.prev !==
-              (index === 0 ? null : next.chain[index - 1])
-            )
-              throw new PlcError(
-                "InvalidCustodyObservation",
-                "Public observation chain is inconsistent",
-              );
-          }
+          validateChainPredecessor(entry, next.chain);
           await store.recordSigned({
             id: `${observation.id}:${entry.cid}`,
             did: observation.did,
@@ -265,8 +274,7 @@ export function createCustodyInventoryStorage(
           );
           const entry = support?.entries.find((item) => item.cid === event.cid);
           if (
-            !support ||
-            support.did !== event.did ||
+            support?.did !== event.did ||
             support.at !== event.at ||
             support.operationId !== event.operationId ||
             !entry ||
