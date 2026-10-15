@@ -1,4 +1,8 @@
-import type { AccountRow } from "../accounts/types.js";
+import type {
+  AccountRow,
+  EmailClaim,
+  StoredEmailClaimPurpose,
+} from "../accounts/types.js";
 
 export interface SecurityChallenge {
   id: string;
@@ -27,15 +31,15 @@ export interface AuthenticationState {
   account(did: string): Promise<AccountRow>;
   identity(did: string): Promise<string | undefined>;
   version(did: string): Promise<number>;
-  claims(email: string): Promise<{ did: string; purpose: string }[]>;
-  claim(email: string): Promise<{ did: string; purpose: string } | null>;
+  claims(email: string): Promise<EmailClaim[]>;
+  claim(email: string): Promise<EmailClaim | null>;
   pendingEmail(did: string): Promise<PendingEmail | null>;
   assertEmailAvailable(
     email: string,
     did: string,
     options?: {
       allowOwnBackup?: boolean;
-      purpose?: "primary" | "pending" | "backup";
+      purpose?: StoredEmailClaimPurpose;
     },
   ): Promise<string>;
   bindVerifiedIdentity(input: {

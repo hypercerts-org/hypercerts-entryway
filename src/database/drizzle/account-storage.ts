@@ -9,6 +9,8 @@ import { DomainError } from "../../accounts/errors.js";
 import type { AccountTransactor } from "../accounts.port.js";
 import type {
   AccountRow,
+  EmailClaim,
+  StoredEmailClaimPurpose,
   BindVerifiedIdentity,
   ExternalMigrationReservation,
   LegacyVerifiedEmail,
@@ -129,7 +131,7 @@ export function createAccountStorage(
       userId: row.user_id,
       state: row.state,
     }));
-  const listEmailClaims = async (email: string) => {
+  const listEmailClaims = async (email: string): Promise<EmailClaim[]> => {
     const [claims, reservations] = await Promise.all([
       db.read("email_claims", {
         where: eq(sql`lower(${t.email_claims.email})`, normalizeEmail(email)),
@@ -142,7 +144,7 @@ export function createAccountStorage(
       ...claims.map(({ did, purpose }) => ({ did, purpose })),
       ...reservations
         .filter(({ did, state }) => state !== "complete" && !claimedDids.has(did))
-        .map(({ did }) => ({ did, purpose: "external" })),
+        .map(({ did }): EmailClaim => ({ did, purpose: "external" })),
     ].sort(
       (a, b) => a.did.localeCompare(b.did) || a.purpose.localeCompare(b.purpose),
     );
@@ -200,7 +202,7 @@ export function createAccountStorage(
   const reserveEmail = async (
     email: string,
     did: string,
-    purpose: string,
+    purpose: StoredEmailClaimPurpose,
     ownerUserId?: string,
   ) =>
     db.transact(async () => {
