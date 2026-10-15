@@ -312,7 +312,7 @@ export function createRegistration({
     }
     if (
       emailClaim &&
-      (!row || emailClaim.did !== row.did || emailClaim.purpose !== "primary")
+      (emailClaim.did !== row?.did || emailClaim.purpose !== "primary")
     )
       throw new HttpError(
         409,
