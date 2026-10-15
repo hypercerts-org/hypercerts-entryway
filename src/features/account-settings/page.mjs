@@ -16,7 +16,7 @@ function renderEmailChange({ security, state, csrf }) {
       typeof state.pendingEmail === "string"
         ? state.pendingEmail
         : state.pendingEmail.email;
-    confirmation = `<p>Awaiting verification of ${esc(email)}.</p>${form("email-confirm", csrf, hidden("email", email) + field("token", "New email verification code", "text", 'autocomplete="one-time-code" maxlength="256"'), "Confirm new email")}`;
+    confirmation = `<p>Awaiting verification of ${esc(email)}.</p>${form("email-confirm", csrf, hidden("challengeId", state.pendingEmailChallengeId ?? "") + hidden("email", email) + field("token", "New email verification code", "text", 'autocomplete="one-time-code" maxlength="256"'), "Confirm new email")}`;
   }
   return `<h3>Change primary email</h3><p>Verify your current email, then your new email. Your browser sessions will stay signed in for any other linked accounts. Sign in with your new email to access this account after the change.</p>${form("email-request", csrf, "", "Start email change")}${confirmation}`;
 }
@@ -102,7 +102,11 @@ export function mountAccountSettingsPage({
       if (!ctx) return;
       const { account: a, browser: b, principal, session } = ctx;
       const state = security
-        ? await security.summary(principal)
+        ? {
+            ...(await security.summary(principal)),
+            pendingEmailChallengeId:
+              await security.pendingEmailChallengeId(principal),
+          }
         : { backupEmails: [], passwordEnabled: false };
       const connected = await loadConnections(req, a.did);
       const { appPasswords } = connected;

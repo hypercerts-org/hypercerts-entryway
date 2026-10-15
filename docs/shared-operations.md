@@ -198,6 +198,12 @@ Response loss after public authorization leaves a spent proof and requires
 fresh confirmation; there is no bearer-proof replay retrieval. Independent
 publication after release cannot be serialized by Entryway.
 
+The account console's primary email-change forms carry the challenge ID separately
+from the emailed eight-digit code and assemble the compound proof on submission.
+The ID is only a selector: consumption still verifies the code and binds the
+proof to its DID, purpose, email, version, expiry and single-use state. XRPC
+callers continue to submit the full compound token.
+
 ## Durable mail attempts
 
 Queueing atomically expires/supersedes older messages for the same recipient and

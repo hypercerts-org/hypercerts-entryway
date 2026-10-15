@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { DatabaseSync } from 'node:sqlite'
 import { readFileSync, mkdirSync } from 'node:fs'
+import { waitForMailpitCode } from '../support/helpers/mailpit.mjs'
 
 const config = JSON.parse(
   readFileSync(process.env.SERVICE_CONFIG_PATH ?? './.runtime/config.json', 'utf8'),
@@ -221,18 +222,75 @@ test('individual application grant revocation prevents refresh through the offic
   await expect(page.locator('#sessions')).toContainText('No remembered application permissions.')
 })
 
-test('primary email change requires both mailboxes and preserves the DID', async () => {
+test('primary email change accepts visible mailbox codes and rejects a tampered challenge ID', async () => {
+  if (!alice.did) await signIn(page, alice, true)
+  if (!bob.did) await signIn(otherPage, bob, true)
   const previousDid = alice.did
   const nextEmail = `changed-${run}@example.com`
+
+  await submit(otherPage, 'email-request')
+  const foreignChallengeId = await accountForm(otherPage, 'email-update')
+    .locator('input[name="challengeId"]')
+    .inputValue()
+  expect(foreignChallengeId).toBeTruthy()
+
+  const currentMailSince = Date.now()
   await submit(page, 'email-request')
   await expect(page.getByRole('heading', { name: 'Verify current email' })).toBeVisible()
-  await page
-    .getByLabel('Current email verification code')
-    .fill(await code(alice.email, 'email-old'))
+  const currentChallengeId = await accountForm(page, 'email-update')
+    .locator('input[name="challengeId"]')
+    .inputValue()
+  const { code: currentCode } = await waitForMailpitCode({
+    recipient: alice.email,
+    since: currentMailSince,
+  })
+  expect(await page.content()).not.toContain(`${currentChallengeId}.${currentCode}`)
+
+  const foreignIdAttempt = await post(page, 'email-update', {
+    challengeId: foreignChallengeId,
+    token: currentCode,
+    email: nextEmail,
+  })
+  expect(foreignIdAttempt.status()).toBe(400)
+  expect(await foreignIdAttempt.text()).toContain('Invalid or already used token')
+
+  const wrongCode = currentCode === '00000000' ? '11111111' : '00000000'
+  const wrongCodeAttempt = await post(page, 'email-update', {
+    challengeId: currentChallengeId,
+    token: wrongCode,
+    email: nextEmail,
+  })
+  expect(wrongCodeAttempt.status()).toBe(400)
+  expect(await wrongCodeAttempt.text()).toContain('Invalid or already used token')
+
+  await page.getByLabel('Current email verification code').fill(currentCode)
   await page.getByLabel('New primary email', { exact: true }).fill(nextEmail)
+  const newMailSince = Date.now()
+  const updateResponsePromise = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === '/account/email-update',
+  )
   await submit(page, 'email-update')
+  const updateResponse = await updateResponsePromise
+  if (updateResponse.status() !== 200) {
+    const error = await page.getByRole('alert').textContent()
+    expect(updateResponse.status(), `Visible current-email code rejected: ${error}`).toBe(200)
+  }
   await expect(page.getByRole('heading', { name: 'Verify new email', exact: true })).toBeVisible()
-  await page.getByLabel('New email verification code').fill(await code(nextEmail, 'email-new'))
+  const destinationChallengeId = await accountForm(page, 'email-confirm')
+    .locator('input[name="challengeId"]')
+    .inputValue()
+  const { code: newCode } = await waitForMailpitCode({
+    recipient: nextEmail,
+    since: newMailSince,
+  })
+  expect(await page.content()).not.toContain(`${destinationChallengeId}.${newCode}`)
+
+  await page.goto(`${config.issuer}/account`)
+  const restoredChallengeId = await accountForm(page, 'email-confirm')
+    .locator('input[name="challengeId"]')
+    .inputValue()
+  expect(restoredChallengeId).toBe(destinationChallengeId)
+  await page.getByLabel('New email verification code').fill(newCode)
   await submit(page, 'email-confirm')
   await expect(page.getByRole('heading', { name: 'Primary email updated' })).toBeVisible()
   alice.email = nextEmail
