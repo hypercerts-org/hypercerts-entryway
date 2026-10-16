@@ -26,13 +26,16 @@ export function createMigrationActions({
           "Choose an enrolled destination data server",
         );
       if (action === "migration-request") {
-        await migration.requestMigration(principal, { pdsId: target.id });
+        const issued = await migration.requestMigrationForBrowser(principal, {
+          pdsId: target.id,
+        });
         return nextStep(
           res,
           "Confirm data server migration",
           browser.csrf,
           "migration-confirm",
           hidden("pdsId", target.id) +
+            hidden("challengeId", issued.challengeId ?? "") +
             field(
               "token",
               "Migration code",
@@ -47,7 +50,7 @@ export function createMigrationActions({
         await migration.importAccount(principal, {
           did: account.did,
           pdsId: target.id,
-          token: token(),
+          token: `${value("challengeId")}.${token()}`,
         });
       } catch (failure) {
         const saved = await migration.status(principal, { did: account.did });

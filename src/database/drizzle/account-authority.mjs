@@ -22,19 +22,21 @@ export function createAccountAuthority({ db, accounts }) {
   const identity = async (did) =>
     (await accounts.storage.getVerifiedBinding(did))?.userId;
   const version = async (did) => (await db.get("security:versions", did)) ?? 0;
-  const userByEmail = async (email) =>
-    (
-      await db.read("user", {
-        where: eq(sql`lower(${t.user.email})`, email),
-        limit: 1,
-      })
-    )[0];
+  const claims = (email) => accounts.storage.listEmailClaims(email);
   const claim = (email) => accounts.storage.getEmailClaim(email);
-  const reserve = async (email, did, purpose) => {
-    const existing = await claim(email);
-    if (existing && (existing.did !== did || existing.purpose !== purpose))
+  const reserve = async (email, did, purpose, userId) => {
+    const existing = await claims(email);
+    const conflict = existing.some((claim) => {
+      if (claim.purpose === "external") return false;
+      if (claim.did === did && claim.purpose === purpose) return false;
+      const canSharePrimaryClaim =
+        claim.purpose === "primary" &&
+        (purpose === "primary" || purpose === "pending");
+      return !canSharePrimaryClaim;
+    });
+    if (conflict)
       throw fail(409, "EmailNotAvailable", "This email address cannot be used");
-    await accounts.storage.reserveEmail(email, did, purpose);
+    await accounts.storage.reserveEmail(email, did, purpose, userId);
   };
   const releasePending = async (did) => {
     await db.remove(
@@ -54,26 +56,88 @@ export function createAccountAuthority({ db, accounts }) {
     if (value) await releasePending(did);
     return null;
   };
-  const assertEmailAvailable = async (
+  const sameOwnerActiveReservations = async (
     email,
     did,
-    { allowOwnBackup = false } = {},
+    reservations,
+    allowSameOwnerActiveMigrationReservation,
   ) => {
-    const owner = await accounts.get(email);
-    let existing = await claim(email);
-    if (existing?.purpose === "pending") {
-      await pendingEmail(existing.did);
-      existing = await claim(email);
-    }
-    const user = await userByEmail(email);
+    if (!allowSameOwnerActiveMigrationReservation)
+      return { userId: undefined, dids: new Set() };
+    const active = reservations.filter(
+      (reservation) =>
+        reservation.did !== did && reservation.state !== "complete",
+    );
+    if (!active.length) return { userId: undefined, dids: new Set() };
+    const userId = active[0].userId;
     if (
-      (owner && owner.did !== did) ||
-      (existing &&
-        (existing.did !== did ||
-          (existing.purpose === "backup" && !allowOwnBackup))) ||
-      (user && user.id !== (await identity(did)))
+      active.some((reservation) => reservation.userId !== userId) ||
+      !(await accounts.storage.isVerifiedUserEmail({ userId, email }))
+    )
+      return { userId: undefined, dids: new Set() };
+    return {
+      userId,
+      dids: new Set(active.map(({ did: reservationDid }) => reservationDid)),
+    };
+  };
+  const exclusiveEmailClaims = (existing, allowedReservationDids) =>
+    existing.filter(
+      ({ did: claimDid, purpose }) =>
+        purpose !== "primary" &&
+        !(purpose === "external" && allowedReservationDids.has(claimDid)),
+    );
+  const emailAvailability = async (
+    email,
+    did,
+    {
+      allowOwnBackup = false,
+      purpose = "primary",
+      allowSameOwnerActiveMigrationReservation = false,
+    } = {},
+  ) => {
+    let existing = await claims(email);
+    for (const pending of existing.filter(({ purpose }) => purpose === "pending"))
+      await pendingEmail(pending.did);
+    existing = await claims(email);
+    const reservations = await accounts.storage.listExternalReservationsByEmail(
+      email,
+    );
+    const { userId: reservationOwnerUserId, dids: allowedReservationDids } =
+      await sameOwnerActiveReservations(
+        email,
+        did,
+        reservations,
+        allowSameOwnerActiveMigrationReservation && purpose === "pending",
+      );
+    const exclusive = exclusiveEmailClaims(existing, allowedReservationDids);
+    const ownBackup =
+      allowOwnBackup &&
+      exclusive.length === 1 &&
+      exclusive[0].did === did &&
+      exclusive[0].purpose === "backup";
+    const ownPending =
+      purpose === "pending" &&
+      exclusive.length === 1 &&
+      exclusive[0].did === did &&
+      exclusive[0].purpose === "pending";
+    const backupOverlapsPrimary =
+      purpose === "backup" &&
+      existing.some(({ purpose: current }) => current === "primary");
+    if (
+      (exclusive.length > 0 && !ownBackup && !ownPending) ||
+      backupOverlapsPrimary ||
+      reservations.some(
+        (reservation) =>
+          reservation.did !== did &&
+          reservation.state !== "complete" &&
+          !allowedReservationDids.has(reservation.did),
+      )
     )
       throw fail(409, "EmailNotAvailable", "This email address cannot be used");
+    return { exclusive, allowedReservationDids, reservationOwnerUserId };
+  };
+  const assertEmailAvailable = async (email, did, options) => {
+    await emailAvailability(email, did, options);
     return email;
   };
   const bindVerifiedIdentity = ({ did, email, userId }) =>
@@ -121,27 +185,27 @@ export function createAccountAuthority({ db, accounts }) {
         eq(t.verification.identifier, `${type}-otp-${email}`),
       );
   };
-  const revokeLocal = async (did) => {
-    const row = await accounts.get(did),
-      userId = await identity(did);
-    if (userId) await db.remove("session", eq(t.session.userId, userId));
-    if (row) await clearEmailProofs(row.email);
+  const clearOAuthTokensForDid = async (did) => {
     for (const { key, value } of await db.list("oauth:tokens")) {
       if (value.data.did !== did) continue;
       await db.delete("oauth:tokens", key);
       for (const previous of value.previousIds ?? [])
         await db.delete("oauth:token-successors", previous);
     }
+  };
+  const revokeLocal = async (did, { preserveBrowserSessions = false } = {}) => {
+    const row = await accounts.get(did),
+      userId = await identity(did);
+    if (userId && !preserveBrowserSessions)
+      await db.remove("session", eq(t.session.userId, userId));
+    if (row) await clearEmailProofs(row.email);
+    await clearOAuthTokensForDid(did);
     for (const { key, value } of await db.list("oauth:device-accounts"))
       if (value.did === did) await db.delete("oauth:device-accounts", key);
     for (const { key, value } of await db.list("oauth:requests"))
       if (value.did === did) await db.delete("oauth:requests", key);
     for (const { key, value } of await db.list("auth-flows"))
-      if (
-        value.authDid === did ||
-        (row && (value.authEmail === row.email || value.email === row.email))
-      )
-        await db.delete("auth-flows", key);
+      if (value.authDid === did) await db.delete("auth-flows", key);
     await db.delete("oauth:grants", did);
     await db.set("security:versions", did, (await version(did)) + 1);
     await db.set("security:revoked-at", did, Date.now());
@@ -163,6 +227,7 @@ export function createAccountAuthority({ db, accounts }) {
     account,
     identity,
     version,
+    claims,
     claim,
     pendingEmail,
     assertEmailAvailable,
@@ -170,8 +235,16 @@ export function createAccountAuthority({ db, accounts }) {
     syncBoundAccountEmailVerification,
     async initializeClaims() {
       await tx(async () => {
-        for (const row of await accounts.list())
+        for (const row of await accounts.list()) {
+          if (
+            (await claims(row.email)).some(
+              (existing) =>
+                existing.did === row.did && existing.purpose === "primary",
+            )
+          )
+            continue;
           await reserve(row.email, row.did, "primary");
+        }
       });
     },
     async hasLiveSession(sessionId, userId) {
@@ -188,32 +261,28 @@ export function createAccountAuthority({ db, accounts }) {
         )[0],
       );
     },
-    async revokeLocal(did) {
-      await tx(() => revokeLocal(did));
+    async revokeLocal(did, { preserveBrowserSessions = false } = {}) {
+      await tx(() => revokeLocal(did, { preserveBrowserSessions }));
     },
     async commitEmailChange({ did, email, recovery, verified, previousEmail }) {
       await tx(async () => {
         const row = await account(did);
-        await assertEmailAvailable(email, did, { allowOwnBackup: recovery });
-        const userId =
-          (await identity(did)) ??
-          (await bindVerifiedIdentity({ did, email: row.email }));
-        await revokeLocal(did);
+        await assertEmailAvailable(email, did, {
+          allowOwnBackup: recovery,
+          purpose: verified ? "pending" : "primary",
+          allowSameOwnerActiveMigrationReservation: verified && !recovery,
+        });
+        const previousUserId = await identity(did);
+        const destinationUserId = verified
+          ? await accounts.storage.ensureVerifiedEmailUser(email)
+          : undefined;
+        await revokeLocal(did, {
+          preserveBrowserSessions: verified && !recovery,
+        });
         for (const address of [row.email, email])
           await clearEmailProofs(address);
-        await db.update(
-          "user",
-          { email, emailVerified: verified, updatedAt: new Date() },
-          eq(t.user.id, userId),
-        );
-        await accounts.save({ ...row, email, emailVerified: verified });
-        await db.remove(
-          "email_claims",
-          and(
-            eq(t.email_claims.did, did),
-            eq(t.email_claims.purpose, "primary"),
-          ),
-        );
+        if (!verified)
+          await accounts.storage.unbindAccount(did, previousUserId);
         await db.remove(
           "backup_emails",
           and(eq(t.backup_emails.email, email), eq(t.backup_emails.did, did)),
@@ -222,7 +291,27 @@ export function createAccountAuthority({ db, accounts }) {
           "email_claims",
           and(eq(t.email_claims.email, email), eq(t.email_claims.did, did)),
         );
-        await reserve(email, did, "primary");
+        await db.remove(
+          "email_claims",
+          and(
+            eq(t.email_claims.did, did),
+            eq(t.email_claims.purpose, "primary"),
+          ),
+        );
+        await accounts.storage.saveAccount(
+          { ...row, email, emailVerified: verified },
+          destinationUserId,
+          {
+            allowSameOwnerActiveMigrationReservation: verified && !recovery,
+          },
+        );
+        await reserve(email, did, "primary", destinationUserId);
+        if (verified)
+          await accounts.storage.rebindVerifiedIdentity({
+            did,
+            email,
+            userId: destinationUserId,
+          });
         await db.set("security:events", randomUUID(), {
           type: recovery ? "recovery" : "email-change",
           did,
@@ -253,11 +342,33 @@ export function createAccountAuthority({ db, accounts }) {
     }) {
       return tx(async () => {
         const row = await account(did);
-        await assertEmailAvailable(email, did, { allowOwnBackup: recovery });
+        const { allowedReservationDids, reservationOwnerUserId } =
+          await emailAvailability(email, did, {
+            allowOwnBackup: recovery,
+            purpose: "pending",
+            allowSameOwnerActiveMigrationReservation: !recovery,
+          });
         if (email === row.email)
           throw fail(400, "InvalidEmail", "Choose a different primary email");
         await releasePending(did);
-        if (!(await claim(email))) await reserve(email, did, "pending");
+        const existingClaims = await claims(email);
+        const exclusiveClaims = exclusiveEmailClaims(
+          existingClaims,
+          allowedReservationDids,
+        );
+        const ownBackup =
+          recovery &&
+          exclusiveClaims.length === 1 &&
+          exclusiveClaims[0].did === did &&
+          exclusiveClaims[0].purpose === "backup";
+        if (exclusiveClaims.length === 0)
+          await reserve(email, did, "pending", reservationOwnerUserId);
+        else if (!ownBackup)
+          throw fail(
+            409,
+            "EmailNotAvailable",
+            "This email address cannot be used",
+          );
         await db.set("security:pending-email", did, {
           email,
           recovery,

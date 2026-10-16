@@ -35,13 +35,16 @@ delivery priorities and approvals belong in the
   still pass required checks before expiry. The managed deployment profiles do
   not establish blanket PDS availability or exhaustive endpoint outage coverage.
 
-- **Multiple accounts per email:** the approved target permits imported DID/email
-  associations from an existing PDS joining Entryway. Sign-in verifies email,
-  resolves associated DIDs and requires a choice when there are several, then
-  continues the original flow before establishing the selected-DID session. The
-  current unique-email and unique-auth-user binding constraints remain in place;
-  schema changes, association import and the chooser are not implemented. Email
-  matching never merges DIDs or establishes unimported DID authority. See
+- **Multiple accounts per email:** primary account email claims may repeat across
+  DIDs, and one verified Better Auth user may bind multiple DIDs; Better Auth
+  email remains unique. Authorized migration finalization can add a binding beside
+  an unbound same-email DID without binding that sibling. Verified account email
+  changes can associate only the selected DID; administrative changes leave it
+  unbound until mailbox verification and never rewrite a shared user. Signup and
+  login do not infer authority from email. The interactive chooser and joining-PDS
+  association import remain unimplemented; the resolver returns
+  `selection-required`. Email-level session revocation remains conservative for a
+  shared user, while OAuth/account data stays DID-scoped. See
   [account identity](data-custody.md#1-account-identity-and-ownership).
 
 - **Moderation:** raw interoperability still exits 2 with

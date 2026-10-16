@@ -161,17 +161,20 @@ export function createRegistration({
     registrationIdentity,
   }) => {
     let row = await get(email);
-    let emailClaim = await storage.getEmailClaim(email);
-    if (emailClaim?.purpose === "pending") {
-      const change = await db.get("security:pending-email", emailClaim.did);
-      if (!change || change.expiresAt <= Date.now()) {
-        await storage.releaseEmail(email, emailClaim.did, "pending");
-        emailClaim = null;
-      }
+    let emailClaims = await storage.listEmailClaims(email);
+    for (const pending of emailClaims.filter(
+      ({ purpose }) => purpose === "pending",
+    )) {
+      const change = await db.get("security:pending-email", pending.did);
+      if (!change || change.expiresAt <= Date.now())
+        await storage.releaseEmail(email, pending.did, "pending");
     }
+    emailClaims = await storage.listEmailClaims(email);
     if (
-      emailClaim &&
-      (!row || emailClaim.did !== row.did || emailClaim.purpose !== "primary")
+      emailClaims.some(
+        (claim) =>
+          claim.purpose !== "primary" || !row || claim.did !== row.did,
+      )
     )
       throw new HttpError(
         409,
@@ -437,11 +440,13 @@ export function createRegistration({
   const reconcileRegistrations = async () => {
     const results = [];
     for (const { key: email } of await db.list("registration:intents")) {
-      if (await get(email)) continue;
-      const nomination = await pendingIntent(email);
-      if (!nomination) continue;
-      const { saved, operationId } = nomination;
       try {
+        const nomination = await pendingIntent(email);
+        if (!nomination) continue;
+        const { saved, operationId } = nomination;
+        // Email is shared; the saved handle identifies an account already persisted.
+        const existing = await storage.getByHandle(saved.handle);
+        if (existing?.email === saved.email) continue;
         const inviteCode = (await db.get("entryway:invite-reservations", email))
           ?.code;
         const row = await ownership.resumePending(

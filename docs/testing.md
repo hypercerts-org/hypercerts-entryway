@@ -162,6 +162,10 @@ co-located `src/features/**/*.test.mjs`, once and sorted, with a shared JUnit re
 Run browser before contracts in a fresh project: real contracts require the
 verified account created by the browser journey. Pure diagnostic unit runs use
 `npm run test:unit` inside the managed test container and do not need that fixture.
+Browser email-proof tests must obtain the recipient's visible code from Mailpit
+message content; reading the database outbox's full token hides missing challenge
+context. Verify the hidden selector is retained and that wrong codes or selectors
+are rejected. Better Auth sign-in OTP remains a separate flow.
 
 The application images are project-scoped. Source changes require rebuilding the
 selected runtime/test/browser images; test results from an older image cannot

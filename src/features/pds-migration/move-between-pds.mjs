@@ -859,14 +859,28 @@ export async function createAccountMigration({
       throw failure;
     }
   };
+  const requestMigrationProof = async (principal, { pdsId }, issueProof) => {
+    const row = await requireOwner(principal);
+    if (row.pdsId === pdsId)
+      throw error("InvalidPds", "Choose another configured PDS");
+    choose(pdsId);
+    return await issueProof(principal, { pdsId });
+  };
   return {
     pendingRecovery: (did) => ownership.pendingExternal(did),
-    async requestMigration(principal, { pdsId }) {
-      const row = await requireOwner(principal);
-      if (row.pdsId === pdsId)
-        throw error("InvalidPds", "Choose another configured PDS");
-      choose(pdsId);
-      return await security.requestMigrationProof(principal, { pdsId });
+    async requestMigration(principal, input) {
+      return await requestMigrationProof(
+        principal,
+        input,
+        security.requestMigrationProof,
+      );
+    },
+    async requestMigrationForBrowser(principal, input) {
+      return await requestMigrationProof(
+        principal,
+        input,
+        security.requestMigrationProofForBrowser,
+      );
     },
     importAccount(principal, input) {
       return serial(input.did, input.pdsId, async () => {
