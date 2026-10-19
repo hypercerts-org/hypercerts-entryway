@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { DatabaseSync } from "node:sqlite";
+import { createHash } from "node:crypto";
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 
 const config = JSON.parse(
@@ -26,7 +27,7 @@ const recoveryMode = process.env.MANAGED_RECOVERY_MODE ?? "consumed-success";
 const run = recoveryRun ?? Date.now().toString(36);
 const identity = {
   email: `migration-console-${run}@example.com`,
-  handle: `migration-${run}.entryway.atmosbox.test`,
+  handle: `migration-${createHash("sha256").update(run).digest("hex").slice(0, 8)}.entryway.atmosbox.test`,
 };
 const source = config.pds.find((p) => p.id === "pds1");
 const target = config.pds.find((p) => p.id === "pds2");
