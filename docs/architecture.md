@@ -245,6 +245,19 @@ Confidential clients also supply client authentication where required.
 The account page distinguishes ending a browser session, forgetting device membership,
 and revoking application access. Revocation effects must be explicit, including outstanding access-token lifetime.
 
+Account settings use request-carried DID selection. A verified identity with one
+binding keeps the existing direct path; with multiple bindings, `GET /account`
+shows a chooser and does not select one implicitly. `POST /account/select`
+checks CSRF and a session-bound form proof, rechecks the live binding, then
+redirects to `/account?did=<selected-DID>`. The query value is untrusted and
+is revalidated with `accountAccess.requireBoundAccount` on every selected page
+request. Every settings action carries the DID and stateless session-bound form
+proof; duplicate or conflicting selectors are rejected. These values do not
+persist selection authority: tabs remain independent, while a replaced session,
+revoked session or unbound DID cannot reuse an old form or fall through to a
+sibling account. Settings and email proofs use only the selected DID. No account
+schema or persistent selection state is added.
+
 ## 6. PDS integration and fleet lifecycle
 
 Maintain a protocol matrix for every applicable Entryway hook and XRPC method.

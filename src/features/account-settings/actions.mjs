@@ -1,5 +1,5 @@
 import { page } from "../../ui/html.mjs";
-import { field, hidden, nextStep } from "../../ui/account-forms.mjs";
+import { accountUrl, field, hidden, nextStep } from "../../ui/account-forms.mjs";
 
 export function createAccountSettingsActions({
   security,
@@ -8,7 +8,7 @@ export function createAccountSettingsActions({
   console,
 }) {
   return {
-    "backup-request": async ({ res, browser, principal, value, token }) => {
+    "backup-request": async ({ res, browser, principal, accountContext, value, token }) => {
       console.needed();
 
       const issued = await security.requestBackupEmailForBrowser(principal, {
@@ -29,6 +29,7 @@ export function createAccountSettingsActions({
           ),
         "Verify recovery email",
         "Enter the verification code sent to your recovery email.",
+        accountContext,
       );
     },
     "backup-confirm": async ({ principal, value, token }) => {
@@ -42,7 +43,7 @@ export function createAccountSettingsActions({
       console.needed();
       await security.removeBackupEmail(principal, { email: value("email") });
     },
-    "email-request": async ({ res, browser, principal, token }) => {
+    "email-request": async ({ res, browser, principal, accountContext, token }) => {
       console.needed();
 
       const issued = await security.requestEmailUpdateForBrowser(principal);
@@ -61,9 +62,10 @@ export function createAccountSettingsActions({
           field("email", "New primary email", "email", 'maxlength="320"'),
         "Verify current email and continue",
         "A verification code was sent to your current primary email.",
+        accountContext,
       );
     },
-    "email-update": async ({ res, browser, principal, value, token }) => {
+    "email-update": async ({ res, browser, principal, accountContext, value, token }) => {
       console.needed();
 
       const issued = await security.updateEmailForBrowser(principal, {
@@ -85,9 +87,10 @@ export function createAccountSettingsActions({
           ),
         "Confirm new email",
         "Verify the code sent to your new primary email to complete the change.",
+        accountContext,
       );
     },
-    "email-confirm": async ({ res, principal, value, token }) => {
+    "email-confirm": async ({ res, principal, accountContext, value, token }) => {
       console.needed();
 
       await security.confirmEmail(principal, {
@@ -97,10 +100,10 @@ export function createAccountSettingsActions({
       return page(
         res,
         "Primary email updated",
-        '<p>Your email was changed. Your browser sessions remain signed in for any other linked accounts, but no longer have access to this account.</p><a href="/login">Sign in with your new email</a>',
+        `<p>Your email was changed. Your browser sessions remain signed in for any other linked accounts, but no longer have access to this account.</p><a href="/login">Sign in with your new email</a>`,
       );
     },
-    "password-set": async ({ req, res, principal }) => {
+    "password-set": async ({ req, res, principal, accountContext }) => {
       console.needed();
 
       await security.setPassword(principal, {
@@ -110,10 +113,10 @@ export function createAccountSettingsActions({
       return page(
         res,
         "Account password updated",
-        '<p>Your password was updated. Existing sessions and app passwords were revoked.</p><a href="/login">Sign in again</a>',
+        `<p>Your password was updated. Existing sessions and app passwords were revoked.</p><a href="/login">Sign in again</a><p><a href="${accountContext?.did ? accountUrl(accountContext.did) : "/account"}">Return to account settings</a></p>`,
       );
     },
-    "password-remove": async ({ req, res, principal }) => {
+    "password-remove": async ({ req, res, principal, accountContext }) => {
       console.needed();
 
       await security.removePassword(principal, {
@@ -122,7 +125,7 @@ export function createAccountSettingsActions({
       return page(
         res,
         "Account password removed",
-        '<p>Email sign-in remains available. Existing sessions and app passwords were revoked.</p><a href="/login">Sign in again</a>',
+        `<p>Email sign-in remains available. Existing sessions and app passwords were revoked.</p><a href="/login">Sign in again</a><p><a href="${accountContext?.did ? accountUrl(accountContext.did) : "/account"}">Return to account settings</a></p>`,
       );
     },
     status: async ({ account, value }) => {

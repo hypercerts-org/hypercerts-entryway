@@ -50,7 +50,6 @@ export function mountAccountUi(context) {
     console.guarded(async (req, res) => {
       const ctx = await console.authenticated(req, res);
       if (!ctx) return;
-      context.oauth.checkCsrf(req, ctx.browser);
       if (context.security) await context.security.summary(ctx.principal);
       console.requireRecent(ctx.session);
       console.needed();

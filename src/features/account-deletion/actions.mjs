@@ -4,7 +4,7 @@ import { HttpError } from "../../http/http-error.mjs";
 
 export function createDeletionActions({ security, console }) {
   return {
-    delete: async ({ res, account, browser, principal, value, token }) => {
+    delete: async ({ res, account, browser, principal, accountContext, value, token }) => {
       console.needed();
 
       if (value("confirm") !== account.handle)
@@ -38,6 +38,7 @@ export function createDeletionActions({ security, console }) {
             : ""),
         "Permanently delete account",
         "A deletion code was sent to your primary email. This deletes your repository and blobs.",
+        accountContext,
       );
     },
     "delete-confirm": async ({ req, res, account, value, token }) => {

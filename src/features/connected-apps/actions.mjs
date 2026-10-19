@@ -1,4 +1,5 @@
 import { page, escapeHtml as esc } from "../../ui/html.mjs";
+import { accountUrl } from "../../ui/account-forms.mjs";
 import { HttpError } from "../../http/http-error.mjs";
 
 export function createConnectedAppsActions({ db, oauth, legacy, console }) {
@@ -77,7 +78,7 @@ export function createConnectedAppsActions({ db, oauth, legacy, console }) {
       return page(
         res,
         "App password created",
-        `<p>Copy this password into ${esc(item.name)} now. It will not be shown again.</p><code data-testid="app-password">${esc(item.password)}</code><p><a href="/account#passwords">Return to account settings</a></p>`,
+        `<p>Copy this password into ${esc(item.name)} now. It will not be shown again.</p><code data-testid="app-password">${esc(item.password)}</code><p><a href="${accountUrl(account.did)}#passwords">Return to account settings</a></p>`,
       );
     },
     "app-password-revoke": async ({ account, value }) => {

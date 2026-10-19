@@ -61,12 +61,12 @@ export function createConsent({ db, provider, stores, flows, accountAccess }) {
       return pageForFlow(
         res,
         "Account unavailable",
-        '<p>This account is deactivated. <a href="/account">Open account settings</a> to reactivate it.</p>',
+        `<p>This account is deactivated. <a href="/account?did=${encodeURIComponent(authorized.account.did)}">Open account settings</a> to reactivate it.</p>`,
         authorized.current,
         403,
       );
     if (!authorized.current.requestUri)
-      return res.redirect(303, "/account");
+      return res.redirect(303, `/account?did=${encodeURIComponent(authorized.account.did)}`);
     return pageForFlow(
       res,
       "Authorize application",

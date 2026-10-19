@@ -1,5 +1,5 @@
 import { page, escapeHtml as esc } from "../../ui/html.mjs";
-import { field, hidden, nextStep } from "../../ui/account-forms.mjs";
+import { accountUrl, field, hidden, nextStep } from "../../ui/account-forms.mjs";
 import { HttpError } from "../../http/http-error.mjs";
 
 export function createMigrationActions({
@@ -10,7 +10,7 @@ export function createMigrationActions({
 }) {
   const perform =
     (action) =>
-    async ({ res, account, browser, principal, value, token }) => {
+    async ({ res, account, browser, principal, accountContext, value, token }) => {
       console.needed();
       if (!migration)
         throw new HttpError(
@@ -44,6 +44,7 @@ export function createMigrationActions({
             ),
           "Move to destination data server",
           `A migration code was sent to your primary email. Confirm to move your repository and blobs to ${target.url}. Writes will pause and existing sessions and app passwords will end.`,
+          accountContext,
         );
       }
       try {
@@ -63,7 +64,7 @@ export function createMigrationActions({
         return page(
           res,
           "Data server migration is pending",
-          `<p role="alert">${required ? "An earlier server request has an uncertain outcome. Contact the service operator; retrying alone cannot resolve it." : "Your saved migration is unfinished. Continue it after the operator authorizes any required recovery."}</p><p>Your DID <code>${esc(account.did)}</code> and handle <strong>${esc(account.handle)}</strong> are retained. The saved destination is ${esc(savedTarget?.url ?? saved.targetPdsId)}.</p>${required ? "<p>Waiting for operator recovery.</p>" : `<form method="post" action="/account/migration-confirm">${hidden("csrf", browser.csrf)}${hidden("pdsId", saved.targetPdsId)}<button>Continue saved migration</button></form>`}<p><a href="/account">Return to account settings</a></p>`,
+          `<p role="alert">${required ? "An earlier server request has an uncertain outcome. Contact the service operator; retrying alone cannot resolve it." : "Your saved migration is unfinished. Continue it after the operator authorizes any required recovery."}</p><p>Your DID <code>${esc(account.did)}</code> and handle <strong>${esc(account.handle)}</strong> are retained. The saved destination is ${esc(savedTarget?.url ?? saved.targetPdsId)}.</p>${required ? "<p>Waiting for operator recovery.</p>" : `<form method="post" action="/account/migration-confirm">${hidden("csrf", browser.csrf)}${hidden("did", account.did)}${hidden("selectionProof", accountContext.selectionProof)}${hidden("pdsId", saved.targetPdsId)}<button>Continue saved migration</button></form>`}<p><a href="${accountUrl(account.did)}">Return to account settings</a></p>`,
           409,
         );
       }

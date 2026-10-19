@@ -57,9 +57,12 @@ async function signIn(p, identity, create = false) {
   identity.did = await p.getByTestId('account-did').textContent()
 }
 async function post(p, action, body = {}, extra = {}) {
-  const csrf = await p.locator('input[name="csrf"]').first().inputValue()
+  const form = accountForm(p, action).first()
+  const csrf = await form.locator('input[name="csrf"]').inputValue()
+  const did = await form.locator('input[name="did"]').inputValue()
+  const selectionProof = await form.locator('input[name="selectionProof"]').inputValue()
   return p.request.post(`${config.issuer}/account/${action}`, {
-    form: { csrf, ...body },
+    form: { csrf, did, selectionProof, ...body },
     headers: { origin: config.issuer },
     maxRedirects: 0,
     ...extra,
@@ -100,6 +103,13 @@ test('console binds verified email to one DID and shows no browser bearer creden
     .map((s) => s.token)
   expect(tokens.some((token) => html.includes(token))).toBe(false)
   await expect(page.getByRole('navigation', { name: 'Account sections' })).toBeVisible()
+  const actionForms = page.locator('form[action^="/account/"]')
+  for (const form of await actionForms.all()) {
+    await expect(form.locator('input[name="did"]')).toHaveValue(alice.did)
+    const selectionProof = form.locator('input[name="selectionProof"]')
+    await expect(selectionProof).toHaveCount(1)
+    await expect(selectionProof).toHaveValue(/\S+/)
+  }
   await page.screenshot({ path: 'artifacts/account-console-overview.png', fullPage: true })
 })
 
@@ -116,12 +126,16 @@ test('backup email requires its visible code and rejects foreign selectors, wron
   expect(foreignChallengeId).toBeTruthy()
 
   await page.locator('#recovery').getByLabel('Recovery email address').fill(backup)
-  await accountForm(page, 'backup-request').evaluate((form, did) => {
-    const suppliedDid = document.createElement('input')
-    suppliedDid.name = 'did'
-    suppliedDid.value = did
-    form.append(suppliedDid)
-  }, bob.did)
+  await accountForm(page, 'backup-request')
+    .locator('input[name="did"]')
+    .evaluate((input, did) => { input.value = did }, bob.did)
+  await submit(page, 'backup-request')
+  await expect(page.getByRole('heading', { name: 'Account operation could not be completed' })).toBeVisible()
+  await expect(page.getByRole('alert')).toContainText('different or expired account session')
+  expect(readMail(backup)).toBeNull()
+
+  await page.goto(`${config.issuer}/account`)
+  await page.locator('#recovery').getByLabel('Recovery email address').fill(backup)
   const since = Date.now()
   await submit(page, 'backup-request')
   await expect(page.getByRole('heading', { name: 'Verify recovery email' })).toBeVisible()
@@ -145,13 +159,27 @@ test('backup email requires its visible code and rejects foreign selectors, wron
   expect(wrong.status()).toBe(400)
 
   await page.getByLabel('Recovery email verification code').fill(code)
+  const confirmationForm = accountForm(page, 'backup-confirm')
+  const confirmationContext = {
+    csrf: await confirmationForm.locator('input[name="csrf"]').inputValue(),
+    did: await confirmationForm.locator('input[name="did"]').inputValue(),
+    selectionProof: await confirmationForm.locator('input[name="selectionProof"]').inputValue(),
+    email: await confirmationForm.locator('input[name="email"]').inputValue(),
+    challengeId: await confirmationForm.locator('input[name="challengeId"]').inputValue(),
+    token: await page.getByLabel('Recovery email verification code').inputValue(),
+  }
   const confirmation = page.waitForResponse(
     (response) => new URL(response.url()).pathname === '/account/backup-confirm',
   )
   await submit(page, 'backup-confirm')
   expect((await confirmation).status()).toBe(303)
   await expect(page.locator('#recovery')).toContainText(backup)
-  expect((await post(page, 'backup-confirm', { email: backup, challengeId, token: code })).status()).toBe(409)
+  const replay = await page.request.post(`${config.issuer}/account/backup-confirm`, {
+    form: confirmationContext,
+    headers: { origin: config.issuer },
+    maxRedirects: 0,
+  })
+  expect(replay.status()).toBe(409)
   await otherPage.goto(`${config.issuer}/account`)
   await expect(otherPage.locator('#recovery')).not.toContainText(backup)
 })
