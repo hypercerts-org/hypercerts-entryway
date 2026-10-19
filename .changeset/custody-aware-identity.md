@@ -2,26 +2,9 @@
 "hypercerts-entryway": minor
 ---
 
-Require the public-only `plcRecoveryKeyDid` operator recovery reference. New accounts place optional user recovery first, operator recovery second and the Entryway hot key last, with repository signing remaining PDS-owned. Pending registrations retain their selected public rotation keys across deployment-default changes. Configure a supported public did:key distinct from the hot key before starting the service; a public reference alone does not establish independent private custody or recovery readiness.
-
-Commit PLC signature-release authorization and confirmation consumption together, while retaining ordinary wrong-code attempt accounting. A lost response after authorization requires a new confirmation. Authorized signing history does not establish publication or effective directory authority. Fenced audit observations record last-observed authority separately, trusting the configured directory for historic branch selection and nullification while validating surviving signatures and CIDs. Internal custody refresh never clears uncertain writes or grants account access. The new database tables require fresh state; this change provides no existing-database upgrade, complete public migration or disaster-recovery qualification.
-
-PLC operation confirmations use the existing durable mail delivery queue and SMTP
-transport. Other legacy XRPC mail flows are unchanged. Public observation history
-retains explicit supporting observation IDs and directory provenance after later
-snapshots replace the observed head. Publication and directory-asserted nullification
-have distinct provenance; forged observation kinds or missing evidence are rejected.
-Internal handle changes and managed moves/repairs atomically retain exact signed
-operations with custody history before dispatch, so interrupted return resumes the
-saved operation without re-signing or another confirmation.
-
-Directory observations retire removed PLC rotation and repository keys while
-preserving their attributed roles and provenance. Replacement repository keys
-remain visible by public reference; OAuth issuer lifecycle is independent.
-
-A successful PDS registration can activate while directory evidence is temporarily
-unavailable. The database retains an explicit `custody:refresh-pending` error;
-no observed authority snapshot is fabricated. The existing account reconciler
-retries nominated markers through custody admission and clears them atomically
-with a successful observation. Conflicting or uncertain operations block refresh. Invalid evidence,
-custody contradictions and lost operation ownership still block activation.
+- Configure a supported public-only `plcRecoveryKeyDid`, distinct from the hot key. New accounts order optional user recovery, operator offline recovery, then Entryway hot authority; pending registrations retain their selected keys. Repository signing stays PDS-owned. Public references do not prove independent private custody or recovery readiness.
+- PLC confirmation uses durable mail delivery. Confirmation consumption and signature-release authorization commit atomically; ordinary wrong-code accounting remains. A lost public signing response requires fresh confirmation. Signing history is not publication or effective directory authority.
+- Internal handle changes and managed moves/repairs atomically save exact signed operations before dispatch, resuming them without re-signing. Fenced directory observations retain supporting evidence and distinguish publication from directory-asserted nullification, preserve attributed custody, retire removed PLC/repository keys and leave OAuth issuer lifecycle independent. Refresh never clears uncertain writes or grants account access.
+- Successful PDS registration may activate only through the existing fallback for classified directory-evidence outages, retaining `custody:refresh-pending` without fabricating authority. Reconciliation clears the marker with a successful observation; invalid evidence, custody contradictions and lost ownership still block activation.
+- Registration and hosted-handle changes share the configured-domain, single-label restriction and 3–18-character label bounds.
+- **Fresh database state is required; no existing-database upgrade is provided.** Complete public migration and disaster-recovery qualification remain separate release requirements.

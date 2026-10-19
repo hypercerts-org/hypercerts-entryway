@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 import { and, asc, eq } from "drizzle-orm";
+import {
+  validateCustodyObservation,
+  validateChainPredecessor,
+} from "../../plc/custody-observation.js";
 import { PlcError } from "../../plc/errors.js";
 import {
   publicKeyAlgorithm,
@@ -18,17 +22,92 @@ function compareKeys(leftKey: string, rightKey: string): number {
   return 0;
 }
 
-function validateChainPredecessor(
-  entry: CustodyObservation["entries"][number],
-  chain: readonly string[],
-): void {
-  if (entry.nullified) return;
-  const index = chain.indexOf(entry.cid);
-  if (entry.operation.prev !== (index === 0 ? null : chain[index - 1]))
-    throw new PlcError(
-      "InvalidCustodyObservation",
-      "Public observation chain is inconsistent",
-    );
+function observedKeys(
+  observation: CustodyObservation,
+): CustodyInventory["keys"] {
+  // Public directory keys reveal authority, not who holds the private keys.
+  const next = observation.snapshot;
+  const head = observation.entries.find((entry) => entry.cid === next.headCid)!;
+  return head.operation.type === "plc_tombstone"
+    ? []
+    : [
+        ...head.operation.rotationKeys.map((keyReference) => ({
+          keyReference,
+          purpose: "unknown-rotation" as const,
+          custodian: "unknown" as const,
+          algorithm: publicKeyAlgorithm(keyReference),
+          fingerprint: `sha256:${createHash("sha256").update(keyReference).digest("hex")}`,
+          lifecycle: "active" as const,
+          provenance: "directory-observed-unknown-custodian" as const,
+        })),
+        ...[head.operation.verificationMethods.atproto]
+          .filter((key): key is string => typeof key === "string")
+          .map((keyReference) => ({
+            keyReference,
+            purpose: "pds-repository" as const,
+            custodian: "unknown" as const,
+            algorithm: publicKeyAlgorithm(keyReference),
+            fingerprint: `sha256:${createHash("sha256").update(keyReference).digest("hex")}`,
+            lifecycle: "active" as const,
+            provenance: "directory-observed-unknown-custodian" as const,
+          })),
+      ];
+}
+
+function preserveAttributedKeys(
+  previous: CustodyInventory | null,
+  keys: CustodyInventory["keys"],
+): CustodyInventory["keys"] {
+  return (previous?.keys ?? [])
+    .filter(
+      (item) => item.provenance !== "directory-observed-unknown-custodian",
+    )
+    .map((item) => {
+      // PLC directory authority cannot change OAuth issuer lifecycle.
+      if (item.purpose === "oauth-issuer") return item;
+      const effective = keys.some(
+        (current) =>
+          current.keyReference === item.keyReference &&
+          (current.purpose === "pds-repository") ===
+            (item.purpose === "pds-repository"),
+      );
+      return {
+        ...item,
+        lifecycle:
+          item.lifecycle === "active" && !effective
+            ? ("retired" as const)
+            : item.lifecycle,
+      };
+    });
+}
+
+function unattributedKeys(
+  keys: CustodyInventory["keys"],
+  attributed: CustodyInventory["keys"],
+): CustodyInventory["keys"] {
+  return keys.filter((item) =>
+    item.purpose === "pds-repository"
+      ? !attributed.some(
+          (known) =>
+            known.purpose === item.purpose &&
+            known.keyReference === item.keyReference,
+        )
+      : !attributed.some(
+          (known) =>
+            known.keyReference === item.keyReference &&
+            known.purpose !== "pds-repository" &&
+            known.purpose !== "oauth-issuer",
+        ),
+  );
+}
+
+function observedInventory(
+  observation: CustodyObservation,
+  previous: CustodyInventory | null,
+): CustodyInventory["keys"] {
+  const keys = observedKeys(observation);
+  const attributed = preserveAttributedKeys(previous, keys);
+  return [...attributed, ...unattributedKeys(keys, attributed)];
 }
 
 /** Bind public custody persistence to this executor. Nested writes join its
@@ -46,157 +125,9 @@ export function createCustodyInventoryStorage(
         .join(",")}}`;
     return JSON.stringify(value);
   };
-  const validateObservation = (input: unknown): CustodyObservation => {
-    try {
-      const observation = input as CustodyObservation;
-      const exact = (value: unknown, keys: string[]) =>
-        typeof value === "object" &&
-        value !== null &&
-        !Array.isArray(value) &&
-        Object.keys(value).sort().join(",") === [...keys].sort().join(",");
-      if (
-        !exact(observation, [
-          "directory",
-          "did",
-          "id",
-          "at",
-          "operationId",
-          "entries",
-          "snapshot",
-        ]) ||
-        typeof observation.directory !== "string" ||
-        !/^https?:\/\//.test(observation.directory) ||
-        new URL(observation.directory).username !== "" ||
-        new URL(observation.directory).password !== "" ||
-        !Array.isArray(observation.entries) ||
-        !observation.entries.length ||
-        observation.snapshot.eventId !== observation.id ||
-        observation.snapshot.at !== observation.at ||
-        observation.entries.some(
-          (entry) =>
-            !exact(entry, ["cid", "operation", "nullified"]) ||
-            typeof entry.nullified !== "boolean",
-        ) ||
-        new Set(observation.entries.map((entry) => entry.cid)).size !==
-          observation.entries.length ||
-        canonical(
-          observation.entries
-            .filter((entry) => !entry.nullified)
-            .map((entry) => entry.cid),
-        ) !== canonical(observation.snapshot.chain) ||
-        canonical(
-          observation.entries
-            .filter((entry) => entry.nullified)
-            .map((entry) => entry.cid),
-        ) !== canonical(observation.snapshot.nullified)
-      )
-        throw new PlcError(
-          "InvalidCustodyObservation",
-          "Public observation projection is inconsistent",
-        );
-      validateCustodyInventory({
-        did: observation.did,
-        keys: [],
-        observation: observation.snapshot,
-      });
-      for (const entry of observation.entries) {
-        validateSignedEvent({
-          id: `${observation.id}:${entry.cid}`,
-          did: observation.did,
-          cid: entry.cid,
-          operation: entry.operation,
-          kind: entry.nullified ? "nullified" : "observed",
-          supportingObservationId: observation.id,
-          operationId: observation.operationId,
-          provenance: entry.nullified
-            ? "directory-asserted-nullification"
-            : "directory-observed-publication",
-          at: observation.at,
-        });
-      }
-      return observation;
-    } catch {
-      throw new PlcError(
-        "InvalidCustodyObservation",
-        "Public observation projection is inconsistent",
-      );
-    }
-  };
-  const observedInventory = (
-    observation: CustodyObservation,
-    previous: CustodyInventory | null,
-  ): CustodyInventory["keys"] => {
-    const next = observation.snapshot;
-    const head = observation.entries.find(
-      (entry) => entry.cid === next.headCid,
-    )!;
-    const keys: CustodyInventory["keys"] =
-      head.operation.type === "plc_tombstone"
-        ? []
-        : [
-            ...head.operation.rotationKeys.map((keyReference) => ({
-              keyReference,
-              purpose: "unknown-rotation" as const,
-              custodian: "unknown" as const,
-              algorithm: publicKeyAlgorithm(keyReference),
-              fingerprint: `sha256:${createHash("sha256").update(keyReference).digest("hex")}`,
-              lifecycle: "active" as const,
-              provenance: "directory-observed-unknown-custodian" as const,
-            })),
-            ...[head.operation.verificationMethods.atproto]
-              .filter((key): key is string => typeof key === "string")
-              .map((keyReference) => ({
-                keyReference,
-                purpose: "pds-repository" as const,
-                custodian: "unknown" as const,
-                algorithm: publicKeyAlgorithm(keyReference),
-                fingerprint: `sha256:${createHash("sha256").update(keyReference).digest("hex")}`,
-                lifecycle: "active" as const,
-                provenance: "directory-observed-unknown-custodian" as const,
-              })),
-          ];
-    // Directory authority does not identify custodians or govern issuer keys.
-    // Retain attributed inventory independently; the snapshot/immutable head
-    // supplies effective PLC authority, including removed or replaced keys.
-    const attributed = (previous?.keys ?? [])
-      .filter(
-        (item) => item.provenance !== "directory-observed-unknown-custodian",
-      )
-      .map((item) => {
-        if (item.purpose === "oauth-issuer") return item;
-        const effective = keys.some(
-          (current) =>
-            current.keyReference === item.keyReference &&
-            (current.purpose === "pds-repository") ===
-              (item.purpose === "pds-repository"),
-        );
-        return {
-          ...item,
-          lifecycle:
-            item.lifecycle === "active" && !effective
-              ? ("retired" as const)
-              : item.lifecycle,
-        };
-      });
-    const observed = keys.filter((item) =>
-      item.purpose === "pds-repository"
-        ? !attributed.some(
-            (known) =>
-              known.purpose === item.purpose &&
-              known.keyReference === item.keyReference,
-          )
-        : !attributed.some(
-            (known) =>
-              known.keyReference === item.keyReference &&
-              known.purpose !== "pds-repository" &&
-              known.purpose !== "oauth-issuer",
-          ),
-    );
-    return [...attributed, ...observed];
-  };
   const store: CustodyInventoryReader & CustodyInventoryTransactor = {
     async recordObservation(input) {
-      const observation = validateObservation(input);
+      const observation = validateCustodyObservation(input);
       await db.transact(async () => {
         // This immutable public projection is the explicit support for every
         // observed/nullified event. Snapshot replacement cannot erase provenance.

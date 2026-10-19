@@ -46,6 +46,33 @@ test("directory observations validate surviving history and reject regressions a
     { ...observed, entries: [{ ...observed.entries[0], operation: null }] },
     { ...observed, id: "" },
     { ...observed, operationId: {} },
+    { ...observed, unexpected: "not-public" },
+    { ...observed, directory: "https://user:password@plc.example.com" },
+    { ...observed, directory: "https://user@plc.example.com" },
+    { ...observed, entries: [] },
+    { ...observed, entries: [...observed.entries, observed.entries[0]] },
+    { ...observed, entries: [{ ...observed.entries[0], unexpected: true }] },
+    { ...observed, entries: [{ ...observed.entries[0], nullified: "false" }] },
+    { ...observed, snapshot: { ...observed.snapshot, unexpected: true } },
+    { ...observed, snapshot: { ...observed.snapshot, eventId: "other" } },
+    { ...observed, snapshot: { ...observed.snapshot, at: "2020-01-01" } },
+    { ...observed, snapshot: { ...observed.snapshot, chain: [second.cid] } },
+    {
+      ...observed,
+      snapshot: { ...observed.snapshot, nullified: [genesis.cid] },
+    },
+    { ...observed, entries: [...observed.entries].reverse() },
+    {
+      ...observed,
+      entries: observed.entries.map((entry) => ({ ...entry, nullified: true })),
+    },
+    {
+      ...observed,
+      entries: observed.entries.map((entry) => ({
+        ...entry,
+        operation: { ...entry.operation, unexpected: true },
+      })),
+    },
   ]) {
     await assert.rejects(store.recordObservation(malformed), {
       code: "InvalidCustodyObservation",
@@ -58,6 +85,20 @@ test("directory observations validate surviving history and reject regressions a
     ])
       assert.deepEqual(await db.read(table), []);
   }
+  const local = {
+    ...observed,
+    directory: "http://localhost:2582",
+    id: "local-http",
+    snapshot: { ...observed.snapshot, eventId: "local-http" },
+  };
+  await db
+    .transact(async () => {
+      await store.recordObservation(local);
+      assert.deepEqual(await store.getObservation(local.id), local);
+      // Roll back this characterization so the main history keeps its exact size.
+      throw new Error("local-characterization");
+    })
+    .catch((error) => assert.equal(error.message, "local-characterization"));
   await store.recordObservation(observed);
   await store.recordObservation(observed);
   assert.equal((await store.getHistory(did)).length, 2);
@@ -170,6 +211,37 @@ test("directory observations validate surviving history and reject regressions a
     /rollback/,
   );
   assert.equal((await store.getHistory(did)).length, beforeRollback);
+  const beforeFailure = await Promise.all(
+    tables.map((table) => db.read(table)),
+  );
+  const failingStore = createCustodyInventoryStorage(
+    new Proxy(db, {
+      get(target, property) {
+        if (property === "insert")
+          return async (table, ...args) => {
+            if (table === "custody_history")
+              throw new Error("history-write-failure");
+            return target.insert(table, ...args);
+          };
+        const value = Reflect.get(target, property);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }),
+  );
+  const failedId = crypto.randomUUID();
+  await assert.rejects(
+    failingStore.recordObservation({
+      ...later,
+      id: failedId,
+      snapshot: { ...later.snapshot, eventId: failedId },
+    }),
+    /history-write-failure/,
+  );
+  assert.deepEqual(
+    await Promise.all(tables.map((table) => db.read(table))),
+    beforeFailure,
+  );
+  assert.equal(await store.getObservation(failedId), null);
 });
 
 test("directory transitions retain attributed custody and issuer inventory separately from authority", async (t) => {
@@ -270,6 +342,27 @@ test("directory transitions retain attributed custody and issuer inventory separ
   assert.equal(inventory.observation.headCid, second.snapshot.headCid);
   assert.deepEqual(await store.getObservation(first.id), first);
   assert.equal((await store.getHistory(did)).length, 3);
+  const tombstone = await plc.signOperation(
+    {
+      type: "plc_tombstone",
+      prev: second.snapshot.headCid,
+    },
+    destination,
+  );
+  const final = await validateAuditObservation(
+    did,
+    [genesis, await envelope(replacement), await envelope(tombstone)],
+    null,
+    "https://plc.example.com",
+  );
+  await store.recordObservation(final);
+  assert.deepEqual(
+    (await store.getByDid(did)).keys,
+    inventory.keys.slice(0, keys.length),
+  );
+  assert.equal((await store.getByDid(did)).observation.tombstone, true);
+  await store.recordObservation(first);
+  assert.equal((await store.getByDid(did)).observation.eventId, final.id);
 });
 
 test("observed and nullified PLC history accepts non-ATProto facts without relaxing issuance", async (t) => {
