@@ -1,8 +1,15 @@
 import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { accountEmailSchema } from "../../accounts/input-schema.js";
 import { ChangedFlowIntentError } from "../../http/browser-flow.mjs";
+import { matchesAuthorizationHint } from "../../accounts/rules.js";
 import { page } from "../../ui/html.mjs";
 const RESEND_COOLDOWN = 5_000;
+const loginHints = (flow) =>
+  [flow.accountHint, flow.parameters?.login_hint].filter(
+    (hint) => hint != null,
+  );
+const matchesLoginHint = (flow, account) =>
+  matchesAuthorizationHint(account, ...loginHints(flow));
 export function mountEmailLogin({
   app,
   db,
@@ -114,7 +121,17 @@ export function mountEmailLogin({
     "/login",
     guarded(async (req, res) => {
       const browser = await loadBrowser(req, res);
-      const flow = await newFlow(browser);
+      const requestedDid = req.query?.did;
+      if (
+        requestedDid !== undefined &&
+        (typeof requestedDid !== "string" ||
+          requestedDid.length > 255 ||
+          !requestedDid.startsWith("did:"))
+      )
+        throw new InvalidRequestError("Invalid requested account for sign-in");
+      const flow = await newFlow(browser, {
+        ...(requestedDid ? { accountHint: requestedDid } : {}),
+      });
       page(res, "Sign in", loginForm(flow, browser));
     }),
   );
@@ -166,19 +183,48 @@ export function mountEmailLogin({
           throw new InvalidRequestError("Email verification did not complete");
         let resolution;
         let verifiedFlow;
+        let selectionAccounts;
+        let hintMismatch = false;
         await db.transact(async () => {
           const current = await readCurrentIntent(flow, browser);
           resolution = await getAccountSecurity()?.assertLoginEmail(identity);
           if (resolution?.kind === "selection-required") {
+            selectionAccounts = resolution.accounts.filter((account) =>
+              matchesLoginHint(current, account),
+            );
+            if (loginHints(current).length > 0 && selectionAccounts.length === 0) {
+              hintMismatch = true;
+              return;
+            }
             current.authEmail = identity.email.toLowerCase();
             current.authUserId = identity.userId;
             await save(current);
             verifiedFlow = current;
+          } else if (
+            resolution?.kind === "single" &&
+            !matchesLoginHint(current, resolution.account)
+          ) {
+            hintMismatch = true;
+          } else if (
+            resolution?.kind === "unbound" &&
+            loginHints(current).some(
+              (hint) => typeof hint === "string" && hint.startsWith("did:"),
+            )
+          ) {
+            hintMismatch = true;
           }
         });
         // Rotate the provider's browser session after successful identity verification.
         const rotated = await loadBrowser(req, res, true);
         const verifiedEmail = identity.email.toLowerCase();
+        if (hintMismatch)
+          return pageForFlow(
+            res,
+            "Account not linked",
+            '<p role="alert">Your verified email is not linked to the requested account. Use the email associated with that account.</p>',
+            flow,
+            403,
+          );
         if (resolution?.kind === "account-requires-repair")
           return pageForFlow(
             res,
@@ -214,7 +260,7 @@ export function mountEmailLogin({
             forms.accountSelectionForm(
               verifiedFlow,
               rotated,
-              resolution.accounts,
+              selectionAccounts,
             ),
             verifiedFlow,
           );
@@ -265,7 +311,13 @@ export function mountEmailLogin({
       return pageForFlow(
         res,
         "Choose an account",
-        forms.accountSelectionForm(flow, browser, resolution.accounts),
+        forms.accountSelectionForm(
+          flow,
+          browser,
+          resolution.accounts.filter((account) =>
+            matchesLoginHint(flow, account),
+          ),
+        ),
         flow,
       );
     }),
@@ -290,8 +342,11 @@ export function mountEmailLogin({
           );
         const resolution =
           await getAccountSecurity()?.assertLoginEmail(identity);
-        const accounts = linkedAccounts(resolution);
-        selected = accounts.find((account) => account.did === selectedDid);
+        selected = linkedAccounts(resolution).find(
+          (account) =>
+            account.did === selectedDid &&
+            matchesLoginHint(current, account),
+        );
         if (!selected)
           throw new InvalidRequestError(
             "The selected account is not linked to this verified identity",

@@ -1,6 +1,7 @@
 import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { escapeHtml } from "../../ui/html.mjs";
 import { hidden } from "../../ui/forms.mjs";
+import { matchesAuthorizationHint } from "../../accounts/rules.js";
 export function createConsent({ db, provider, stores, flows, accountAccess }) {
   const { fields, save, readCurrentIntent, pageForFlow } = flows;
   const chooseAnotherAccountForm = (flow, browser) =>
@@ -31,6 +32,16 @@ export function createConsent({ db, provider, stores, flows, accountAccess }) {
         identity,
         row.did,
       );
+      if (
+        !matchesAuthorizationHint(
+          account,
+          current.accountHint,
+          current.parameters?.login_hint,
+        )
+      )
+        throw new InvalidRequestError(
+          "Sign in to the account requested by this application",
+        );
       current.authEmail = identity.email.toLowerCase();
       if (account.status === "active") {
         await provider.accountManager.upsertDeviceAccount(

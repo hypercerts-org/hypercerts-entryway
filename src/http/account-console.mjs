@@ -102,6 +102,13 @@ export function createAccountConsole({
       canSwitchAccount = resolution.kind === "selection-required";
     }
     if (account.status === "deleted") return noAccount(res);
+    const deviceAccount = (
+      await oauth.provider.accountManager.listDeviceAccounts(browser.deviceId)
+    ).find(({ account: device }) => device.did === account.did);
+    if (!deviceAccount || oauth.provider.checkLoginRequired(deviceAccount)) {
+      res.redirect(303, `/login?did=${encodeURIComponent(account.did)}`);
+      return null;
+    }
     res.locals.accountUrl = accountUrl(account.did);
     return {
       session,

@@ -72,7 +72,10 @@ test('forgetting one owned OAuth device and signing out require new identity pro
     await page.goto(`${config.issuer}/account`)
     await page.locator('#sessions li').filter({ hasText: 'This device' })
       .getByRole('button', { name: 'Forget OAuth device' }).click()
-    await expect(page.locator('#sessions')).toContainText('No remembered OAuth devices.')
+    await expect(page.getByRole('heading', { name: 'Sign in', exact: true })).toBeVisible()
+    expect(new URL(page.url()).searchParams.get('did')).toBe(identity.did)
+    await signInAccount(page, identity)
+    await expect(page.locator('#sessions li').filter({ hasText: 'This device' })).toBeVisible()
     await page.goto(browserUrl)
     await expect(page.locator('#verified-did')).toHaveText(identity.did)
     await page.getByRole('button', { name: 'Refresh authorization' }).click()
@@ -81,8 +84,12 @@ test('forgetting one owned OAuth device and signing out require new identity pro
     await page.getByLabel('Account prompt').selectOption('select_account')
     await page.getByRole('button', { name: 'Start another authorization' }).click()
     await expect(page.getByRole('heading', { name: 'Sign in to authorize' })).toBeVisible()
-    await expect(page.locator('form[action="/auth/consent"]')).toHaveCount(0)
-    await completeAuthorizationWithEmail(page, identity)
+    const rememberedConsent = page.locator('form[action="/auth/consent"]').filter({
+      has: page.locator(`input[name="did"][value="${identity.did}"]`),
+    })
+    await expect(rememberedConsent).toHaveCount(1)
+    await rememberedConsent.getByRole('button', { name: 'Allow access' }).click()
+    await expect(page.locator('#verified-did')).toHaveText(identity.did)
 
     await page.goto(`${config.issuer}/account`)
     await page.locator('form[action="/auth/logout"]')
@@ -161,7 +168,7 @@ test('revoking an OAuth grant blocks refresh while a previously issued access to
   }
 })
 
-test('foreign-DID device removal is isolated; public-client prompt login permits stale consent (OPEN RISK)', async ({ browser }) => {
+test('foreign-DID device removal is isolated; login_hint constrains public-client authorization', async ({ browser }) => {
   test.setTimeout(240_000)
   const shared = await browser.newContext({ ignoreHTTPSErrors: false })
   const creator = await browser.newContext({ ignoreHTTPSErrors: false })
@@ -192,29 +199,16 @@ test('foreign-DID device removal is isolated; public-client prompt login permits
     expect(parFields.get('prompt')).toBe('login')
     expect(parFields.get('login_hint')).toBe(bob.handle)
     await expect(sharedPage.getByRole('heading', { name: 'Sign in to authorize' })).toBeVisible()
-    const staleAlice = sharedPage.locator('form[action="/auth/consent"]')
+    const aliceConsent = sharedPage.locator('form[action="/auth/consent"]')
       .filter({ has: sharedPage.locator(`input[name="did"][value="${alice.did}"]`) })
-    await expect(staleAlice).toBeVisible()
+    const bobConsent = sharedPage.locator('form[action="/auth/consent"]')
+      .filter({ has: sharedPage.locator(`input[name="did"][value="${bob.did}"]`) })
+    await expect(aliceConsent).toHaveCount(0)
+    await expect(bobConsent).toBeVisible()
     const approval = sharedPage.waitForResponse((response) => response.url() === `${config.issuer}/auth/consent` &&
       response.request().method() === 'POST', { timeout: 15_000 })
-    await staleAlice.getByRole('button', { name: 'Allow access' }).click()
-    const staleApproval = await approval
-    expect(staleApproval.status()).toBe(303)
-    const destination = new URL(staleApproval.headers().location, config.issuer)
-    expect(destination.origin).toBe(browserUrl)
-    expect(destination.pathname).toBe('/callback')
-    expect(new URLSearchParams(destination.hash.slice(1)).has('code')).toBe(true)
-    await expect(sharedPage.locator('#loading-error')).toHaveText(
-      'Error: The authorized account did not match the requested account',
-    )
-    await expect(sharedPage.locator('#post-container')).toBeHidden()
-
-    await sharedPage.goto(browserUrl)
-    await expect(sharedPage.locator('#login-container')).toBeVisible()
-    await sharedPage.getByLabel('Handle', { exact: true }).fill(bob.handle)
-    await sharedPage.getByRole('button', { name: 'Continue' }).click()
-    await expect(sharedPage.getByRole('heading', { name: 'Sign in to authorize' })).toBeVisible()
-    await completeAuthorizationWithEmail(sharedPage, bob)
+    await bobConsent.getByRole('button', { name: 'Allow access' }).click()
+    expect((await approval).status()).toBe(303)
     await expect(sharedPage.locator('#verified-did')).toHaveText(bob.did)
   } finally {
     await shared.close()

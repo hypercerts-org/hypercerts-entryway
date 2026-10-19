@@ -103,18 +103,35 @@ export function mountSignupRoutes({
           "This account setup cannot be acquired through email sign-in",
         );
       const registrationIdentity = savedOwner ?? identity;
+      const input = await registrationInput({
+        db,
+        existing,
+        savedIntent,
+        email: flow.authEmail,
+        body: req.body,
+        registrationIdentity,
+      });
+      const requestedHints = [
+        flow.accountHint,
+        flow.parameters?.login_hint,
+      ].filter((hint) => hint != null);
+      if (
+        requestedHints.some(
+          (hint) =>
+            typeof hint !== "string" ||
+            (hint.startsWith("did:")
+              ? existing?.did !== hint
+              : input.handle !== hint.toLowerCase()),
+        )
+      )
+        throw new HttpError(
+          403,
+          "AccountMismatch",
+          "This sign-in can only create the account requested by the application",
+        );
       let row;
       try {
-        row = await accounts.create(
-          await registrationInput({
-            db,
-            existing,
-            savedIntent,
-            email: flow.authEmail,
-            body: req.body,
-            registrationIdentity,
-          }),
-        );
+        row = await accounts.create(input);
       } catch (error) {
         const pending = await accounts.ownership.pendingExternal(
           `email:${flow.authEmail}`,
