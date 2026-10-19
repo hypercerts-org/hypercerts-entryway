@@ -41,10 +41,12 @@ Account access is resolved only through explicit DID-to-user bindings. The
 schemas retain support for multiple DIDs sharing a primary email claim and one
 Better Auth user binding multiple DIDs; Better Auth email itself remains unique.
 Ordinary account changes do not add a primary claim to an email already claimed
-by another DID; migration/import remains the explicit sharing exception. The
-resolver returns `selection-required` for multiple established bindings, but the
-interactive chooser and joining-PDS association import are not implemented. No
-DID is selected or bound from an email match alone.
+by another DID; migration/import remains the explicit sharing exception. After
+OTP verification, multiple established bindings render an explicit chooser. Its
+browser flow retains the verified user identity, and submission re-reads current
+bindings before continuing only with the selected DID. The chooser does not create
+bindings; joining-PDS association import remains unimplemented. No DID is selected
+or bound from an email match alone.
 
 The table below records current storage, not the full approved target. Internal
 refactoring does not require upgrading existing databases; public account migration

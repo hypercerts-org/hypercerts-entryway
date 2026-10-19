@@ -183,16 +183,15 @@ owned boundaries, feature-internal imports, runtime cycles and impure rule modul
 
 ## 5. Login and application authorization
 
-The sequence shows the target sign-in journey for existing associated accounts,
-not a claim of ePDS parity today.
-The approved sign-in policy verifies email before resolving established DID
-bindings, then requires an explicit choice if more than one is associated. The
-schema supports repeated primary-email claims and multiple DID bindings per
-verified user; the joining-PDS association import and interactive chooser remain
-unimplemented. The resolver returns `selection-required` and does not choose a DID
-from email alone; see [account identity](data-custody.md#1-account-identity-and-ownership).
-Proof freshness and consent remain separate policy decisions. Public and
-confidential clients both need acceptance coverage.
+The sequence shows the implemented phase-one sign-in path for established
+bindings, not complete ePDS parity. Email OTP is verified before bindings are
+resolved; zero or one associated DID retains the existing path, while multiple
+bindings render an explicit chooser. The joining-PDS association import remains
+unimplemented, so an association not present as an Entryway binding is not
+eligible for sign-in. The resolver returns `selection-required` and never chooses
+from an email match alone; see [account identity](data-custody.md#1-account-identity-and-ownership).
+Proof freshness and consent policy remain separate decisions. Public and
+confidential clients still need acceptance coverage.
 
 ```mermaid
 %%{init: {"theme":"base","themeVariables":{"primaryTextColor":"#172B4D","lineColor":"#45556C","actorBkg":"#DBEAFE","actorBorder":"#315582","actorTextColor":"#172B4D","signalColor":"#45556C","signalTextColor":"#172B4D","noteBkgColor":"#FFF1D6","noteTextColor":"#172B4D","noteBorderColor":"#8A5A2B","activationBkgColor":"#EDE9FE","activationBorderColor":"#65538A","fontFamily":"Arial"}}}%%
@@ -230,14 +229,17 @@ sequenceDiagram
 
 The Better Auth session proves the email identity; it does not itself select or
 authenticate a DID. Only established bindings are eligible for account choice;
-matching an email cannot add authority over an unbound DID. The current resolver
-returns `selection-required` when multiple bindings are found, but no chooser or
-continuation path is implemented. Security-revocation flows invalidate all Better
+matching an email cannot add authority over an unbound DID. The email chooser is
+distinct from the existing OAuth device-account picker: it appears only after OTP
+verification and binds the pending flow to that verified browser identity.
+Submission re-reads current bindings, requires a bound DID, and limits consent to
+the chosen DID while preserving the original PAR, client and requested scope. The
+existing consent continuation remains in place; this change adds no freshness
+threshold or consent-skip policy. Security-revocation flows invalidate all Better
 Auth sessions for a DID's shared user. Ordinary verified email changes instead
 preserve sessions on the previous user while atomically moving only the selected
 DID binding to the verified destination user; sessions are not migrated to that
-user. OAuth and account data remain DID-scoped. Preserve the original client
-request and authorization context through verification and any future choice.
+user. OAuth and account data remain DID-scoped.
 
 Confidential clients also supply client authentication where required.
 The account page distinguishes ending a browser session, forgetting device membership,
@@ -315,8 +317,8 @@ Reuse provider wiring, OTP integration, atomic account/DID invariants, indexed d
 PDS call sequences, journals, branding, mail ports and regression scenarios.
 Keep shared contracts narrow while features own their operation bodies.
 
-Still required: joining-PDS association import and post-verification chooser,
-ePDS consent/freshness parity, complete XRPC adapters, production email delivery,
+Still required: joining-PDS association import, ePDS consent/freshness parity,
+complete XRPC adapters, production email delivery,
 operator onboarding and fleet lifecycle, implementation of the approved custody
 model and public-protocol migration. The [Drizzle database boundary](database.md) provides asynchronous authority
 transactions. [Shared operation ownership](shared-operations.md) implements durable
