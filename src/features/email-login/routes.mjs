@@ -269,12 +269,7 @@ export function mountEmailLogin({
           );
         const resolution =
           await getAccountSecurity()?.assertLoginEmail(identity);
-        const accounts =
-          resolution?.kind === "single"
-            ? [resolution.account]
-            : resolution?.kind === "selection-required"
-              ? resolution.accounts
-              : [];
+        const accounts = linkedAccounts(resolution);
         selected = accounts.find((account) => account.did === selectedDid);
         if (!selected)
           throw new InvalidRequestError(
@@ -298,4 +293,10 @@ export function mountEmailLogin({
       res.redirect(303, "/login");
     }),
   );
+}
+
+function linkedAccounts(resolution) {
+  if (resolution?.kind === "single") return [resolution.account];
+  if (resolution?.kind === "selection-required") return resolution.accounts;
+  return [];
 }

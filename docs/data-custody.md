@@ -48,6 +48,15 @@ bindings before continuing only with the selected DID. The chooser does not crea
 bindings; joining-PDS association import remains unimplemented. No DID is selected
 or bound from an email match alone.
 
+The account console follows the same authority rule. A single binding keeps the
+direct `/account` path; multiple bindings require an explicit choice before
+settings are shown. The chosen DID travels in `/account?did=...` and each action
+form. Both page reads and actions recheck the current verified user-to-DID
+binding; stale, foreign or revoked selections fail rather than switching to a
+remaining sibling. A stateless form proof binds each POST to its Better Auth
+session and selected DID. It is not persistent selection state and adds no
+storage schema.
+
 The table below records current storage, not the full approved target. Internal
 refactoring does not require upgrading existing databases; public account migration
 and existing ePDS deployment conversion remain separate requirements.
