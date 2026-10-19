@@ -165,6 +165,7 @@ export function mountAuthorizationRoutes({
       if (
         !session ||
         provider.checkLoginRequired(session) ||
+        ((flow.authEmail || flow.authDid) && flow.authDid !== did) ||
         (request.parameters.prompt === "login" && flow.authDid !== did)
       )
         throw new InvalidRequestError("Sign in to this account first");

@@ -48,10 +48,11 @@ Better Auth user binding multiple DIDs; Better Auth email itself remains unique.
 Ordinary account changes do not add a primary claim to an email already claimed
 by another DID. Existing migration/import adapters still permit sharing; the
 accepted design restricts that exception to whole-PDS association import, not
-individual incoming arrivals. The resolver returns `selection-required` for
-multiple established bindings, but the
-interactive chooser and joining-PDS association import are not implemented. No
-DID is selected or bound from an email match alone.
+individual incoming arrivals. After OTP verification, multiple established
+bindings render an explicit chooser. Its browser flow retains the verified user
+identity, and submission re-reads current bindings before continuing only with
+the selected DID. The chooser does not create bindings; joining-PDS association
+import remains unimplemented. No DID is selected or bound from an email match alone.
 
 The table below records current storage, not the full approved target. Internal
 refactoring does not require upgrading existing databases; public account migration
