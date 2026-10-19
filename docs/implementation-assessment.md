@@ -46,9 +46,10 @@ delivery priorities and approvals belong in the
   Migration can link the imported account to a login without granting access to
   other accounts that share its email.
 
-  The account chooser and importing account-to-login links from a joining PDS are
-  not implemented yet. When several accounts match, the resolver returns
-  `selection-required`. Email-level session revocation remains conservative for a
+  After OTP verification, a login bound to several accounts sees an account
+  chooser; submission re-reads current bindings and continues only with the
+  explicit choice. Importing account-to-login links from a joining PDS is not
+  implemented yet. Email-level session revocation remains conservative for a
   shared user, while OAuth/account data stays DID-scoped. See
   [account identity](data-custody.md#1-account-identity-and-ownership).
 

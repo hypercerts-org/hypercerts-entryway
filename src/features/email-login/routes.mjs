@@ -61,6 +61,7 @@ export function mountEmailLogin({
         flow.lastOtpSentAt = now;
         delete flow.authDid;
         delete flow.authEmail;
+        delete flow.authUserId;
         await save(flow);
         // Verification and outbox queue belong to this reservation. The returned
         // dispatcher performs SMTP only after the outer transaction commits.
@@ -164,9 +165,16 @@ export function mountEmailLogin({
         )
           throw new InvalidRequestError("Email verification did not complete");
         let resolution;
+        let verifiedFlow;
         await db.transact(async () => {
-          await readCurrentIntent(flow, browser);
+          const current = await readCurrentIntent(flow, browser);
           resolution = await getAccountSecurity()?.assertLoginEmail(identity);
+          if (resolution?.kind === "selection-required") {
+            current.authEmail = identity.email.toLowerCase();
+            current.authUserId = identity.userId;
+            await save(current);
+            verifiedFlow = current;
+          }
         });
         // Rotate the provider's browser session after successful identity verification.
         const rotated = await loadBrowser(req, res, true);
@@ -198,14 +206,19 @@ export function mountEmailLogin({
           response.commitCookies(res);
           return pageForFlow(res, "Create your account", body, current);
         }
-        if (resolution.kind === "selection-required")
+        if (resolution.kind === "selection-required") {
+          response.commitCookies(res);
           return pageForFlow(
             res,
-            "Account selection required",
-            "<p role=\"alert\">This verified identity is linked to multiple accounts. Account selection is not available yet.</p>",
-            flow,
-            409,
+            "Choose an account",
+            forms.accountSelectionForm(
+              verifiedFlow,
+              rotated,
+              resolution.accounts,
+            ),
+            verifiedFlow,
           );
+        }
         await authenticated(req, res, flow, rotated, resolution.account, {
           identity,
           commitCookies: () => response.commitCookies(res),
@@ -220,6 +233,58 @@ export function mountEmailLogin({
           400,
         );
       }
+    }),
+  );
+  app.post(
+    "/auth/select",
+    form,
+    guarded(async (req, res) => {
+      const { flow, browser } = await getFlow(req, res);
+      const session = await authentication.requireSession(req);
+      if (
+        !flow.authEmail ||
+        !flow.authUserId ||
+        session?.emailVerified !== true ||
+        session.userId !== flow.authUserId ||
+        session.email.toLowerCase() !== flow.authEmail
+      )
+        throw new InvalidRequestError("Verified sign-in session expired");
+      const identity = {
+        userId: session.userId,
+        email: session.email.toLowerCase(),
+        emailVerified: true,
+      };
+      const selectedDid = String(req.body.did ?? "");
+      let current;
+      let selected;
+      await db.transact(async () => {
+        current = await readCurrentIntent(flow, browser);
+        if (
+          current.authEmail !== identity.email ||
+          current.authUserId !== identity.userId ||
+          current.authDid
+        )
+          throw new InvalidRequestError(
+            "This account choice is no longer valid",
+          );
+        const resolution =
+          await getAccountSecurity()?.assertLoginEmail(identity);
+        const accounts =
+          resolution?.kind === "single"
+            ? [resolution.account]
+            : resolution?.kind === "selection-required"
+              ? resolution.accounts
+              : [];
+        selected = accounts.find((account) => account.did === selectedDid);
+        if (!selected)
+          throw new InvalidRequestError(
+            "The selected account is not linked to this verified identity",
+          );
+      });
+      await authenticated(req, res, current, browser, selected, {
+        identity,
+        requireUnselected: true,
+      });
     }),
   );
   app.post(

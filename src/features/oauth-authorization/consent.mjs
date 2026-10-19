@@ -1,3 +1,4 @@
+import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { escapeHtml } from "../../ui/html.mjs";
 import { hidden } from "../../ui/forms.mjs";
 export function createConsent({ db, provider, stores, flows, accountAccess }) {
@@ -10,7 +11,7 @@ export function createConsent({ db, provider, stores, flows, accountAccess }) {
     flow,
     browser,
     row,
-    { identity, commitCookies = () => {} } = {},
+    { identity, commitCookies = () => {}, requireUnselected = false } = {},
   ) => {
     const displayAccount =
       row.status === "active" && flow.requestUri
@@ -18,9 +19,22 @@ export function createConsent({ db, provider, stores, flows, accountAccess }) {
         : null;
     const authorized = await db.transact(async () => {
       const current = await readCurrentIntent(flow, browser);
-      const account = await accountAccess.requireBoundAccount(identity, row.did);
+      if (
+        requireUnselected &&
+        (current.authDid ||
+          current.authEmail !== identity.email.toLowerCase() ||
+          current.authUserId !== identity.userId)
+      )
+        throw new InvalidRequestError(
+          "This account choice has already been used",
+        );
+      const account = await accountAccess.requireBoundAccount(
+        identity,
+        row.did,
+      );
       current.authEmail = identity.email.toLowerCase();
       if (account.status === "active") {
+        if (requireUnselected) delete current.authUserId;
         await provider.accountManager.upsertDeviceAccount(
           browser.deviceId,
           account.did,
