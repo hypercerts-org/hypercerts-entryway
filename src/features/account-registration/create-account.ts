@@ -257,8 +257,8 @@ export function createRegistration({
       await db.transact(async () => {
         await storage.insertAccount(row!);
         await ownership.bindResource(row!.did);
-        // The exact signed row and its unsigned authorization history commit
-        // before PDS dispatch. Resume reuses both, without promoting authority.
+        // Persist genesis and its authorization history before dispatch so a
+        // retry keeps the same DID and signed operation.
         await custody.recordSigned({
           id: `${operationId}:genesis`,
           did,
@@ -394,8 +394,8 @@ export function createRegistration({
         },
       },
     );
-    // Remote creation is acknowledged. Only a classified evidence transport
-    // outage is ancillary; validation, custody conflicts and fence loss still fail.
+    // After acknowledged creation, only a classified observation outage may
+    // defer evidence refresh; custody conflicts and fence loss still block activation.
     let refreshPending = false;
     try {
       await observeCustody?.(row.did);

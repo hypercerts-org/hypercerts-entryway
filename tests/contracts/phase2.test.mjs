@@ -68,7 +68,7 @@ const call = (name, body, auth, options = {}) =>
   });
 async function signup(label, pdsId = "pds1", extra = {}) {
   const email = `api-${unique}-${label}@example.com`;
-  const handle = `api-${unique}-${label}.entryway.atmosbox.test`;
+  const handle = `api-${randomBytes(6).toString("hex")}.entryway.atmosbox.test`;
   await request(config.issuer, "/signup/request-code", { body: { email } });
   const session = await call("server.createAccount", {
     email,
@@ -101,7 +101,7 @@ integration(
   "invalid signup password is rejected before proof consumption or account provisioning",
   async () => {
     const email = `api-${unique}-password-policy@example.com`;
-    const handle = `api-${unique}-password-policy.entryway.atmosbox.test`;
+    const handle = `api-${randomBytes(6).toString("hex")}.entryway.atmosbox.test`;
     await request(config.issuer, "/signup/request-code", { body: { email } });
     const verificationCode = mail(email).otp;
     const rejected = await call(

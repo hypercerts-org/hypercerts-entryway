@@ -69,53 +69,140 @@ export function createHandleChange({
   plcSigner,
   ownership,
 }: Context) {
+  const loadEligibleChange = async (did: string, handle: string) => {
+    await assertNoMigration(did);
+    const row = await get(did);
+    if (row?.status !== "active")
+      throw new HttpError(403, "AccountUnavailable", "Account is unavailable");
+    const existingOp = (await db.get(
+      "operations",
+      `handle:${did}`,
+    )) as HandleOperation | null;
+    if (
+      existingOp &&
+      existingOp.phase !== "complete" &&
+      existingOp.handle !== handle
+    )
+      throw new HttpError(
+        409,
+        "OperationPending",
+        "Reconcile the pending handle change before requesting another",
+      );
+    await validateHandle(handle, did);
+    return { row, existingOp };
+  };
+  const completePdsUpdate = async (row: AccountRow, op: HandleOperation) => {
+    const { did, handle } = op;
+    await admin(
+      row,
+      "com.atproto.admin.updateAccountHandle",
+      { did, handle },
+      { previousHandle: op.previousHandle },
+    );
+    // Keep the prior handle reserved until the PDS acknowledges the new one.
+    await db.transact(async () => {
+      await storage.releaseHandle(op.previousHandle, did);
+      await journal({ ...op, phase: "complete" });
+    });
+  };
+  const prepareSignedIntent = async (row: AccountRow, op: HandleOperation) => {
+    const { did, handle } = op;
+    // Reuse exact signed bytes on resume rather than authorizing a different CID.
+    if (!op.plcOp) {
+      await observeCustody?.(did);
+      op.plcOp = await plcSigner.signHandleUpdate(
+        await plcClient.getLastOp(did),
+        handle,
+        async (signed, facts, cid) => {
+          // Persist signed intent, history and checkpoint before publication so
+          // interruption cannot leave a released signature without its journal.
+          await db.transact(async () => {
+            const fresh = await get(did);
+            if (fresh?.status !== "active" || fresh.handle !== row.handle)
+              throw new HttpError(
+                409,
+                "AccountUnavailable",
+                "Handle authority changed",
+              );
+            await assertNoMigration(did);
+            await custody.recordSigned({
+              id: crypto.randomUUID(),
+              did,
+              cid,
+              operation: facts,
+              kind: "signed",
+              operationId: ownership.currentClaim!.operationId,
+              provenance: "entryway-authorized",
+              at: new Date().toISOString(),
+            });
+            await journal({
+              ...op,
+              plcOp: structuredClone(signed),
+              plcOpCid: cid,
+            });
+            await ownership.checkpoint("handle-signed", {
+              did,
+              handle,
+              cid,
+            });
+          });
+        },
+      );
+      op.plcOpCid = (await cidForCbor(op.plcOp)).toString();
+    }
+    await journal(op);
+    return { ...op, plcOp: op.plcOp };
+  };
+  const publishSignedIntent = async (
+    op: HandleOperation & { plcOp: Operation },
+  ) => {
+    const { did } = op;
+    const signed = op.plcOp;
+    await ownership.dispatch(
+      {
+        step: "publish-handle",
+        target: config.plcUrl,
+        method: "plc.sendOperation",
+        intent: { did, operation: op.plcOp },
+      },
+      {
+        ...noExternalResult,
+        send: () => plcClient.sendOperation(did, signed),
+        observe: async () => {
+          const head = (
+            await cidForCbor(await plcClient.getLastOp(did))
+          ).toString();
+          let state: "applied" | "unapplied" | "diverged" = "diverged";
+          if (head === op.plcOpCid) state = "applied";
+          else if (head === signed.prev) state = "unapplied";
+          return { result: undefined, state };
+        },
+      },
+    );
+  };
+  const commitLocalHandle = async (row: AccountRow, op: HandleOperation) => {
+    const { did, handle } = op;
+    await observeCustody?.(did);
+    // Commit authority with its pending callback so recovery can finish PDS sync.
+    row.handle = handle;
+    await db.transact(async () => {
+      await save(row);
+      await journal({ ...op, phase: "pds-pending" });
+    });
+  };
   const updateHandle = (did: string, handle: string) =>
     serialized(
       did,
       async () => {
-        await assertNoMigration(did);
-        const row = await get(did);
-        if (row?.status !== "active")
-          throw new HttpError(
-            403,
-            "AccountUnavailable",
-            "Account is unavailable",
-          );
-        const existingOp = (await db.get(
-          "operations",
-          `handle:${did}`,
-        )) as HandleOperation | null;
-        if (
-          existingOp &&
-          existingOp.phase !== "complete" &&
-          existingOp.handle !== handle
-        )
-          throw new HttpError(
-            409,
-            "OperationPending",
-            "Reconcile the pending handle change before requesting another",
-          );
-        await validateHandle(handle, did);
+        const { row, existingOp } = await loadEligibleChange(did, handle);
         if (row.handle === handle) {
           const pendingOp = (await db.get(
             "operations",
             `handle:${did}`,
           )) as HandleOperation | null;
-          if (pendingOp?.phase === "pds-pending") {
-            await admin(
-              row,
-              "com.atproto.admin.updateAccountHandle",
-              {
-                did,
-                handle,
-              },
-              { previousHandle: pendingOp.previousHandle },
-            );
-            await db.transact(async () => {
-              await storage.releaseHandle(pendingOp.previousHandle, did);
-              await journal({ ...pendingOp, phase: "complete" });
-            });
-          }
+          // Local authority can already match while the PDS callback is pending.
+          if (pendingOp?.phase === "pds-pending")
+            await completePdsUpdate(row, pendingOp);
           return row;
         }
         await claimHandle(handle, did);
@@ -131,93 +218,10 @@ export function createHandleChange({
                 phase: "plc-pending",
                 at: new Date(),
               };
-        if (!op.plcOp) {
-          await observeCustody?.(did);
-          op.plcOp = await plcSigner.signHandleUpdate(
-            await plcClient.getLastOp(did),
-            handle,
-            async (signed, facts, cid) => {
-              // Internal handle authorization reuses admission, not a new email proof.
-              // Exact signed bytes and custody history commit together. A crash
-              // after this callback resumes the journal, never another signature.
-              await db.transact(async () => {
-                const fresh = await get(did);
-                if (fresh?.status !== "active" || fresh.handle !== row.handle)
-                  throw new HttpError(
-                    409,
-                    "AccountUnavailable",
-                    "Handle authority changed",
-                  );
-                await assertNoMigration(did);
-                await custody.recordSigned({
-                  id: crypto.randomUUID(),
-                  did,
-                  cid,
-                  operation: facts,
-                  kind: "signed",
-                  operationId: ownership.currentClaim!.operationId,
-                  provenance: "entryway-authorized",
-                  at: new Date().toISOString(),
-                });
-                await journal({
-                  ...op,
-                  plcOp: structuredClone(signed),
-                  plcOpCid: cid,
-                });
-                await ownership.checkpoint("handle-signed", {
-                  did,
-                  handle,
-                  cid,
-                });
-              });
-            },
-          );
-          op.plcOpCid = (await cidForCbor(op.plcOp)).toString();
-        }
-        await journal(op);
-        const signed = op.plcOp;
-        await ownership.dispatch(
-          {
-            step: "publish-handle",
-            target: config.plcUrl,
-            method: "plc.sendOperation",
-            intent: { did, operation: op.plcOp },
-          },
-          {
-            ...noExternalResult,
-            send: () => plcClient.sendOperation(did, signed),
-            observe: async () => {
-              const head = (
-                await cidForCbor(await plcClient.getLastOp(did))
-              ).toString();
-              let state: "applied" | "unapplied" | "diverged" = "diverged";
-              if (head === op.plcOpCid) state = "applied";
-              else if (head === signed.prev) state = "unapplied";
-              return { result: undefined, state };
-            },
-          },
-        );
-        await observeCustody?.(did);
-        // Persist authority before callback. A failed callback remains explicitly
-        // journaled and may be retried by reconciliation.
-        row.handle = handle;
-        await db.transact(async () => {
-          await save(row);
-          await journal({ ...op, phase: "pds-pending" });
-        });
-        await admin(
-          row,
-          "com.atproto.admin.updateAccountHandle",
-          {
-            did,
-            handle,
-          },
-          { previousHandle: op.previousHandle },
-        );
-        await db.transact(async () => {
-          await storage.releaseHandle(op.previousHandle, did);
-          await journal({ ...op, phase: "complete" });
-        });
+        const signed = await prepareSignedIntent(row, op);
+        await publishSignedIntent(signed);
+        await commitLocalHandle(row, op);
+        await completePdsUpdate(row, op);
         return row;
       },
       { kind: "handle", request: { handle } },
