@@ -190,8 +190,14 @@ bindings render an explicit chooser. The joining-PDS association import remains
 unimplemented, so an association not present as an Entryway binding is not
 eligible for sign-in. The resolver returns `selection-required` and never chooses
 from an email match alone; see [account identity](data-custody.md#1-account-identity-and-ownership).
-Proof freshness and consent policy remain separate decisions. Public and
-confidential clients still need acceptance coverage.
+A remembered device is fresh for seven days; stale device authentication returns
+to email OTP for the selected DID. The authentication check revalidates the live
+DID binding before refreshing that DID's device membership. Account-console
+sensitive actions retain their separate ten-minute Better Auth session check.
+This adds no consent bypass or new client-trust policy. Configured local public
+and confidential client flows have verified hint acceptance, seven-day
+freshness and consent behavior. Full ePDS production consent/freshness parity
+remains outstanding.
 
 ```mermaid
 %%{init: {"theme":"base","themeVariables":{"primaryTextColor":"#172B4D","lineColor":"#45556C","actorBkg":"#DBEAFE","actorBorder":"#315582","actorTextColor":"#172B4D","signalColor":"#45556C","signalTextColor":"#172B4D","noteBkgColor":"#FFF1D6","noteTextColor":"#172B4D","noteBorderColor":"#8A5A2B","activationBkgColor":"#EDE9FE","activationBorderColor":"#65538A","fontFamily":"Arial"}}}%%
@@ -236,9 +242,10 @@ Submission re-reads current bindings, requires a bound DID, and limits consent t
 the chosen DID while preserving the original PAR, client and requested scope.
 Until consent is approved or denied, the same verified session may choose a
 different bound DID from the consent page; consent then applies only to the
-latest choice. The
-existing consent continuation remains in place; this change adds no freshness
-threshold or consent-skip policy. Security-revocation flows invalidate all Better
+latest choice. Stale selected accounts re-enter the existing visible email-OTP flow. The
+provider request's `login_hint` and any selected-account hint both remain binding
+across authentication and flow restart; current account binding is checked before
+device membership is refreshed. Existing consent behavior remains unchanged. Security-revocation flows invalidate all Better
 Auth sessions for a DID's shared user. Ordinary verified email changes instead
 preserve sessions on the previous user while atomically moving only the selected
 DID binding to the verified destination user; sessions are not migrated to that
@@ -332,8 +339,9 @@ Reuse provider wiring, OTP integration, atomic account/DID invariants, indexed d
 PDS call sequences, journals, branding, mail ports and regression scenarios.
 Keep shared contracts narrow while features own their operation bodies.
 
-Still required: joining-PDS association import, ePDS consent/freshness parity,
-complete XRPC adapters, production email delivery,
+Still required: joining-PDS association import, full ePDS production
+consent/freshness parity, complete XRPC adapters,
+production email delivery,
 operator onboarding and fleet lifecycle, implementation of the approved custody
 model and public-protocol migration. The [Drizzle database boundary](database.md) provides asynchronous authority
 transactions. [Shared operation ownership](shared-operations.md) implements durable

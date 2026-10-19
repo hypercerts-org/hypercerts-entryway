@@ -43,10 +43,13 @@ selected binding is re-read before the original authorization continues. The
 joining-PDS association import remains unimplemented; the resolver returns
 `selection-required` and no DID is selected by email alone.
 
-Preserved MJS remains outside strict TypeScript coverage. Complete ePDS consent and
-freshness parity, production email delivery across the XRPC surface, fleet
-placement/drain/retirement, repeatable migration history and public-protocol
-migration still require work. Valid empty repositories and actual create-then-
+Preserved MJS remains outside strict TypeScript coverage. Remembered OAuth device
+authentication now requires email OTP after seven days and keeps the selected
+account and OAuth `login_hint` binding through flow restart. Configured local
+public and confidential client flows have verified hint, freshness and consent
+behavior. Full ePDS production consent/freshness parity, production email
+delivery across the XRPC surface, fleet placement/drain/retirement, repeatable
+migration history and public-protocol migration still require work. Valid empty repositories and actual create-then-
 deactivate/PLC ordering must be covered by the complete migration contract.
 See [implementation limits](implementation-assessment.md#known-limits) for unresolved
 moderation, credential lifetime and production qualification.
