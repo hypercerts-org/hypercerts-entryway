@@ -13,6 +13,7 @@ export default defineConfig({
         "experience-browser.spec.mjs",
         "browser-oauth.spec.mjs",
         "oauth-lifecycle.spec.mjs",
+        "account-chooser.spec.mjs",
       ],
   fullyParallel: false,
   workers: 1,
