@@ -118,19 +118,6 @@ export function createHandleChange({
           }
           return row;
         }
-        const domain = config.handleDomains.find((suffix) =>
-          handle.endsWith(suffix),
-        );
-        if (!domain)
-          throw new HttpError(400, "InvalidHandle", "Choose a hosted handle");
-        const label = handle.slice(0, -domain.length);
-        // Match the pinned stock PDS service-label limits before publishing PLC changes.
-        if (label.length < 3 || label.length > 18)
-          throw new HttpError(
-            400,
-            "InvalidHandle",
-            "Hosted handle labels must contain 3 to 18 characters",
-          );
         await claimHandle(handle, did);
         const op: HandleOperation =
           existingOp?.phase === "plc-pending"

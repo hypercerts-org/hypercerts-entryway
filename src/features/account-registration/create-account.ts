@@ -7,6 +7,10 @@ import type { CustodyInventoryTransactor } from "../../database/custody.port.js"
 import * as plc from "@did-plc/lib";
 import { genesisRotationKeys } from "../../plc/policy.js";
 import { HttpError } from "../../http/http-error.mjs";
+import {
+  registrationInputSchema,
+  type RegistrationInput,
+} from "../../accounts/input-schema.js";
 import { xrpc } from "../../pds/client.mjs";
 
 import type { AuthorityDatabase } from "../../database/connection.js";
@@ -14,13 +18,6 @@ import type { AccountRow } from "../../accounts/types.js";
 import type { AccountTransactor } from "../../database/accounts.port.js";
 import type { createOperationOwnership } from "../../accounts/operation-ownership.js";
 import type { Secp256k1MigrationPlcSigner } from "../../plc/signing.js";
-interface RegistrationInput {
-  email: string;
-  handle: string;
-  pdsId: string;
-  recoveryKey?: string | null | undefined;
-  inviteCode?: string | undefined;
-}
 interface ProvisionPolicy {
   reserve(inviteCode: string | undefined, email: string): Promise<void>;
   complete(row: AccountRow): Promise<void>;
@@ -69,15 +66,6 @@ function notFound(error: unknown): boolean {
     error.status === 404
   );
 }
-// Bounded, linear validation preserves the existing simple email policy.
-function validEmail(email: string): boolean {
-  if (email.length > 254 || /\s/.test(email)) return false;
-  const at = email.indexOf("@");
-  if (at <= 0 || at !== email.lastIndexOf("@")) return false;
-  const domain = email.slice(at + 1);
-  const dot = domain.lastIndexOf(".");
-  return dot > 0 && dot < domain.length - 1;
-}
 /** Assemble DID provisioning using custody storage on the same database/fence.
  * Persist exact genesis before PDS dispatch and resume it after interruption.
  * Only classified evidence outages permit activation with a durable refresh
@@ -110,16 +98,23 @@ export function createRegistration({
   const setProvisionPolicy = (policy: ProvisionPolicy) => {
     provisionPolicy = policy;
   };
-  const create = async ({
-    email,
-    handle,
-    pdsId,
-    recoveryKey,
-    inviteCode,
-  }: RegistrationInput) => {
-    email = String(email).trim().toLowerCase();
-    if (!validEmail(email))
-      throw new HttpError(400, "InvalidEmail", "Provide a valid email address");
+  const create = async (value: unknown) => {
+    const input = registrationInputSchema.safeParse(value);
+    if (!input.success) {
+      const field = input.error.issues[0]?.path[0];
+      const [code, message] =
+        field === "handle"
+          ? ["InvalidHandle", "Invalid handle"]
+          : field === "pdsId"
+            ? ["InvalidPds", "Unknown PDS"]
+            : field === "recoveryKey"
+              ? ["InvalidRecoveryKey", "Provide a valid PLC recovery did:key"]
+              : field === "inviteCode"
+                ? ["InvalidInviteCode", "Invite code is invalid"]
+                : ["InvalidEmail", "Provide a valid email address"];
+      throw new HttpError(400, code, message);
+    }
+    const { email, handle, pdsId, recoveryKey, inviteCode } = input.data;
     if (recoveryKey) {
       try {
         await plc.assureValidOp({

@@ -25,6 +25,164 @@ test("registration rejects malformed and oversized email before external work", 
   assert.equal(f.calls.length, 0);
 });
 
+test("registration normalizes accepted email and preserves absent and null recovery keys", async (t) => {
+  for (const recoveryKey of [undefined, null]) {
+    await t.test(`recovery key ${recoveryKey}`, async (t) => {
+      const f = await fixture(t);
+      const row = await f.accounts.create({
+        ...alice,
+        email: "  ALICE@Example.COM  ",
+        recoveryKey,
+      });
+      assert.equal(row.email, "alice@example.com");
+      assert.equal(row.recoveryKey ?? null, null);
+    });
+  }
+});
+
+test("empty recovery key retains InvalidPlcOperation semantics without remote mutation", async (t) => {
+  const f = await fixture(t);
+  await assert.rejects(f.accounts.create({ ...alice, recoveryKey: "" }), {
+    code: "InvalidPlcOperation",
+  });
+  assert.equal(f.calls.length, 0);
+});
+
+test("registration maps malformed fields before signing or PDS mutation", async (t) => {
+  const f = await fixture(t);
+  let signatures = 0;
+  f.accounts.plcSigner.signGenesis = async () => {
+    signatures++;
+    throw Error("Unexpected signing");
+  };
+  for (const [input, error] of [
+    [null, "InvalidEmail"],
+    [{ ...alice, email: null }, "InvalidEmail"],
+    [{ ...alice, email: 123 }, "InvalidEmail"],
+    [{ ...alice, handle: null }, "InvalidHandle"],
+    [{ ...alice, handle: 123 }, "InvalidHandle"],
+    [{ ...alice, pdsId: null }, "InvalidPds"],
+    [{ ...alice, pdsId: "unknown" }, "InvalidPds"],
+    [{ ...alice, recoveryKey: {} }, "InvalidRecoveryKey"],
+    [{ ...alice, recoveryKey: "not-a-key" }, "InvalidRecoveryKey"],
+    [{ ...alice, inviteCode: false }, "InvalidInviteCode"],
+  ]) {
+    await assert.rejects(f.accounts.create(input), { status: 400, error });
+  }
+  assert.equal(signatures, 0);
+  assert.equal(f.calls.length, 0);
+});
+
+test("registration rejects invalid hosted handles before signing or PDS mutation", async (t) => {
+  const f = await fixture(t);
+  f.config.handleDomains.push(".entryway.test", ".test");
+  let signatures = 0;
+  f.accounts.plcSigner.signGenesis = async () => {
+    signatures++;
+    throw Error("Unexpected signing");
+  };
+  for (const handle of [
+    "ab.entryway.atmosbox.test",
+    `${"a".repeat(19)}.entryway.atmosbox.test`,
+    "a.b.entryway.atmosbox.test",
+    "Alice.entryway.atmosbox.test",
+    "-alice.entryway.atmosbox.test",
+    "alice.other.test",
+    "entryway.test",
+    "client.entryway.test",
+    "pds1.entryway.test",
+    "pds2.entryway.test",
+  ]) {
+    await assert.rejects(f.accounts.create({ ...alice, handle }), {
+      status: 400,
+      error: "InvalidHandle",
+    });
+  }
+  assert.equal(signatures, 0);
+  assert.equal(f.calls.length, 0);
+});
+
+test("registration accepts boundary labels and does not reserve labels across domains", async (t) => {
+  const f = await fixture(t);
+  for (const label of [
+    "abc",
+    "a".repeat(18),
+    "entryway",
+    "client",
+    "pds1",
+    "pds2",
+    "admin",
+  ]) {
+    const handle = `${label}.entryway.atmosbox.test`;
+    const row = await f.accounts.create({
+      ...alice,
+      email: `${label}@example.com`,
+      handle,
+    });
+    assert.equal(row.handle, handle);
+  }
+});
+
+test("configured public handles remain an additional registration constraint", async (t) => {
+  const f = await fixture(t);
+  f.config.publicHandles = [alice.handle];
+  await assert.rejects(
+    f.accounts.create({ ...alice, handle: "other.entryway.atmosbox.test" }),
+    { status: 400, error: "InvalidHandle" },
+  );
+  assert.equal(f.calls.length, 0);
+  assert.equal((await f.accounts.create(alice)).handle, alice.handle);
+});
+
+test("shared email schema preserves simple acceptance, bounds and caller coercion", async () => {
+  const { accountEmailSchema, registrationInputSchema } =
+    await import("../../../dist/src/accounts/input-schema.js");
+  const { emailAddress } = await import("../../../dist/src/accounts/input.mjs");
+  for (const email of [
+    " A+Tag@Example.COM ",
+    "a@b..c",
+    `${"a".repeat(250)}@b.c`,
+  ]) {
+    const normalized = email.trim().toLowerCase();
+    assert.equal(accountEmailSchema.parse(email), normalized);
+    assert.equal(emailAddress(email), normalized);
+    assert.equal(
+      registrationInputSchema.parse({ ...alice, email }).email,
+      normalized,
+    );
+  }
+  assert.equal(emailAddress({ toString: () => " A@B.C " }), "a@b.c");
+  assert.equal(
+    registrationInputSchema.parse({
+      ...alice,
+      email: { toString: () => " A@B.C " },
+    }).email,
+    "a@b.c",
+  );
+  for (const email of [
+    undefined,
+    null,
+    false,
+    123,
+    {},
+    [],
+    "a@@b.c",
+    "a@.c",
+    "a@b.",
+    "a b@c.d",
+    `${"a".repeat(251)}@b.c`,
+  ]) {
+    assert.throws(() => emailAddress(email), {
+      status: 400,
+      error: "InvalidEmail",
+    });
+    assert.equal(
+      registrationInputSchema.safeParse({ ...alice, email }).success,
+      false,
+    );
+  }
+});
+
 test("acknowledged registration activates during transient evidence outage and retains refresh pending", async (t) => {
   const f = await fixture(t);
   const read = f.accounts.plcClient.getAuditableLog;
