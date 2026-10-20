@@ -154,6 +154,48 @@ test("registration accepts boundary labels and does not reserve labels across do
   }
 });
 
+for (const domain of [".entryway.atmosbox.test", "entryway.atmosbox.test"]) {
+  test(`registration accepts hosted label boundaries with domain ${domain}`, async (t) => {
+    const f = await fixture(t);
+    f.config.handleDomains = [domain];
+    for (const label of ["abc", "alice", "a".repeat(18)]) {
+      const handle = `${label}.entryway.atmosbox.test`;
+      const row = await f.accounts.create({
+        ...alice,
+        email: `${label}@example.com`,
+        handle,
+      });
+      assert.equal(row.handle, handle);
+    }
+  });
+
+  test(`registration rejects lookalikes and invalid labels with domain ${domain}`, async (t) => {
+    const f = await fixture(t);
+    f.config.handleDomains = [domain];
+    let signatures = 0;
+    f.accounts.plcSigner.signGenesis = async () => {
+      signatures++;
+      throw Error("Unexpected signing");
+    };
+    for (const handle of [
+      "aliceentryway.atmosbox.test",
+      "alice-entryway.atmosbox.test",
+      "entryway.atmosbox.test",
+      "ab.entryway.atmosbox.test",
+      `${"a".repeat(19)}.entryway.atmosbox.test`,
+      "a.b.entryway.atmosbox.test",
+      "alice.entryway.atmosbox.test.other.test",
+    ]) {
+      await assert.rejects(f.accounts.create({ ...alice, handle }), {
+        status: 400,
+        error: "InvalidHandle",
+      });
+    }
+    assert.equal(signatures, 0);
+    assert.equal(f.calls.length, 0);
+  });
+}
+
 test("configured public handles remain an additional registration constraint", async (t) => {
   const f = await fixture(t);
   f.config.publicHandles = [alice.handle];

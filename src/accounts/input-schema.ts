@@ -13,7 +13,13 @@ export function validateHostedHandle(
   handle: string,
   domains: readonly string[],
 ): void {
-  const domain = domains.find((candidate) => handle.endsWith(candidate));
+  // Configured domains may include or omit the leading dot. Require that separator
+  // so aliceexample.test cannot match example.test, and exclude it from the label.
+  const domain = domains
+    .map((candidate) =>
+      candidate.startsWith(".") ? candidate : `.${candidate}`,
+    )
+    .find((candidate) => handle.endsWith(candidate));
   const label = domain ? handle.slice(0, -domain.length) : "";
   if (!domain || label.includes(".") || label.length < 3 || label.length > 18)
     throw new Error("InvalidHandle");
