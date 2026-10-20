@@ -1,4 +1,5 @@
 import { HttpError } from "../../http/http-error.mjs";
+import { emailAddress } from "../../accounts/input.mjs";
 
 export function mountAccountRegistrationXrpc({
   app,
@@ -50,9 +51,7 @@ export function mountAccountRegistrationXrpc({
         "InvalidRequest",
         "A supplied PLC operation requires an authenticated existing DID migration",
       );
-    const normalized = String(email ?? "")
-      .trim()
-      .toLowerCase();
+    const normalized = emailAddress(email);
     const session = await oauth.requireSession(req);
     if (
       password !== undefined &&

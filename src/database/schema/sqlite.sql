@@ -57,6 +57,32 @@ CREATE TABLE `backup_emails` (
 	CONSTRAINT `fk_backup_emails_did_accounts_did_fk` FOREIGN KEY (`did`) REFERENCES `accounts`(`did`)
 );
 --> statement-breakpoint
+CREATE TABLE `custody_history` (
+	`id` text PRIMARY KEY,
+	`did` text NOT NULL,
+	`cid` text NOT NULL,
+	`kind` text NOT NULL,
+	`supporting_observation_id` text,
+	`operation_id` text,
+	`provenance` text NOT NULL,
+	`at` text NOT NULL,
+	CONSTRAINT `fk_custody_history_supporting_observation_id_custody_observations_id_fk` FOREIGN KEY (`supporting_observation_id`) REFERENCES `custody_observations`(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `custody_observations` (
+	`id` text PRIMARY KEY,
+	`did` text NOT NULL,
+	`directory` text NOT NULL,
+	`value` text NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE `custody_operations` (
+	`did` text NOT NULL,
+	`cid` text NOT NULL,
+	`operation` text NOT NULL,
+	CONSTRAINT `custody_operations_pk` PRIMARY KEY(`did`, `cid`)
+);
+--> statement-breakpoint
 CREATE TABLE `email_claims` (
 	`email` text PRIMARY KEY,
 	`did` text NOT NULL,
@@ -207,6 +233,7 @@ CREATE UNIQUE INDEX `accounts_handle_ci` ON `accounts` (lower("handle"));--> sta
 CREATE INDEX `accounts_pds_status` ON `accounts` (`pds_id`,`status`);--> statement-breakpoint
 CREATE INDEX `authority_operation_lease` ON `authority_operations` (`state`,`lease_expires_at`);--> statement-breakpoint
 CREATE UNIQUE INDEX `backup_emails_ci` ON `backup_emails` (lower("email"));--> statement-breakpoint
+CREATE INDEX `custody_history_did` ON `custody_history` (`did`);--> statement-breakpoint
 CREATE UNIQUE INDEX `email_claims_ci` ON `email_claims` (lower("email"));--> statement-breakpoint
 CREATE INDEX `external_operation_step` ON `external_operation_attempts` (`operation_id`,`step`,`created_at`);--> statement-breakpoint
 CREATE UNIQUE INDEX `handle_claims_ci` ON `handle_claims` (lower("handle"));--> statement-breakpoint

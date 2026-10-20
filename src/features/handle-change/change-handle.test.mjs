@@ -124,7 +124,7 @@ test("PDS-incompatible handle updates fail before PLC publication", async (t) =>
   accounts.plcClient.sendOperation = async () => {
     plcWrites++;
   };
-  for (const label of ["ab", "a".repeat(19)]) {
+  for (const label of ["ab", "a".repeat(19), "a.b"]) {
     await assert.rejects(
       accounts.updateHandle(account.did, `${label}.entryway.atmosbox.test`),
       {
@@ -143,9 +143,69 @@ test("PDS-incompatible handle updates fail before PLC publication", async (t) =>
   assert.equal(plcWrites, 2);
 });
 
-test("repeating an existing long handle with no pending change remains a no-op", async (t) => {
+test("handle policy failures and conflicts cause no signing or remote mutation", async (t) => {
+  const f = await fixture(t);
+  const account = await f.accounts.create(alice);
+  const other = await f.accounts.create({
+    ...alice,
+    email: "bob@example.com",
+    handle: "bob.entryway.atmosbox.test",
+  });
+  f.config.handleDomains.push(".entryway.test", ".test");
+  let signatures = 0;
+  f.accounts.plcSigner.signHandleUpdate = async () => {
+    signatures++;
+    throw Error("Unexpected signing");
+  };
+  const before = f.calls.length;
+  for (const handle of [
+    null,
+    123,
+    "Alice.entryway.atmosbox.test",
+    "-alice.entryway.atmosbox.test",
+    "alice.other.test",
+    "entryway.test",
+    "client.entryway.test",
+    "pds1.entryway.test",
+    "pds2.entryway.test",
+  ]) {
+    await assert.rejects(f.accounts.updateHandle(account.did, handle), {
+      status: 400,
+      error: "InvalidHandle",
+    });
+  }
+  await assert.rejects(f.accounts.updateHandle(account.did, other.handle), {
+    status: 409,
+    error: "HandleNotAvailable",
+  });
+  f.config.publicHandles = [alice.handle];
+  await assert.rejects(
+    f.accounts.updateHandle(account.did, "other.entryway.atmosbox.test"),
+    { status: 400, error: "InvalidHandle" },
+  );
+  assert.equal(
+    (await f.accounts.updateHandle(account.did, alice.handle)).handle,
+    alice.handle,
+  );
+  assert.equal(signatures, 0);
+  assert.equal(f.calls.length, before);
+});
+
+test("handle updates do not add domain-wide or PDS reserved-label restrictions", async (t) => {
+  const f = await fixture(t);
+  const account = await f.accounts.create(alice);
+  for (const label of ["entryway", "client", "pds1", "pds2", "admin"]) {
+    const handle = `${label}.entryway.atmosbox.test`;
+    assert.equal(
+      (await f.accounts.updateHandle(account.did, handle)).handle,
+      handle,
+    );
+  }
+});
+
+test("repeating an existing valid handle with no pending change remains a no-op", async (t) => {
   const { accounts, calls, db } = await fixture(t);
-  const handle = `${"a".repeat(19)}.entryway.atmosbox.test`;
+  const handle = `${"a".repeat(18)}.entryway.atmosbox.test`;
   const account = await accounts.create({ ...alice, handle });
   const before = calls.length;
   accounts.plcClient.sendOperation = async () => {

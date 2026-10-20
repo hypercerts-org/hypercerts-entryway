@@ -2,6 +2,7 @@ import {
   noExternalResult,
   type OperationOwnership,
 } from "../../accounts/operation-ownership.js";
+import * as plc from "@did-plc/lib";
 import { DomainError } from "../../accounts/errors.js";
 import { advance, commandFor, requireSameOwner } from "./state-machine.js";
 import { createHash } from "node:crypto";
@@ -196,6 +197,35 @@ export class ExternalMigrationService {
     id: string,
   ): Promise<void> {
     await this.d.transact(async () => {
+      if (id === "publish-source-handoff" || id === "create-inactive-target") {
+        const operation =
+          id === "publish-source-handoff"
+            ? after.handoffOperation
+            : after.moveOperation;
+        const cid =
+          id === "publish-source-handoff"
+            ? after.handoffOperationCid
+            : after.moveOperationCid;
+        if (!operation || !cid)
+          throw new MigrationError(
+            "InvalidCustodyInventory",
+            "Confirmed fixture operation is missing",
+          );
+        const { sig: _signature, ...facts } =
+          plc.def.operation.parse(operation);
+        // Fixture confirmation is explicit provenance, not directory observation
+        // or independent public migration qualification.
+        await this.d.custody.recordSigned({
+          id: `${after.id}:${id}`,
+          did: after.did,
+          cid,
+          operation: facts,
+          kind: "observed",
+          operationId: this.d.ownership.currentClaim!.operationId,
+          provenance: "synthetic-fixture",
+          at: after.updatedAt,
+        });
+      }
       await this.d.workflows.transition(before, after, id);
       await this.d.ownership.checkpoint(after.phase, { workflowId: after.id });
     });
@@ -324,20 +354,52 @@ export class ExternalMigrationService {
             {
               await this.assertHead(w);
               const k = await this.d.target.reserveTargetRepositoryKey(w.did);
-              const s = await this.d.plcRotationSigner.signMigrationMove({
-                workflowId: w.id,
-                did: w.did,
-                handoffOperation: w.handoffOperation,
-                targetPdsUrl: w.targetPdsUrl,
-                targetRepositoryKey: k,
-                handle: w.handle,
-              });
+              const s = await this.d.plcRotationSigner.signMigrationMove(
+                {
+                  workflowId: w.id,
+                  did: w.did,
+                  handoffOperation: w.handoffOperation,
+                  targetPdsUrl: w.targetPdsUrl,
+                  targetRepositoryKey: k,
+                  handle: w.handle,
+                },
+                async (operation, facts, cid) => {
+                  await this.d.transact(async () => {
+                    await this.requireOwner(w, currentSessionId);
+                    await this.d.custody.recordSigned({
+                      id: crypto.randomUUID(),
+                      did: w.did,
+                      cid,
+                      operation: facts,
+                      kind: "signed",
+                      operationId: this.d.ownership.currentClaim!.operationId,
+                      provenance: "synthetic-fixture",
+                      at: new Date().toISOString(),
+                    });
+                    const next = advance(w, "move-journaled", {
+                      moveOperation: operation,
+                      moveOperationCid: cid,
+                      targetRepositoryKey: k,
+                    });
+                    await this.d.workflows.transition(
+                      w,
+                      next,
+                      "journal-entryway-move",
+                    );
+                    await this.d.ownership.checkpoint(next.phase, {
+                      workflowId: w.id,
+                    });
+                  });
+                },
+              );
               const n = advance(w, "move-journaled", {
                 moveOperation: s.operation,
                 moveOperationCid: s.cid,
                 targetRepositoryKey: k,
               });
-              await this.transition(w, n, "journal-entryway-move");
+              // The signed operation and custody event already committed together.
+              this.audit(n, "journal-entryway-move");
+              await this.d.checkpointObserver?.(n);
               w = n;
             }
             break;
@@ -563,6 +625,7 @@ export class ExternalMigrationService {
       algorithm: publicKeyAlgorithm(keyReference),
       fingerprint: `sha256:${createHash("sha256").update(keyReference).digest("hex")}`,
       lifecycle: "active",
+      provenance: "synthetic-fixture",
     });
     await this.d.custody.save({
       did: workflow.did,

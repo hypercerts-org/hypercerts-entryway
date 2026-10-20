@@ -9,7 +9,7 @@ export const browserUrl = 'https://browser.atmosbox.internal'
 export async function createAccount(page, label = 'browser') {
   const suffix = randomUUID().slice(0, 12)
   const email = `${label}-${suffix}@example.test`
-  const handle = `${label}-${suffix}.entryway.atmosbox.test`
+  const handle = `web-${randomUUID().replaceAll('-', '').slice(0, 14)}.entryway.atmosbox.test`
   await page.goto(new URL('/login', config.issuer).href)
   await page.getByLabel('Email address').fill(email)
   const since = Date.now()

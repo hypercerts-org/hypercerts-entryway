@@ -1,6 +1,7 @@
 // Test-only preload: consume one actual unchanged-PDS response, then lose it.
 // The rejected-request mode corrupts only this nominated request authorization.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 const run = process.env.MANAGED_RECOVERY_RUN;
 assert.match(run ?? "", /^[a-z0-9-]+$/);
@@ -17,7 +18,8 @@ globalThis.fetch = async (url, init) => {
   const match =
     armed &&
     target === "http://pds2:3000/xrpc/com.atproto.server.createAccount" &&
-    body.handle === `migration-${run}.entryway.atmosbox.test`;
+    body.handle ===
+      `migration-${createHash("sha256").update(run).digest("hex").slice(0, 8)}.entryway.atmosbox.test`;
   if (match) armed = false;
   let request = init;
   if (match && mode === "rejected-request") {
