@@ -183,8 +183,27 @@ test("directory observations validate surviving history and reject regressions a
     branch,
   );
   assert.equal((await store.getObservation(branch.id)).directory, directory);
+  const retainedState = await Promise.all(
+    tables.map((table) => db.read(table)),
+  );
+  const forgottenNullification = await observe([
+    genesis,
+    await envelope(repaired),
+    await envelope(third),
+  ]);
+  await assert.rejects(store.recordObservation(forgottenNullification), {
+    code: "CustodyConflict",
+  });
+  assert.deepEqual(
+    await Promise.all(tables.map((table) => db.read(table))),
+    retainedState,
+  );
   const retainedCount = (await store.getHistory(did)).length;
   await store.recordObservation(branch);
+  assert.deepEqual(
+    await Promise.all(tables.map((table) => db.read(table))),
+    retainedState,
+  );
   assert.equal((await store.getHistory(did)).length, retainedCount);
   assert.equal((await store.getByDid(did)).observation.eventId, later.id);
   for (const conflicting of [
@@ -214,34 +233,39 @@ test("directory observations validate surviving history and reject regressions a
   const beforeFailure = await Promise.all(
     tables.map((table) => db.read(table)),
   );
-  const failingStore = createCustodyInventoryStorage(
-    new Proxy(db, {
-      get(target, property) {
-        if (property === "insert")
-          return async (table, ...args) => {
-            if (table === "custody_history")
-              throw new Error("history-write-failure");
-            return target.insert(table, ...args);
-          };
-        const value = Reflect.get(target, property);
-        return typeof value === "function" ? value.bind(target) : value;
-      },
-    }),
-  );
-  const failedId = crypto.randomUUID();
-  await assert.rejects(
-    failingStore.recordObservation({
-      ...later,
-      id: failedId,
-      snapshot: { ...later.snapshot, eventId: failedId },
-    }),
-    /history-write-failure/,
-  );
-  assert.deepEqual(
-    await Promise.all(tables.map((table) => db.read(table))),
-    beforeFailure,
-  );
-  assert.equal(await store.getObservation(failedId), null);
+  for (const failedTable of [
+    "custody_history",
+    "migration_custody_inventory",
+  ]) {
+    const failingStore = createCustodyInventoryStorage(
+      new Proxy(db, {
+        get(target, property) {
+          if (property === "insert" || property === "update")
+            return async (table, ...args) => {
+              if (table === failedTable)
+                throw new Error(`${failedTable}-write-failure`);
+              return target[property](table, ...args);
+            };
+          const value = Reflect.get(target, property);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      }),
+    );
+    const failedId = crypto.randomUUID();
+    await assert.rejects(
+      failingStore.recordObservation({
+        ...later,
+        id: failedId,
+        snapshot: { ...later.snapshot, eventId: failedId },
+      }),
+      { message: `${failedTable}-write-failure` },
+    );
+    assert.deepEqual(
+      await Promise.all(tables.map((table) => db.read(table))),
+      beforeFailure,
+    );
+    assert.equal(await store.getObservation(failedId), null);
+  }
 });
 
 test("directory transitions retain attributed custody and issuer inventory separately from authority", async (t) => {

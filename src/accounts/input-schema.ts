@@ -1,19 +1,13 @@
 import { z } from "zod";
 
-const boundedEmail = (value: string): boolean => {
-  if (value.length > 254 || /\s/.test(value)) return false;
-  const at = value.indexOf("@");
-  if (at <= 0 || at !== value.lastIndexOf("@")) return false;
-  const domain = value.slice(at + 1);
-  const dot = domain.lastIndexOf(".");
-  return dot > 0 && dot < domain.length - 1;
-};
-
 export const accountEmailSchema = z
   .string()
   .trim()
   .toLowerCase()
-  .refine(boundedEmail);
+  .pipe(z.email().max(254))
+  .refine((email) => email.indexOf("@") <= 64, {
+    message: "The part before @ must contain at most 64 characters",
+  });
 
 export function validateHostedHandle(
   handle: string,
@@ -25,9 +19,8 @@ export function validateHostedHandle(
     throw new Error("InvalidHandle");
 }
 
-export const registrationInputSchema = z.object({
-  // Preserve registration's existing String coercion; email callers share the rule.
-  email: z.preprocess((value) => String(value), accountEmailSchema),
+export const registrationInputSchema = z.strictObject({
+  email: accountEmailSchema,
   handle: z.string(),
   pdsId: z.string(),
   recoveryKey: z.string().nullable().optional(),

@@ -12,6 +12,15 @@ test("registration rejects malformed and oversized email before external work", 
   const f = await fixture(t);
   for (const email of [
     "missing-at",
+    "a@b..c",
+    `${"a".repeat(65)}@example.com`,
+    [alice.email],
+    { toString: () => alice.email },
+    {
+      toString() {
+        assert.fail("Email must not be coerced");
+      },
+    },
     "a@@b.c",
     "a@.c",
     "a@b.",
@@ -56,7 +65,11 @@ test("registration maps malformed fields before signing or PDS mutation", async 
     throw Error("Unexpected signing");
   };
   for (const [input, error] of [
-    [null, "InvalidEmail"],
+    [null, "InvalidRequest"],
+    [undefined, "InvalidRequest"],
+    [[], "InvalidRequest"],
+    ["registration", "InvalidRequest"],
+    [123, "InvalidRequest"],
     [{ ...alice, email: null }, "InvalidEmail"],
     [{ ...alice, email: 123 }, "InvalidEmail"],
     [{ ...alice, handle: null }, "InvalidHandle"],
@@ -66,10 +79,28 @@ test("registration maps malformed fields before signing or PDS mutation", async 
     [{ ...alice, recoveryKey: {} }, "InvalidRecoveryKey"],
     [{ ...alice, recoveryKey: "not-a-key" }, "InvalidRecoveryKey"],
     [{ ...alice, inviteCode: false }, "InvalidInviteCode"],
+    [{ ...alice, unexpected: true }, "InvalidRequest"],
   ]) {
     await assert.rejects(f.accounts.create(input), { status: 400, error });
   }
   assert.equal(signatures, 0);
+  assert.equal(f.calls.length, 0);
+});
+
+test("registration distinguishes nonobject details from unsupported fields", async (t) => {
+  const f = await fixture(t);
+  for (const input of [null, undefined, [], "registration", 123, false]) {
+    await assert.rejects(f.accounts.create(input), {
+      status: 400,
+      error: "InvalidRequest",
+      message: "Registration details must be provided as an object.",
+    });
+  }
+  await assert.rejects(f.accounts.create({ ...alice, unexpected: true }), {
+    status: 400,
+    error: "InvalidRequest",
+    message: "Registration contains unsupported fields.",
+  });
   assert.equal(f.calls.length, 0);
 });
 
@@ -134,14 +165,15 @@ test("configured public handles remain an additional registration constraint", a
   assert.equal((await f.accounts.create(alice)).handle, alice.handle);
 });
 
-test("shared email schema preserves simple acceptance, bounds and caller coercion", async () => {
+test("shared email schema normalizes standard addresses within length bounds", async () => {
   const { accountEmailSchema, registrationInputSchema } =
     await import("../../../dist/src/accounts/input-schema.js");
   const { emailAddress } = await import("../../../dist/src/accounts/input.mjs");
   for (const email of [
     " A+Tag@Example.COM ",
-    "a@b..c",
-    `${"a".repeat(250)}@b.c`,
+    "user.name+tag@example.co.uk",
+    `${"a".repeat(64)}@example.com`,
+    `${"a".repeat(64)}@${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(61)}`,
   ]) {
     const normalized = email.trim().toLowerCase();
     assert.equal(accountEmailSchema.parse(email), normalized);
@@ -151,14 +183,15 @@ test("shared email schema preserves simple acceptance, bounds and caller coercio
       normalized,
     );
   }
-  assert.equal(emailAddress({ toString: () => " A@B.C " }), "a@b.c");
-  assert.equal(
-    registrationInputSchema.parse({
-      ...alice,
-      email: { toString: () => " A@B.C " },
-    }).email,
-    "a@b.c",
-  );
+});
+
+test("shared email schema rejects malformed addresses and nonstrings without coercion", async () => {
+  const { accountEmailSchema, registrationInputSchema } =
+    await import("../../../dist/src/accounts/input-schema.js");
+  const { emailAddress } = await import("../../../dist/src/accounts/input.mjs");
+  const { normalizeEmail } =
+    await import("../../../dist/src/accounts/security-primitives.mjs");
+  assert.equal(normalizeEmail(" ALICE@Example.COM "), alice.email);
   for (const email of [
     undefined,
     null,
@@ -166,12 +199,35 @@ test("shared email schema preserves simple acceptance, bounds and caller coercio
     123,
     {},
     [],
+    [alice.email],
+    new String(alice.email),
+    { toString: () => alice.email },
+    {
+      toString() {
+        assert.fail("Email must not be coerced");
+      },
+    },
+    1n,
+    Symbol("email"),
+    "",
+    "   ",
+    "a@b..c",
+    "a@b.c",
+    ".alice@example.com",
+    "alice..name@example.com",
+    `${"a".repeat(65)}@example.com`,
+    `${"a".repeat(64)}@${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(62)}`,
     "a@@b.c",
     "a@.c",
     "a@b.",
     "a b@c.d",
     `${"a".repeat(251)}@b.c`,
   ]) {
+    assert.equal(accountEmailSchema.safeParse(email).success, false);
+    assert.throws(() => normalizeEmail(email), {
+      status: 400,
+      error: "InvalidEmail",
+    });
     assert.throws(() => emailAddress(email), {
       status: 400,
       error: "InvalidEmail",
@@ -181,6 +237,38 @@ test("shared email schema preserves simple acceptance, bounds and caller coercio
       false,
     );
   }
+});
+
+test("email local-part limit reports a meaningful schema issue", async () => {
+  const { accountEmailSchema } =
+    await import("../../../dist/src/accounts/input-schema.js");
+  const result = accountEmailSchema.safeParse(`${"a".repeat(65)}@example.com`);
+  assert.equal(result.success, false);
+  assert.ok(
+    result.error.issues.some(
+      ({ message }) =>
+        message === "Email local part must contain at most 64 characters",
+    ),
+  );
+});
+
+test("registration schema rejects undeclared fields without adding field policy", async () => {
+  const { registrationInputSchema } =
+    await import("../../../dist/src/accounts/input-schema.js");
+  assert.equal(
+    registrationInputSchema.safeParse({ ...alice, unexpected: true }).success,
+    false,
+  );
+  assert.deepEqual(
+    registrationInputSchema.parse({
+      ...alice,
+      handle: "",
+      pdsId: "",
+      recoveryKey: null,
+      inviteCode: "",
+    }),
+    { ...alice, handle: "", pdsId: "", recoveryKey: null, inviteCode: "" },
+  );
 });
 
 test("acknowledged registration activates during transient evidence outage and retains refresh pending", async (t) => {

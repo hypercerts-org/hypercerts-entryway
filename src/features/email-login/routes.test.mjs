@@ -100,6 +100,35 @@ async function fixture(t) {
   };
 }
 
+test("sign-in rejects nonstring and malformed email before reserving budgets or queuing mail", async (t) => {
+  const f = await fixture(t);
+  const flow = await f.flow("invalid-email", { email: "prior@example.com" });
+  let queued = 0;
+  f.authentication.queueSignInCode = async () => {
+    queued++;
+    return { async deliver() {} };
+  };
+  for (const email of [
+    ["alice@example.com"],
+    null,
+    {},
+    123,
+    "a@b..c",
+    `${"a".repeat(65)}@example.com`,
+    {
+      toString() {
+        assert.fail("Email must not be coerced");
+      },
+    },
+  ]) {
+    await assert.rejects(f.request(flow, email), /Enter a valid email address/);
+    assert.deepEqual(await f.db.get("auth-flows", flow.id), flow);
+    assert.deepEqual(await f.db.list("otp-limits"), []);
+    assert.equal(queued, 0);
+    assert.equal(f.sent, 0);
+  }
+});
+
 test("concurrent sign-in flows reserve the existing five-code normalized email budget atomically", async (t) => {
   const f = await fixture(t),
     email = "owner@example.test";

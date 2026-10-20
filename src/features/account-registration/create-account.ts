@@ -101,7 +101,8 @@ export function createRegistration({
   const create = async (value: unknown) => {
     const input = registrationInputSchema.safeParse(value);
     if (!input.success) {
-      const field = input.error.issues[0]?.path[0];
+      const issue = input.error.issues[0];
+      const field = issue?.path[0];
       const [code, message] =
         field === "handle"
           ? ["InvalidHandle", "Invalid handle"]
@@ -111,7 +112,14 @@ export function createRegistration({
               ? ["InvalidRecoveryKey", "Provide a valid PLC recovery did:key"]
               : field === "inviteCode"
                 ? ["InvalidInviteCode", "Invite code is invalid"]
-                : ["InvalidEmail", "Provide a valid email address"];
+                : field === "email"
+                  ? ["InvalidEmail", "Provide a valid email address"]
+                  : [
+                      "InvalidRequest",
+                      issue?.code === "unrecognized_keys"
+                        ? "Registration contains unsupported fields."
+                        : "Registration details must be provided as an object.",
+                    ];
       throw new HttpError(400, code, message);
     }
     const { email, handle, pdsId, recoveryKey, inviteCode } = input.data;

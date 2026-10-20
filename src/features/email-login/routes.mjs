@@ -1,4 +1,5 @@
 import { InvalidRequestError } from "@atproto/oauth-provider/errors";
+import { accountEmailSchema } from "../../accounts/input-schema.js";
 import { ChangedFlowIntentError } from "../../http/browser-flow.mjs";
 import { page } from "../../ui/html.mjs";
 const RESEND_COOLDOWN = 5_000;
@@ -38,17 +39,14 @@ export function mountEmailLogin({
         // getFlow authenticated this flow before yielding. Refresh its mutable
         // request counters and intent under the same lock as the shared budget.
         flow = await refreshFlow(flow, browser);
-        email = String(emailValue ?? flow.email ?? "")
-          .trim()
-          .toLowerCase();
-        if (!email && emailValue === undefined)
+        if (emailValue === undefined && !flow.email)
           throw new InvalidRequestError("Request a sign-in code first");
-        if (
-          !email ||
-          email.length > 320 ||
-          !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-        )
+        const input = accountEmailSchema.safeParse(
+          emailValue === undefined ? flow.email : emailValue,
+        );
+        if (!input.success)
           throw new InvalidRequestError("Enter a valid email address");
+        email = input.data;
         const now = Date.now();
         if (flow.otpRequestCount >= 5) return { reason: "flow-limit" };
         if (flow.lastOtpSentAt && now - flow.lastOtpSentAt < RESEND_COOLDOWN)
@@ -125,7 +123,7 @@ export function mountEmailLogin({
     form,
     guarded(async (req, res) => {
       const { flow, browser } = await getFlow(req, res);
-      await sendCode(res, flow, browser, String(req.body.email ?? ""));
+      await sendCode(res, flow, browser, req.body.email ?? "");
     }),
   );
   app.post(

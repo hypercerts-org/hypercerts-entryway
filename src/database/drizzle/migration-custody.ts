@@ -110,6 +110,29 @@ function observedInventory(
   return [...attributed, ...unattributedKeys(keys, attributed)];
 }
 
+function validateObservationExtension(
+  previous: CustodyInventory["observation"],
+  next: CustodyObservation["snapshot"],
+): void {
+  if (!previous) return;
+  const retainsOrNullifies = (cid: string): boolean =>
+    next.chain.includes(cid) || next.nullified.includes(cid);
+  const accountsForPreviousHead = retainsOrNullifies(previous.headCid);
+  const preservesNullifications = previous.nullified.every((cid) =>
+    next.nullified.includes(cid),
+  );
+  const accountsForPreviousChain = previous.chain.every(retainsOrNullifies);
+  if (
+    !accountsForPreviousHead ||
+    !preservesNullifications ||
+    !accountsForPreviousChain
+  )
+    throw new PlcError(
+      "CustodyConflict",
+      "Directory observation regresses or contradicts retained authority",
+    );
+}
+
 /** Bind public custody persistence to this executor. Nested writes join its
  * physical transaction and mutation fence; no separate connection is opened.
  * Reads/writes reject inconsistent or non-public evidence with stable PLC errors. */
@@ -125,74 +148,68 @@ export function createCustodyInventoryStorage(
         .join(",")}}`;
     return JSON.stringify(value);
   };
+  const retainObservation = async (observation: CustodyObservation) => {
+    const row = {
+      id: observation.id,
+      did: observation.did,
+      directory: observation.directory,
+      value: canonical(observation),
+    };
+    await db.insert("custody_observations", row, { ignoreConflict: true });
+    const retained = (
+      await db.read("custody_observations", {
+        where: eq(db.tables.custody_observations.id, observation.id),
+        limit: 1,
+      })
+    )[0];
+    if (canonical(retained) !== canonical(row))
+      throw new PlcError("CustodyConflict", "Observation retry differs");
+  };
+  const hasCompleteObservationHistory = async (
+    observation: CustodyObservation,
+  ): Promise<boolean> => {
+    const priorEvents = await db.read("custody_history", {
+      where: eq(
+        db.tables.custody_history.supporting_observation_id,
+        observation.id,
+      ),
+    });
+    return priorEvents.length === observation.entries.length;
+  };
+  const recordObservationHistory = async (observation: CustodyObservation) => {
+    for (const entry of observation.entries) {
+      validateChainPredecessor(entry, observation.snapshot.chain);
+      await store.recordSigned({
+        id: `${observation.id}:${entry.cid}`,
+        did: observation.did,
+        cid: entry.cid,
+        operation: entry.operation,
+        kind: entry.nullified ? "nullified" : "observed",
+        supportingObservationId: observation.id,
+        operationId: observation.operationId,
+        provenance: entry.nullified
+          ? "directory-asserted-nullification"
+          : "directory-observed-publication",
+        at: observation.at,
+      });
+    }
+  };
   const store: CustodyInventoryReader & CustodyInventoryTransactor = {
     async recordObservation(input) {
       const observation = validateCustodyObservation(input);
       await db.transact(async () => {
-        // This immutable public projection is the explicit support for every
-        // observed/nullified event. Snapshot replacement cannot erase provenance.
-        const row = {
-          id: observation.id,
-          did: observation.did,
-          directory: observation.directory,
-          value: canonical(observation),
-        };
-        await db.insert("custody_observations", row, { ignoreConflict: true });
-        const retained = (
-          await db.read("custody_observations", {
-            where: eq(db.tables.custody_observations.id, observation.id),
-            limit: 1,
-          })
-        )[0];
-        if (canonical(retained) !== canonical(row))
-          throw new PlcError("CustodyConflict", "Observation retry differs");
-        const priorEvents = await db.read("custody_history", {
-          where: eq(
-            db.tables.custody_history.supporting_observation_id,
-            observation.id,
-          ),
-        });
-        // An exact retained retry must not regress a newer effective snapshot.
-        if (priorEvents.length === observation.entries.length) return;
+        await retainObservation(observation);
+        if (await hasCompleteObservationHistory(observation)) return;
         const previous = await store.getByDid(observation.did);
-        const old = previous?.observation;
-        const next = observation.snapshot;
-        // A different branch needs explicit nullification of our prior head.
-        // Neither local timestamps nor publication inclusion establish authority.
-        if (
-          old &&
-          ((!next.chain.includes(old.headCid) &&
-            !next.nullified.includes(old.headCid)) ||
-            old.nullified.some((cid) => !next.nullified.includes(cid)) ||
-            old.chain.some(
-              (cid) =>
-                !next.chain.includes(cid) && !next.nullified.includes(cid),
-            ))
-        )
-          throw new PlcError(
-            "CustodyConflict",
-            "Directory observation regresses or contradicts retained authority",
-          );
-        for (const entry of observation.entries) {
-          validateChainPredecessor(entry, next.chain);
-          await store.recordSigned({
-            id: `${observation.id}:${entry.cid}`,
-            did: observation.did,
-            cid: entry.cid,
-            operation: entry.operation,
-            kind: entry.nullified ? "nullified" : "observed",
-            supportingObservationId: observation.id,
-            operationId: observation.operationId,
-            provenance: entry.nullified
-              ? "directory-asserted-nullification"
-              : "directory-observed-publication",
-            at: observation.at,
-          });
-        }
+        validateObservationExtension(
+          previous?.observation,
+          observation.snapshot,
+        );
+        await recordObservationHistory(observation);
         await store.save({
           did: observation.did,
           keys: observedInventory(observation, previous),
-          observation: next,
+          observation: observation.snapshot,
         });
       });
     },

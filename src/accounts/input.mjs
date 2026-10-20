@@ -5,7 +5,7 @@ export const fail = (error, message, status = 400) => {
   throw new HttpError(status, error, message);
 };
 export const emailAddress = (value) => {
-  const result = accountEmailSchema.safeParse(String(value ?? ""));
+  const result = accountEmailSchema.safeParse(value);
   if (!result.success) fail("InvalidEmail", "Provide a valid email address");
   return result.data;
 };
