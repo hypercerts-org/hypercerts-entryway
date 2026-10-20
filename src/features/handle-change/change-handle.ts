@@ -182,12 +182,32 @@ export function createHandleChange({
   };
   const commitLocalHandle = async (row: AccountRow, op: HandleOperation) => {
     const { did, handle } = op;
-    await observeCustody?.(did);
+    let refreshPending = false;
+    try {
+      await observeCustody?.(did);
+    } catch (error: unknown) {
+      // PLC publication is already acknowledged: an evidence outage must not
+      // strand local/PDS handles. Authority conflicts and fence loss stay fatal.
+      if (
+        typeof error !== "object" ||
+        error === null ||
+        !("code" in error) ||
+        error.code !== "CustodyEvidenceUnavailable"
+      )
+        throw error;
+      refreshPending = true;
+    }
     // Commit authority with its pending callback so recovery can finish PDS sync.
     row.handle = handle;
     await db.transact(async () => {
       await save(row);
       await journal({ ...op, phase: "pds-pending" });
+      // Recovery must retain the deferred observation whenever the handle commits.
+      if (refreshPending)
+        await db.set("custody:refresh-pending", did, {
+          operationId: ownership.currentClaim!.operationId,
+          error: "CustodyEvidenceUnavailable",
+        });
     });
   };
   const updateHandle = (did: string, handle: string) =>

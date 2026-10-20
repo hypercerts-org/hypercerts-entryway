@@ -243,6 +243,145 @@ for (const outcome of ["unapplied", "applied", "diverged"]) {
   });
 }
 
+for (const callbackFails of [false, true]) {
+  test(`acknowledged publication defers unavailable custody evidence with callback failure ${callbackFails}`, async (t) => {
+    let fail = callbackFails;
+    const f = await fixture(t, ({ method }) => {
+      if (fail && method === "com.atproto.admin.updateAccountHandle")
+        return { status: 503, body: { error: "Unavailable" } };
+    });
+    const row = await f.accounts.create(alice);
+    const audit = f.accounts.plcClient.getAuditableLog;
+    const send = f.accounts.plcClient.sendOperation;
+    const signed = trackSigning(f);
+    let publications = 0;
+    f.accounts.plcClient.sendOperation = async (...args) => {
+      publications++;
+      await send(...args);
+      f.accounts.plcClient.getAuditableLog = async () => {
+        throw Object.assign(new Error("Directory unavailable"), {
+          status: 503,
+        });
+      };
+    };
+    if (callbackFails)
+      await assert.rejects(f.accounts.updateHandle(row.did, handle));
+    else await f.accounts.updateHandle(row.did, handle);
+    const pending = await operation(f, row.did);
+    assert.equal(pending.phase, callbackFails ? "pds-pending" : "complete");
+    assert.equal((await f.accounts.get(row.did)).handle, handle);
+    assert.deepEqual(await f.db.get("custody:refresh-pending", row.did), {
+      operationId: pending.authorityOperationId,
+      error: "CustodyEvidenceUnavailable",
+    });
+    fail = false;
+    if (callbackFails) await f.recover(row.did);
+    await f.accounts.updateHandle(row.did, handle);
+    assert.equal(f.remote.get(row.did).handle, handle);
+    assert.equal((await operation(f, row.did)).phase, "complete");
+    assert.equal(await f.accounts.storage.getHandleClaim(alice.handle), null);
+    f.accounts.plcClient.getAuditableLog = audit;
+    await f.accounts.reconcile();
+    assert.equal(await f.db.get("custody:refresh-pending", row.did), null);
+    assert.equal(publications, 1);
+    assert.equal(signed.length, 1);
+  });
+}
+
+test("unavailable custody evidence before publication remains fatal", async (t) => {
+  const f = await fixture(t);
+  const row = await f.accounts.create(alice);
+  const signed = trackSigning(f);
+  const before = f.calls.length;
+  f.accounts.plcClient.getAuditableLog = async () => {
+    throw Object.assign(new Error("Directory unavailable"), { status: 503 });
+  };
+  f.accounts.plcClient.sendOperation = async () =>
+    assert.fail("must not publish");
+  await assert.rejects(f.accounts.updateHandle(row.did, handle), {
+    code: "CustodyEvidenceUnavailable",
+  });
+  assert.equal(signed.length, 0);
+  assert.equal(f.calls.length, before);
+  assert.equal((await f.accounts.get(row.did)).handle, alice.handle);
+  assert.equal(await operation(f, row.did), null);
+  assert.equal(await f.db.get("custody:refresh-pending", row.did), null);
+});
+
+for (const failure of [
+  { code: "CustodyConflict" },
+  { code: "OperationLeaseLost" },
+  new Error("Unexpected observation failure"),
+  null,
+  "CustodyEvidenceUnavailable",
+]) {
+  test(`post-publication observation failure stays fatal: ${failure?.code ?? String(failure)}`, async (t) => {
+    const f = await fixture(t);
+    const row = await f.accounts.create(alice);
+    const before = f.calls.length;
+    const send = f.accounts.plcClient.sendOperation;
+    f.accounts.plcClient.sendOperation = async (...args) => {
+      await send(...args);
+      f.accounts.plcClient.getAuditableLog = async () => {
+        throw failure;
+      };
+    };
+    await assert.rejects(
+      f.accounts.updateHandle(row.did, handle),
+      (error) => error === failure,
+    );
+    assert.equal((await f.accounts.get(row.did)).handle, alice.handle);
+    assert.equal(f.calls.length, before);
+    assert.equal((await operation(f, row.did)).phase, "plc-pending");
+    assert.equal(await f.db.get("custody:refresh-pending", row.did), null);
+  });
+}
+
+for (const boundary of ["marker", "journal"]) {
+  test(`deferred custody marker and local handle roll back together on ${boundary} failure`, async (t) => {
+    const f = await fixture(t);
+    const row = await f.accounts.create(alice);
+    const send = f.accounts.plcClient.sendOperation;
+    const set = f.db.set.bind(f.db);
+    const before = f.calls.length;
+    let publications = 0;
+    f.accounts.plcClient.sendOperation = async (...args) => {
+      publications++;
+      await send(...args);
+      f.accounts.plcClient.getAuditableLog = async () => {
+        throw Object.assign(new Error("Directory unavailable"), {
+          status: 503,
+        });
+      };
+    };
+    f.db.set = async (ns, key, value, ...args) => {
+      const result = await set(ns, key, value, ...args);
+      if (
+        (boundary === "marker" && ns === "custody:refresh-pending") ||
+        (boundary === "journal" &&
+          ns === "operations" &&
+          value.phase === "pds-pending")
+      )
+        throw Error("Fixture local commit failure");
+      return result;
+    };
+    await assert.rejects(
+      f.accounts.updateHandle(row.did, handle),
+      /Fixture local commit failure/,
+    );
+    assert.equal((await f.accounts.get(row.did)).handle, alice.handle);
+    assert.equal((await operation(f, row.did)).phase, "plc-pending");
+    assert.equal(await f.db.get("custody:refresh-pending", row.did), null);
+    assert.equal(f.calls.length, before);
+    f.db.set = set;
+    await f.accounts.updateHandle(row.did, handle);
+    assert.equal((await operation(f, row.did)).phase, "complete");
+    assert.equal(f.remote.get(row.did).handle, handle);
+    assert.ok(await f.db.get("custody:refresh-pending", row.did));
+    assert.equal(publications, 1);
+  });
+}
+
 for (const boundary of ["history", "journal", "checkpoint"]) {
   test(`signed-intent transaction rolls back history and journal on ${boundary} failure`, async (t) => {
     const f = await fixture(t);
