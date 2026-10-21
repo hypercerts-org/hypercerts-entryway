@@ -24,7 +24,7 @@ export function createSecurityPrimitives({
   authority,
   ownership,
 }) {
-  const { account, identity, version, claim, pendingEmail } = authority;
+  const { account, identity, version, claims, claim, pendingEmail } = authority;
   const assertEmailAvailable = async (email, did, options) =>
     await authority.assertEmailAvailable(normalizeEmail(email), did, options);
   const bindVerifiedIdentity = async (input) =>
@@ -113,7 +113,13 @@ export function createSecurityPrimitives({
     createHmac("sha256", config.betterAuthSecret)
       .update(`${id}\0${purpose}\0${secret}`)
       .digest("hex");
-  const issue = async (purpose, row, email, data = {}) => {
+  const issue = async (
+    purpose,
+    row,
+    email,
+    data = {},
+    { exposeChallengeId = false } = {},
+  ) => {
     await rate(email);
     const id = randomBytes(18).toString("base64url");
     const code = String(randomInt(100_000_000)).padStart(8, "0");
@@ -155,11 +161,36 @@ export function createSecurityPrimitives({
       await db.set("security:challenges", id, record);
       // Challenge replacement and its outbox supersession must share the same
       // transaction. A delayed earlier sender may not enqueue over a newer proof.
-      return mail.queueProof({ email, token: `${id}.${code}`, purpose });
+      return {
+        challengeId: id,
+        delivery: await mail.queueProof({
+          email,
+          token: `${id}.${code}`,
+          purpose,
+        }),
+      };
     });
     if (!issued) return {};
-    await issued.deliver();
-    return {};
+    await issued.delivery.deliver();
+    // The selector may be retained in a browser form; the OTP stays mail-only.
+    return exposeChallengeId ? { challengeId: issued.challengeId } : {};
+  };
+  const activeChallengeId = async (purpose, { did, email }) => {
+    const currentVersion = await version(did);
+    const now = Date.now();
+    // Restore only a matching selector; never recover a challenge from code/email.
+    for (const { key, value } of await db.list("security:challenges"))
+      if (
+        value.did === did &&
+        value.purpose === purpose &&
+        value.email === email &&
+        !value.consumedAt &&
+        value.expiresAt > now &&
+        value.attempts < 5 &&
+        value.version === currentVersion
+      )
+        return key;
+    return null;
   };
 
   const consume = async (token, purpose, expected = {}) => {
@@ -236,6 +267,7 @@ export function createSecurityPrimitives({
     account,
     identity,
     version,
+    claims,
     claim,
     pendingEmail,
     assertEmailAvailable,
@@ -244,6 +276,7 @@ export function createSecurityPrimitives({
     requireAdmin,
     rate,
     issue,
+    activeChallengeId,
     consume,
     commitProof,
     revokeAccount,

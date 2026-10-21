@@ -20,9 +20,14 @@ export function createEmailAuthorityChange({
           const old = await account(did);
           email = await assertEmailAvailable(email, did, {
             allowOwnBackup: recovery,
+            purpose: verified ? "pending" : "primary",
+            allowSameOwnerActiveMigrationReservation: verified && !recovery,
           });
-          // Quarantine old service/browser credentials before the first async yield.
-          await authority.revokeLocal(did);
+          // Revoke DID-scoped credentials before legacy cleanup. Ordinary verified
+          // email changes intentionally preserve sessions for the old shared user.
+          await authority.revokeLocal(did, {
+            preserveBrowserSessions: verified && !recovery,
+          });
           if (recovery) await legacy.removePassword(did);
           await legacy.revokeAccount(did, { credentials: true });
           await authority.commitEmailChange({

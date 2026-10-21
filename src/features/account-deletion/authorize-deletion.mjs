@@ -18,11 +18,28 @@ export function createDeletionAuthorization({
     await authority.clearDeletedAccountRecovery(did);
     await db.delete("security:deletion-authorizations", did);
   };
+  const issueDeletionProof = async (
+    actor,
+    { exposeChallengeId = false } = {},
+  ) => {
+    const row = await principal(actor);
+    return await issue(
+      "account-delete",
+      row,
+      row.email,
+      {},
+      {
+        exposeChallengeId,
+      },
+    );
+  };
   accounts.setDeletionFinalizer?.(completeDeletion);
   const operations = {
     async requestAccountDelete(actor) {
-      const row = await principal(actor);
-      return await issue("account-delete", row, row.email);
+      return await issueDeletionProof(actor);
+    },
+    async requestAccountDeleteForBrowser(actor) {
+      return await issueDeletionProof(actor, { exposeChallengeId: true });
     },
     async deleteAccount({ did, token, password }) {
       const authorization = await db.get(

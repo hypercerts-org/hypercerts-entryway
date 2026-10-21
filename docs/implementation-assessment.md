@@ -35,13 +35,21 @@ delivery priorities and approvals belong in the
   still pass required checks before expiry. The managed deployment profiles do
   not establish blanket PDS availability or exhaustive endpoint outage coverage.
 
-- **Multiple accounts per email:** the approved target permits imported DID/email
-  associations from an existing PDS joining Entryway. Sign-in verifies email,
-  resolves associated DIDs and requires a choice when there are several, then
-  continues the original flow before establishing the selected-DID session. The
-  current unique-email and unique-auth-user binding constraints remain in place;
-  schema changes, association import and the chooser are not implemented. Email
-  matching never merges DIDs or establishes unimported DID authority. See
+- **Multiple accounts per email:** accounts can share an email after migration or
+  import. One verified login can access multiple accounts, but access must be
+  granted separately for each account—matching emails alone are not enough.
+
+  Email changes, backup recovery, and admin repairs cannot move an account to an
+  email already used by another account. Moving one account to an unused email
+  leaves the others unchanged.
+
+  Migration can link the imported account to a login without granting access to
+  other accounts that share its email.
+
+  The account chooser and importing account-to-login links from a joining PDS are
+  not implemented yet. When several accounts match, the resolver returns
+  `selection-required`. Email-level session revocation remains conservative for a
+  shared user, while OAuth/account data stays DID-scoped. See
   [account identity](data-custody.md#1-account-identity-and-ownership).
 
 - **Moderation:** raw interoperability still exits 2 with
