@@ -95,10 +95,19 @@ export function createAccountAuthority({ db, accounts }) {
       allowSameOwnerActiveMigrationReservation = false,
     } = {},
   ) => {
+    email = normalizeEmail(email);
+    const isCurrentEmail =
+      normalizeEmail((await account(did)).email) === email;
     let existing = await claims(email);
     for (const pending of existing.filter(({ purpose }) => purpose === "pending"))
       await pendingEmail(pending.did);
     existing = await claims(email);
+    const primaryClaimByAnotherDid =
+      !isCurrentEmail &&
+      existing.some(
+        ({ did: ownerDid, purpose: claimPurpose }) =>
+          ownerDid !== did && claimPurpose === "primary",
+      );
     const reservations = await accounts.storage.listExternalReservationsByEmail(
       email,
     );
@@ -124,6 +133,7 @@ export function createAccountAuthority({ db, accounts }) {
       purpose === "backup" &&
       existing.some(({ purpose: current }) => current === "primary");
     if (
+      primaryClaimByAnotherDid ||
       (exclusive.length > 0 && !ownBackup && !ownPending) ||
       backupOverlapsPrimary ||
       reservations.some(

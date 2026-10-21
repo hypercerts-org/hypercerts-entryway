@@ -260,7 +260,7 @@ test('individual application grant revocation prevents refresh through the offic
   await expect(page.locator('#sessions')).toContainText('No remembered application permissions.')
 })
 
-test('primary email change accepts visible mailbox codes and rejects a tampered challenge ID', async () => {
+test('primary email change rejects occupied addresses and retries with visible mailbox proofs', async () => {
   if (!alice.did) await signIn(page, alice, true)
   if (!bob.did) await signIn(otherPage, bob, true)
   const previousDid = alice.did
@@ -300,6 +300,21 @@ test('primary email change accepts visible mailbox codes and rejects a tampered 
   })
   expect(wrongCodeAttempt.status()).toBe(400)
   expect(await wrongCodeAttempt.text()).toContain('Invalid or already used token')
+
+  const occupiedMailSince = Date.now()
+  const occupiedResponse = await post(page, 'email-update', {
+    challengeId: currentChallengeId,
+    token: currentCode,
+    email: ` ${bob.email.toUpperCase()} `,
+  })
+  expect(occupiedResponse.status()).toBe(409)
+  await expect(
+    waitForMailpitCode({
+      recipient: bob.email,
+      since: occupiedMailSince,
+      timeoutMs: 2_000,
+    }),
+  ).rejects.toThrow('Timed out waiting for a new Mailpit verification message')
 
   await page.getByLabel('Current email verification code').fill(currentCode)
   await page.getByLabel('New primary email', { exact: true }).fill(nextEmail)
@@ -373,6 +388,26 @@ test('backup recovery verifies visible codes with retained selectors for both ma
   expect(ineligible.message).toBe(unknown.message)
   expect(eligible.message).toBe(unknown.message)
   const backupCode = await visibleCode(backup, recoverySince)
+  const occupiedMailSince = Date.now()
+  const occupiedRecovery = await page.request.post(`${config.issuer}/recover/verify`, {
+    form: {
+      csrf: eligible.csrf,
+      challengeId: backupChallengeId,
+      token: backupCode,
+      newEmail: ` ${bob.email.toUpperCase()} `,
+    },
+    headers: { origin: config.issuer },
+    maxRedirects: 0,
+  })
+  expect(occupiedRecovery.status()).toBe(409)
+  await expect(
+    waitForMailpitCode({
+      recipient: bob.email,
+      since: occupiedMailSince,
+      timeoutMs: 2_000,
+    }),
+  ).rejects.toThrow('Timed out waiting for a new Mailpit verification message')
+
   for (const challengeId of [unknown.challengeId, ineligible.challengeId]) {
     const fakeSelector = await page.request.post(`${config.issuer}/recover/verify`, {
       form: { csrf: eligible.csrf, challengeId, token: backupCode, newEmail: nextEmail },
