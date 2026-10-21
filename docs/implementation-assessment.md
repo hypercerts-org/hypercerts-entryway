@@ -35,14 +35,19 @@ delivery priorities and approvals belong in the
   still pass required checks before expiry. The managed deployment profiles do
   not establish blanket PDS availability or exhaustive endpoint outage coverage.
 
-- **Multiple accounts per email:** primary account email claims may repeat across
-  DIDs, and one verified Better Auth user may bind multiple DIDs; Better Auth
-  email remains unique. Authorized migration finalization can add a binding beside
-  an unbound same-email DID without binding that sibling. Verified account email
-  changes can associate only the selected DID; administrative changes leave it
-  unbound until mailbox verification and never rewrite a shared user. Signup and
-  login do not infer authority from email. The interactive chooser and joining-PDS
-  association import remain unimplemented; the resolver returns
+- **Multiple accounts per email:** accounts can share an email after migration or
+  import. One verified login can access multiple accounts, but access must be
+  granted separately for each account—matching emails alone are not enough.
+
+  Email changes, backup recovery, and admin repairs cannot move an account to an
+  email already used by another account. Moving one account to an unused email
+  leaves the others unchanged.
+
+  Migration can link the imported account to a login without granting access to
+  other accounts that share its email.
+
+  The account chooser and importing account-to-login links from a joining PDS are
+  not implemented yet. When several accounts match, the resolver returns
   `selection-required`. Email-level session revocation remains conservative for a
   shared user, while OAuth/account data stays DID-scoped. See
   [account identity](data-custody.md#1-account-identity-and-ownership).

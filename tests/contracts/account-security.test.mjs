@@ -647,7 +647,81 @@ test("verified email change preserves shared-user browser sessions and cleans on
   });
 });
 
-test("verified email change can associate a DID with a primary email held by its migration owner", async (t) => {
+test("ordinary email change rejects another DID's normalized primary email and keeps proof reusable for an unused address", async (t) => {
+  const f = await fixture(t);
+  const destination = await f.signIn(f.bob.email);
+  const sibling = {
+    ...f.alice,
+    did: "did:plc:cccccccccccccccccccccccc",
+    handle: "shared-sibling.entryway.atmosbox.test",
+  };
+  await f.accounts.storage.insertAccount(sibling);
+  await f.accounts.storage.bindVerifiedIdentity({
+    did: sibling.did,
+    email: sibling.email,
+    userId: f.login.user.id,
+  });
+
+  await f.security.requestEmailUpdate(f.actor);
+  const currentEmailToken = await f.token(f.alice.email);
+  await assert.rejects(
+    f.security.updateEmail(f.actor, {
+      email: " ALICE@EXAMPLE.COM ",
+      token: currentEmailToken,
+    }),
+    { error: "InvalidEmail" },
+  );
+  const destinationMailBefore = await f.db.get("outbox", f.bob.email);
+  await assert.rejects(
+    f.security.updateEmail(f.actor, {
+      email: " BOB@EXAMPLE.COM ",
+      token: currentEmailToken,
+    }),
+    { error: "EmailNotAvailable" },
+  );
+
+  assert.deepEqual(await f.db.get("outbox", f.bob.email), destinationMailBefore);
+  assert.equal(await f.db.get("security:pending-email", f.alice.did), null);
+  assert.equal(
+    (await f.db.get("security:challenges", currentEmailToken.split(".")[0]))
+      .consumedAt,
+    undefined,
+  );
+  assert.equal(
+    (await f.db.list("security:challenges")).some(
+      ({ value }) => value.email === f.bob.email && value.purpose === "email-new",
+    ),
+    false,
+  );
+
+  await f.security.updateEmail(f.actor, {
+    email: "unused@example.com",
+    token: currentEmailToken,
+  });
+  await f.security.confirmEmail(f.actor, {
+    email: "unused@example.com",
+    token: await f.token("unused@example.com"),
+  });
+
+  assert.equal((await f.accounts.get(f.alice.did)).email, "unused@example.com");
+  assert.equal((await f.accounts.get(sibling.did)).email, f.alice.email);
+  assert.equal(
+    (await f.accounts.storage.getVerifiedBinding(sibling.did)).userId,
+    f.login.user.id,
+  );
+  assert.equal(
+    (await f.accounts.storage.getVerifiedBinding(f.bob.did)).userId,
+    destination.user.id,
+  );
+  assert.deepEqual(await f.accounts.storage.listEmailClaims(f.alice.email), [
+    { did: sibling.did, purpose: "primary" },
+  ]);
+  assert.deepEqual(await f.accounts.storage.listEmailClaims(f.bob.email), [
+    { did: f.bob.did, purpose: "primary" },
+  ]);
+});
+
+test("ordinary email change rejects another DID's primary even when a migration reservation has the same owner", async (t) => {
   const f = await fixture(t);
   const destination = await f.signIn(f.bob.email);
   const reservation = {
@@ -661,29 +735,11 @@ test("verified email change can associate a DID with a primary email held by its
   };
   await f.accounts.storage.reserveExternalMigration(reservation);
   const aliceBefore = await f.accounts.get(f.alice.did);
-  const aliceBindingBefore = await f.accounts.storage.getVerifiedBinding(
-    f.alice.did,
-  );
   const bobBefore = await f.accounts.get(f.bob.did);
   const bobBindingBefore = await f.accounts.storage.getVerifiedBinding(
     f.bob.did,
   );
-  const destinationUserBefore = await query(
-    f.db,
-    'SELECT * FROM "user" WHERE id=?',
-    [destination.user.id],
-    "get",
-  );
-  assert.deepEqual(aliceBindingBefore, {
-    did: f.alice.did,
-    userId: f.login.user.id,
-    email: f.alice.email,
-  });
-  assert.deepEqual(bobBindingBefore, {
-    did: f.bob.did,
-    userId: destination.user.id,
-    email: f.bob.email,
-  });
+  const destinationMailBefore = await f.db.get("outbox", f.bob.email);
   await assert.rejects(
     f.accounts.storage.saveAccount(
       { ...aliceBefore, email: f.bob.email },
@@ -695,85 +751,28 @@ test("verified email change can associate a DID with a primary email held by its
   assert.deepEqual(await f.accounts.get(f.alice.did), aliceBefore);
 
   await f.security.requestEmailUpdate(f.actor);
-  await f.security.updateEmail(f.actor, {
-    email: f.bob.email,
-    token: await f.token(f.alice.email),
-  });
-  const newEmailToken = await f.token(f.bob.email);
   await assert.rejects(
-    f.security.confirmEmail(destination.actor, {
-      email: f.bob.email,
-      token: newEmailToken,
+    f.security.updateEmail(f.actor, {
+      email: " BOB@EXAMPLE.COM ",
+      token: await f.token(f.alice.email),
     }),
-    { error: "InvalidToken" },
+    { error: "EmailNotAvailable" },
   );
+
   assert.deepEqual(await f.accounts.get(f.alice.did), aliceBefore);
-  assert.deepEqual(
-    await f.accounts.storage.getVerifiedBinding(f.alice.did),
-    aliceBindingBefore,
-  );
   assert.deepEqual(await f.accounts.get(f.bob.did), bobBefore);
   assert.deepEqual(
     await f.accounts.storage.getVerifiedBinding(f.bob.did),
     bobBindingBefore,
   );
-
-  await f.security.confirmEmail(f.actor, {
-    email: f.bob.email,
-    token: newEmailToken,
-  });
-
-  assert.equal((await f.accounts.get(f.alice.did)).email, f.bob.email);
-  assert.deepEqual(await f.accounts.get(f.bob.did), bobBefore);
-  assert.deepEqual(
-    await f.accounts.storage.getVerifiedBinding(f.bob.did),
-    bobBindingBefore,
-  );
+  assert.equal((await f.security.summary(f.actor)).pendingEmail, null);
+  assert.deepEqual(await f.db.get("outbox", f.bob.email), destinationMailBefore);
   assert.equal(
-    (await f.accounts.storage.getVerifiedBinding(f.alice.did)).userId,
-    destination.user.id,
-  );
-  assert.notEqual(
-    (await f.accounts.storage.getVerifiedBinding(f.alice.did)).userId,
-    aliceBindingBefore.userId,
-  );
-  assert.deepEqual(
-    await query(
-      f.db,
-      'SELECT * FROM "user" WHERE id=?',
-      [destination.user.id],
-      "get",
+    (await f.db.list("security:challenges")).some(
+      ({ value }) => value.email === f.bob.email && value.purpose === "email-new",
     ),
-    destinationUserBefore,
+    false,
   );
-  assert.deepEqual(
-    await f.security.assertLoginEmail({
-      email: f.bob.email,
-      userId: destination.user.id,
-      emailVerified: true,
-    }),
-    {
-      kind: "selection-required",
-      accounts: [
-        { did: f.alice.did, handle: f.alice.handle, status: f.alice.status },
-        { did: f.bob.did, handle: f.bob.handle, status: f.bob.status },
-      ],
-    },
-  );
-  const destinationSession = await f.oauth.requireSession({
-    headers: { cookie: destination.cookie },
-  });
-  assert.ok(destinationSession);
-  assert.equal(
-    (
-      await createAccountAccess(f.accounts.storage).requireBoundAccount(
-        destinationSession,
-        f.alice.did,
-      )
-    ).did,
-    f.alice.did,
-  );
-  assert.equal(await f.accounts.storage.getVerifiedBinding(reservation.did), null);
   assert.deepEqual(
     await f.accounts.storage.getExternalReservationByEmail(f.bob.email),
     { did: reservation.did, userId: destination.user.id },
@@ -784,7 +783,8 @@ test("verified email change rejects mixed or stale migration reservation owners"
   for (const scenario of ["mixed-owners", "stale-owner"]) {
     await t.test(scenario, async (t) => {
       const f = await fixture(t);
-      const destination = await f.signIn(f.bob.email);
+      const migrationEmail = "email-change-migration@example.com";
+      const destination = await f.signIn(migrationEmail);
       const reservations = [
         {
           workflowId: `email-change-${scenario}-one`,
@@ -824,7 +824,7 @@ test("verified email change rejects mixed or stale migration reservation owners"
       await f.security.requestEmailUpdate(f.actor);
       await assert.rejects(
         f.security.updateEmail(f.actor, {
-          email: f.bob.email,
+          email: migrationEmail,
           token: await f.token(f.alice.email),
         }),
         { error: "EmailNotAvailable" },
@@ -834,40 +834,41 @@ test("verified email change rejects mixed or stale migration reservation owners"
   }
 });
 
-test("admin email change leaves the selected DID unbound and does not mutate the destination owner", async (t) => {
+test("admin email repair rejects another DID's normalized primary without changing either account", async (t) => {
   const f = await fixture(t);
   const destination = await f.signIn(f.bob.email);
-  await f.security.adminUpdateEmail(
-    { kind: "admin" },
-    { did: f.alice.did, email: f.bob.email },
+  const aliceBefore = await f.accounts.get(f.alice.did);
+  const aliceBindingBefore = await f.accounts.storage.getVerifiedBinding(
+    f.alice.did,
+  );
+  const bobBefore = await f.accounts.get(f.bob.did);
+  const bobBindingBefore = await f.accounts.storage.getVerifiedBinding(
+    f.bob.did,
+  );
+  const destinationMailBefore = await f.db.get("outbox", f.bob.email);
+
+  await assert.rejects(
+    f.security.adminUpdateEmail(
+      { kind: "admin" },
+      { did: f.alice.did, email: " BOB@EXAMPLE.COM " },
+    ),
+    { error: "EmailNotAvailable" },
   );
 
-  const alice = await f.accounts.get(f.alice.did);
-  assert.equal(alice.email, f.bob.email);
-  assert.equal(alice.emailVerified, false);
-  assert.equal(await f.accounts.storage.getVerifiedBinding(f.alice.did), null);
-  assert.equal((await f.accounts.get(f.bob.did)).email, f.bob.email);
-  assert.equal(
-    (await f.accounts.storage.getVerifiedBinding(f.bob.did)).userId,
-    destination.user.id,
-  );
+  assert.deepEqual(await f.accounts.get(f.alice.did), aliceBefore);
   assert.deepEqual(
-    await f.security.assertLoginEmail({
-      email: f.bob.email,
-      userId: destination.user.id,
-      emailVerified: true,
-    }),
-    { kind: "single", account: await f.accounts.get(f.bob.did) },
+    await f.accounts.storage.getVerifiedBinding(f.alice.did),
+    aliceBindingBefore,
   );
-  const destinationUser = await query(
-    f.db,
-    'SELECT * FROM "user" WHERE id=?',
-    [destination.user.id],
-    "get",
+  assert.deepEqual(await f.accounts.get(f.bob.did), bobBefore);
+  assert.deepEqual(
+    await f.accounts.storage.getVerifiedBinding(f.bob.did),
+    bobBindingBefore,
   );
-  assert.equal(destinationUser.email, f.bob.email);
-  assert.equal(destinationUser.emailVerified, f.db.backend === "sqlite" ? 1 : true);
-  assert.ok(await f.oauth.requireSession({ headers: { cookie: destination.cookie } }));
+  assert.deepEqual(await f.db.get("outbox", f.bob.email), destinationMailBefore);
+  assert.ok(
+    await f.oauth.requireSession({ headers: { cookie: destination.cookie } }),
+  );
   await assert.rejects(
     f.security.adminUpdateEmail(f.actor, {
       did: f.alice.did,
@@ -1060,8 +1061,32 @@ test("backup recovery verifies replacement email, retains DID and removes compro
   );
   assert.equal(await f.db.get("outbox", "missing@example.com"), null);
   await f.security.requestRecovery({ email: "backup@example.com" });
+  const backupToken = await f.token("backup@example.com");
+  const occupiedMailBefore = await f.db.get("outbox", f.bob.email);
+  await assert.rejects(
+    f.security.completeRecovery({
+      token: backupToken,
+      newEmail: " BOB@EXAMPLE.COM ",
+    }),
+    { error: "EmailNotAvailable" },
+  );
+  assert.deepEqual(await f.db.get("outbox", f.bob.email), occupiedMailBefore);
+  assert.equal(await f.db.get("security:pending-email", f.alice.did), null);
+  assert.equal(
+    (await f.db.get("security:challenges", backupToken.split(".")[0]))
+      .consumedAt,
+    undefined,
+  );
+  assert.equal(
+    (await f.db.list("security:challenges")).some(
+      ({ value }) =>
+        value.email === f.bob.email &&
+        value.purpose === "recovery-new-email",
+    ),
+    false,
+  );
   await f.security.completeRecovery({
-    token: await f.token("backup@example.com"),
+    token: backupToken,
     newEmail: "recovered@example.com",
   });
   assert.equal((await f.accounts.get(f.alice.did)).email, f.alice.email);
@@ -1422,6 +1447,55 @@ test("forced email claim failure rolls back account and identity changes togethe
       .sessionId,
     f.actor.sessionId,
   );
+});
+
+test("concurrent final email authority commits allow only one DID to claim an unused destination", async (t) => {
+  const f = await fixture(t);
+  const authority = createAccountAuthority({ db: f.db, accounts: f.accounts });
+  const destination = "racing-destination@example.com";
+  const mutations = [f.alice, f.bob].map((row) => ({
+    did: row.did,
+    email: destination,
+    recovery: false,
+    verified: true,
+    previousEmail: row.email,
+  }));
+  const before = await Promise.all(
+    mutations.map(async ({ did }) => ({
+      account: await f.accounts.get(did),
+      binding: await f.accounts.storage.getVerifiedBinding(did),
+    })),
+  );
+
+  const results = await Promise.allSettled(
+    mutations.map((mutation) => authority.commitEmailChange(mutation)),
+  );
+  const winnerIndex = results.findIndex(({ status }) => status === "fulfilled");
+  assert.notEqual(winnerIndex, -1);
+  assert.equal(
+    results.filter(({ status }) => status === "fulfilled").length,
+    1,
+  );
+  const loserIndex = winnerIndex === 0 ? 1 : 0;
+  assert.equal(
+    results[loserIndex].reason.error ?? results[loserIndex].reason.code,
+    "EmailNotAvailable",
+  );
+  assert.equal(
+    (await f.accounts.get(mutations[winnerIndex].did)).email,
+    destination,
+  );
+  assert.deepEqual(
+    await f.accounts.get(mutations[loserIndex].did),
+    before[loserIndex].account,
+  );
+  assert.deepEqual(
+    await f.accounts.storage.getVerifiedBinding(mutations[loserIndex].did),
+    before[loserIndex].binding,
+  );
+  assert.deepEqual(await f.accounts.storage.listEmailClaims(destination), [
+    { did: mutations[winnerIndex].did, purpose: "primary" },
+  ]);
 });
 
 test("concurrent security attempt reservations retain the existing aggregate budget", async (t) => {

@@ -8,11 +8,16 @@ See [architecture](architecture.md) for domain ownership and [delivery reference
 Use the DID as the account primary key. A separate account UUID is not required by the agreed scope.
 Better Auth user IDs, browser-session IDs, devices, grants and migration-operation IDs remain separate identifiers.
 
-Primary account email claims may repeat across DIDs, and one verified Better Auth
-user may have multiple DID bindings. Each DID remains a separate account with at
-most one binding; associations never merge DIDs. A shared email claim does not
-bind or grant access to another DID. Binding a DID requires an authorized,
-account-specific verification path, including verified migration finalization.
+Multiple accounts can share a primary email after migration or import. They remain
+separate accounts: access to one does not grant access to the others.
+
+Email changes, account recovery, and admin repairs cannot move an account to an
+email already used by another account. Moving an account to an unused email leaves
+the others unchanged.
+
+An email match alone never grants account access. Linking an account to a login
+still requires proof that the user controls that account.
+
 Ordinary signup cannot create another DID for an email that already has an account.
 
 Sign-in verifies the email before resolving its associated DIDs. One associated
@@ -33,8 +38,10 @@ Restoring access requires an explicit trusted repair. No repair command is
 currently available, and no automatic backfill is performed.
 
 Account access is resolved only through explicit DID-to-user bindings. The
-schemas allow multiple DIDs to share a primary email claim and allow one Better
-Auth user to bind multiple DIDs; Better Auth email itself remains unique. The
+schemas retain support for multiple DIDs sharing a primary email claim and one
+Better Auth user binding multiple DIDs; Better Auth email itself remains unique.
+Ordinary account changes do not add a primary claim to an email already claimed
+by another DID; migration/import remains the explicit sharing exception. The
 resolver returns `selection-required` for multiple established bindings, but the
 interactive chooser and joining-PDS association import are not implemented. No
 DID is selected or bound from an email match alone.
