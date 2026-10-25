@@ -1,5 +1,6 @@
 import { noExternalResult, signingKeyResult } from "./operation-ownership.js";
 import { ensureValidHandle } from "@atproto/syntax";
+import { validateHostedHandle } from "./input-schema.js";
 import { HttpError } from "../http/http-error.mjs";
 import { xrpc } from "../pds/client.mjs";
 
@@ -85,29 +86,31 @@ export function createAccountPrimitives({ db, config, storage, ownership }) {
       );
   };
   const validateHandle = async (handle, did) => {
+    if (typeof handle !== "string")
+      throw new HttpError(400, "InvalidHandle", "Invalid handle");
     if (config.publicHandles && !config.publicHandles.includes(handle))
       throw new HttpError(
         400,
         "InvalidHandle",
         "Choose one of the configured tunnel handles",
       );
-    if (typeof handle !== "string" || handle !== handle.toLowerCase())
+    if (handle !== handle.toLowerCase())
       throw new HttpError(400, "InvalidHandle", "Use a lowercase handle");
     try {
       ensureValidHandle(handle);
     } catch {
       throw new HttpError(400, "InvalidHandle", "Invalid handle");
     }
-    if (
-      !config.handleDomains.some(
-        (d) => handle.endsWith(d) && !handle.slice(0, -d.length).includes("."),
-      )
-    )
+    try {
+      validateHostedHandle(handle, config.handleDomains);
+    } catch {
       throw new HttpError(
         400,
         "InvalidHandle",
-        "Choose a handle in the hosted domain",
+        "Hosted handle labels must contain 3 to 18 characters",
       );
+    }
+    // Entryway callbacks bypass the PDS reserved list; retain our exact-host policy.
     if (
       [
         "entryway.test",

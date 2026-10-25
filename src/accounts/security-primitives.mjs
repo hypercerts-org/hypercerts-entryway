@@ -1,16 +1,15 @@
 import { createHmac, randomBytes, randomInt } from "node:crypto";
 import { HttpError } from "../http/http-error.mjs";
+import { accountEmailSchema } from "./input-schema.js";
 
 const TEN_MINUTES = 600_000;
 export const fail = (status, error, message) =>
   new HttpError(status, error, message);
 export const normalizeEmail = (email) => {
-  email = String(email ?? "")
-    .trim()
-    .toLowerCase();
-  if (email.length > 320 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+  const result = accountEmailSchema.safeParse(email);
+  if (!result.success)
     throw fail(400, "InvalidEmail", "Enter a valid email address");
-  return email;
+  return result.data;
 };
 
 /** Shared verified principal and one-use proof primitives. Feature operations

@@ -23,7 +23,7 @@ const outbox = (email) => {
 const runId = Date.now().toString(36)
 const identities = ['pds1', 'pds2', 'disposable', 'protocol'].map((name, index) => ({
   email: `spike-${runId}-${name}@example.com`,
-  handle: `spike-${runId}-${name}.entryway.atmosbox.test`,
+  handle: `web-${randomUUID().replaceAll('-', '').slice(0, 14)}.entryway.atmosbox.test`,
   pdsId: index === 1 ? 'pds2' : 'pds1',
 }))
 let context
@@ -380,7 +380,7 @@ test('handle update, deactivate, reactivate, revoke and delete use a disposable 
   const disposable = identities[2]
   await signup(disposable)
   await page.goto(`${config.issuer}/account`)
-  const updated = `renamed-${runId}.entryway.atmosbox.test`
+  const updated = `new-${randomUUID().replaceAll('-', '').slice(0, 14)}.entryway.atmosbox.test`
   await page.getByLabel('New handle').fill(updated)
   await page.getByRole('button', { name: 'Update handle' }).click()
   await expect(page.locator('main')).toContainText(updated)

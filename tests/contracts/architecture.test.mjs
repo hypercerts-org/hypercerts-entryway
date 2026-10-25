@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -55,6 +61,23 @@ test("application respects the three boundaries and contains no runtime import c
   const result = checkArchitecture(resolve("."));
   assert.ok(result.files > 0);
   assert.deepEqual(result.violations, []);
+});
+
+test("custody-writing workflows receive storage from composition rather than constructing adapters", () => {
+  for (const file of [
+    "src/features/account-registration/create-account.ts",
+    "src/features/handle-change/change-handle.ts",
+    "src/plc/operations.ts",
+    "src/features/pds-migration/move-between-pds.mjs",
+  ]) {
+    const source = readFileSync(file, "utf8");
+    assert.doesNotMatch(
+      source,
+      /createCustodyInventoryStorage|database\/drizzle\/migration-custody/,
+      file,
+    );
+    assert.match(source, /custody\.recordSigned/, file);
+  }
 });
 
 test("authentication, database and mail accept their own provider integrations", (t) => {

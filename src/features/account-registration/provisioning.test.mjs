@@ -1,7 +1,384 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Secp256k1Keypair } from "@atproto/crypto";
+import { cidForCbor } from "@atproto/common";
+import { createCustodyInventoryStorage } from "../../../dist/src/database/drizzle/migration-custody.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fixture, alice } from "../../../tests/support/account-fixture.mjs";
+
+test("registration rejects malformed and oversized email before external work", async (t) => {
+  const f = await fixture(t);
+  for (const email of [
+    "missing-at",
+    "a@b..c",
+    `${"a".repeat(65)}@example.com`,
+    [alice.email],
+    { toString: () => alice.email },
+    {
+      toString() {
+        assert.fail("Email must not be coerced");
+      },
+    },
+    "a@@b.c",
+    "a@.c",
+    "a@b.",
+    "a b@c.d",
+    `${"a".repeat(10000)}@b.c`,
+  ]) {
+    await assert.rejects(f.accounts.create({ ...alice, email }), {
+      error: "InvalidEmail",
+    });
+  }
+  assert.equal(f.calls.length, 0);
+});
+
+test("registration normalizes accepted email and preserves absent and null recovery keys", async (t) => {
+  for (const recoveryKey of [undefined, null]) {
+    await t.test(`recovery key ${recoveryKey}`, async (t) => {
+      const f = await fixture(t);
+      const row = await f.accounts.create({
+        ...alice,
+        email: "  ALICE@Example.COM  ",
+        recoveryKey,
+      });
+      assert.equal(row.email, "alice@example.com");
+      assert.equal(row.recoveryKey ?? null, null);
+    });
+  }
+});
+
+test("empty recovery key retains InvalidPlcOperation semantics without remote mutation", async (t) => {
+  const f = await fixture(t);
+  await assert.rejects(f.accounts.create({ ...alice, recoveryKey: "" }), {
+    code: "InvalidPlcOperation",
+  });
+  assert.equal(f.calls.length, 0);
+});
+
+test("registration maps malformed fields before signing or PDS mutation", async (t) => {
+  const f = await fixture(t);
+  let signatures = 0;
+  f.accounts.plcSigner.signGenesis = async () => {
+    signatures++;
+    throw Error("Unexpected signing");
+  };
+  for (const [input, error] of [
+    [null, "InvalidRequest"],
+    [undefined, "InvalidRequest"],
+    [[], "InvalidRequest"],
+    ["registration", "InvalidRequest"],
+    [123, "InvalidRequest"],
+    [{ ...alice, email: null }, "InvalidEmail"],
+    [{ ...alice, email: 123 }, "InvalidEmail"],
+    [{ ...alice, handle: null }, "InvalidHandle"],
+    [{ ...alice, handle: 123 }, "InvalidHandle"],
+    [{ ...alice, pdsId: null }, "InvalidPds"],
+    [{ ...alice, pdsId: "unknown" }, "InvalidPds"],
+    [{ ...alice, recoveryKey: {} }, "InvalidRecoveryKey"],
+    [{ ...alice, recoveryKey: "not-a-key" }, "InvalidRecoveryKey"],
+    [{ ...alice, inviteCode: false }, "InvalidInviteCode"],
+    [{ ...alice, unexpected: true }, "InvalidRequest"],
+  ]) {
+    await assert.rejects(f.accounts.create(input), { status: 400, error });
+  }
+  assert.equal(signatures, 0);
+  assert.equal(f.calls.length, 0);
+});
+
+test("registration distinguishes nonobject details from unsupported fields", async (t) => {
+  const f = await fixture(t);
+  for (const input of [null, undefined, [], "registration", 123, false]) {
+    await assert.rejects(f.accounts.create(input), {
+      status: 400,
+      error: "InvalidRequest",
+      message: "Registration details must be provided as an object.",
+    });
+  }
+  await assert.rejects(f.accounts.create({ ...alice, unexpected: true }), {
+    status: 400,
+    error: "InvalidRequest",
+    message: "Registration contains unsupported fields.",
+  });
+  assert.equal(f.calls.length, 0);
+});
+
+test("registration rejects invalid hosted handles before signing or PDS mutation", async (t) => {
+  const f = await fixture(t);
+  f.config.handleDomains.push(".entryway.test", ".test");
+  let signatures = 0;
+  f.accounts.plcSigner.signGenesis = async () => {
+    signatures++;
+    throw Error("Unexpected signing");
+  };
+  for (const handle of [
+    "ab.entryway.atmosbox.test",
+    `${"a".repeat(19)}.entryway.atmosbox.test`,
+    "a.b.entryway.atmosbox.test",
+    "Alice.entryway.atmosbox.test",
+    "-alice.entryway.atmosbox.test",
+    "alice.other.test",
+    "entryway.test",
+    "client.entryway.test",
+    "pds1.entryway.test",
+    "pds2.entryway.test",
+  ]) {
+    await assert.rejects(f.accounts.create({ ...alice, handle }), {
+      status: 400,
+      error: "InvalidHandle",
+    });
+  }
+  assert.equal(signatures, 0);
+  assert.equal(f.calls.length, 0);
+});
+
+test("registration accepts boundary labels and does not reserve labels across domains", async (t) => {
+  const f = await fixture(t);
+  for (const label of [
+    "abc",
+    "a".repeat(18),
+    "entryway",
+    "client",
+    "pds1",
+    "pds2",
+    "admin",
+  ]) {
+    const handle = `${label}.entryway.atmosbox.test`;
+    const row = await f.accounts.create({
+      ...alice,
+      email: `${label}@example.com`,
+      handle,
+    });
+    assert.equal(row.handle, handle);
+  }
+});
+
+for (const domain of [".entryway.atmosbox.test", "entryway.atmosbox.test"]) {
+  test(`registration accepts hosted label boundaries with domain ${domain}`, async (t) => {
+    const f = await fixture(t);
+    f.config.handleDomains = [domain];
+    for (const label of ["abc", "alice", "a".repeat(18)]) {
+      const handle = `${label}.entryway.atmosbox.test`;
+      const row = await f.accounts.create({
+        ...alice,
+        email: `${label}@example.com`,
+        handle,
+      });
+      assert.equal(row.handle, handle);
+    }
+  });
+
+  test(`registration rejects lookalikes and invalid labels with domain ${domain}`, async (t) => {
+    const f = await fixture(t);
+    f.config.handleDomains = [domain];
+    let signatures = 0;
+    f.accounts.plcSigner.signGenesis = async () => {
+      signatures++;
+      throw Error("Unexpected signing");
+    };
+    for (const handle of [
+      "aliceentryway.atmosbox.test",
+      "alice-entryway.atmosbox.test",
+      "entryway.atmosbox.test",
+      "ab.entryway.atmosbox.test",
+      `${"a".repeat(19)}.entryway.atmosbox.test`,
+      "a.b.entryway.atmosbox.test",
+      "alice.entryway.atmosbox.test.other.test",
+    ]) {
+      await assert.rejects(f.accounts.create({ ...alice, handle }), {
+        status: 400,
+        error: "InvalidHandle",
+      });
+    }
+    assert.equal(signatures, 0);
+    assert.equal(f.calls.length, 0);
+  });
+}
+
+test("configured public handles remain an additional registration constraint", async (t) => {
+  const f = await fixture(t);
+  f.config.publicHandles = [alice.handle];
+  await assert.rejects(
+    f.accounts.create({ ...alice, handle: "other.entryway.atmosbox.test" }),
+    { status: 400, error: "InvalidHandle" },
+  );
+  assert.equal(f.calls.length, 0);
+  assert.equal((await f.accounts.create(alice)).handle, alice.handle);
+});
+
+test("shared email schema normalizes standard addresses within length bounds", async () => {
+  const { accountEmailSchema, registrationInputSchema } =
+    await import("../../../dist/src/accounts/input-schema.js");
+  const { emailAddress } = await import("../../../dist/src/accounts/input.mjs");
+  for (const email of [
+    " A+Tag@Example.COM ",
+    "user.name+tag@example.co.uk",
+    `${"a".repeat(64)}@example.com`,
+    `${"a".repeat(64)}@${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(61)}`,
+  ]) {
+    const normalized = email.trim().toLowerCase();
+    assert.equal(accountEmailSchema.parse(email), normalized);
+    assert.equal(emailAddress(email), normalized);
+    assert.equal(
+      registrationInputSchema.parse({ ...alice, email }).email,
+      normalized,
+    );
+  }
+});
+
+test("shared email schema rejects malformed addresses and nonstrings without coercion", async () => {
+  const { accountEmailSchema, registrationInputSchema } =
+    await import("../../../dist/src/accounts/input-schema.js");
+  const { emailAddress } = await import("../../../dist/src/accounts/input.mjs");
+  const { normalizeEmail } =
+    await import("../../../dist/src/accounts/security-primitives.mjs");
+  assert.equal(normalizeEmail(" ALICE@Example.COM "), alice.email);
+  for (const email of [
+    undefined,
+    null,
+    false,
+    123,
+    {},
+    [],
+    [alice.email],
+    new String(alice.email),
+    { toString: () => alice.email },
+    {
+      toString() {
+        assert.fail("Email must not be coerced");
+      },
+    },
+    1n,
+    Symbol("email"),
+    "",
+    "   ",
+    "a@b..c",
+    "a@b.c",
+    ".alice@example.com",
+    "alice..name@example.com",
+    `${"a".repeat(65)}@example.com`,
+    `${"a".repeat(64)}@${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(62)}`,
+    "a@@b.c",
+    "a@.c",
+    "a@b.",
+    "a b@c.d",
+    `${"a".repeat(251)}@b.c`,
+  ]) {
+    assert.equal(accountEmailSchema.safeParse(email).success, false);
+    assert.throws(() => normalizeEmail(email), {
+      status: 400,
+      error: "InvalidEmail",
+    });
+    assert.throws(() => emailAddress(email), {
+      status: 400,
+      error: "InvalidEmail",
+    });
+    assert.equal(
+      registrationInputSchema.safeParse({ ...alice, email }).success,
+      false,
+    );
+  }
+});
+
+test("email local-part limit reports a meaningful schema issue", async () => {
+  const { accountEmailSchema } =
+    await import("../../../dist/src/accounts/input-schema.js");
+  const result = accountEmailSchema.safeParse(`${"a".repeat(65)}@example.com`);
+  assert.equal(result.success, false);
+  assert.ok(
+    result.error.issues.some(
+      ({ message }) =>
+        message === "Email local part must contain at most 64 characters",
+    ),
+  );
+});
+
+test("registration schema rejects undeclared fields without adding field policy", async () => {
+  const { registrationInputSchema } =
+    await import("../../../dist/src/accounts/input-schema.js");
+  assert.equal(
+    registrationInputSchema.safeParse({ ...alice, unexpected: true }).success,
+    false,
+  );
+  assert.deepEqual(
+    registrationInputSchema.parse({
+      ...alice,
+      handle: "",
+      pdsId: "",
+      recoveryKey: null,
+      inviteCode: "",
+    }),
+    { ...alice, handle: "", pdsId: "", recoveryKey: null, inviteCode: "" },
+  );
+});
+
+test("acknowledged registration activates during transient evidence outage and retains refresh pending", async (t) => {
+  const f = await fixture(t);
+  const read = f.accounts.plcClient.getAuditableLog;
+  f.accounts.plcClient.getAuditableLog = async () => {
+    throw Object.assign(new Error("unavailable"), { status: 503 });
+  };
+  const row = await f.accounts.create(alice);
+  assert.equal(row.status, "active");
+  const store = createCustodyInventoryStorage(f.db);
+  assert.equal(await store.getByDid(row.did), null);
+  assert.deepEqual(
+    (await store.getHistory(row.did)).map((event) => event.kind),
+    ["signed"],
+  );
+  assert.equal(
+    (await f.db.get("custody:refresh-pending", row.did)).error,
+    "CustodyEvidenceUnavailable",
+  );
+  assert.equal(
+    (await f.db.get("operations", `create:${row.did}`)).phase,
+    "complete",
+  );
+  assert.equal(await f.db.get("registration:intents", alice.email), null);
+  assert.equal((await f.accounts.create(alice)).did, row.did);
+  assert.equal(
+    f.calls.filter((call) => call.method === "com.atproto.server.createAccount")
+      .length,
+    1,
+  );
+  f.accounts.plcClient.getAuditableLog = read;
+  const results = await f.accounts.reconcile();
+  assert.deepEqual(
+    results.find((result) => result.id === `custody-refresh:${row.did}`),
+    { id: `custody-refresh:${row.did}`, status: "complete" },
+  );
+  assert.equal(await f.db.get("custody:refresh-pending", row.did), null);
+  assert.ok((await store.getByDid(row.did)).observation);
+});
+
+for (const code of [
+  "CustodyConflict",
+  "InvalidCustodyObservation",
+  "OperationLeaseLost",
+  "UnknownFailure",
+]) {
+  test(`registration does not activate on ${code} evidence failure`, async (t) => {
+    const f = await fixture(t);
+    f.accounts.plcClient.getAuditableLog = async () => {
+      throw Object.assign(new Error("injected"), { code });
+    };
+    await assert.rejects(f.accounts.create(alice), { code });
+    const row = await f.accounts.get(alice.email);
+    assert.equal(row.status, "provisioning");
+    assert.ok(row.op);
+    assert.ok(await f.db.get("registration:intents", alice.email));
+    assert.equal(await f.db.get("custody:refresh-pending", row.did), null);
+    assert.equal(
+      await createCustodyInventoryStorage(f.db).getByDid(row.did),
+      null,
+    );
+    assert.equal(
+      (await f.db.get("operations", `create:${row.did}`)).phase,
+      "pds-pending",
+    );
+  });
+}
 
 test("provisioning retries reuse the persisted DID and signed operation after a PDS failure", async (t) => {
   let failed = false;
@@ -90,7 +467,7 @@ test("pre-DID registration binds public recovery custody while matching requests
   const entered = Promise.withResolvers(),
     release = Promise.withResolvers();
   let firstAllocation = true;
-  const { db, accounts, calls, recover } = await fixture(
+  const { db, accounts, calls, recover, config } = await fixture(
     t,
     async ({ method }) => {
       if (
@@ -134,12 +511,85 @@ test("pre-DID registration binds public recovery custody while matching requests
     authorityOperationId: pendingAttempt.operationId,
     ...alice,
     recoveryKey: firstKey,
+    rotationKeys: [
+      firstKey,
+      config.plcRecoveryKeyDid,
+      accounts.plcSigner.publicKey(),
+    ],
   });
+  const selected = (await db.get("registration:intents", alice.email))
+    .rotationKeys;
+  config.plcRecoveryKeyDid = (await Secp256k1Keypair.create()).did();
   await recover(`email:${alice.email}`);
   const completed = await accounts.create(original);
   assert.equal(completed.recoveryKey, firstKey);
   assert.equal(completed.status, "active");
+  assert.deepEqual(completed.genesisRotationKeys, selected);
   assert.equal(await db.get("registration:intents", alice.email), null);
+});
+
+test("unsigned pending genesis refuses a replacement hot signer before allocating again", async (t) => {
+  let failAllocation = true;
+  const directory = mkdtempSync(join(tmpdir(), "custody-resume-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const f = await fixture(
+    t,
+    ({ method }) => {
+      if (method === "com.atproto.server.reserveSigningKey" && failAllocation) {
+        failAllocation = false;
+        return { status: 503, body: { error: "Unavailable" } };
+      }
+    },
+    { path: join(directory, "authority.sqlite") },
+  );
+  await assert.rejects(f.accounts.create(alice), { error: "Unavailable" });
+  await f.recover(`email:${alice.email}`);
+  const replacement = await Secp256k1Keypair.create({ exportable: true });
+  f.config.plcRotationKeyHex = Buffer.from(await replacement.export()).toString(
+    "hex",
+  );
+  await f.reopen();
+  await assert.rejects(f.accounts.create(alice), {
+    error: "RequiredSignerUnavailable",
+  });
+  assert.equal(
+    f.calls.filter(
+      (call) => call.method === "com.atproto.server.reserveSigningKey",
+    ).length,
+    1,
+  );
+  assert.ok(await f.db.get("registration:intents", alice.email));
+});
+
+test("signed pending genesis resumes exact bytes after the hot signer changes", async (t) => {
+  let failCreate = true;
+  const directory = mkdtempSync(join(tmpdir(), "custody-signed-resume-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const f = await fixture(
+    t,
+    ({ method }) => {
+      if (method === "com.atproto.server.createAccount" && failCreate) {
+        failCreate = false;
+        return { status: 503, body: { error: "Unavailable" } };
+      }
+    },
+    { path: join(directory, "authority.sqlite") },
+  );
+  await assert.rejects(f.accounts.create(alice), { error: "Unavailable" });
+  const row = await f.accounts.get(alice.email);
+  const original = structuredClone(row.op);
+  await f.recover(row.did);
+  const replacement = await Secp256k1Keypair.create({ exportable: true });
+  f.config.plcRotationKeyHex = Buffer.from(await replacement.export()).toString(
+    "hex",
+  );
+  await f.reopen();
+  await f.accounts.create(alice);
+  const calls = f.calls.filter(
+    (call) => call.method === "com.atproto.server.createAccount",
+  );
+  assert.deepEqual(calls[1].body.plcOp, original);
+  assert.equal(calls[1].body.did, row.did);
 });
 
 test("matching target description cannot reconcile a divergent registration PLC head", async (t) => {
@@ -173,4 +623,155 @@ test("matching target description cannot reconcile a divergent registration PLC 
   assert.equal(unchanged.did, pending.did);
   assert.deepEqual(unchanged.op, pending.op);
   assert.ok(await accounts.ownership.pendingExternal(pending.did));
+});
+
+// Local genesis computation cannot publish before the signed account row commits.
+test("genesis failure before first insert has no publication; saved row replays exactly", async (t) => {
+  const f = await fixture(t);
+  const insert = f.db.insert.bind(f.db);
+  let fail = true;
+  f.db.insert = async (table, ...args) => {
+    if (table === "accounts" && fail) {
+      fail = false;
+      throw new Error("Injected pre-insert crash boundary");
+    }
+    return insert(table, ...args);
+  };
+  await assert.rejects(f.accounts.create(alice), /pre-insert crash boundary/);
+  assert.equal(await f.accounts.get(alice.email), null);
+  assert.equal(f.remote.size, 0);
+  assert.equal(f.plcHeads.size, 0);
+  assert.equal(
+    f.calls.filter((call) => call.method === "com.atproto.server.createAccount")
+      .length,
+    0,
+  );
+  assert.equal((await f.db.list("operations")).length, 0);
+});
+
+test("genesis authorization history commits before PDS dispatch without observed authority", async (t) => {
+  let checked = false;
+  const f = await fixture(t, async ({ method, body }) => {
+    if (method !== "com.atproto.server.createAccount") return;
+    const store = createCustodyInventoryStorage(f.db);
+    const row = await f.accounts.get(body.did);
+    const { sig: _signature, ...facts } = body.plcOp;
+    const claim = f.accounts.ownership.currentClaim;
+    assert.deepEqual(row.op, body.plcOp);
+    assert.deepEqual(await store.getHistory(body.did), [
+      {
+        id: `${claim.operationId}:genesis`,
+        did: body.did,
+        cid: String(await cidForCbor(body.plcOp)),
+        operation: facts,
+        kind: "signed",
+        operationId: claim.operationId,
+        provenance: "entryway-authorized",
+        at: row.createdAt,
+      },
+    ]);
+    assert.equal(await store.getByDid(body.did), null);
+    assert.equal(f.remote.size, 0);
+    assert.equal(f.plcHeads.size, 0);
+    checked = true;
+  });
+  await f.accounts.create(alice);
+  assert.equal(checked, true);
+});
+
+test("genesis history failure rolls back the signed row, claims, DID admission and facts", async (t) => {
+  const f = await fixture(t);
+  const insert = f.db.insert.bind(f.db);
+  let did;
+  f.db.insert = async (table, values, ...args) => {
+    if (table === "custody_history") {
+      did = values.did;
+      // Fail after immutable facts and DID binding have been written, proving
+      // nested custody storage participates in the outer physical transaction.
+      assert.ok(await f.accounts.get(did));
+      assert.equal((await f.db.read("custody_operations")).length, 1);
+      assert.ok(
+        (await f.db.read("operation_admissions")).some(
+          (admission) => admission.resource === did,
+        ),
+      );
+      throw new Error("Injected genesis history failure");
+    }
+    return insert(table, values, ...args);
+  };
+  await assert.rejects(f.accounts.create(alice), /genesis history failure/);
+  assert.ok(did);
+  assert.equal(await f.accounts.get(alice.email), null);
+  for (const table of [
+    "accounts",
+    "email_claims",
+    "handle_claims",
+    "custody_operations",
+    "custody_history",
+    "migration_custody_inventory",
+  ])
+    assert.deepEqual(await f.db.read(table), [], table);
+  assert.equal(
+    (await f.db.read("operation_admissions")).some(
+      (admission) => admission.resource === did,
+    ),
+    false,
+  );
+  assert.equal(f.remote.size, 0);
+  assert.equal(f.plcHeads.size, 0);
+  assert.equal(
+    f.calls.filter((call) => call.method === "com.atproto.server.createAccount")
+      .length,
+    0,
+  );
+});
+
+test("crash after signed row commit reuses acknowledged repository key and saved public custody", async (t) => {
+  const f = await fixture(t);
+  const set = f.db.set.bind(f.db);
+  let fail = true;
+  f.db.set = async (namespace, ...args) => {
+    if (namespace === "operations" && fail) {
+      fail = false;
+      throw new Error("Injected post-insert crash boundary");
+    }
+    return set(namespace, ...args);
+  };
+  await assert.rejects(f.accounts.create(alice), /post-insert crash boundary/);
+  const saved = await f.accounts.get(alice.email);
+  assert.ok(saved.op);
+  const store = createCustodyInventoryStorage(f.db);
+  const signedHistory = await store.getHistory(saved.did);
+  assert.equal(signedHistory.length, 1);
+  assert.equal(signedHistory[0].kind, "signed");
+  assert.equal(signedHistory[0].cid, String(await cidForCbor(saved.op)));
+  assert.equal(await store.getByDid(saved.did), null);
+  assert.deepEqual(saved.op.rotationKeys, saved.genesisRotationKeys);
+  assert.equal(f.remote.size, 0);
+  assert.equal(f.plcHeads.size, 0);
+  assert.equal(
+    f.calls.filter((call) => call.method === "com.atproto.server.createAccount")
+      .length,
+    0,
+  );
+  f.config.plcRecoveryKeyDid = (await Secp256k1Keypair.create()).did();
+  await f.accounts.create(alice);
+  const creates = f.calls.filter(
+    (call) => call.method === "com.atproto.server.createAccount",
+  );
+  assert.equal(creates.length, 1);
+  assert.deepEqual(
+    (await store.getHistory(saved.did)).filter(
+      (event) => event.kind === "signed",
+    ),
+    signedHistory,
+  );
+  assert.deepEqual(creates[0].body.plcOp, saved.op);
+  assert.equal(creates[0].body.did, saved.did);
+  assert.equal(
+    f.calls.filter(
+      (call) => call.method === "com.atproto.server.reserveSigningKey",
+    ).length,
+    1,
+  );
 });
