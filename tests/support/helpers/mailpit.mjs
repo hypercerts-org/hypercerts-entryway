@@ -50,7 +50,14 @@ export async function waitForMailpitCode({
 
   while (Date.now() < deadline) {
     const requestSignal = AbortSignal.timeout(Math.max(1, Math.min(5_000, deadline - Date.now())))
-    const result = await readJson(endpoint, requestSignal)
+    let result
+    try {
+      result = await readJson(endpoint, requestSignal)
+    } catch (error) {
+      // A poll cut off by the overall deadline is the same outcome as no message.
+      if (error?.name === 'TimeoutError' && Date.now() >= deadline) break
+      throw error
+    }
     const message = result.messages?.find((candidate) =>
       typeof candidate.ID === 'string' &&
       !excluded.has(candidate.ID) &&

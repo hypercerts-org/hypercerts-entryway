@@ -20,6 +20,10 @@ test("createAccount rejects JSON email coercion before signup, invite or provisi
     accounts: {
       get: record("get", null),
       create: record("create", { did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa" }),
+      pendingRegistration: record("pending", null),
+      storage: {
+        ensureVerifiedEmailUser: record("ensureUser", "user-alice"),
+      },
     },
     oauth: { requireSession: record("session", null) },
     protocolOperations: {
@@ -28,7 +32,6 @@ test("createAccount rejects JSON email coercion before signup, invite or provisi
       reserveInvite: record("reserve"),
       completeInvite: record("complete"),
     },
-    security: { bindVerifiedIdentity: record("bind") },
     legacy: { createAccountSession: record("result", { success: true }) },
     route(method, name, handler) {
       app[method](`/xrpc/com.atproto.${name}`, (req, res, next) => {
@@ -73,5 +76,9 @@ test("createAccount rejects JSON email coercion before signup, invite or provisi
   assert.equal(
     calls.find(({ name }) => name === "create").args[0].email,
     "alice@example.com",
+  );
+  assert.deepEqual(
+    calls.find(({ name }) => name === "create").args[0].registrationIdentity,
+    { kind: "better-auth", userId: "user-alice", email: "alice@example.com" },
   );
 });

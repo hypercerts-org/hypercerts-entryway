@@ -1,5 +1,8 @@
 import type {
   AccountRow,
+  EmailClaim,
+  StoredEmailClaimPurpose,
+  ExternalEmailReservation,
   ActivateImportedAccount,
   BindVerifiedIdentity,
   ExternalMigrationReservation,
@@ -12,11 +15,15 @@ import type {
 
 export interface AccountReader {
   getByDid(did: string): Promise<AccountRow | null>;
+  listBoundAccounts(userId: string): Promise<AccountRow[]>;
+  listByEmail(email: string): Promise<AccountRow[]>;
   getByEmail(email: string): Promise<AccountRow | null>;
   getByHandle(handle: string): Promise<AccountRow | null>;
-  getEmailClaim(
+  listEmailClaims(email: string): Promise<EmailClaim[]>;
+  getEmailClaim(email: string): Promise<EmailClaim | null>;
+  listExternalReservationsByEmail(
     email: string,
-  ): Promise<{ did: string; purpose: string } | null>;
+  ): Promise<ExternalEmailReservation[]>;
   getExternalReservationByEmail(
     email: string,
   ): Promise<{ did: string; userId: string } | null>;
@@ -33,14 +40,34 @@ export interface AccountReader {
 
 export interface AccountTransactor extends AccountReader {
   insertAccount(row: AccountRow): Promise<void>;
-  saveAccount(row: AccountRow): Promise<void>;
+  saveAccount(
+    row: AccountRow,
+    ownerUserId?: string,
+    options?: { allowSameOwnerActiveMigrationReservation?: boolean },
+  ): Promise<void>;
   bindVerifiedIdentity(input: BindVerifiedIdentity): Promise<string>;
-  ensureLegacyVerifiedIdentity(input: LegacyVerifiedEmail): Promise<string>;
+  /** Persist a verified email identity before signup provisions its DID.
+   * Callers must validate mailbox proof first.
+   */
+  ensureVerifiedEmailUser(email: string): Promise<string>;
+  /** Bind an account to its verified email user. Callers must validate mailbox proof first. */
+  bindAccountToVerifiedEmailUser(input: LegacyVerifiedEmail): Promise<string>;
   reserveExternalMigration(input: ExternalMigrationReservation): Promise<void>;
   finalizeImportedAccount(input: FinalizeImportedAccount): Promise<AccountRow>;
   activateImportedAccount(input: ActivateImportedAccount): Promise<AccountRow>;
-  reserveEmail(email: string, did: string, purpose: string): Promise<void>;
-  releaseEmail(email: string, did: string, purpose: string): Promise<void>;
+  reserveEmail(
+    email: string,
+    did: string,
+    purpose: StoredEmailClaimPurpose,
+    ownerUserId?: string,
+  ): Promise<void>;
+  releaseEmail(
+    email: string,
+    did: string,
+    purpose: StoredEmailClaimPurpose,
+  ): Promise<void>;
+  unbindAccount(did: string, expectedUserId?: string): Promise<void>;
+  rebindVerifiedIdentity(input: BindVerifiedIdentity): Promise<void>;
   reserveHandle(handle: string, did: string): Promise<void>;
   releaseHandle(handle: string, did: string): Promise<void>;
 }

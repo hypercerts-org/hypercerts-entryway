@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { fail, normalizeEmail } from "../../accounts/security-primitives.mjs";
 
 export function createAccountRecovery({
@@ -38,7 +39,7 @@ export function createAccountRecovery({
       });
       return {};
     },
-    async requestRecovery({ email }) {
+    async requestRecovery({ email }, { exposeChallengeId = false } = {}) {
       email = normalizeEmail(email);
       const backup = await authority.backupOwner(email);
       if (!backup) {
@@ -50,9 +51,29 @@ export function createAccountRecovery({
         await rate(email);
         return {};
       }
-      return await issue("recovery-backup", row, email);
+      return await issue(
+        "recovery-backup",
+        row,
+        email,
+        {},
+        {
+          exposeChallengeId,
+        },
+      );
     },
-    async completeRecovery({ token, newEmail }) {
+    async requestRecoveryForBrowser(input) {
+      const issued = await operations.requestRecovery(input, {
+        exposeChallengeId: true,
+      });
+      return {
+        challengeId:
+          issued.challengeId ?? randomBytes(18).toString("base64url"),
+      };
+    },
+    async completeRecovery(
+      { token, newEmail },
+      { exposeChallengeId = false } = {},
+    ) {
       const pending = await commitProof(
         token,
         "recovery-backup",
@@ -70,8 +91,22 @@ export function createAccountRecovery({
           });
         },
       );
-      await issue("recovery-new-email", pending.row, pending.email);
-      return { pending: true };
+      const issued = await issue(
+        "recovery-new-email",
+        pending.row,
+        pending.email,
+        {},
+        { exposeChallengeId },
+      );
+      return {
+        pending: true,
+        ...(issued.challengeId ? { challengeId: issued.challengeId } : {}),
+      };
+    },
+    async completeRecoveryForBrowser(input) {
+      return await operations.completeRecovery(input, {
+        exposeChallengeId: true,
+      });
     },
     async completeRecoveryEmail({ token }) {
       return commitProof(token, "recovery-new-email", {}, async (proof) => {

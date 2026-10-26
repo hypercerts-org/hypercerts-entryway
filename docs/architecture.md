@@ -127,6 +127,12 @@ A feature does not import another feature. Short root compose modules wire expli
 operations together. Shared accounts code owns common facts, validation and proof
 primitives. A shared account summary can display feature-owned panels supplied by
 composition without importing those features.
+
+Browser forms for emailed account proofs retain the opaque challenge ID separately
+from the visible code, then combine them server-side. Render selectors through the
+HTML-escaping hidden-field helper; never infer a selector by searching for a code.
+The primary-email change flow is the reference for browser-only proof issuance.
+Keep default protocol/XRPC proof-token behavior unchanged.
 Changes to shared transaction contracts, browser identity, signing custody and
 schema initialization require coordinated review. See AGENTS.md for enforceable source rules.
 
@@ -179,12 +185,14 @@ owned boundaries, feature-internal imports, runtime cycles and impure rule modul
 
 The sequence shows the target sign-in journey for existing associated accounts,
 not a claim of ePDS parity today.
-The approved sign-in policy verifies email before resolving associated DIDs, then
-requires an explicit choice if more than one is associated. The joining-PDS
-association import, schema changes and chooser remain unimplemented; see
-[account identity](data-custody.md#1-account-identity-and-ownership). Proof freshness
-and consent remain separate policy decisions. Public and confidential clients
-both need acceptance coverage.
+The approved sign-in policy verifies email before resolving established DID
+bindings, then requires an explicit choice if more than one is associated. The
+schema supports repeated primary-email claims and multiple DID bindings per
+verified user; the joining-PDS association import and interactive chooser remain
+unimplemented. The resolver returns `selection-required` and does not choose a DID
+from email alone; see [account identity](data-custody.md#1-account-identity-and-ownership).
+Proof freshness and consent remain separate policy decisions. Public and
+confidential clients both need acceptance coverage.
 
 ```mermaid
 %%{init: {"theme":"base","themeVariables":{"primaryTextColor":"#172B4D","lineColor":"#45556C","actorBkg":"#DBEAFE","actorBorder":"#315582","actorTextColor":"#172B4D","signalColor":"#45556C","signalTextColor":"#172B4D","noteBkgColor":"#FFF1D6","noteTextColor":"#172B4D","noteBorderColor":"#8A5A2B","activationBkgColor":"#EDE9FE","activationBorderColor":"#65538A","fontFamily":"Arial"}}}%%
@@ -221,9 +229,15 @@ sequenceDiagram
 ```
 
 The Better Auth session proves the email identity; it does not itself select or
-authenticate a DID. Only established associations are eligible for account choice;
-matching an email cannot add authority over an unimported DID. Preserve the
-original client request and authorization context through verification and choice.
+authenticate a DID. Only established bindings are eligible for account choice;
+matching an email cannot add authority over an unbound DID. The current resolver
+returns `selection-required` when multiple bindings are found, but no chooser or
+continuation path is implemented. Security-revocation flows invalidate all Better
+Auth sessions for a DID's shared user. Ordinary verified email changes instead
+preserve sessions on the previous user while atomically moving only the selected
+DID binding to the verified destination user; sessions are not migrated to that
+user. OAuth and account data remain DID-scoped. Preserve the original client
+request and authorization context through verification and any future choice.
 
 Confidential clients also supply client authentication where required.
 The account page distinguishes ending a browser session, forgetting device membership,
@@ -301,9 +315,10 @@ Reuse provider wiring, OTP integration, atomic account/DID invariants, indexed d
 PDS call sequences, journals, branding, mail ports and regression scenarios.
 Keep shared contracts narrow while features own their operation bodies.
 
-Still required: the approved multiple-DID email schema, joining-PDS association import
-and post-verification chooser, ePDS consent/freshness parity, complete XRPC adapters, production email delivery,
-operator onboarding and fleet lifecycle, implementation of the approved custody model and public-protocol migration. The [Drizzle database boundary](database.md) provides asynchronous authority
+Still required: joining-PDS association import and post-verification chooser,
+ePDS consent/freshness parity, complete XRPC adapters, production email delivery,
+operator onboarding and fleet lifecycle, implementation of the approved custody
+model and public-protocol migration. The [Drizzle database boundary](database.md) provides asynchronous authority
 transactions. [Shared operation ownership](shared-operations.md) implements durable
 account/PDS admission, execution fences, operator-verified uncertain-write recovery,
 mail attempts and authentication ordering. [Deployment lifecycle](deployment-profiles.md)

@@ -13,7 +13,9 @@ import { join } from "node:path";
 import test from "node:test";
 import { openTestDatabase } from "../support/database-fixture.mjs";
 import { createAccountStorage } from "../../dist/src/database/drizzle/account-storage.js";
+import { createAccountAccess } from "../../dist/src/accounts/account-access.mjs";
 import { createMigrationStartTransactor } from "../../dist/src/database/drizzle/migration-workflow.js";
+import { ExternalMigrationService } from "../../dist/src/features/external-migration/import-account.js";
 
 const pds = [{ id: "pds1", url: "https://pds1.atmosbox.test" }];
 const alice = {
@@ -111,6 +113,351 @@ test("reopening the database preserves account ownership, claims and stored date
         ),
       hasFailure("foreign key"),
     );
+  } finally {
+    await db.close();
+  }
+});
+
+test("bound-account lookup returns only accounts with an established user binding", async (t) => {
+  const { path } = fixture(t);
+  const db = await openTestDatabase(path);
+  try {
+    const storage = createAccountStorage(db, pds);
+    await storage.insertAccount(alice);
+    await verifiedUser(db, "verified-owner", alice.email);
+
+    assert.deepEqual(await storage.listBoundAccounts("verified-owner"), []);
+    await storage.bindVerifiedIdentity({
+      did: alice.did,
+      email: alice.email,
+      userId: "verified-owner",
+    });
+    assert.deepEqual(
+      await storage.listBoundAccounts("verified-owner"),
+      [alice],
+    );
+    assert.deepEqual(await storage.listBoundAccounts("unrelated-user"), []);
+  } finally {
+    await db.close();
+  }
+});
+
+test("one verified owner can bind multiple DID accounts with the same primary email", async (t) => {
+  const { path } = fixture(t);
+  const db = await openTestDatabase(path);
+  try {
+    const storage = createAccountStorage(db, pds);
+    const second = {
+      ...alice,
+      did: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
+      handle: "second.entryway.atmosbox.test",
+    };
+    await verifiedUser(db, "shared-owner", alice.email);
+    await storage.insertAccount(alice);
+    await storage.bindVerifiedIdentity({
+      did: alice.did,
+      email: alice.email,
+      userId: "shared-owner",
+    });
+    await storage.insertAccount(second);
+    await storage.bindVerifiedIdentity({
+      did: second.did,
+      email: second.email,
+      userId: "shared-owner",
+    });
+
+    assert.deepEqual(await storage.listByEmail(alice.email), [alice, second]);
+    assert.deepEqual(await storage.listEmailClaims(alice.email), [
+      { did: alice.did, purpose: "primary" },
+      { did: second.did, purpose: "primary" },
+    ]);
+    assert.deepEqual(await storage.listBoundAccounts("shared-owner"), [
+      alice,
+      second,
+    ]);
+    await assert.rejects(storage.getByEmail(alice.email), {
+      code: "AccountSelectionRequired",
+    });
+    await assert.rejects(storage.getEmailClaim(alice.email), {
+      code: "AccountSelectionRequired",
+    });
+    const access = createAccountAccess(storage);
+    const identity = {
+      userId: "shared-owner",
+      email: alice.email,
+      emailVerified: true,
+    };
+    assert.deepEqual(await access.resolveBoundAccounts(identity), {
+      kind: "selection-required",
+      accounts: [
+        { did: alice.did, handle: alice.handle, status: alice.status },
+        { did: second.did, handle: second.handle, status: second.status },
+      ],
+    });
+    assert.equal(
+      (await access.requireBoundAccount(identity, second.did)).did,
+      second.did,
+    );
+    await assert.rejects(
+      access.requireBoundAccount(identity, "did:plc:cccccccccccccccccccccccc"),
+      { code: "AccountMismatch" },
+    );
+    await assert.rejects(
+      access.requireBoundAccount(
+        { ...identity, userId: "unrelated-user" },
+        second.did,
+      ),
+      { code: "AccountMismatch" },
+    );
+    await assert.rejects(
+      storage.bindVerifiedIdentity({
+        did: second.did,
+        email: second.email,
+        userId: "unrelated-user",
+      }),
+      { code: "AccountMismatch" },
+    );
+    assert.equal(
+      (await storage.getVerifiedBinding(second.did)).userId,
+      "shared-owner",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("email-claim writes serialize primary sharing against exclusive claims", async (t) => {
+  const { path } = fixture(t);
+  const db = await openTestDatabase(path);
+  try {
+    const storage = createAccountStorage(db, pds);
+    await storage.insertAccount(alice);
+    const second = {
+      ...alice,
+      did: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
+      email: "second@example.test",
+      handle: "second.entryway.atmosbox.test",
+    };
+    const third = {
+      ...alice,
+      did: "did:plc:cccccccccccccccccccccccc",
+      email: "third@example.test",
+      handle: "third.entryway.atmosbox.test",
+    };
+    await storage.insertAccount(second);
+    await storage.insertAccount(third);
+
+    await Promise.all([
+      storage.reserveEmail("shared@example.test", alice.did, "primary"),
+      storage.reserveEmail("shared@example.test", second.did, "primary"),
+    ]);
+    await storage.reserveEmail("shared@example.test", third.did, "pending");
+    const sharedClaims = await storage.listEmailClaims("shared@example.test");
+    assert.equal(sharedClaims.length, 3);
+    assert.ok(
+      sharedClaims.some(
+        (claim) => claim.did === third.did && claim.purpose === "pending",
+      ),
+    );
+    assert.ok(
+      sharedClaims
+        .filter((claim) => claim.purpose === "primary")
+        .every(({ did }) => [alice.did, second.did].includes(did)),
+    );
+
+    const competing = await Promise.allSettled([
+      storage.reserveEmail("exclusive@example.test", alice.did, "backup"),
+      storage.reserveEmail("exclusive@example.test", second.did, "primary"),
+    ]);
+    assert.equal(
+      competing.filter(({ status }) => status === "fulfilled").length,
+      1,
+    );
+    assert.equal(
+      competing.find(({ status }) => status === "rejected")?.reason.code,
+      "EmailNotAvailable",
+    );
+    assert.equal(
+      (await storage.listEmailClaims("exclusive@example.test")).length,
+      1,
+    );
+
+    const competingPending = await Promise.allSettled([
+      storage.reserveEmail(
+        "pending-exclusive@example.test",
+        alice.did,
+        "pending",
+      ),
+      storage.reserveEmail(
+        "pending-exclusive@example.test",
+        second.did,
+        "pending",
+      ),
+    ]);
+    assert.equal(
+      competingPending.filter(({ status }) => status === "fulfilled").length,
+      1,
+    );
+    assert.equal(
+      competingPending.find(({ status }) => status === "rejected")?.reason.code,
+      "EmailNotAvailable",
+    );
+    assert.equal(
+      (await storage.listEmailClaims("pending-exclusive@example.test")).length,
+      1,
+    );
+
+    const competingBackupPending = await Promise.allSettled([
+      storage.reserveEmail(
+        "backup-pending@example.test",
+        alice.did,
+        "backup",
+      ),
+      storage.reserveEmail(
+        "backup-pending@example.test",
+        second.did,
+        "pending",
+      ),
+    ]);
+    assert.equal(
+      competingBackupPending.filter(({ status }) => status === "fulfilled")
+        .length,
+      1,
+    );
+    assert.equal(
+      competingBackupPending.find(({ status }) => status === "rejected")?.reason
+        .code,
+      "EmailNotAvailable",
+    );
+    assert.equal(
+      (await storage.listEmailClaims("backup-pending@example.test")).length,
+      1,
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("authorized migration can share an email with an unbound DID and roll back its own binding", async (t) => {
+  const { path } = fixture(t);
+  const db = await openTestDatabase(path);
+  try {
+    const storage = createAccountStorage(db, pds);
+    const ownerId = "migration-owner";
+    const now = Date.now();
+    const incoming = {
+      workflowId: "shared-email-import",
+      did: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
+      handle: "second.entryway.atmosbox.test",
+      userId: ownerId,
+      sessionId: "migration-session",
+      targetPdsId: "pds1",
+      targetPdsUrl: pds[0].url,
+    };
+    await storage.insertAccount(alice);
+    await verifiedUser(db, ownerId, alice.email);
+    await browserSession(
+      db,
+      incoming.sessionId,
+      ownerId,
+      now,
+      now + 600_000,
+    );
+    const sourcePlcHead = "bafyreih" + "a".repeat(52);
+    const migration = new ExternalMigrationService({
+      ownership: {
+        run: async (_did, _intent, operation) => operation(),
+        checkpoint: async () => {},
+      },
+      transact: (operation) => db.transact(operation),
+      workflows: { getByDid: async () => null },
+      start: {
+        createReservedWorkflow: async ({ reservation }) =>
+          storage.reserveExternalMigration(reservation),
+      },
+      snapshots: {},
+      accounts: storage,
+      source: { observePlcHead: async () => sourcePlcHead },
+      target: {},
+      sourceHandoffSigner: {},
+      plcRotationSigner: {},
+      audit: () => {},
+      custody: {},
+      oauthIssuerKey: {},
+    });
+    const started = await migration.start({
+      workflowId: incoming.workflowId,
+      did: incoming.did,
+      ownerUserId: ownerId,
+      ownerSessionId: incoming.sessionId,
+      sourceEmail: "source@example.test",
+      handle: incoming.handle,
+      sourcePdsUrl: "https://source.example.test",
+      targetPdsId: incoming.targetPdsId,
+      targetPdsUrl: incoming.targetPdsUrl,
+      authority: {
+        sourceRecoveryKey: "did:key:zQ3sh" + "a".repeat(44),
+        rotationAuthorityKey: "did:key:zQ3sh" + "b".repeat(44),
+        sourceRepositoryKey: "did:key:zQ3sh" + "c".repeat(44),
+        sourcePlcHead,
+      },
+    });
+    assert.equal(started.ownerEmail, alice.email);
+    const ordinarySignup = {
+      ...alice,
+      did: "did:plc:cccccccccccccccccccccccc",
+      email: alice.email,
+      handle: "third.entryway.atmosbox.test",
+    };
+    await assert.rejects(storage.insertAccount(ordinarySignup), {
+      code: "EmailNotAvailable",
+    });
+    assert.equal(await storage.getByDid(ordinarySignup.did), null);
+    await failureTrigger(
+      db,
+      "reject_import_binding",
+      "account_bindings",
+      "synthetic binding failure",
+    );
+    await assert.rejects(
+      storage.finalizeImportedAccount({
+        workflowId: incoming.workflowId,
+        did: incoming.did,
+        userId: ownerId,
+        email: alice.email,
+        handle: incoming.handle,
+        pdsId: incoming.targetPdsId,
+        pdsUrl: incoming.targetPdsUrl,
+      }),
+      hasFailure("synthetic binding failure"),
+    );
+    assert.equal(await storage.getByDid(incoming.did), null);
+    assert.equal(await storage.getVerifiedBinding(alice.did), null);
+    assert.deepEqual(await storage.getExternalReservationByEmail(alice.email), {
+      did: incoming.did,
+      userId: ownerId,
+    });
+    await removeFailureTrigger(db, "reject_import_binding", "account_bindings");
+
+    const imported = await storage.finalizeImportedAccount({
+      workflowId: incoming.workflowId,
+      did: incoming.did,
+      userId: ownerId,
+      email: alice.email,
+      handle: incoming.handle,
+      pdsId: incoming.targetPdsId,
+      pdsUrl: incoming.targetPdsUrl,
+    });
+    assert.equal(imported.status, "provisioning");
+    assert.equal(await storage.getVerifiedBinding(alice.did), null);
+    assert.equal(
+      (await storage.getVerifiedBinding(incoming.did)).userId,
+      ownerId,
+    );
+    assert.deepEqual(await storage.listByEmail(alice.email), [
+      alice,
+      imported,
+    ]);
   } finally {
     await db.close();
   }
@@ -294,37 +641,39 @@ test("synthetic imported DID binds only a recent verified owner then activates a
     const hosted = {
       ...alice,
       did: "did:plc:dddddddddddddddddddddddd",
-      email: "owner@example.test",
+      email: alice.email,
       handle: "owner.entryway.atmosbox.test",
     };
     await storage.insertAccount(hosted);
-    await query(
-      db,
-      'UPDATE "user" SET email=? WHERE id=?',
-      [hosted.email, "owner"],
-      "run",
-    );
     await storage.bindVerifiedIdentity({
       did: hosted.did,
       email: hosted.email,
       userId: "owner",
     });
-    await query(
-      db,
-      'UPDATE "user" SET email=? WHERE id=?',
-      [alice.email, "owner"],
-      "run",
+    const siblingBefore = await storage.getByDid(hosted.did);
+    const siblingBindingBefore = await storage.getVerifiedBinding(hosted.did);
+    assert.deepEqual(siblingBindingBefore, {
+      did: hosted.did,
+      userId: "owner",
+      email: alice.email,
+    });
+
+    await storage.reserveExternalMigration(reservation);
+    assert.deepEqual(await storage.getByDid(hosted.did), siblingBefore);
+    assert.deepEqual(
+      await storage.getVerifiedBinding(hosted.did),
+      siblingBindingBefore,
     );
-    await assert.rejects(
-      async () => await storage.reserveExternalMigration(reservation),
-      (error) => error.code === "IdentityConflict",
-    );
-    await query(
-      db,
-      "DELETE FROM account_bindings WHERE did=?",
+    assert.equal(await storage.getByDid(alice.did), null);
+    assert.equal(await storage.getVerifiedBinding(alice.did), null);
+    assert.deepEqual(
+      (await storage.listByEmail(alice.email)).map(({ did }) => did),
       [hosted.did],
-      "run",
     );
+    assert.deepEqual(await storage.getExternalReservationByEmail(alice.email), {
+      did: alice.did,
+      userId: "owner",
+    });
     await storage.reserveExternalMigration(reservation);
     await assert.rejects(
       async () =>
@@ -399,6 +748,15 @@ test("synthetic imported DID binds only a recent verified owner then activates a
       (await storage.getVerifiedBinding(alice.did))?.userId,
       "owner",
     );
+    assert.deepEqual(await storage.getByDid(hosted.did), siblingBefore);
+    assert.deepEqual(
+      await storage.getVerifiedBinding(hosted.did),
+      siblingBindingBefore,
+    );
+    assert.deepEqual(
+      (await storage.listByEmail(alice.email)).map(({ did }) => did),
+      [hosted.did, alice.did],
+    );
     assert.equal(await storage.hasPendingExternalMigration(alice.did), true);
     const active = await storage.activateImportedAccount({
       workflowId: reservation.workflowId,
@@ -422,7 +780,7 @@ test("synthetic imported DID binds only a recent verified owner then activates a
   }
 });
 
-test("external reservation excludes hosted and competing email claims before cutover", async (t) => {
+test("authorized migration shares an existing primary email without acquiring its unbound sibling", async (t) => {
   const { path } = await fixture(t);
   const db = await openTestDatabase(path);
   try {
@@ -446,42 +804,72 @@ test("external reservation excludes hosted and competing email claims before cut
       targetPdsId: "pds1",
       targetPdsUrl: pds[0].url,
     };
-    await assert.rejects(
-      async () => await storage.reserveExternalMigration(reservation),
-      (error) => error.code === "EmailNotAvailable",
-    );
-    await query(
-      db,
-      'UPDATE "user" SET email=? WHERE id=?',
-      ["fresh@example.test", "owner"],
-      "run",
-    );
+    const siblingBefore = await storage.getByDid(hosted.did);
+    const siblingBindingBefore = await storage.getVerifiedBinding(hosted.did);
+    assert.equal(siblingBindingBefore, null);
+
     await storage.reserveExternalMigration(reservation);
-    assert.deepEqual(await storage.getEmailClaim("fresh@example.test"), {
+    assert.deepEqual(await storage.getByDid(hosted.did), siblingBefore);
+    assert.equal(await storage.getVerifiedBinding(hosted.did), null);
+    assert.equal(await storage.getByDid(alice.did), null);
+    assert.equal(await storage.getVerifiedBinding(alice.did), null);
+    assert.deepEqual(
+      (await storage.listByEmail(hosted.email)).map(({ did }) => did),
+      [hosted.did],
+    );
+    assert.deepEqual(await storage.getExternalReservationByEmail(hosted.email), {
       did: alice.did,
+      userId: "owner",
+    });
+    assert.deepEqual(await storage.listEmailClaims(hosted.email), [
+      { did: alice.did, purpose: "external" },
+      { did: hosted.did, purpose: "primary" },
+    ]);
+
+    const freshEmail = "fresh@example.test";
+    const freshOwner = "fresh-reservation-owner";
+    await verifiedUser(db, freshOwner, freshEmail);
+    await browserSession(
+      db,
+      "fresh-session",
+      freshOwner,
+      now,
+      now + 600_000,
+    );
+    const freshReservation = {
+      workflowId: "fresh-email-reservation",
+      did: "did:plc:gggggggggggggggggggggggg",
+      handle: "fresh.entryway.atmosbox.test",
+      userId: freshOwner,
+      sessionId: "fresh-session",
+      targetPdsId: "pds1",
+      targetPdsUrl: pds[0].url,
+    };
+    await storage.reserveExternalMigration(freshReservation);
+    assert.deepEqual(await storage.getEmailClaim(freshEmail), {
+      did: freshReservation.did,
       purpose: "external",
     });
     await assert.rejects(
-      async () =>
-        await storage.reserveEmail("fresh@example.test", hosted.did, "backup"),
+      async () => await storage.reserveEmail(freshEmail, hosted.did, "backup"),
       (error) => error.code === "EmailNotAvailable",
     );
     await assert.rejects(
       async () =>
         await storage.insertAccount({
           ...alice,
-          did: "did:plc:gggggggggggggggggggggggg",
-          email: "fresh@example.test",
+          did: "did:plc:hhhhhhhhhhhhhhhhhhhhhhhh",
+          email: freshEmail,
           handle: "other.entryway.atmosbox.test",
         }),
       (error) => error.code === "EmailNotAvailable",
     );
     await assert.rejects(
       async () =>
-        await storage.saveAccount({ ...hosted, email: "fresh@example.test" }),
+        await storage.saveAccount({ ...hosted, email: freshEmail }),
       (error) => error.code === "EmailNotAvailable",
     );
-    assert.equal(await storage.getByEmail("fresh@example.test"), null);
+    assert.equal(await storage.getByEmail(freshEmail), null);
   } finally {
     await db.close();
   }

@@ -1,4 +1,8 @@
-import type { AccountRow } from "../accounts/types.js";
+import type {
+  AccountRow,
+  EmailClaim,
+  StoredEmailClaimPurpose,
+} from "../accounts/types.js";
 
 export interface SecurityChallenge {
   id: string;
@@ -27,21 +31,34 @@ export interface AuthenticationState {
   account(did: string): Promise<AccountRow>;
   identity(did: string): Promise<string | undefined>;
   version(did: string): Promise<number>;
-  claim(email: string): Promise<{ did: string; purpose: string } | null>;
+  claims(email: string): Promise<EmailClaim[]>;
+  claim(email: string): Promise<EmailClaim | null>;
   pendingEmail(did: string): Promise<PendingEmail | null>;
   assertEmailAvailable(
     email: string,
     did: string,
-    options?: { allowOwnBackup?: boolean },
+    options?: {
+      allowOwnBackup?: boolean;
+      purpose?: StoredEmailClaimPurpose;
+    },
   ): Promise<string>;
   bindVerifiedIdentity(input: {
     did: string;
     email: string;
     userId?: string;
   }): Promise<string>;
+  /** Sync verification only while the DID already has this verified user binding. */
+  syncBoundAccountEmailVerification(input: {
+    did: string;
+    email: string;
+    userId: string;
+  }): Promise<void>;
   initializeClaims(): Promise<void>;
   hasLiveSession(sessionId: string, userId: string): Promise<boolean>;
-  revokeLocal(did: string): Promise<void>;
+  revokeLocal(
+    did: string,
+    options?: { preserveBrowserSessions?: boolean },
+  ): Promise<void>;
   commitEmailChange(input: {
     did: string;
     email: string;

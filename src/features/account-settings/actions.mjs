@@ -11,13 +11,16 @@ export function createAccountSettingsActions({
     "backup-request": async ({ res, browser, principal, value, token }) => {
       console.needed();
 
-      await security.requestBackupEmail(principal, { email: value("email") });
+      const issued = await security.requestBackupEmailForBrowser(principal, {
+        email: value("email"),
+      });
       return nextStep(
         res,
         "Verify recovery email",
         browser.csrf,
         "backup-confirm",
         hidden("email", value("email")) +
+          hidden("challengeId", issued.challengeId ?? "") +
           field(
             "token",
             "Recovery email verification code",
@@ -32,7 +35,7 @@ export function createAccountSettingsActions({
       console.needed();
       await security.confirmBackupEmail(principal, {
         email: value("email"),
-        token: token(),
+        token: `${value("challengeId")}.${token()}`,
       });
     },
     "backup-remove": async ({ principal, value }) => {
@@ -42,18 +45,20 @@ export function createAccountSettingsActions({
     "email-request": async ({ res, browser, principal, token }) => {
       console.needed();
 
-      await security.requestEmailUpdate(principal);
+      const issued = await security.requestEmailUpdateForBrowser(principal);
       return nextStep(
         res,
         "Verify current email",
         browser.csrf,
         "email-update",
-        field(
-          "token",
-          "Current email verification code",
-          "text",
-          'autocomplete="one-time-code" maxlength="256"',
-        ) + field("email", "New primary email", "email", 'maxlength="320"'),
+        hidden("challengeId", issued.challengeId ?? "") +
+          field(
+            "token",
+            "Current email verification code",
+            "text",
+            'autocomplete="one-time-code" maxlength="256"',
+          ) +
+          field("email", "New primary email", "email", 'maxlength="320"'),
         "Verify current email and continue",
         "A verification code was sent to your current primary email.",
       );
@@ -61,16 +66,17 @@ export function createAccountSettingsActions({
     "email-update": async ({ res, browser, principal, value, token }) => {
       console.needed();
 
-      await security.updateEmail(principal, {
+      const issued = await security.updateEmailForBrowser(principal, {
         email: value("email"),
-        token: token(),
+        token: `${value("challengeId")}.${token()}`,
       });
       return nextStep(
         res,
         "Verify new email",
         browser.csrf,
         "email-confirm",
-        hidden("email", value("email")) +
+        hidden("challengeId", issued.challengeId ?? "") +
+          hidden("email", value("email")) +
           field(
             "token",
             "New email verification code",
@@ -86,12 +92,12 @@ export function createAccountSettingsActions({
 
       await security.confirmEmail(principal, {
         email: value("email"),
-        token: token(),
+        token: `${value("challengeId")}.${token()}`,
       });
       return page(
         res,
         "Primary email updated",
-        '<p>Your email was changed and existing sessions were ended.</p><a href="/login">Sign in with your new email</a>',
+        '<p>Your email was changed. Your browser sessions remain signed in for any other linked accounts, but no longer have access to this account.</p><a href="/login">Sign in with your new email</a>',
       );
     },
     "password-set": async ({ req, res, principal }) => {

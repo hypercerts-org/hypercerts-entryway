@@ -2,12 +2,30 @@ import { fail } from "../../accounts/security-primitives.mjs";
 
 export function createMigrationProof({ proofs, config }) {
   const { account, principal, issue, consume } = proofs;
+  const requestMigrationProof = async (
+    actor,
+    { pdsId },
+    { exposeChallengeId = false } = {},
+  ) => {
+    const row = await principal(actor);
+    if (!config.pds.some((pds) => pds.id === pdsId) || row.pdsId === pdsId)
+      throw fail(400, "InvalidPds", "Choose another configured PDS");
+    return await issue(
+      "account-migrate",
+      row,
+      row.email,
+      { pdsId },
+      { exposeChallengeId },
+    );
+  };
   const operations = {
-    async requestMigrationProof(actor, { pdsId }) {
-      const row = await principal(actor);
-      if (!config.pds.some((pds) => pds.id === pdsId) || row.pdsId === pdsId)
-        throw fail(400, "InvalidPds", "Choose another configured PDS");
-      return await issue("account-migrate", row, row.email, { pdsId });
+    async requestMigrationProof(actor, input) {
+      return await requestMigrationProof(actor, input);
+    },
+    async requestMigrationProofForBrowser(actor, input) {
+      return await requestMigrationProof(actor, input, {
+        exposeChallengeId: true,
+      });
     },
     async confirmMigrationProof(actor, { pdsId, token }) {
       const row = await principal(actor);
