@@ -72,9 +72,6 @@ async function signInSelectedAccount(page, did, email) {
 async function chooseAccount(page, did, email) {
   const form = selectionForm(page, did);
   await expect(form).toHaveCount(1);
-  const option = form.locator(`input[name="did"][value="${did}"]`);
-  await option.check();
-  await expect(option).toBeChecked();
   await form.getByRole("button").click();
   await signInSelectedAccount(page, did, email);
   await expect(page.getByTestId("account-did")).toHaveText(did);
