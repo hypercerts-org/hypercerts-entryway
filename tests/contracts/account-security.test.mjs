@@ -194,6 +194,35 @@ async function bindSiblingToSharedEmail(f, sharedUserId) {
   return sibling;
 }
 
+test("shared-email password reset and login answer like an unknown email", async (t) => {
+  const f = await fixture(t);
+  const sibling = await bindSiblingToSharedEmail(f, f.login.user.id);
+  const password = "a long shared-email password";
+  await f.legacy.setPassword(f.alice.did, password);
+  await f.legacy.setPassword(sibling.did, password);
+  const resetChallenges = async () =>
+    (await f.db.list("security:challenges")).filter(
+      ({ value }) => value.purpose === "password-reset",
+    ).length;
+  const challengesBefore = await resetChallenges();
+
+  for (const email of [f.alice.email, "unknown@example.com"])
+    assert.deepEqual(await f.security.requestPasswordReset({ email }), {});
+  assert.equal(await resetChallenges(), challengesBefore);
+
+  for (const identifier of [f.alice.email, "unknown@example.com"])
+    await assert.rejects(f.legacy.createSession({ identifier, password }), {
+      status: 401,
+      error: "AuthenticationRequired",
+    });
+  // Each shared DID remains reachable through its own identifier.
+  for (const { did, handle } of [f.alice, sibling])
+    assert.equal(
+      (await f.legacy.createSession({ identifier: handle, password })).did,
+      did,
+    );
+});
+
 test("login validation requires repair for an email-matched account without a binding", async (t) => {
   const f = await fixture(t, { initialLogin: false });
   await f.accounts.save({ ...f.alice, emailVerified: false });
@@ -1542,16 +1571,21 @@ test("password reset cannot issue current authority to a former primary email af
     release = resolve;
   });
   const get = f.accounts.get;
+  const storage = f.accounts.storage;
+  const listByEmail = storage.listByEmail;
   let pause = true;
-  f.accounts.get = async (identifier) => {
-    const row = await get(identifier);
-    if (pause && identifier === oldEmail) {
+  storage.listByEmail = async (email) => {
+    const rows = await listByEmail(email);
+    if (pause && email === oldEmail) {
       pause = false;
       entered();
       await continueRequest;
     }
-    return row;
+    return rows;
   };
+  t.after(() => {
+    storage.listByEmail = listByEmail;
+  });
   // Snapshot the mail projection so even a newly sent unusable code is noticed.
   const oldMail = await f.db.get("outbox", oldEmail);
   const pending = f.security.requestPasswordReset({ email: oldEmail });
