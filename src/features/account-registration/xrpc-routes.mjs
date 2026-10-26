@@ -1,5 +1,6 @@
 import { HttpError } from "../../http/http-error.mjs";
 import { emailAddress } from "../../accounts/input.mjs";
+import { registrationAccountForEmail } from "./create-account.js";
 
 async function verifiedRegistrationOwner({
   accounts,
@@ -120,7 +121,10 @@ export function mountAccountRegistrationXrpc({
         phoneNumber: verificationPhone,
         token: verificationCode,
       });
-    const prior = await accounts.get(normalized);
+    const prior = await registrationAccountForEmail(
+      accounts.storage,
+      normalized,
+    );
     if (prior && prior.status !== "provisioning")
       throw new HttpError(
         409,

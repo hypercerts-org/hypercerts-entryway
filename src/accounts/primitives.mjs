@@ -1,5 +1,5 @@
 import { noExternalResult, signingKeyResult } from "./operation-ownership.js";
-import { ensureValidHandle } from "@atproto/syntax";
+import { ensureValidHandle, isValidDid, isValidHandle } from "@atproto/syntax";
 import { validateHostedHandle } from "./input-schema.js";
 import { HttpError } from "../http/http-error.mjs";
 import { xrpc } from "../pds/client.mjs";
@@ -7,10 +7,23 @@ import { xrpc } from "../pds/client.mjs";
 export function createAccountPrimitives({ db, config, storage, ownership }) {
   const claimHandle = async (handle, did) =>
     await storage.reserveHandle(handle, did);
-  const get = async (id) =>
-    (await storage.getByDid(id)) ??
-    (await storage.getByEmail(id)) ??
-    (await storage.getByHandle(id));
+  // Callers pass untrusted values (hostnames, JWT subjects, login input), so
+  // anything that is neither a DID nor a handle is simply not found. Email is
+  // the exception: one email can belong to several DIDs, so it fails loudly
+  // without revealing whether any account exists; email callers use
+  // storage.listByEmail and decide.
+  const get = async (id) => {
+    if (typeof id !== "string") return null;
+    if (isValidDid(id)) return await storage.getByDid(id);
+    if (isValidHandle(id)) return await storage.getByHandle(id);
+    if (id.includes("@"))
+      throw new HttpError(
+        400,
+        "InvalidRequest",
+        "Identify the account by DID or handle, not an email address",
+      );
+    return null;
+  };
   const list = async () => await storage.listAccounts();
   const save = async (row) => await storage.saveAccount(row);
   const pdsFor = (row) => config.pds.find((p) => p.id === row.pdsId);

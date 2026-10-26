@@ -101,7 +101,7 @@ test("operator recovery requires Entryway authorization and exact nonreplayable 
   };
   const form = createSignupForm({
     db,
-    accounts: { ownership, get: async () => account },
+    accounts: { ownership, storage: { listByEmail: async () => [account] } },
     config: {
       pds: [{ id: "pds1", url: target }],
       handleDomains: [".example.test"],
