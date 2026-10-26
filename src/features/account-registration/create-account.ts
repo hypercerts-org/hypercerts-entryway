@@ -410,8 +410,7 @@ export function createRegistration({
     const current = await storage.listEmailClaims(email);
     if (
       current.some(
-        (claim) =>
-          claim.purpose !== "primary" || !row || claim.did !== row.did,
+        (claim) => claim.purpose !== "primary" || claim.did !== row?.did,
       )
     )
       throw new HttpError(
