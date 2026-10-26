@@ -1,5 +1,5 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { and, asc, eq, gt, ne } from "drizzle-orm";
+import { and, asc, eq, gt, ne, sql } from "drizzle-orm";
 import { HttpError } from "../../http/http-error.mjs";
 import { normalizeEmail } from "../../accounts/rules.js";
 const fail = (status, error, message) => new HttpError(status, error, message);
@@ -227,7 +227,8 @@ export function createAccountAuthority({ db, accounts }) {
   const backupOwner = async (email) => {
     const row = (
       await db.read("backup_emails", {
-        where: eq(t.backup_emails.email, email),
+        // Matches the case-insensitive backup_emails_ci uniqueness index.
+        where: eq(sql`lower(${t.backup_emails.email})`, normalizeEmail(email)),
         limit: 1,
       })
     )[0];
