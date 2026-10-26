@@ -174,7 +174,13 @@ test("console migrates its own DID, record and blob between enrolled PDSs with m
       response.request().method() === "POST",
   );
   await accountForm(page, "migration-confirm").getByRole("button").click();
-  expect((await confirmation).status(), "Visible migration email code was rejected").toBe(200);
+  const confirmationStatus = (await confirmation).status();
+  // The recovery drill loses the target response after the accepted code, so
+  // confirmation reports an uncertain outcome (409) instead of completing.
+  if (recoveryRun)
+    expect(confirmationStatus, "Visible migration email code was rejected").toBe(409);
+  else
+    expect(confirmationStatus, "Visible migration email code was rejected").toBe(200);
   expect(challengeId).toBeTruthy();
   if (recoveryRun) {
     const prefix = `artifacts/managed-recovery-${recoveryRun}`;
