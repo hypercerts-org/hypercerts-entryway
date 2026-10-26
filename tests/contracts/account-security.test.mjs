@@ -1075,6 +1075,19 @@ test("browser recovery selectors mask unknown and ineligible emails without proo
   assert.equal(await f.db.get("outbox", f.bob.email), null);
 });
 
+test("backup ownership lookup ignores email case like its uniqueness index", async (t) => {
+  const f = await fixture(t);
+  await f.security.requestBackupEmail(f.actor, { email: "backup@example.com" });
+  await f.security.confirmBackupEmail(f.actor, {
+    email: "backup@example.com",
+    token: await f.token("backup@example.com"),
+  });
+  const authority = createAccountAuthority({ db: f.db, accounts: f.accounts });
+  for (const email of ["backup@example.com", " Backup@Example.COM "])
+    assert.deepEqual(await authority.backupOwner(email), { did: f.alice.did });
+  assert.equal(await authority.backupOwner("other@example.com"), undefined);
+});
+
 test("backup recovery verifies replacement email, retains DID and removes compromised credentials", async (t) => {
   const f = await fixture(t);
   await f.legacy.setPassword(f.alice.did, "old compromised password");
