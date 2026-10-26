@@ -423,7 +423,7 @@ test("email local-part limit reports a meaningful schema issue", async () => {
   assert.ok(
     result.error.issues.some(
       ({ message }) =>
-        message === "Email local part must contain at most 64 characters",
+        message === "The part before @ must contain at most 64 characters",
     ),
   );
 });
