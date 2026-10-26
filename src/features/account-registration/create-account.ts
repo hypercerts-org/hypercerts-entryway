@@ -391,17 +391,11 @@ export function createRegistration({
     }
     return row;
   };
-  // Reconciliation invokes this admitted body directly. Calling public create()
-  // here could await a matching request queued behind our own admission.
-  const provision = async ({
-    email,
-    handle,
-    pdsId,
-    recoveryKey,
-    inviteCode,
-    registrationIdentity,
-  }: ProvisionInput): Promise<AccountRow> => {
-    let row = await get(email);
+  // Expired pending email changes no longer reserve the address.
+  const assertEmailAvailable = async (
+    email: string,
+    row: AccountRow | null,
+  ) => {
     let emailClaim = await storage.getEmailClaim(email);
     if (emailClaim?.purpose === "pending") {
       const change = (await db.get(
@@ -422,28 +416,58 @@ export function createRegistration({
         "EmailNotAvailable",
         "Email is reserved by another account operation",
       );
+  };
+  const assertSameRegistration = (
+    row: AccountRow,
+    {
+      handle,
+      pdsId,
+      recoveryKey,
+    }: Pick<RegistrationInput, "handle" | "pdsId" | "recoveryKey">,
+  ) => {
     if (
-      row &&
-      (row.handle !== handle ||
-        row.pdsId !== pdsId ||
-        (row.recoveryKey ?? null) !== (recoveryKey ?? null))
+      row.handle !== handle ||
+      row.pdsId !== pdsId ||
+      (row.recoveryKey ?? null) !== (recoveryKey ?? null)
     )
       throw new HttpError(
         409,
         "AccountExists",
         "This email already has an account",
       );
-    if (row) await ownership.bindResource(row.did);
+  };
+  // Registration may return an active account only to its original owner.
+  const assertActiveRegistrationOwner = async (
+    row: AccountRow,
+    registrationIdentity: RegistrationIdentity | undefined,
+  ) => {
+    if (!registrationIdentity) return;
+    const binding = await storage.getVerifiedBinding(row.did);
+    if (binding?.userId !== registrationIdentity.userId)
+      throw new HttpError(
+        403,
+        "AccountMismatch",
+        "An active account cannot be acquired through registration",
+      );
+  };
+  // Reconciliation invokes this admitted body directly. Calling public create()
+  // here could await a matching request queued behind our own admission.
+  const provision = async ({
+    email,
+    handle,
+    pdsId,
+    recoveryKey,
+    inviteCode,
+    registrationIdentity,
+  }: ProvisionInput): Promise<AccountRow> => {
+    let row = await get(email);
+    await assertEmailAvailable(email, row);
+    if (row) {
+      assertSameRegistration(row, { handle, pdsId, recoveryKey });
+      await ownership.bindResource(row.did);
+    }
     if (row?.status === "active") {
-      if (registrationIdentity) {
-        const binding = await storage.getVerifiedBinding(row.did);
-        if (binding?.userId !== registrationIdentity.userId)
-          throw new HttpError(
-            403,
-            "AccountMismatch",
-            "An active account cannot be acquired through registration",
-          );
-      }
+      await assertActiveRegistrationOwner(row, registrationIdentity);
       return row;
     }
     if (row && row.status !== "provisioning")
