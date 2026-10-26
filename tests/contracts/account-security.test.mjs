@@ -1209,7 +1209,7 @@ test("deletion proof cannot cross accounts and password-bearing accounts require
   );
 });
 
-test("admin repair leaves the DID unbound after email-only login and preserves the old user", async (t) => {
+test("admin repair leaves the DID unbound and requires repair after email-only login", async (t) => {
   const f = await fixture(t);
   await f.security.adminUpdateEmail(
     { kind: "admin" },
@@ -1240,7 +1240,7 @@ test("admin repair leaves the DID unbound after email-only login and preserves t
   assert.notEqual(response.principal.userId, f.login.user.id);
   assert.deepEqual(
     await f.security.assertLoginEmail(response.principal),
-    { kind: "unbound" },
+    { kind: "account-requires-repair" },
   );
   assert.equal((await f.accounts.get(f.alice.did)).emailVerified, false);
   assert.equal(await f.accounts.storage.getVerifiedBinding(f.alice.did), null);

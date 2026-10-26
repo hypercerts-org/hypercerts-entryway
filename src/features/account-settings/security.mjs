@@ -143,12 +143,16 @@ export function createAccountSettingsSecurity({
       const usage = await readLoginEmailUsage(email);
       await assertLoginEmailUsage(identity, email, usage);
       const resolution = await accountAccess.resolveBoundAccounts(identity);
-      if (
-        resolution.kind === "unbound" &&
-        usage.account &&
-        usage.account.status !== "provisioning"
-      )
-        return { kind: "account-requires-repair" };
+      if (resolution.kind === "unbound") {
+        // Shared emails can match several DIDs; any established account with
+        // this primary email and no binding to the identity needs repair.
+        for (const { did, purpose } of usage.claims) {
+          if (purpose !== "primary") continue;
+          const account = await accounts.get(did);
+          if (account && account.status !== "provisioning")
+            return { kind: "account-requires-repair" };
+        }
+      }
       if (resolution.kind === "single")
         await authority.syncBoundAccountEmailVerification({
           did: resolution.account.did,
