@@ -32,6 +32,16 @@ export function createConsent({ db, provider, stores, flows, accountAccess }) {
       else await save(current);
       return { current, account };
     });
+    // Deleted accounts cannot be restored, so verification must not leave a
+    // browser session or point the user at reactivation.
+    if (authorized.account.status === "deleted")
+      return pageForFlow(
+        res,
+        "Account unavailable",
+        "<p>This account is deleted and cannot be used to sign in.</p>",
+        authorized.current,
+        403,
+      );
     commitCookies();
     if (authorized.account.status !== "active")
       return pageForFlow(
