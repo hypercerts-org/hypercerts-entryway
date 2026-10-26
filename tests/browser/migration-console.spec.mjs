@@ -137,7 +137,9 @@ test("console migrates its own DID, record and blob between enrolled PDSs with m
   const selector = accountForm(page, "migration-confirm").locator(
     'input[name="challengeId"]',
   );
-  const challengeId = (await selector.count()) ? await selector.inputValue() : "";
+  expect(await selector.count()).toBe(1);
+  const challengeId = await selector.inputValue();
+  expect(challengeId).toBeTruthy();
   const { code } = await waitForMailpitCode({
     recipient: identity.email,
     since: migrationSince,
@@ -181,7 +183,6 @@ test("console migrates its own DID, record and blob between enrolled PDSs with m
     expect(confirmationStatus, "Visible migration email code was rejected").toBe(409);
   else
     expect(confirmationStatus, "Visible migration email code was rejected").toBe(200);
-  expect(challengeId).toBeTruthy();
   if (recoveryRun) {
     const prefix = `artifacts/managed-recovery-${recoveryRun}`;
     // The original authenticated request returned. Source freeze intentionally
