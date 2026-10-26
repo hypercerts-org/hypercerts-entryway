@@ -5,7 +5,7 @@ export function mountHandleChangeXrpc({ app, accounts, authenticate }) {
     "/xrpc/com.atproto.identity.resolveHandle",
     async (req, res, next) => {
       try {
-        const row = await accounts.get(
+        const row = await accounts.storage.getByHandle(
           String(req.query.handle ?? "").toLowerCase(),
         );
         if (!row || ["deleted", "provisioning"].includes(row.status))

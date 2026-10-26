@@ -1,7 +1,10 @@
 import { escapeHtml } from "../../ui/html.mjs";
+import { registrationAccountForEmail } from "./create-account.js";
 export function createSignupForm({ db, config, accounts, fields }) {
   const signupForm = async (flow, browser) => {
-    const account = flow.authEmail ? await accounts.get(flow.authEmail) : null;
+    const account = flow.authEmail
+      ? await registrationAccountForEmail(accounts.storage, flow.authEmail)
+      : null;
     const attempt = flow.authEmail
       ? await accounts.ownership?.pendingExternal(`email:${flow.authEmail}`)
       : null;

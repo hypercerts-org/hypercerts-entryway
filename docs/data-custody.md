@@ -20,6 +20,20 @@ still requires proof that the user controls that account.
 
 Ordinary signup cannot create another DID for an email that already has an account.
 
+An email is never treated as a single-account key. Flows that start from an
+email list its accounts and decide explicitly, without revealing whether the
+email has none, one or several (TECH-733):
+
+- Signup and registration retry refuse an email shared by several DIDs. They
+  run only after mailbox verification.
+- Password login and standard-client password reset treat a shared email like an
+  unknown one: login returns the ordinary invalid-credentials error, and reset
+  answers without sending mail. Each DID still signs in by handle or DID. Reset
+  for shared emails is tracked in TECH-783.
+- Lookups that expect a DID or handle reject an email address with
+  `InvalidRequest`, so the answer depends on the input format, not on whether any
+  account exists.
+
 Sign-in verifies the email before resolving its associated DIDs. One associated
 DID continues directly; multiple associated DIDs require an explicit account
 choice. The selected DID then continues the original authentication or

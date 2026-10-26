@@ -175,9 +175,6 @@ test("one verified owner can bind multiple DID accounts with the same primary em
       alice,
       second,
     ]);
-    await assert.rejects(storage.getByEmail(alice.email), {
-      code: "AccountSelectionRequired",
-    });
     await assert.rejects(storage.getEmailClaim(alice.email), {
       code: "AccountSelectionRequired",
     });
@@ -869,7 +866,7 @@ test("authorized migration shares an existing primary email without acquiring it
         await storage.saveAccount({ ...hosted, email: freshEmail }),
       (error) => error.code === "EmailNotAvailable",
     );
-    assert.equal(await storage.getByEmail(freshEmail), null);
+    assert.deepEqual(await storage.listByEmail(freshEmail), []);
   } finally {
     await db.close();
   }

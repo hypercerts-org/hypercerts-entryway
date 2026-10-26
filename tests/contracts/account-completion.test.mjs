@@ -54,7 +54,7 @@ for (const kind of ["create", "status", "handle", "delete"])
             : f.accounts.deleteAccount(account.did),
       /Interrupted after local completion/,
     );
-    account = await f.accounts.get(alice.email);
+    account = (await f.accounts.storage.listByEmail(alice.email))[0] ?? null;
     assert.equal(
       (await f.db.get("operations", `${kind}:${account.did}`)).phase,
       "complete",
@@ -194,7 +194,7 @@ test("acknowledged pre-DID key allocation retains saved signup context and recon
     f.accounts.create(original),
     /Interrupted after key acknowledgement/,
   );
-  assert.equal(await f.accounts.get(alice.email), null);
+  assert.equal((await f.accounts.storage.listByEmail(alice.email))[0] ?? null, null);
   assert.equal(
     await f.accounts.ownership.pendingExternal(`email:${alice.email}`),
     null,
@@ -221,7 +221,7 @@ test("acknowledged pre-DID key allocation retains saved signup context and recon
     { code: "OperationPending" },
   );
   assert.equal((await f.accounts.reconcile())[0].status, "complete");
-  const completed = await f.accounts.get(alice.email);
+  const completed = (await f.accounts.storage.listByEmail(alice.email))[0] ?? null;
   assert.equal(completed.recoveryKey, original.recoveryKey);
   assert.equal(completed.handle, alice.handle);
   assert.equal(completed.pdsId, alice.pdsId);
@@ -367,7 +367,7 @@ test("a paused pre-DID scheduler cannot allocate or dispatch after its nominated
   const result = await scheduler;
   assert.equal(result[0].error, "OperationNoLongerPending");
   assert.equal(f.calls.length, writes);
-  assert.equal(await f.accounts.get(alice.email), null);
+  assert.equal((await f.accounts.storage.listByEmail(alice.email))[0] ?? null, null);
   assert.equal(await f.accounts.pendingRegistration(alice.email), null);
   const changed = await f.accounts.create({
     ...alice,

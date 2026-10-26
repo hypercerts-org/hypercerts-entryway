@@ -13,9 +13,11 @@ test("resolveHandle forwards a rejected reader through Express and serves the ne
   mountHandleChangeXrpc({
     app,
     accounts: {
-      async get() {
-        if (unavailable) throw failure;
-        return { did, status: "active" };
+      storage: {
+        async getByHandle() {
+          if (unavailable) throw failure;
+          return { did, status: "active" };
+        },
       },
     },
   });

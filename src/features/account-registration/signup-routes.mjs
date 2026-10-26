@@ -1,6 +1,7 @@
 import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { HttpError } from "../../http/http-error.mjs";
 import { escapeHtml } from "../../ui/html.mjs";
+import { registrationAccountForEmail } from "./create-account.js";
 async function registrationInput({
   db,
   existing,
@@ -73,7 +74,10 @@ export function mountSignupRoutes({
         email,
         emailVerified: true,
       };
-      const existing = await accounts.get(flow.authEmail);
+      const existing = await registrationAccountForEmail(
+        accounts.storage,
+        flow.authEmail,
+      );
       const savedIntent = await accounts.pendingRegistration(flow.authEmail);
       const savedOwner = savedIntent?.registrationIdentity;
       const ownerMatches = matchesRegistrationOwner(savedOwner, session, email);

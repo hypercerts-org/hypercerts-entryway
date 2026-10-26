@@ -64,7 +64,7 @@ async function fixture(t, { initialLogin = true } = {}) {
     async get(identifier) {
       return (
         (await storage.getByDid(identifier)) ??
-        (await storage.getByEmail(identifier))
+        (await storage.getByHandle(identifier))
       );
     },
     async list() {
@@ -130,7 +130,7 @@ async function fixture(t, { initialLogin = true } = {}) {
     assert.equal(response.status, 200);
     const identity = response.principal;
     // This fixture explicitly establishes existing-account ownership; production sign-in only reads it.
-    const existing = await accounts.get(email);
+    const [existing] = await storage.listByEmail(email);
     if (existing)
       await createAccountAuthority({ db, accounts }).bindVerifiedIdentity({
         did: existing.did,
@@ -142,7 +142,7 @@ async function fixture(t, { initialLogin = true } = {}) {
     response.commitCookies({ append: (_name, value) => cookies.push(value) });
     const cookie = cookies.map((value) => value.split(";")[0]).join("; ");
     const session = await f.oauth.requireSession({ headers: { cookie } });
-    const row = await accounts.get(email);
+    const [row] = await storage.listByEmail(email);
     return {
       cookie,
       user: { id: identity.userId, email: identity.email },
@@ -268,7 +268,7 @@ test("login validation leaves a genuinely new verified email available for signu
   assert.deepEqual(await f.security.assertLoginEmail(response.principal), {
     kind: "unbound",
   });
-  assert.equal(await f.accounts.get(email), null);
+  assert.deepEqual(await f.accounts.storage.listByEmail(email), []);
 });
 
 test("account authorization rechecks the persisted Better Auth verification state", async (t) => {

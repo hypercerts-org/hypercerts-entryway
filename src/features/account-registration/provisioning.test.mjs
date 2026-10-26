@@ -119,8 +119,20 @@ test("ordinary registration fails closed when an email maps to multiple establis
     [],
   );
   await assert.rejects(f.accounts.create(alice), {
-    error: "AccountSelectionRequired",
+    status: 409,
+    error: "AccountExists",
   });
+  // A shared email is never a single-account key; callers must list by email.
+  await assert.rejects(f.accounts.get(first.email), {
+    status: 400,
+    error: "InvalidRequest",
+  });
+  assert.deepEqual(
+    (await f.accounts.storage.listByEmail(first.email))
+      .map(({ did }) => did)
+      .sort(),
+    [first.did, sibling.did].sort(),
+  );
 
   assert.equal(f.calls.length, pdsCallsBeforeSignup);
   assert.equal(f.plcHeads.size, plcOperationsBeforeSignup);
@@ -183,14 +195,14 @@ test("registration reconciliation isolates shared-email intents and processes la
     {
       id: "create:pre-did",
       status: "pending",
-      error: "AccountSelectionRequired",
+      error: "AccountExists",
     },
     {
-      id: `create:${(await f.accounts.get(later.email)).did}`,
+      id: `create:${(await f.accounts.storage.listByEmail(later.email))[0].did}`,
       status: "complete",
     },
   ]);
-  assert.equal((await f.accounts.get(later.email)).status, "active");
+  assert.equal((await f.accounts.storage.listByEmail(later.email))[0].status, "active");
 });
 
 test("registration reconciliation recognizes a persisted intent account by handle with a shared email", async (t) => {
@@ -262,7 +274,7 @@ test("registration reconciliation uses persisted user ID and atomically retries 
     "registration_binding_failure",
     "account_bindings",
   );
-  const pending = await f.accounts.get(alice.email);
+  const pending = (await f.accounts.storage.listByEmail(alice.email))[0] ?? null;
   assert.equal(pending.status, "provisioning");
   assert.equal(await f.accounts.storage.getVerifiedBinding(pending.did), null);
   assert.equal(
@@ -665,7 +677,7 @@ for (const code of [
       throw Object.assign(new Error("injected"), { code });
     };
     await assert.rejects(f.accounts.create(alice), { code });
-    const row = await f.accounts.get(alice.email);
+    const row = (await f.accounts.storage.listByEmail(alice.email))[0] ?? null;
     assert.equal(row.status, "provisioning");
     assert.ok(row.op);
     assert.ok(await f.db.get("registration:intents", alice.email));
@@ -697,7 +709,7 @@ test("provisioning retries reuse the persisted DID and signed operation after a 
     recoveryKey: (await Secp256k1Keypair.create()).did(),
   };
   await assert.rejects(accounts.create(keyed), { error: "Unavailable" });
-  const pending = await accounts.get(alice.email);
+  const pending = (await accounts.storage.listByEmail(alice.email))[0] ?? null;
   assert.equal(pending.status, "provisioning");
   assert.ok(pending.op);
   await assert.rejects(accounts.create(keyed), {
@@ -786,7 +798,7 @@ test("pre-DID registration binds public recovery custody while matching requests
   const pending = accounts.create(original);
   const failed = assert.rejects(pending, { error: "Unavailable" });
   await entered.promise;
-  assert.equal(await accounts.get(alice.email), null);
+  assert.equal((await accounts.storage.listByEmail(alice.email))[0] ?? null, null);
   await assert.rejects(accounts.create({ ...alice, recoveryKey: secondKey }), {
     status: 409,
   });
@@ -803,7 +815,7 @@ test("pre-DID registration binds public recovery custody while matching requests
     ).length,
     1,
   );
-  assert.equal(await accounts.get(alice.email), null);
+  assert.equal((await accounts.storage.listByEmail(alice.email))[0] ?? null, null);
   assert.ok(await accounts.ownership.pendingExternal(`email:${alice.email}`));
   const pendingAttempt = await accounts.ownership.pendingExternal(
     `email:${alice.email}`,
@@ -877,7 +889,7 @@ test("signed pending genesis resumes exact bytes after the hot signer changes", 
     { path: join(directory, "authority.sqlite") },
   );
   await assert.rejects(f.accounts.create(alice), { error: "Unavailable" });
-  const row = await f.accounts.get(alice.email);
+  const row = (await f.accounts.storage.listByEmail(alice.email))[0] ?? null;
   const original = structuredClone(row.op);
   await f.recover(row.did);
   const replacement = await Secp256k1Keypair.create({ exportable: true });
@@ -905,7 +917,7 @@ test("matching target description cannot reconcile a divergent registration PLC 
     },
   );
   await assert.rejects(accounts.create(alice), { error: "Unavailable" });
-  const pending = await accounts.get(alice.email);
+  const pending = (await accounts.storage.listByEmail(alice.email))[0] ?? null;
   remote.set(pending.did, {
     did: pending.did,
     handle: pending.handle,
@@ -919,7 +931,7 @@ test("matching target description cannot reconcile a divergent registration PLC 
   await assert.rejects(accounts.create(alice), {
     code: "OperationRecoveryRequired",
   });
-  const unchanged = await accounts.get(alice.email);
+  const unchanged = (await accounts.storage.listByEmail(alice.email))[0] ?? null;
   assert.equal(unchanged.status, "provisioning");
   assert.equal(unchanged.did, pending.did);
   assert.deepEqual(unchanged.op, pending.op);
@@ -939,7 +951,7 @@ test("genesis failure before first insert has no publication; saved row replays 
     return insert(table, ...args);
   };
   await assert.rejects(f.accounts.create(alice), /pre-insert crash boundary/);
-  assert.equal(await f.accounts.get(alice.email), null);
+  assert.equal((await f.accounts.storage.listByEmail(alice.email))[0] ?? null, null);
   assert.equal(f.remote.size, 0);
   assert.equal(f.plcHeads.size, 0);
   assert.equal(
@@ -1002,7 +1014,7 @@ test("genesis history failure rolls back the signed row, claims, DID admission a
   };
   await assert.rejects(f.accounts.create(alice), /genesis history failure/);
   assert.ok(did);
-  assert.equal(await f.accounts.get(alice.email), null);
+  assert.equal((await f.accounts.storage.listByEmail(alice.email))[0] ?? null, null);
   for (const table of [
     "accounts",
     "email_claims",
@@ -1039,7 +1051,7 @@ test("crash after signed row commit reuses acknowledged repository key and saved
     return set(namespace, ...args);
   };
   await assert.rejects(f.accounts.create(alice), /post-insert crash boundary/);
-  const saved = await f.accounts.get(alice.email);
+  const saved = (await f.accounts.storage.listByEmail(alice.email))[0] ?? null;
   assert.ok(saved.op);
   const store = createCustodyInventoryStorage(f.db);
   const signedHistory = await store.getHistory(saved.did);
