@@ -193,7 +193,8 @@ from an email match alone; see [account identity](data-custody.md#1-account-iden
 A remembered device is fresh for seven days; stale device authentication returns
 to email OTP for the selected DID. The authentication check revalidates the live
 DID binding before refreshing that DID's device membership. Account-console
-sensitive actions retain their separate ten-minute Better Auth session check.
+sensitive actions keep their separate ten-minute rule on the Better Auth session,
+which an in-place confirmation can renew ([Confirm it's you](#confirm-its-you)).
 This adds no consent bypass or new client-trust policy. Configured local public
 and confidential client flows have verified hint acceptance, seven-day
 freshness and consent behavior. Full ePDS production consent/freshness parity
@@ -266,6 +267,54 @@ selectors are rejected. The DID does not persist selection authority: tabs
 remain independent, while a revoked session or unbound DID cannot reuse an old
 form or fall through to a sibling account. Settings and email proofs use only the selected DID. No account
 schema or persistent selection state is added.
+
+### Confirm it's you
+
+Security and identity actions in the account console need a recent browser
+session: it signed in, or last confirmed its email, within ten minutes
+(`isRecent` in the shared security primitives; the window is unchanged). Viewing
+settings and the revocation actions in `noRecentLogin` never need it. A session
+older than that is not sent back to `/login`. The console answers the original
+POST with a "Confirm it's you" page (HTTP 200) and emails a one-use eight-digit
+`reconfirm` proof to the account's primary email. Entering it at
+`POST /account/confirm` continues the original action through the same dispatch
+path as a direct post: CSRF, the live DID binding and recency are checked again, and the action keeps its own checks. A
+confirmation lasts ten minutes, belongs to its Better Auth session and ends with
+it; signing out or revoking the session makes it useless. Another proof, such as
+the current-email code of an email change, does not count as a confirmation.
+Direct callers of the security primitives still receive
+`403 ReauthenticationRequired` when the session is not recent.
+
+The saved action (name, DID and posted fields) rides in the `reconfirm`
+challenge, so it expires, supersedes and invalidates with the code and can be
+completed or re-sent only by the session that asked. Posted fields can hold
+passwords and mailbox codes, so they are sealed with AES-256-GCM under a key
+derived from the existing secret, the label `entryway-reconfirm-v1` and the
+session, user, DID and action. The sealed fields are removed when the code is
+used or superseded, and the next confirmation request sweeps any that expired.
+A spent challenge keeps only who asked and for what, so a late attempt is still
+told the code expired or was used. Completing opens the fields only after the
+usual checks (unused, unexpired, current, five guesses). "Send a new code"
+replaces the earlier code and carries the action over; it applies the same
+checks except the guess limit, so a code exhausted by wrong guesses can be
+re-sent, while a used, superseded, expired or voided one cannot. Another
+session, user or account receives the ordinary `InvalidToken` answer without
+spending the code's five guesses. No schema, secret or setting is added.
+
+Starting a confirmation in another tab of the same account replaces the earlier
+code, as it does for other proofs; the newest email wins. Every confirmation
+code, including each re-send, counts against the existing five-per-ten-minutes
+request budget for the mailbox. The code of the action it unlocks, such as the
+current-email code of an email change, draws on the same budget; there is no
+separate bucket. An expired code ends the page with "This code has expired.
+Start the change again." and a link back to account settings, without a
+re-send; asking to re-send a used, superseded or voided code ends it the same
+way ("This code can no longer be used. Start the change again."). Too many
+confirmation requests show a rate-limit message with a link back and one plain
+sign-in line, rather than the generic error page; no other confirmation ending
+links to sign-in. A failure of the replayed action itself, such as its own code
+having expired or hitting the same budget, still uses the generic
+account-operation error page.
 
 ## 6. PDS integration and fleet lifecycle
 
