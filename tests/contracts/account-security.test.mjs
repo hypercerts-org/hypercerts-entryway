@@ -22,6 +22,7 @@ import { createAccountSecurity } from "../../dist/src/compose-account-security.m
 import { createAccountStorage } from "../../dist/src/database/drizzle/account-storage.js";
 import { createMailFeature } from "../../dist/src/mail/create-mail.js";
 import { createMailOutbox } from "../../dist/src/database/drizzle/mail-outbox.js";
+import { createOtpMessage } from "../../dist/src/mail/templates.js";
 
 async function fixture(t, { initialLogin = true } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "entryway-account-security-"));
@@ -1790,4 +1791,628 @@ test("stale saved deletion authorization cannot manufacture another deletion adm
   assert.deepEqual(await f.db.read("authority_operations"), operations);
   assert.equal(calls, 1);
   assert.equal((await f.accounts.get(f.alice.did)).status, "deleted");
+});
+
+// "Confirm it's you": a browser session signed in more than ten minutes ago proves
+// its mailbox again in place instead of signing in again.
+const staleActor = (actor) => ({
+  ...actor,
+  authenticatedAt: new Date(Date.now() - 601_000),
+});
+const savedAction = (f, changes = {}) => ({
+  action: "backup-request",
+  did: f.alice.did,
+  fields: { email: "backup@example.com" },
+  ...changes,
+});
+async function beginConfirmation(
+  f,
+  actor,
+  changes = {},
+  email = f.alice.email,
+) {
+  const saved = savedAction(f, changes);
+  const { challengeId } = await f.security.beginReconfirm(actor, saved);
+  const token = (await f.db.get("outbox", email)).token;
+  assert.equal(token.split(".")[0], challengeId);
+  return { challengeId, token, saved };
+}
+const completed = (f, saved) => ({
+  action: saved.action,
+  did: saved.did,
+  fields: saved.fields,
+});
+// What a used, superseded or expired challenge keeps: who asked and for what.
+const spentData = (actor, action = "backup-request") => ({
+  sessionId: actor.sessionId,
+  userId: actor.userId,
+  action,
+});
+const challengeData = async (f, id) =>
+  (await f.db.get("security:challenges", id)).data;
+async function editChallenge(f, id, change) {
+  const row = await f.db.get("security:challenges", id);
+  await f.db.set("security:challenges", id, change(row));
+}
+
+test("a browser session is recent for ten minutes after sign-in or an in-place confirmation", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  assert.equal(await f.security.isRecent(f.actor), true);
+  assert.equal(await f.security.isRecent(stale), false);
+  assert.equal(
+    await f.security.isRecent({
+      ...f.actor,
+      authenticatedAt: new Date(Date.now() + 60_000),
+    }),
+    false,
+    "a future-dated sign-in is never recent",
+  );
+  for (const kind of ["oauth", "legacy", "admin"])
+    assert.equal(
+      await f.security.isRecent({
+        did: f.alice.did,
+        kind,
+        authenticatedAt: new Date(),
+      }),
+      false,
+    );
+  // Direct callers keep the same refusal and error code; nothing is bypassed.
+  await assert.rejects(
+    f.security.requestBackupEmail(stale, { email: "backup@example.com" }),
+    { status: 403, error: "ReauthenticationRequired" },
+  );
+
+  const { token } = await beginConfirmation(f, stale);
+  assert.equal(
+    await f.security.isRecent(stale),
+    false,
+    "a sent code is not a confirmation",
+  );
+  await f.security.completeReconfirm(stale, token);
+  assert.equal(await f.security.isRecent(stale), true);
+  assert.equal(
+    await f.security.isRecent(stale, Date.now() + 590_000),
+    true,
+    "the confirmation lasts ten minutes",
+  );
+  assert.equal(await f.security.isRecent(stale, Date.now() + 610_000), false);
+  assert.equal(
+    await f.security.isRecent({
+      ...stale,
+      authenticatedAt: new Date(Date.now() + 60_000),
+    }),
+    true,
+    "a future-dated sign-in does not hide a valid confirmation",
+  );
+  // principal(actor, true) applies the identical rule to every direct caller.
+  await f.security.requestBackupEmail(stale, { email: "backup@example.com" });
+});
+
+test("a confirmation code returns its saved action once and keeps no plaintext or residue", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  const password = "a sealed replacement password";
+  const previous = "the previous sealed password";
+  const { challengeId, token, saved } = await beginConfirmation(f, stale, {
+    action: "password-set",
+    fields: { password, currentPassword: previous, token: "12345678" },
+  });
+  const [, code] = token.split(".");
+  const stored = await f.db.get("security:challenges", challengeId);
+  assert.equal(stored.purpose, "reconfirm");
+  assert.equal(stored.did, f.alice.did);
+  assert.equal(stored.email, f.alice.email);
+  assert.equal(stored.data.action, "password-set");
+  const persisted = JSON.stringify(stored);
+  for (const secret of [password, previous, code])
+    assert.ok(
+      !persisted.includes(secret),
+      "the saved action and the code are not stored in plaintext",
+    );
+  assert.equal((await f.db.get("outbox", f.alice.email)).type, "reconfirm");
+
+  assert.deepEqual(
+    await f.security.completeReconfirm(stale, token),
+    completed(f, saved),
+  );
+  const used = await f.db.get("security:challenges", challengeId);
+  assert.ok(used.consumedAt);
+  assert.deepEqual(
+    used.data,
+    spentData(stale, "password-set"),
+    "the sealed fields are dropped with the code",
+  );
+  await assert.rejects(f.security.completeReconfirm(stale, token), {
+    error: "InvalidToken",
+  });
+
+  // A confirmation that can no longer make any session recent is pruned on write.
+  await f.db.set("account:reconfirm", "ended-session", {
+    userId: f.login.user.id,
+    at: Date.now() - 601_000,
+  });
+  const next = await beginConfirmation(f, stale);
+  await f.security.completeReconfirm(stale, next.token);
+  assert.equal(await f.db.get("account:reconfirm", "ended-session"), null);
+  assert.equal(
+    (await f.db.get("account:reconfirm", stale.sessionId)).userId,
+    f.login.user.id,
+  );
+});
+
+test("a saved action is unusable once its code is used, superseded or expired", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+
+  // A code already marked used or superseded is refused by its own state, even
+  // before the action is swept away.
+  const marked = await beginConfirmation(f, stale);
+  await editChallenge(f, marked.challengeId, (row) => ({
+    ...row,
+    consumedAt: Date.now(),
+  }));
+  await assert.rejects(f.security.resendReconfirm(stale, marked.challengeId), {
+    error: "InvalidToken",
+  });
+  await assert.rejects(f.security.completeReconfirm(stale, marked.token), {
+    error: "InvalidToken",
+  });
+
+  // Superseded by a newer code: the earlier action is dropped at once and no
+  // path - completing, re-sending - can reach it.
+  const first = await beginConfirmation(f, stale);
+  assert.ok((await challengeData(f, first.challengeId)).sealed);
+  const second = await beginConfirmation(f, stale);
+  assert.deepEqual(await challengeData(f, first.challengeId), spentData(stale));
+  await assert.rejects(f.security.completeReconfirm(stale, first.token), {
+    error: "InvalidToken",
+  });
+  await assert.rejects(f.security.resendReconfirm(stale, first.challengeId), {
+    error: "InvalidToken",
+  });
+
+  // Expired: refused by every path, then dropped by the next confirmation
+  // request even when that request belongs to another account.
+  await editChallenge(f, second.challengeId, (row) => ({
+    ...row,
+    expiresAt: Date.now() - 1,
+  }));
+  await assert.rejects(f.security.completeReconfirm(stale, second.token), {
+    error: "ExpiredToken",
+  });
+  await assert.rejects(f.security.resendReconfirm(stale, second.challengeId), {
+    error: "ExpiredToken",
+  });
+  const bob = staleActor((await f.signIn(f.bob.email)).actor);
+  await beginConfirmation(
+    f,
+    bob,
+    { did: f.bob.did, action: "email-request", fields: {} },
+    f.bob.email,
+  );
+  assert.deepEqual(
+    await challengeData(f, second.challengeId),
+    spentData(stale),
+  );
+  // Swept or not, a late attempt is told the code expired, not that it is invalid.
+  await assert.rejects(f.security.completeReconfirm(stale, second.token), {
+    error: "ExpiredToken",
+  });
+  await assert.rejects(f.security.resendReconfirm(stale, second.challengeId), {
+    error: "ExpiredToken",
+  });
+  assert.equal(await f.security.isRecent(stale), false);
+
+  // Used: dropped in the transaction that consumes the code.
+  const third = await beginConfirmation(f, stale);
+  await f.security.completeReconfirm(stale, third.token);
+  assert.deepEqual(await challengeData(f, third.challengeId), spentData(stale));
+  await assert.rejects(f.security.resendReconfirm(stale, third.challengeId), {
+    error: "InvalidToken",
+  });
+});
+
+test("a saved action opens only for its own session, user, account and action", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  const other = staleActor((await f.signIn(f.alice.email)).actor);
+  assert.notEqual(other.sessionId, stale.sessionId);
+  const { challengeId, token, saved } = await beginConfirmation(f, stale);
+  const original = await challengeData(f, challengeId);
+  const flip = (sealed, index) =>
+    sealed.slice(0, index) +
+    (sealed[index] === "A" ? "B" : "A") +
+    sealed.slice(index + 1);
+  const variants = [
+    ["a tampered tag", stale, { sealed: flip(original.sealed, 20) }],
+    [
+      "tampered ciphertext",
+      stale,
+      { sealed: flip(original.sealed, original.sealed.length - 6) },
+    ],
+    ["a truncated payload", stale, { sealed: original.sealed.slice(0, 30) }],
+    // The ownership field is rewritten so the request reaches the key; the key
+    // still belongs to the session that sealed the action.
+    ["another session", other, { sessionId: other.sessionId }],
+    ["another action", stale, { action: "password-remove" }],
+  ];
+  for (const [name, actor, change] of variants) {
+    await editChallenge(f, challengeId, (row) => ({
+      ...row,
+      data: { ...original, ...change },
+    }));
+    await assert.rejects(
+      f.security.completeReconfirm(actor, token),
+      { error: "InvalidToken" },
+      name,
+    );
+    assert.equal(await f.security.isRecent(actor), false, name);
+    assert.ok(
+      !(await f.db.get("security:challenges", challengeId)).consumedAt,
+      name,
+    );
+  }
+  // The untouched action still opens for the session that sealed it.
+  await editChallenge(f, challengeId, (row) => ({ ...row, data: original }));
+  assert.deepEqual(
+    await f.security.completeReconfirm(stale, token),
+    completed(f, saved),
+  );
+});
+
+test("another session or person is told nothing about an expired or swept code", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  const other = staleActor((await f.signIn(f.alice.email)).actor);
+  const bob = staleActor((await f.signIn(f.bob.email)).actor);
+  const { challengeId, token } = await beginConfirmation(f, stale);
+  await editChallenge(f, challengeId, (row) => ({
+    ...row,
+    expiresAt: Date.now() - 1,
+  }));
+  const refused = async () => {
+    for (const actor of [other, bob]) {
+      await assert.rejects(f.security.completeReconfirm(actor, token), {
+        error: "InvalidToken",
+      });
+      await assert.rejects(f.security.resendReconfirm(actor, challengeId), {
+        error: "InvalidToken",
+      });
+    }
+  };
+
+  // Only the requesting session learns that the code expired.
+  await assert.rejects(f.security.completeReconfirm(stale, token), {
+    error: "ExpiredToken",
+  });
+  await refused();
+
+  // The tombstone keeps the identifiers, so the answers hold after the sweep.
+  await beginConfirmation(
+    f,
+    bob,
+    { did: f.bob.did, action: "email-request", fields: {} },
+    f.bob.email,
+  );
+  assert.deepEqual(await challengeData(f, challengeId), spentData(stale));
+  await assert.rejects(f.security.completeReconfirm(stale, token), {
+    error: "ExpiredToken",
+  });
+  await refused();
+});
+
+test("completing and re-sending classify a late attempt the same way", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  const { challengeId, token } = await beginConfirmation(f, stale);
+  // An account security change voids outstanding codes.
+  const version = (await f.db.get("security:versions", f.alice.did)) ?? 0;
+  await f.db.set("security:versions", f.alice.did, version + 1);
+  await assert.rejects(f.security.completeReconfirm(stale, token), {
+    error: "InvalidToken",
+  });
+  await assert.rejects(f.security.resendReconfirm(stale, challengeId), {
+    error: "InvalidToken",
+  });
+  // Expiry is reported before the void by both.
+  await editChallenge(f, challengeId, (row) => ({
+    ...row,
+    expiresAt: Date.now() - 1,
+  }));
+  await assert.rejects(f.security.completeReconfirm(stale, token), {
+    error: "ExpiredToken",
+  });
+  await assert.rejects(f.security.resendReconfirm(stale, challengeId), {
+    error: "ExpiredToken",
+  });
+});
+
+test("a confirmation record counts only for the session's own user", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  await f.db.set("account:reconfirm", stale.sessionId, {
+    userId: "another-user",
+    at: Date.now(),
+  });
+  assert.equal(await f.security.isRecent(stale), false);
+  await f.db.set("account:reconfirm", stale.sessionId, {
+    userId: stale.userId,
+    at: Date.now(),
+  });
+  assert.equal(await f.security.isRecent(stale), true);
+});
+
+test("two concurrent completions with the same valid code replay exactly once", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  const { token, saved } = await beginConfirmation(f, stale);
+  const results = await Promise.allSettled([
+    f.security.completeReconfirm(stale, token),
+    f.security.completeReconfirm(stale, token),
+  ]);
+  const won = results.filter(({ status }) => status === "fulfilled");
+  assert.equal(won.length, 1);
+  assert.deepEqual(won[0].value, completed(f, saved));
+  const lost = results.find(({ status }) => status === "rejected");
+  assert.equal(lost.reason.error, "InvalidToken");
+  assert.equal(await f.security.isRecent(stale), true);
+});
+
+test("a confirmation code belongs to its session: another session or person is refused without spending guesses", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  const { challengeId, token, saved } = await beginConfirmation(f, stale);
+  const [, code] = token.split(".");
+  const wrong = code === "00000000" ? "11111111" : "00000000";
+
+  // The same person on another browser session cannot complete or re-send it.
+  const other = staleActor((await f.signIn(f.alice.email)).actor);
+  assert.notEqual(other.sessionId, stale.sessionId);
+  for (const guess of [code, wrong, wrong, wrong, wrong, wrong, wrong])
+    await assert.rejects(
+      f.security.completeReconfirm(other, `${challengeId}.${guess}`),
+      { status: 400, error: "InvalidToken" },
+    );
+  await assert.rejects(f.security.resendReconfirm(other, challengeId), {
+    error: "InvalidToken",
+  });
+  assert.equal(await f.security.isRecent(other), false);
+  assert.equal(
+    (await f.db.get("security:challenges", challengeId)).attempts,
+    0,
+  );
+
+  // Another person is refused for their own account and for this one.
+  const bob = staleActor((await f.signIn(f.bob.email)).actor);
+  await assert.rejects(f.security.completeReconfirm(bob, token), {
+    error: "InvalidToken",
+  });
+  await assert.rejects(
+    f.security.completeReconfirm({ ...bob, did: f.alice.did }, token),
+    { error: "AccountMismatch" },
+  );
+  await assert.rejects(
+    f.security.beginReconfirm({ ...bob, did: f.alice.did }, saved),
+    { error: "AccountMismatch" },
+  );
+  assert.equal(await f.security.isRecent(bob), false);
+
+  // The requesting session is unaffected by every attempt above.
+  assert.deepEqual(
+    await f.security.completeReconfirm(stale, token),
+    completed(f, saved),
+  );
+});
+
+test("a confirmation code belongs to its account when a verified email is shared", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  const sibling = await bindSiblingToSharedEmail(f, f.login.user.id);
+  const siblingActor = { ...stale, did: sibling.did };
+  const ours = await beginConfirmation(f, stale);
+  const [, oursCode] = ours.token.split(".");
+  const wrong = oursCode === "00000000" ? "11111111" : "00000000";
+  // The other account is refused without spending this account's guesses.
+  for (const guess of [oursCode, wrong, wrong, wrong, wrong, wrong, wrong])
+    await assert.rejects(
+      f.security.completeReconfirm(
+        siblingActor,
+        `${ours.challengeId}.${guess}`,
+      ),
+      { error: "InvalidToken" },
+    );
+  assert.equal(
+    (await f.db.get("security:challenges", ours.challengeId)).attempts,
+    0,
+  );
+  await assert.rejects(
+    f.security.resendReconfirm(siblingActor, ours.challengeId),
+    { error: "InvalidToken" },
+  );
+  // A saved action cannot be filed under another account.
+  await assert.rejects(
+    f.security.beginReconfirm(stale, { ...ours.saved, did: sibling.did }),
+    { status: 400, error: "InvalidRequest" },
+  );
+
+  // Each account has its own live code; neither consumes or supersedes the
+  // other, and the saved action cannot be moved between them.
+  const theirs = await beginConfirmation(f, siblingActor, {
+    did: sibling.did,
+    action: "email-request",
+    fields: {},
+  });
+  const graft = (await challengeData(f, ours.challengeId)).sealed;
+  await editChallenge(f, theirs.challengeId, (row) => ({
+    ...row,
+    data: { ...row.data, sealed: graft },
+  }));
+  await assert.rejects(
+    f.security.completeReconfirm(siblingActor, theirs.token),
+    {
+      error: "InvalidToken",
+    },
+  );
+  assert.deepEqual(
+    await f.security.completeReconfirm(stale, ours.token),
+    completed(f, ours.saved),
+  );
+});
+
+test("a failed confirmation never makes a session recent: wrong codes stop at five and expired codes are refused", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+
+  const expired = await beginConfirmation(f, stale);
+  await editChallenge(f, expired.challengeId, (row) => ({
+    ...row,
+    expiresAt: Date.now() - 1,
+  }));
+  await assert.rejects(f.security.completeReconfirm(stale, expired.token), {
+    error: "ExpiredToken",
+  });
+
+  const guessed = await beginConfirmation(f, stale);
+  const [selector, code] = guessed.token.split(".");
+  const wrong = code === "00000000" ? "11111111" : "00000000";
+  for (let attempt = 0; attempt < 5; attempt++)
+    await assert.rejects(
+      f.security.completeReconfirm(stale, `${selector}.${wrong}`),
+      { error: "InvalidToken" },
+    );
+  await assert.rejects(f.security.completeReconfirm(stale, guessed.token), {
+    error: "InvalidToken",
+  });
+  for (const malformed of ["", "not-a-selector.12345678", `${selector}.1.2`])
+    await assert.rejects(f.security.completeReconfirm(stale, malformed), {
+      error: "InvalidToken",
+    });
+  assert.equal(await f.security.isRecent(stale), false);
+  await assert.rejects(
+    f.security.requestBackupEmail(stale, { email: "backup@example.com" }),
+    { error: "ReauthenticationRequired" },
+  );
+});
+
+test("sending a new confirmation code replaces the earlier one and keeps the saved action", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  const first = await beginConfirmation(f, stale);
+  const resent = await f.security.resendReconfirm(stale, first.challengeId);
+  const secondToken = (await f.db.get("outbox", f.alice.email)).token;
+  assert.notEqual(resent.challengeId, first.challengeId);
+  assert.equal(secondToken.split(".")[0], resent.challengeId);
+  await assert.rejects(f.security.completeReconfirm(stale, first.token), {
+    error: "InvalidToken",
+  });
+  assert.deepEqual(
+    await f.security.completeReconfirm(stale, secondToken),
+    completed(f, first.saved),
+  );
+  // A completed action has nothing left to re-send.
+  await assert.rejects(f.security.resendReconfirm(stale, resent.challengeId), {
+    error: "InvalidToken",
+  });
+});
+
+test("new confirmation codes share the mailbox request limit", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  let { challengeId } = await beginConfirmation(f, stale);
+  for (let sent = 1; sent < 5; sent++)
+    challengeId = (await f.security.resendReconfirm(stale, challengeId))
+      .challengeId;
+  await assert.rejects(f.security.resendReconfirm(stale, challengeId), {
+    status: 429,
+    error: "RateLimitExceeded",
+  });
+  // The refused request left the latest code and its action usable.
+  const token = (await f.db.get("outbox", f.alice.email)).token;
+  assert.equal(token.split(".")[0], challengeId);
+  assert.deepEqual(
+    await f.security.completeReconfirm(stale, token),
+    completed(f, savedAction(f)),
+  );
+});
+
+test("revoking or ending a session makes its confirmation useless", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  const { token } = await beginConfirmation(f, stale);
+  await f.security.completeReconfirm(stale, token);
+  await f.security.requestBackupEmail(stale, { email: "backup@example.com" });
+
+  await f.security.revokeAccount(f.alice.did);
+  await assert.rejects(
+    f.security.requestBackupEmail(stale, { email: "other@example.com" }),
+    { status: 401, error: "AuthenticationRequired" },
+  );
+  await assert.rejects(f.security.beginReconfirm(stale, savedAction(f)), {
+    status: 401,
+  });
+  // A later session starts from its own sign-in time; it inherits nothing.
+  const later = staleActor((await f.signIn(f.alice.email)).actor);
+  assert.notEqual(later.sessionId, stale.sessionId);
+  assert.equal(await f.security.isRecent(later), false);
+  await assert.rejects(
+    f.security.requestBackupEmail(later, { email: "other@example.com" }),
+    { status: 403, error: "ReauthenticationRequired" },
+  );
+});
+
+test("saved confirmation actions are validated and only browser sessions can confirm", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  const pending = savedAction(f);
+  for (const invalid of [
+    { ...pending, did: f.bob.did },
+    { ...pending, action: "Not An Action" },
+    { ...pending, action: undefined },
+    { ...pending, fields: null },
+    { ...pending, fields: ["email"] },
+    { ...pending, fields: { nested: { value: "x" } } },
+    { ...pending, fields: { count: 1 } },
+  ])
+    await assert.rejects(f.security.beginReconfirm(stale, invalid), {
+      status: 400,
+      error: "InvalidRequest",
+    });
+  for (const actor of [
+    { did: f.alice.did, kind: "oauth", authenticatedAt: new Date() },
+    { did: f.alice.did, kind: "legacy", authenticatedAt: new Date() },
+  ]) {
+    await assert.rejects(f.security.beginReconfirm(actor, pending), {
+      status: 403,
+      error: "Forbidden",
+    });
+    await assert.rejects(f.security.completeReconfirm(actor, "x.12345678"), {
+      status: 403,
+      error: "Forbidden",
+    });
+  }
+  await assert.rejects(f.security.beginReconfirm(undefined, pending), {
+    status: 401,
+  });
+  await assert.rejects(
+    f.security.beginReconfirm({ ...stale, userId: "attacker" }, pending),
+    { error: "AccountMismatch" },
+  );
+  assert.equal(
+    (await f.db.list("security:challenges")).filter(
+      ({ value }) => value.purpose === "reconfirm",
+    ).length,
+    0,
+    "refused requests issue no code",
+  );
+});
+
+test("the confirmation email names its purpose and keeps the code format", () => {
+  const message = createOtpMessage(
+    "alice@example.com",
+    "12345678",
+    "reconfirm",
+  );
+  assert.match(message.text, /^Use 12345678 to confirm it's you\. /);
+  assert.match(message.html, /Use this code to confirm it's you\./);
 });

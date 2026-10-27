@@ -24,6 +24,7 @@ const purposeLabels: Record<string, string> = {
   "recovery-backup": "recover your Entryway account",
   "recovery-new-email": "confirm your recovered email",
   "account-delete": "confirm account deletion",
+  reconfirm: "confirm it's you",
 };
 
 export function createOtpMessage(
