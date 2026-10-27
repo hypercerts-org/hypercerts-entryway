@@ -67,6 +67,12 @@ function renderPasswordPanel({
   renderAppPasswords,
   accountContext,
 }) {
+  if (!(security && legacy))
+    return section(
+      "passwords",
+      "Passwords",
+      "<p>Password management is not available yet.</p>",
+    );
   const passwordInput = state.passwordEnabled
     ? field(
         "currentPassword",
@@ -75,12 +81,6 @@ function renderPasswordPanel({
         'autocomplete="current-password" maxlength="256"',
       )
     : "";
-  if (!security || !legacy)
-    return section(
-      "passwords",
-      "Passwords",
-      "<p>Password management is not available yet.</p>",
-    );
   const passwordStatus = state.passwordEnabled
     ? "Optional account password is enabled."
     : "This account has no account password. Email sign-in remains available.";
