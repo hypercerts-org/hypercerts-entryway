@@ -193,7 +193,8 @@ from an email match alone; see [account identity](data-custody.md#1-account-iden
 A remembered device is fresh for seven days; stale device authentication returns
 to email OTP for the selected DID. The authentication check revalidates the live
 DID binding before refreshing that DID's device membership. Account-console
-sensitive actions retain their separate ten-minute Better Auth session check.
+sensitive actions keep their separate ten-minute rule on the Better Auth session,
+which an in-place confirmation can renew ([Confirm it's you](#confirm-its-you)).
 This adds no consent bypass or new client-trust policy. Configured local public
 and confidential client flows have verified hint acceptance, seven-day
 freshness and consent behavior. Full ePDS production consent/freshness parity
@@ -266,6 +267,45 @@ selectors are rejected. The DID does not persist selection authority: tabs
 remain independent, while a revoked session or unbound DID cannot reuse an old
 form or fall through to a sibling account. Settings and email proofs use only the selected DID. No account
 schema or persistent selection state is added.
+
+### Confirm it's you
+
+Sensitive account-console actions need a recent browser session: one that signed
+in, or last confirmed it's you, within ten minutes (`isRecent` in the shared
+security primitives). Anything not exempted in `noRecentLogin` counts as
+sensitive.
+
+| Needs a recent session                                            | Never asks                                      |
+| ----------------------------------------------------------------- | ----------------------------------------------- |
+| Email: `email-request`, `email-update`, `email-confirm`           | Viewing settings                                |
+| Backup email: `backup-request`, `backup-confirm`, `backup-remove` | `revoke`, `grant-revoke`                        |
+| Password: `password-set`, `password-remove`                       | `oauth-session-revoke`, `legacy-session-revoke` |
+| Handle: `handle`                                                  | `browser-session-revoke`, `browsers-revoke`     |
+| App passwords: `app-password-create`, `app-password-revoke`       | `device-revoke`                                 |
+| Migration: `migration-request`, `migration-confirm`               |                                                 |
+| Deletion: `delete`, `delete-confirm`                              |                                                 |
+
+Revocations are exempt because they only reduce access.
+
+When the session is not recent, the console does not redirect to `/login`. It
+answers the original POST with a "Confirm it's you" page and emails a one-use
+eight-digit `reconfirm` code to the primary email. Entering it at
+`POST /account/confirm` replays the original action through the normal dispatch
+path, so CSRF, the live DID binding and the action's own checks still run.
+
+- A confirmation lasts ten minutes and belongs to its Better Auth session;
+  signing out or revoking the session ends it. No other proof counts as one.
+- The code expires after ten minutes and allows five guesses. "Send a new code"
+  replaces it, and a newer request from another tab supersedes it.
+- Another session, user or account gets `InvalidToken` without spending guesses.
+- Every code, including re-sends and the unlocked action's own code, uses the
+  existing five-per-ten-minutes mailbox budget.
+- The saved action (name, DID, posted fields) rides in the challenge. Fields are
+  sealed with AES-256-GCM under a key derived from the existing secret, the label
+  `entryway-reconfirm-v1` and the session, user, DID and action, and are removed
+  once the code is used, superseded or expired.
+- Direct callers of the security primitives still get
+  `403 ReauthenticationRequired`. No schema, secret or setting is added.
 
 ## 6. PDS integration and fleet lifecycle
 
