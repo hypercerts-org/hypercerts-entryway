@@ -5,6 +5,8 @@ export const hidden = (name, value) =>
 export const accountUrl = (did) => `/account?did=${encodeURIComponent(did)}`;
 const accountContextFields = (context) =>
   context?.did ? hidden("did", context.did) : "";
+const formAction = (action) =>
+  action.startsWith("/") ? action : `/account/${action}`;
 export const field = (name, label, type = "text", attributes = "") =>
   `<label>${esc(label)}<input name="${esc(name)}" type="${type}" ${attributes} required></label>`;
 export const form = (
@@ -14,10 +16,8 @@ export const form = (
   button,
   accountContext,
   extra = "",
-) => {
-  const target = action.startsWith("/") ? action : "/account/" + action;
-  return `<form method="post" action="${target}" ${extra}>${hidden("csrf", csrf)}${accountContextFields(accountContext)}${contents}<button>${esc(button)}</button></form>`;
-};
+) =>
+  `<form method="post" action="${formAction(action)}" ${extra}>${hidden("csrf", csrf)}${accountContextFields(accountContext)}${contents}<button>${esc(button)}</button></form>`;
 export const stamp = (value) => {
   const date = new Date(value);
   return Number.isFinite(date.getTime())

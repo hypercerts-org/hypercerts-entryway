@@ -10,6 +10,12 @@ const loginHints = (flow) =>
   );
 const matchesLoginHint = (flow, account) =>
   matchesAuthorizationHint(account, ...loginHints(flow));
+const linkedAccounts = (resolution) => {
+  if (resolution?.kind === "single") return [resolution.account];
+  if (resolution?.kind === "selection-required") return resolution.accounts;
+  return [];
+};
+
 export function mountEmailLogin({
   app,
   db,
@@ -369,10 +375,4 @@ export function mountEmailLogin({
       res.redirect(303, "/login");
     }),
   );
-}
-
-function linkedAccounts(resolution) {
-  if (resolution?.kind === "single") return [resolution.account];
-  if (resolution?.kind === "selection-required") return resolution.accounts;
-  return [];
 }

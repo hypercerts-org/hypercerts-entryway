@@ -41,6 +41,16 @@ function matchesRegistrationOwner(owner, session, email) {
   );
 }
 
+/** A signup started for a requested DID or handle may only create that account. */
+const signupMatchesHints = (flow, existing, input) =>
+  [flow.accountHint, flow.parameters?.login_hint]
+    .filter((hint) => hint != null)
+    .every((hint) => {
+      if (typeof hint !== "string") return false;
+      if (hint.startsWith("did:")) return existing?.did === hint;
+      return input.handle === hint.toLowerCase();
+    });
+
 export function mountSignupRoutes({
   app,
   db,
@@ -115,19 +125,7 @@ export function mountSignupRoutes({
         body: req.body,
         registrationIdentity,
       });
-      const requestedHints = [
-        flow.accountHint,
-        flow.parameters?.login_hint,
-      ].filter((hint) => hint != null);
-      if (
-        requestedHints.some(
-          (hint) =>
-            typeof hint !== "string" ||
-            (hint.startsWith("did:")
-              ? existing?.did !== hint
-              : input.handle !== hint.toLowerCase()),
-        )
-      )
+      if (!signupMatchesHints(flow, existing, input))
         throw new HttpError(
           403,
           "AccountMismatch",

@@ -182,10 +182,11 @@ export function createAccountConsole({
     const message = resent
       ? `We sent a new code to ${sentTo}. The earlier code no longer works. This one expires in ten minutes.`
       : `For your security, changes to account security or identity settings need a recent confirmation. We sent a code to ${sentTo}. Enter it to continue; it expires in ten minutes.`;
+    const alert = error ? `<p role="alert">${esc(error)}</p>` : "";
     return page(
       res,
       "Confirm it's you",
-      `${error ? `<p role="alert">${esc(error)}</p>` : ""}<p id="reconfirm-help" role="status">${message}</p><form method="post" action="/account/confirm">${proofs}<label for="reconfirm-code">Confirmation code</label><input id="reconfirm-code" name="token" inputmode="numeric" autocomplete="one-time-code" minlength="8" maxlength="8" aria-describedby="reconfirm-help" required><button>Confirm and continue</button></form><form method="post" action="/account/confirm">${proofs}${hidden("resend", "1")}<button class="secondary">Send a new code</button></form><p><a href="${esc(accountUrl(ctx.account.did))}">Cancel and return to account settings</a></p>`,
+      `${alert}<p id="reconfirm-help" role="status">${message}</p><form method="post" action="/account/confirm">${proofs}<label for="reconfirm-code">Confirmation code</label><input id="reconfirm-code" name="token" inputmode="numeric" autocomplete="one-time-code" minlength="8" maxlength="8" aria-describedby="reconfirm-help" required><button>Confirm and continue</button></form><form method="post" action="/account/confirm">${proofs}${hidden("resend", "1")}<button class="secondary">Send a new code</button></form><p><a href="${esc(accountUrl(ctx.account.did))}">Cancel and return to account settings</a></p>`,
       status,
     );
   };
