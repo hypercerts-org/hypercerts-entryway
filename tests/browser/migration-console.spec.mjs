@@ -116,9 +116,8 @@ test("console migrates its own DID, record and blob between enrolled PDSs with m
 
   await page.goto(`${config.issuer}/account`);
   const csrf = await page.locator('input[name="csrf"]').first().inputValue();
-  // Every account action names its DID, so these negative controls must send it
-  // to reach the migration guards rather than failing account selection.
-  const did = await page.locator('input[name="did"]').first().inputValue();
+  // Account actions name their DID; send it so these negative controls reach
+  // the migration guards instead of failing account selection.
   const notSelectionError = async (response) =>
     expect(await response.text()).not.toContain("Choose exactly one linked account");
   const forbiddenTarget = await page.request.post(
