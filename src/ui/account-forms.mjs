@@ -4,9 +4,7 @@ export const hidden = (name, value) =>
   `<input type="hidden" name="${esc(name)}" value="${esc(value)}">`;
 export const accountUrl = (did) => `/account?did=${encodeURIComponent(did)}`;
 const accountContextFields = (context) =>
-  context
-    ? `${context.did ? hidden("did", context.did) : ""}${hidden("selectionProof", context.selectionProof)}`
-    : "";
+  context?.did ? hidden("did", context.did) : "";
 export const field = (name, label, type = "text", attributes = "") =>
   `<label>${esc(label)}<input name="${esc(name)}" type="${type}" ${attributes} required></label>`;
 export const form = (

@@ -33,7 +33,7 @@ export function renderMigrationPanel({
   let actions;
   if (migrationPending) {
     actions = recoveryRequired
-      ? `<form method="post" action="/account/migration-confirm">${hidden("csrf", csrf)}${hidden("did", accountContext.did)}${hidden("selectionProof", accountContext.selectionProof)}${hidden("pdsId", migrationState.targetPdsId)}<button disabled>Waiting for operator recovery</button></form>`
+      ? `<form method="post" action="/account/migration-confirm">${hidden("csrf", csrf)}${hidden("did", accountContext.did)}${hidden("pdsId", migrationState.targetPdsId)}<button disabled>Waiting for operator recovery</button></form>`
       : form(
           "migration-confirm",
           csrf,

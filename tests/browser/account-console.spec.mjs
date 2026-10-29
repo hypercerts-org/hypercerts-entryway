@@ -72,11 +72,8 @@ async function post(p, action, body = {}, extra = {}) {
   const form = accountForm(p, action).first();
   const csrf = await form.locator('input[name="csrf"]').inputValue();
   const did = await form.locator('input[name="did"]').inputValue();
-  const selectionProof = await form
-    .locator('input[name="selectionProof"]')
-    .inputValue();
   return p.request.post(`${config.issuer}/account/${action}`, {
-    form: { csrf, did, selectionProof, ...body },
+    form: { csrf, did, ...body },
     headers: { origin: config.issuer },
     maxRedirects: 0,
     ...extra,
@@ -122,9 +119,6 @@ test("console binds verified email to one DID and shows no browser bearer creden
   const actionForms = page.locator('form[action^="/account/"]');
   for (const form of await actionForms.all()) {
     await expect(form.locator('input[name="did"]')).toHaveValue(alice.did);
-    const selectionProof = form.locator('input[name="selectionProof"]');
-    await expect(selectionProof).toHaveCount(1);
-    await expect(selectionProof).toHaveValue(/\S+/);
   }
   await page.screenshot({
     path: "artifacts/account-console-overview.png",
@@ -168,7 +162,7 @@ test("backup email requires its visible code and rejects foreign selectors, wron
     }),
   ).toBeVisible();
   await expect(page.getByRole("alert")).toContainText(
-    "different or expired account session",
+    "not linked to this verified identity",
   );
   expect(readMail(backup)).toBeNull();
 
@@ -208,9 +202,6 @@ test("backup email requires its visible code and rejects foreign selectors, wron
   const confirmationContext = {
     csrf: await confirmationForm.locator('input[name="csrf"]').inputValue(),
     did: await confirmationForm.locator('input[name="did"]').inputValue(),
-    selectionProof: await confirmationForm
-      .locator('input[name="selectionProof"]')
-      .inputValue(),
     email: await confirmationForm.locator('input[name="email"]').inputValue(),
     challengeId: await confirmationForm
       .locator('input[name="challengeId"]')
