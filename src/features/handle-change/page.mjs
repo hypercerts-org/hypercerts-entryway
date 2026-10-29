@@ -12,6 +12,5 @@ export const renderHandleForm = ({ csrf, a, accountContext }) =>
       `value="${esc(a.handle)}" maxlength="253"`,
     ),
     "Update handle",
-    "",
     accountContext,
   );

@@ -39,7 +39,6 @@ export function renderMigrationPanel({
           csrf,
           hidden("pdsId", migrationState.targetPdsId),
           "Resume data server migration",
-          "",
           accountContext,
         );
   } else if (destinations.length) {
@@ -55,7 +54,6 @@ export function renderMigrationPanel({
       csrf,
       destination,
       "Start data server migration",
-      "",
       accountContext,
     );
   } else {

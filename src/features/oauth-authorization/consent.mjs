@@ -3,8 +3,10 @@ import { escapeHtml } from "../../ui/html.mjs";
 import { hidden } from "../../ui/forms.mjs";
 export function createConsent({ db, provider, stores, flows, accountAccess }) {
   const { fields, save, readCurrentIntent, pageForFlow } = flows;
+  const chooseAnotherAccountForm = (flow, browser) =>
+    `<form method="post" action="/auth/choose">${fields(flow, browser)}<button class="secondary">Choose a different account</button></form>`;
   const consentForm = (flow, browser, account) =>
-    `<div class="account"><strong>${escapeHtml(account.handle ?? account.did)}</strong><br><small>${escapeHtml(account.did)}</small>${flow.authUserId ? `<form method="post" action="/auth/choose">${fields(flow, browser)}<button class="secondary">Choose a different account</button></form>` : ""}</div><p><strong>${escapeHtml(flow.clientName ?? "Your application")}</strong> requests access:</p><p><code>${escapeHtml(flow.parameters?.scope)}</code></p><form method="post" action="/auth/consent">${fields(flow, browser)}${hidden("did", account.did)}<button name="decision" value="approve">Allow access</button> <button class="secondary" name="decision" value="deny">Cancel</button></form>`;
+    `<div class="account"><strong>${escapeHtml(account.handle ?? account.did)}</strong><br><small>${escapeHtml(account.did)}</small>${flow.authUserId ? chooseAnotherAccountForm(flow, browser) : ""}</div><p><strong>${escapeHtml(flow.clientName ?? "Your application")}</strong> requests access:</p><p><code>${escapeHtml(flow.parameters?.scope)}</code></p><form method="post" action="/auth/consent">${fields(flow, browser)}${hidden("did", account.did)}<button name="decision" value="approve">Allow access</button> <button class="secondary" name="decision" value="deny">Cancel</button></form>`;
   const authenticated = async (
     req,
     res,
@@ -62,7 +64,10 @@ export function createConsent({ db, provider, stores, flows, accountAccess }) {
         403,
       );
     if (!authorized.current.requestUri)
-      return res.redirect(303, `/account?did=${encodeURIComponent(authorized.account.did)}`);
+      return res.redirect(
+        303,
+        `/account?did=${encodeURIComponent(authorized.account.did)}`,
+      );
     return pageForFlow(
       res,
       "Authorize application",

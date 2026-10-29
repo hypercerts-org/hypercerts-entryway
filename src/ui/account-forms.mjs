@@ -12,10 +12,12 @@ export const form = (
   csrf,
   contents,
   button,
-  extra = "",
   accountContext,
-) =>
-  `<form method="post" action="${action.startsWith("/") ? action : `/account/${action}`}" ${extra}>${hidden("csrf", csrf)}${accountContextFields(accountContext)}${contents}<button>${esc(button)}</button></form>`;
+  extra = "",
+) => {
+  const target = action.startsWith("/") ? action : "/account/" + action;
+  return `<form method="post" action="${target}" ${extra}>${hidden("csrf", csrf)}${accountContextFields(accountContext)}${contents}<button>${esc(button)}</button></form>`;
+};
 export const stamp = (value) => {
   const date = new Date(value);
   return Number.isFinite(date.getTime())
@@ -30,16 +32,10 @@ export const rows = (items, render, empty) =>
     : `<p class="muted">${empty}</p>`;
 export const nextStep = (
   res,
-  title,
-  csrf,
-  action,
-  contents,
-  button,
-  message,
-  accountContext,
+  { title, csrf, action, contents, button, message, accountContext },
 ) =>
   page(
     res,
     title,
-    `<p role="status">${esc(message)}</p>${form(action, csrf, contents, button, "", accountContext)}<a href="${accountContext?.did ? accountUrl(accountContext.did) : "/account"}">Return to account settings</a>`,
+    `<p role="status">${esc(message)}</p>${form(action, csrf, contents, button, accountContext)}<a href="${accountContext?.did ? accountUrl(accountContext.did) : "/account"}">Return to account settings</a>`,
   );
