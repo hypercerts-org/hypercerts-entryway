@@ -20,7 +20,10 @@ metadata URL and requested scope. Google/GitHub are outside this flow.
    identity equals the intended DID and the original OAuth request is retained.
    A stale remembered device requires visible email OTP for its selected DID;
    both the OAuth `login_hint` and selected-account hint must still match after
-   restart. Consent and client-trust behavior are unchanged.
+   restart. Client trust is the Entryway-wide `OAUTH_TRUSTED_CLIENTS` list.
+   A newly created account skips consent only when `SIGNUP_ALLOW_CONSENT_SKIP`
+   is on and a trusted client's metadata opts in; no browser case covers the
+   skip yet, so its decision table lives in `signup-consent-skip.test.mjs`.
 5. Use the resulting credentials for a real PDS write and refresh.
 6. Check denied/revoked paths in the accompanying lifecycle cases.
 

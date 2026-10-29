@@ -7,67 +7,66 @@ test("OAuth client policy keeps file configuration when variables are unset", ()
 });
 
 test("OAuth trusted clients are one comma-separated Entryway-wide list", () => {
-  assert.deepEqual(
-    loadOAuthClientPolicy({
-      OAUTH_TRUSTED_CLIENTS:
-        " https://a.example/client-metadata.json,,https://b.example/client-metadata.json ",
-    }).trustedClientIds,
+  for (const [value, expected] of [
     [
-      "https://a.example/client-metadata.json",
-      "https://b.example/client-metadata.json",
+      " https://a.example/client-metadata.json,,https://b.example/client-metadata.json ",
+      [
+        "https://a.example/client-metadata.json",
+        "https://b.example/client-metadata.json",
+      ],
     ],
-  );
-  assert.deepEqual(
-    loadOAuthClientPolicy({ OAUTH_TRUSTED_CLIENTS: "" }).trustedClientIds,
-    [],
-  );
+    ["", []],
+    [",", []],
+  ])
+    assert.deepEqual(
+      loadOAuthClientPolicy({ OAUTH_TRUSTED_CLIENTS: value }).trustedClientIds,
+      expected,
+      JSON.stringify(value),
+    );
 });
 
-test("OAuth trusted clients must be https URLs and the error never echoes them", () => {
-  for (const value of [
+test("trusted client entries that are not exact https client_id URLs fail startup without echoing them", () => {
+  for (const entry of [
     "http://a.example/client-metadata.json",
     "a.example/client-metadata.json",
     "https://a.example/client-metadata.json,not-a-url-secret",
-  ]) {
+    "https://a.example",
+    "https://A.example/client-metadata.json",
+    "https://a.example:443/client-metadata.json",
+    "https://a.example/client-metadata.json/",
+    "https://user:pass@a.example/client-metadata.json",
+    "https://a.example/client-metadata.json#x",
+  ])
     assert.throws(
-      () => loadOAuthClientPolicy({ OAUTH_TRUSTED_CLIENTS: value }),
+      () => loadOAuthClientPolicy({ OAUTH_TRUSTED_CLIENTS: entry }),
       (error) =>
         error.code === "InvalidOAuthClientPolicy" &&
         !error.message.includes("secret") &&
         !error.message.includes("a.example"),
+      entry,
     );
-  }
 });
 
 test("signup consent skip accepts only explicit boolean values", () => {
-  assert.equal(
-    loadOAuthClientPolicy({ SIGNUP_ALLOW_CONSENT_SKIP: "true" })
-      .signupAllowConsentSkip,
-    true,
-  );
-  assert.equal(
-    loadOAuthClientPolicy({ SIGNUP_ALLOW_CONSENT_SKIP: "0" })
-      .signupAllowConsentSkip,
-    false,
-  );
-  assert.throws(
-    () => loadOAuthClientPolicy({ SIGNUP_ALLOW_CONSENT_SKIP: "yes" }),
-    { code: "InvalidOAuthClientPolicy" },
-  );
-});
-
-test("trusted client entries that could never equal a client_id are rejected at startup", () => {
-  for (const entry of [
-    "https://client.example",
-    "https://Client.example/client-metadata.json",
-    "https://client.example:443/client-metadata.json",
-    "https://client.example/client-metadata.json/",
-    "https://user:pass@client.example/client-metadata.json",
-    "https://client.example/client-metadata.json#x",
+  for (const [value, expected] of [
+    ["true", true],
+    ["1", true],
+    ["TRUE", true],
+    [" true ", true],
+    ["false", false],
+    ["0", false],
+    ["", false],
   ])
+    assert.equal(
+      loadOAuthClientPolicy({ SIGNUP_ALLOW_CONSENT_SKIP: value })
+        .signupAllowConsentSkip,
+      expected,
+      JSON.stringify(value),
+    );
+  for (const value of ["yes", "2", "on"])
     assert.throws(
-      () => loadOAuthClientPolicy({ OAUTH_TRUSTED_CLIENTS: entry }),
+      () => loadOAuthClientPolicy({ SIGNUP_ALLOW_CONSENT_SKIP: value }),
       { code: "InvalidOAuthClientPolicy" },
-      entry,
+      value,
     );
 });
