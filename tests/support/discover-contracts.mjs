@@ -19,6 +19,7 @@ const unitContracts = new Set([
   "service-auth.test.mjs",
   "legacy.test.mjs",
   "account-access.test.mjs",
+  "account-console.test.mjs",
   "account-security.test.mjs",
   "account-completion.test.mjs",
   "reconciliation-admission.test.mjs",
