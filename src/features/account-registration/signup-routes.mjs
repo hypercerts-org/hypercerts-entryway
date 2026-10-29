@@ -33,6 +33,13 @@ async function registrationInput({
   };
 }
 
+// An OAuth flow ends at the client's redirect_uri, so its form pages must
+// allow that origin as a form-action target (the CSP applies to redirects).
+const clientFormPolicy = (flow) =>
+  flow.requestUri
+    ? { formOrigin: new URL(flow.parameters.redirect_uri).origin }
+    : {};
+
 function matchesRegistrationOwner(owner, session, email) {
   return (
     owner?.kind === "better-auth" &&
@@ -152,9 +159,13 @@ export function mountSignupRoutes({
           `<p role="alert">${escapeHtml(message)}</p>${await signupForm(flow, browser)}`,
           flow,
           error.status >= 400 && error.status < 600 ? error.status : 503,
+          clientFormPolicy(flow),
         );
       }
-      await authenticated(req, res, flow, browser, row, { identity });
+      await authenticated(req, res, flow, browser, row, {
+        identity,
+        newAccount: true,
+      });
     }),
   );
 }

@@ -18,6 +18,7 @@ export async function createAuthentication({
   provider,
   stores,
   mail,
+  clientRequestsSignupConsentSkip,
 }) {
   let accountSecurity;
   const getAccountSecurity = () => accountSecurity;
@@ -47,10 +48,12 @@ export async function createAuthentication({
   });
   const { consentForm, authenticated } = createConsent({
     db,
+    config,
     provider,
     stores,
     flows,
     accountAccess,
+    clientRequestsSignupConsentSkip,
   });
   mountEmailLogin({
     app,
