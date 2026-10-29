@@ -131,12 +131,12 @@ test("verified-email chooser selects each real DID after OTP and keeps OAuth wri
   const sharedEmail = `chooser-${runId}-shared@example.test`;
   const first = {
     email: sharedEmail,
-    handle: `chooser-${runId}-one.entryway.atmosbox.test`,
+    handle: `ch-${runId}-o.entryway.atmosbox.test`,
     pdsId: "pds1",
   };
   const second = {
     email: `chooser-${runId}-second@example.test`,
-    handle: `chooser-${runId}-two.entryway.atmosbox.test`,
+    handle: `ch-${runId}-t.entryway.atmosbox.test`,
     pdsId: "pds2",
   };
   await createRealAccount(browser, first);

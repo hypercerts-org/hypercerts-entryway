@@ -63,12 +63,12 @@ test("shared verified email keeps each tab and account action bound to its selec
   const sharedEmail = `console-multi-${runId}@example.test`;
   const first = {
     email: sharedEmail,
-    handle: `console-multi-${runId}-one.entryway.atmosbox.test`,
+    handle: `cm-${runId}-on.entryway.atmosbox.test`,
     pdsId: "pds1",
   };
   const second = {
     email: `console-multi-${runId}-two@example.test`,
-    handle: `console-multi-${runId}-two.entryway.atmosbox.test`,
+    handle: `cm-${runId}-tw.entryway.atmosbox.test`,
     pdsId: "pds2",
   };
   await createRealAccount(browser, first);
