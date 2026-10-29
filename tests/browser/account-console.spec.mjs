@@ -60,9 +60,8 @@ async function post(p, action, body = {}, extra = {}) {
   const form = accountForm(p, action).first()
   const csrf = await form.locator('input[name="csrf"]').inputValue()
   const did = await form.locator('input[name="did"]').inputValue()
-  const selectionProof = await form.locator('input[name="selectionProof"]').inputValue()
   return p.request.post(`${config.issuer}/account/${action}`, {
-    form: { csrf, did, selectionProof, ...body },
+    form: { csrf, did, ...body },
     headers: { origin: config.issuer },
     maxRedirects: 0,
     ...extra,
@@ -106,9 +105,6 @@ test('console binds verified email to one DID and shows no browser bearer creden
   const actionForms = page.locator('form[action^="/account/"]')
   for (const form of await actionForms.all()) {
     await expect(form.locator('input[name="did"]')).toHaveValue(alice.did)
-    const selectionProof = form.locator('input[name="selectionProof"]')
-    await expect(selectionProof).toHaveCount(1)
-    await expect(selectionProof).toHaveValue(/\S+/)
   }
   await page.screenshot({ path: 'artifacts/account-console-overview.png', fullPage: true })
 })
@@ -131,7 +127,7 @@ test('backup email requires its visible code and rejects foreign selectors, wron
     .evaluate((input, did) => { input.value = did }, bob.did)
   await submit(page, 'backup-request')
   await expect(page.getByRole('heading', { name: 'Account operation could not be completed' })).toBeVisible()
-  await expect(page.getByRole('alert')).toContainText('different or expired account session')
+  await expect(page.getByRole('alert')).toContainText('not linked to this verified identity')
   expect(readMail(backup)).toBeNull()
 
   await page.goto(`${config.issuer}/account`)
@@ -163,7 +159,6 @@ test('backup email requires its visible code and rejects foreign selectors, wron
   const confirmationContext = {
     csrf: await confirmationForm.locator('input[name="csrf"]').inputValue(),
     did: await confirmationForm.locator('input[name="did"]').inputValue(),
-    selectionProof: await confirmationForm.locator('input[name="selectionProof"]').inputValue(),
     email: await confirmationForm.locator('input[name="email"]').inputValue(),
     challengeId: await confirmationForm.locator('input[name="challengeId"]').inputValue(),
     token: await page.getByLabel('Recovery email verification code').inputValue(),

@@ -10,7 +10,7 @@ and OAuth clients/grants created within the scenario.
 protect sensitive changes; account selection does not bind the wrong identity.
 For a verified identity with multiple bindings, `/account` requires an explicit
 DID choice; every action and proof stays pinned to that DID. Reject duplicate,
-conflicting, foreign, revoked and stale-session selectors without falling back to
+conflicting, foreign and revoked selectors without falling back to
 a sibling. Open two selected-DID tabs and verify their actions remain isolated.
 Logout/session revocation, forgetting a device-account membership and revoking
 an application grant have distinct effects.

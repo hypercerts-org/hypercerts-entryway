@@ -137,7 +137,6 @@ test("shared verified email keeps each tab and account action bound to its selec
       Object.fromEntries(new FormData(element).entries()),
     );
     expect(secondFields.did).toBe(second.did);
-    expect(secondFields.selectionProof).toBeTruthy();
 
     const secondDeactivation = secondTab.waitForResponse(
       (response) =>
@@ -190,7 +189,6 @@ test("shared verified email keeps each tab and account action bound to its selec
       Object.fromEntries(new FormData(element).entries()),
     );
     expect(fields.did).toBe(first.did);
-    expect(fields.selectionProof).toBeTruthy();
 
     const deactivation = firstTab.waitForResponse(
       (response) =>

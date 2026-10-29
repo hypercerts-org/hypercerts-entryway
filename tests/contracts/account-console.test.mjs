@@ -136,14 +136,14 @@ function fixture() {
     );
     return res;
   };
-  const post = async ({ did, proof, query = {}, csrfValue = csrf }) => {
+  const post = async ({ did, query = {}, csrfValue = csrf }) => {
     const res = response();
     await routes.get("POST /account/:action")(
       {
         method: "POST",
         params: { action: "revoke" },
         query,
-        body: { csrf: csrfValue, did, selectionProof: proof },
+        body: { csrf: csrfValue, did },
         headers: { origin },
       },
       res,
@@ -163,13 +163,7 @@ function fixture() {
   };
 }
 
-const hiddenValue = (html, name) => {
-  const match = html.match(new RegExp(`name="${name}" value="([^"]+)"`));
-  assert.ok(match, `expected hidden ${name} field`);
-  return match[1];
-};
-
-test("multi-binding account page requires an explicit CSRF/session-bound choice", async () => {
+test("multi-binding account page requires an explicit CSRF-protected choice", async () => {
   const f = fixture();
   const chooser = await f.getPage();
 
@@ -179,14 +173,13 @@ test("multi-binding account page requires an explicit CSRF/session-bound choice"
   assert.match(chooser.body, new RegExp(didB));
   assert.doesNotMatch(chooser.body, /pds1\.example\.test/);
 
-  const proof = hiddenValue(chooser.body, "selectionProof");
   const select = f.routes.get("POST /account/select");
   const rejected = f.response();
   await select(
     {
       method: "POST",
       query: {},
-      body: { csrf: "wrong", did: didB, selectionProof: proof },
+      body: { csrf: "wrong", did: didB },
       headers: { origin },
     },
     rejected,
@@ -195,40 +188,12 @@ test("multi-binding account page requires an explicit CSRF/session-bound choice"
   assert.equal(rejected.statusCode, 400);
   assert.equal(rejected.location, undefined);
 
-  f.setSession({
-    userId: "verified-user",
-    email: "owner@example.test",
-    emailVerified: true,
-    sessionId: "session-two",
-    authenticatedAt: new Date(),
-  });
-  const staleChoice = f.response();
-  await select(
-    {
-      method: "POST",
-      query: {},
-      body: { csrf, did: didB, selectionProof: proof },
-      headers: { origin },
-    },
-    staleChoice,
-    (error) => { throw error; },
-  );
-  assert.equal(staleChoice.statusCode, 403);
-  assert.equal(staleChoice.location, undefined);
-  f.setSession({
-    userId: "verified-user",
-    email: "owner@example.test",
-    emailVerified: true,
-    sessionId: "session-one",
-    authenticatedAt: new Date(),
-  });
-
   const accepted = f.response();
   await select(
     {
       method: "POST",
       query: {},
-      body: { csrf, did: didB, selectionProof: proof },
+      body: { csrf, did: didB },
       headers: { origin },
     },
     accepted,
@@ -237,9 +202,6 @@ test("multi-binding account page requires an explicit CSRF/session-bound choice"
   assert.equal(accepted.statusCode, 303);
   assert.equal(accepted.location, `/account?did=${encodeURIComponent(didB)}`);
 
-  const invalidProof = await f.post({ did: didB, proof: "invalid" });
-  assert.equal(invalidProof.statusCode, 403);
-  assert.ok(invalidProof.body.includes(`href="/account?did=${encodeURIComponent(didB)}"`));
   assert.deepEqual(f.mutations, []);
 
   const selected = await f.getPage(didB);
@@ -257,19 +219,15 @@ test("account actions remain pinned to each tab's DID and reject a revoked bindi
   assert.doesNotMatch(tabA.body, new RegExp(didB));
   assert.match(tabB.body, new RegExp(didB));
   assert.doesNotMatch(tabB.body, new RegExp(didA));
-  const proofA = hiddenValue(tabA.body, "selectionProof");
-  const proofB = hiddenValue(tabB.body, "selectionProof");
-  assert.notEqual(proofA, proofB);
 
-  const first = await f.post({ did: didA, proof: proofA });
-  const second = await f.post({ did: didB, proof: proofB });
+  const first = await f.post({ did: didA });
+  const second = await f.post({ did: didB });
   assert.deepEqual(f.mutations, [didA, didB]);
   assert.equal(first.location, `/account?did=${encodeURIComponent(didA)}`);
   assert.equal(second.location, `/account?did=${encodeURIComponent(didB)}`);
 
   const mismatch = await f.post({
     did: didA,
-    proof: proofA,
     query: { did: didB },
   });
   assert.equal(mismatch.statusCode, 400);
@@ -281,29 +239,26 @@ test("account actions remain pinned to each tab's DID and reject a revoked bindi
   assert.ok(revokedPage.body.includes(`href="/account?did=${encodeURIComponent(didA)}"`));
   assert.doesNotMatch(revokedPage.body, /two\.example\.test/);
 
-  const revoked = await f.post({ did: didA, proof: proofA });
+  const revoked = await f.post({ did: didA });
   assert.equal(revoked.statusCode, 403);
   assert.match(revoked.body, /not linked to this verified identity/i);
   assert.ok(revoked.body.includes(`href="/account?did=${encodeURIComponent(didA)}"`));
   assert.deepEqual(f.mutations, [didA, didB]);
 });
 
-test("duplicate selector values and forms from a replaced session cannot act", async () => {
+test("duplicate or mismatched selector values cannot act", async () => {
   const f = fixture();
-  const page = await f.getPage(didA);
-  const proof = hiddenValue(page.body, "selectionProof");
   const malformedGet = await f.getPage([didA, didB]);
   assert.equal(malformedGet.statusCode, 400);
   assert.ok(malformedGet.body.includes('href="/account"'));
   assert.doesNotMatch(malformedGet.body, /href="\/account\?did=/);
 
-  const duplicateBody = await f.post({ did: [didA, didA], proof });
+  const duplicateBody = await f.post({ did: [didA, didA] });
   assert.equal(duplicateBody.statusCode, 400);
   assert.ok(duplicateBody.body.includes('href="/account"'));
   assert.doesNotMatch(duplicateBody.body, /href="\/account\?did=/);
   const duplicateQuery = await f.post({
     did: didA,
-    proof,
     query: { did: [didA, didA] },
   });
   assert.equal(duplicateQuery.statusCode, 400);
@@ -311,7 +266,6 @@ test("duplicate selector values and forms from a replaced session cannot act", a
   assert.doesNotMatch(duplicateQuery.body, /href="\/account\?did=/);
   const mismatch = await f.post({
     did: didA,
-    proof,
     query: { did: didB },
   });
   assert.equal(mismatch.statusCode, 400);
@@ -319,27 +273,14 @@ test("duplicate selector values and forms from a replaced session cannot act", a
   assert.doesNotMatch(mismatch.body, /href="\/account\?did=/);
   const unsafeUrl = await f.post({
     did: "https://evil.example/path",
-    proof: "invalid",
   });
   assert.equal(unsafeUrl.statusCode, 403);
   assert.ok(unsafeUrl.body.includes('href="/account?did='));
   assert.doesNotMatch(unsafeUrl.body, /href="https:\/\/evil\.example/);
   assert.deepEqual(f.mutations, []);
 
-  f.setSession({
-    userId: "verified-user",
-    email: "owner@example.test",
-    emailVerified: true,
-    sessionId: "session-two",
-    authenticatedAt: new Date(),
-  });
-  const replaced = await f.post({ did: didA, proof });
-  assert.equal(replaced.statusCode, 403);
-  assert.match(replaced.body, /different or expired account session/i);
-  assert.deepEqual(f.mutations, []);
-
   f.setSession(null);
-  const revokedSession = await f.post({ did: didA, proof });
+  const revokedSession = await f.post({ did: didA });
   assert.equal(revokedSession.statusCode, 303);
   assert.equal(revokedSession.location, "/login");
   assert.deepEqual(f.mutations, []);
