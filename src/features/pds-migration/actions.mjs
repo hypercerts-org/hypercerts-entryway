@@ -2,6 +2,7 @@ import { page, escapeHtml as esc } from "../../ui/html.mjs";
 import {
   accountUrl,
   field,
+  form,
   hidden,
   nextStep,
 } from "../../ui/account-forms.mjs";
@@ -37,12 +38,12 @@ export function createMigrationActions({ config, migration, console }) {
         const issued = await migration.requestMigrationForBrowser(principal, {
           pdsId: target.id,
         });
-        return nextStep(
-          res,
-          "Confirm data server migration",
-          browser.csrf,
-          "migration-confirm",
-          hidden("pdsId", target.id) +
+        return nextStep(res, {
+          title: "Confirm data server migration",
+          csrf: browser.csrf,
+          action: "migration-confirm",
+          contents:
+            hidden("pdsId", target.id) +
             hidden("challengeId", issued.challengeId ?? "") +
             field(
               "token",
@@ -50,10 +51,10 @@ export function createMigrationActions({ config, migration, console }) {
               "text",
               'autocomplete="one-time-code" maxlength="256"',
             ),
-          "Move to destination data server",
-          `A migration code was sent to your primary email. Confirm to move your repository and blobs to ${target.url}. Writes will pause and existing sessions and app passwords will end.`,
+          button: "Move to destination data server",
+          message: `A migration code was sent to your primary email. Confirm to move your repository and blobs to ${target.url}. Writes will pause and existing sessions and app passwords will end.`,
           accountContext,
-        );
+        });
       }
       try {
         await migration.importAccount(principal, {
@@ -69,10 +70,19 @@ export function createMigrationActions({ config, migration, console }) {
         );
         const recovery = await migration.pendingRecovery(account.did);
         const required = recovery?.state === "dispatched";
+        const nextAction = required
+          ? "<p>Waiting for operator recovery.</p>"
+          : form(
+              "migration-confirm",
+              browser.csrf,
+              hidden("pdsId", saved.targetPdsId),
+              "Continue saved migration",
+              accountContext,
+            );
         return page(
           res,
           "Data server migration is pending",
-          `<p role="alert">${required ? "An earlier server request has an uncertain outcome. Contact the service operator; retrying alone cannot resolve it." : "Your saved migration is unfinished. Continue it after the operator authorizes any required recovery."}</p><p>Your DID <code>${esc(account.did)}</code> and handle <strong>${esc(account.handle)}</strong> are retained. The saved destination is ${esc(savedTarget?.url ?? saved.targetPdsId)}.</p>${required ? "<p>Waiting for operator recovery.</p>" : `<form method="post" action="/account/migration-confirm">${hidden("csrf", browser.csrf)}${hidden("did", account.did)}${hidden("pdsId", saved.targetPdsId)}<button>Continue saved migration</button></form>`}<p><a href="${accountUrl(account.did)}">Return to account settings</a></p>`,
+          `<p role="alert">${required ? "An earlier server request has an uncertain outcome. Contact the service operator; retrying alone cannot resolve it." : "Your saved migration is unfinished. Continue it after the operator authorizes any required recovery."}</p><p>Your DID <code>${esc(account.did)}</code> and handle <strong>${esc(account.handle)}</strong> are retained. The saved destination is ${esc(savedTarget?.url ?? saved.targetPdsId)}.</p>${nextAction}<p><a href="${accountUrl(account.did)}">Return to account settings</a></p>`,
           409,
         );
       }

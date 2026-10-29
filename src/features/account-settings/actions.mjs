@@ -25,12 +25,12 @@ export function createAccountSettingsActions({
       const issued = await security.requestBackupEmailForBrowser(principal, {
         email: value("email"),
       });
-      return nextStep(
-        res,
-        "Verify recovery email",
-        browser.csrf,
-        "backup-confirm",
-        hidden("email", value("email")) +
+      return nextStep(res, {
+        title: "Verify recovery email",
+        csrf: browser.csrf,
+        action: "backup-confirm",
+        contents:
+          hidden("email", value("email")) +
           hidden("challengeId", issued.challengeId ?? "") +
           field(
             "token",
@@ -38,10 +38,10 @@ export function createAccountSettingsActions({
             "text",
             'autocomplete="one-time-code" maxlength="256"',
           ),
-        "Verify recovery email",
-        "Enter the verification code sent to your recovery email.",
+        button: "Verify recovery email",
+        message: "Enter the verification code sent to your recovery email.",
         accountContext,
-      );
+      });
     },
     "backup-confirm": async ({ principal, value, token }) => {
       console.needed();
@@ -58,12 +58,12 @@ export function createAccountSettingsActions({
       console.needed();
 
       const issued = await security.requestEmailUpdateForBrowser(principal);
-      return nextStep(
-        res,
-        "Verify current email",
-        browser.csrf,
-        "email-update",
-        hidden("challengeId", issued.challengeId ?? "") +
+      return nextStep(res, {
+        title: "Verify current email",
+        csrf: browser.csrf,
+        action: "email-update",
+        contents:
+          hidden("challengeId", issued.challengeId ?? "") +
           field(
             "token",
             "Current email verification code",
@@ -71,10 +71,10 @@ export function createAccountSettingsActions({
             'autocomplete="one-time-code" maxlength="256"',
           ) +
           field("email", "New primary email", "email", 'maxlength="320"'),
-        "Verify current email and continue",
-        "A verification code was sent to your current primary email.",
+        button: "Verify current email and continue",
+        message: "A verification code was sent to your current primary email.",
         accountContext,
-      );
+      });
     },
     "email-update": async ({
       res,
@@ -90,12 +90,12 @@ export function createAccountSettingsActions({
         email: value("email"),
         token: `${value("challengeId")}.${token()}`,
       });
-      return nextStep(
-        res,
-        "Verify new email",
-        browser.csrf,
-        "email-confirm",
-        hidden("challengeId", issued.challengeId ?? "") +
+      return nextStep(res, {
+        title: "Verify new email",
+        csrf: browser.csrf,
+        action: "email-confirm",
+        contents:
+          hidden("challengeId", issued.challengeId ?? "") +
           hidden("email", value("email")) +
           field(
             "token",
@@ -103,10 +103,11 @@ export function createAccountSettingsActions({
             "text",
             'autocomplete="one-time-code" maxlength="256"',
           ),
-        "Confirm new email",
-        "Verify the code sent to your new primary email to complete the change.",
+        button: "Confirm new email",
+        message:
+          "Verify the code sent to your new primary email to complete the change.",
         accountContext,
-      );
+      });
     },
     "email-confirm": async ({ res, principal, value, token }) => {
       console.needed();

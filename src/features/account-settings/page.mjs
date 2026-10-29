@@ -16,9 +16,9 @@ function renderEmailChange({ security, state, csrf, accountContext }) {
       typeof state.pendingEmail === "string"
         ? state.pendingEmail
         : state.pendingEmail.email;
-    confirmation = `<p>Awaiting verification of ${esc(email)}.</p>${form("email-confirm", csrf, hidden("challengeId", state.pendingEmailChallengeId ?? "") + hidden("email", email) + field("token", "New email verification code", "text", 'autocomplete="one-time-code" maxlength="256"'), "Confirm new email", "", accountContext)}`;
+    confirmation = `<p>Awaiting verification of ${esc(email)}.</p>${form("email-confirm", csrf, hidden("challengeId", state.pendingEmailChallengeId ?? "") + hidden("email", email) + field("token", "New email verification code", "text", 'autocomplete="one-time-code" maxlength="256"'), "Confirm new email", accountContext)}`;
   }
-  return `<h3>Change primary email</h3><p>Verify your current email, then your new email. Your browser sessions will stay signed in for any other linked accounts. Sign in with your new email to access this account after the change.</p>${form("email-request", csrf, "", "Start email change", "", accountContext)}${confirmation}`;
+  return `<h3>Change primary email</h3><p>Verify your current email, then your new email. Your browser sessions will stay signed in for any other linked accounts. Sign in with your new email to access this account after the change.</p>${form("email-request", csrf, "", "Start email change", accountContext)}${confirmation}`;
 }
 
 function renderIdentityPanel({
@@ -50,8 +50,8 @@ function renderRecoveryPanel({ security, state, csrf, accountContext }) {
     security
       ? `
       <p>Add an email you can still access if your primary mailbox is lost. Each recovery address must be verified before it can restore access.</p>
-      ${rows(state.backupEmails ?? [], (item) => `<strong>${esc(item.email)}</strong><span>${item.verified ? "Verified" : "Awaiting verification"}</span>${form("backup-remove", csrf, hidden("email", item.email), "Remove recovery email", "", accountContext)}`, "No verified recovery email.")}
-      ${form("backup-request", csrf, field("email", "Recovery email address", "email", 'autocomplete="email" maxlength="320"'), "Send recovery verification", "", accountContext)}
+      ${rows(state.backupEmails ?? [], (item) => `<strong>${esc(item.email)}</strong><span>${item.verified ? "Verified" : "Awaiting verification"}</span>${form("backup-remove", csrf, hidden("email", item.email), "Remove recovery email", accountContext)}`, "No verified recovery email.")}
+      ${form("backup-request", csrf, field("email", "Recovery email address", "email", 'autocomplete="email" maxlength="320"'), "Send recovery verification", accountContext)}
       <p><a href="/recover">Recover an account using a verified recovery email</a></p>
     `
       : "<p>Recovery email setup is not available yet.</p>",
@@ -75,17 +75,36 @@ function renderPasswordPanel({
         'autocomplete="current-password" maxlength="256"',
       )
     : "";
+  if (!security || !legacy)
+    return section(
+      "passwords",
+      "Passwords",
+      "<p>Password management is not available yet.</p>",
+    );
+  const passwordStatus = state.passwordEnabled
+    ? "Optional account password is enabled."
+    : "This account has no account password. Email sign-in remains available.";
+  const setPasswordLabel = state.passwordEnabled
+    ? "Change account password"
+    : "Set account password";
+  const removePasswordForm = state.passwordEnabled
+    ? form(
+        "password-remove",
+        csrf,
+        passwordInput,
+        "Remove account password",
+        accountContext,
+      )
+    : "";
   return section(
     "passwords",
     "Passwords",
-    security && legacy
-      ? `
-      <p>${state.passwordEnabled ? "Optional account password is enabled." : "This account has no account password. Email sign-in remains available."} Passwords here support apps that use the legacy AT Protocol sign-in API. Changing or removing a password ends all sessions and removes existing app passwords.</p>
-      ${form("password-set", csrf, passwordInput + field("password", "New account password", "password", 'autocomplete="new-password" minlength="12" maxlength="256"'), state.passwordEnabled ? "Change account password" : "Set account password", "", accountContext)}
-      ${state.passwordEnabled ? form("password-remove", csrf, passwordInput, "Remove account password", "", accountContext) : ""}
-      ${renderAppPasswords({ appPasswords, csrf, accountContext })}
     `
-      : "<p>Password management is not available yet.</p>",
+      <p>${passwordStatus} Passwords here support apps that use the legacy AT Protocol sign-in API. Changing or removing a password ends all sessions and removes existing app passwords.</p>
+      ${form("password-set", csrf, passwordInput + field("password", "New account password", "password", 'autocomplete="new-password" minlength="12" maxlength="256"'), setPasswordLabel, accountContext)}
+      ${removePasswordForm}
+      ${renderAppPasswords({ appPasswords, csrf, accountContext })}
+    `,
   );
 }
 
@@ -166,7 +185,6 @@ export function mountAccountSettingsPage({
         csrf,
         hidden("status", a.status === "active" ? "deactivated" : "active"),
         a.status === "active" ? "Deactivate account" : "Reactivate account",
-        "",
         accountContext,
       );
       const lifecycle = renderLifecycle({
@@ -190,7 +208,7 @@ export function mountAccountSettingsPage({
       page(
         res,
         "Account settings",
-        `<p>Manage your sign-in, recovery options, and connected applications.</p><nav class="section-nav" aria-label="Account sections"><a href="#identity">Identity</a><a href="#recovery">Recovery</a><a href="#passwords">Passwords</a><a href="#sessions">Sessions</a><a href="#lifecycle">Lifecycle</a>${migration ? '<a href="#migration">Data server</a>' : ""}</nav>${identity}${backup}${passwords}${sessions}${lifecycle}${migrationPanel}${form("/auth/logout", csrf, "", "Sign out", 'class="signout"', accountContext)}<p><a href="${esc(config.clientUrl)}/client">Open test application</a></p>`,
+        `<p>Manage your sign-in, recovery options, and connected applications.</p><nav class="section-nav" aria-label="Account sections"><a href="#identity">Identity</a><a href="#recovery">Recovery</a><a href="#passwords">Passwords</a><a href="#sessions">Sessions</a><a href="#lifecycle">Lifecycle</a>${migration ? '<a href="#migration">Data server</a>' : ""}</nav>${identity}${backup}${passwords}${sessions}${lifecycle}${migrationPanel}${form("/auth/logout", csrf, "", "Sign out", accountContext, 'class="signout"')}<p><a href="${esc(config.clientUrl)}/client">Open test application</a></p>`,
       );
     }),
   );
