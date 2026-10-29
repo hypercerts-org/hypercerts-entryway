@@ -43,13 +43,16 @@ export function createConsent({ db, provider, stores, flows, accountAccess }) {
           "Sign in to the account requested by this application",
         );
       current.authEmail = identity.email.toLowerCase();
-      if (account.status === "active") {
+      // Inactive accounts still record this browser's fresh sign-in: the
+      // account console requires it, and it is the only place to reactivate
+      // or settle a migration. Authorization choosers skip deactivated
+      // device accounts, so this does not make the account usable for OAuth.
+      if (account.status !== "deleted")
         await provider.accountManager.upsertDeviceAccount(
           browser.deviceId,
           account.did,
         );
-        current.authDid = account.did;
-      }
+      if (account.status === "active") current.authDid = account.did;
       if (account.status === "active" && !current.requestUri)
         await db.delete("auth-flows", current.id);
       else await save(current);

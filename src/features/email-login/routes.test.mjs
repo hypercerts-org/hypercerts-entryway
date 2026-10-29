@@ -578,7 +578,7 @@ test("standalone verified login continues to the selected DID account page", asy
   assert.equal(await f.db.get("auth-flows", f.flow.id), null);
 });
 
-test("inactive account continuation links to that account's settings", async (t) => {
+test("inactive account continuation records the device sign-in its settings link requires", async (t) => {
   const f = await verificationFixture(t, "inactive-account", {
     inactivePrimary: true,
   });
@@ -596,7 +596,12 @@ test("inactive account continuation links to that account's settings", async (t)
     ),
   );
   assert.equal(f.cookies, 1);
-  assert.equal(await f.db.get("fixture-device-accounts", "browser"), null);
+  // The account console redirects to sign-in without fresh device membership,
+  // so omitting it here would loop the settings link back to /login.
+  assert.equal(
+    await f.db.get("fixture-device-accounts", "browser"),
+    selectedDid,
+  );
 });
 
 test("verified multi-DID sign-in withholds bindings until OTP and continues only the explicitly chosen account", async (t) => {
@@ -735,7 +740,12 @@ test("an inactive chooser choice preserves verified identity so an active siblin
   assert.equal(pending.authEmail, "old@example.test");
   assert.equal(pending.authUserId, "verified-user");
   assert.equal(pending.authDid, undefined);
-  assert.equal(await f.db.get("fixture-device-accounts", "browser"), null);
+  // Device membership lets the inactive account open its settings to
+  // reactivate; authDid stays unset, so it cannot continue the OAuth request.
+  assert.equal(
+    await f.db.get("fixture-device-accounts", "browser"),
+    "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
+  );
 
   const activeDid = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
   const consent = await f.request("/auth/select", { did: activeDid });
