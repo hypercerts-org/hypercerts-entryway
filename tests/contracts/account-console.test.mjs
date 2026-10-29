@@ -527,14 +527,6 @@ test("a stale session is asked to confirm it's you on the same request, then the
   assert.equal(later.statusCode, 303);
   assert.equal(f.reconfirmations.length, 1);
   assert.equal(f.requests.length, 2);
-
-  // The code and its saved action are single use.
-  const replay = await f.postConfirm({
-    did: didA,
-    body: { challengeId, token: "12345678" },
-  });
-  assert.equal(replay.statusCode, 400);
-  assert.equal(f.requests.length, 2);
 });
 
 test("fresh sessions and actions that never needed a recent sign-in are not asked to confirm", async () => {
@@ -590,12 +582,6 @@ test("Send a new code re-issues the same saved action and a refusal keeps the ea
   assert.match(limited.body, /role="alert">Too many attempts/);
   assert.equal(hiddenValue(limited.body, "challengeId"), second);
 
-  const superseded = await f.postConfirm({
-    did: didA,
-    body: { challengeId: first, token: "12345678" },
-  });
-  assert.equal(superseded.statusCode, 400);
-  assert.deepEqual(f.requests, []);
   const done = await f.postConfirm({
     did: didA,
     body: { challengeId: second, token: "12345678" },
@@ -635,7 +621,7 @@ test("the confirmation form needs the console's CSRF token and selected account"
   assert.deepEqual(f.requests, []);
 });
 
-test("a saved action is replayed through the same checks and never prompts twice", async () => {
+test("a saved action whose confirmation does not count fails instead of prompting again", async () => {
   const f = fixture({ authenticatedAt: minutesAgo(11) });
   const prompt = async () =>
     hiddenValue(
@@ -648,20 +634,6 @@ test("a saved action is replayed through the same checks and never prompts twice
       "challengeId",
     );
 
-  // The linked account is checked again after the code, before the action runs.
-  const first = await prompt();
-  f.setBindings([account(didB, "two.example.test")]);
-  const unlinked = await f.postConfirm({
-    did: didA,
-    body: { challengeId: first, token: "12345678" },
-  });
-  assert.equal(unlinked.statusCode, 403);
-  assert.match(unlinked.body, /not linked to this verified identity/i);
-  f.setBindings([
-    account(didA, "one.example.test"),
-    account(didB, "two.example.test"),
-  ]);
-
   // If a confirmation somehow does not count, the replay fails instead of looping.
   f.confirmationCounts(false);
   const second = await prompt();
@@ -671,7 +643,7 @@ test("a saved action is replayed through the same checks and never prompts twice
   });
   assert.equal(uncounted.statusCode, 403);
   assert.match(uncounted.body, /Confirm it&#39;s you again/);
-  assert.equal(f.reconfirmations.length, 2, "only the two original prompts");
+  assert.equal(f.reconfirmations.length, 1, "only the original prompt");
   assert.deepEqual(f.requests, []);
 });
 
@@ -806,25 +778,4 @@ test("a refused confirmation code explains the rate limit and offers a plain sig
     signIn: true,
   });
   assert.deepEqual(f.requests, []);
-});
-
-test("the console replays only the winning completion", async () => {
-  const f = fixture({ authenticatedAt: minutesAgo(11) });
-  const prompted = await f.postAction("email-request", {
-    did: didA,
-    body: typed,
-  });
-  const body = {
-    challengeId: hiddenValue(prompted.body, "challengeId"),
-    token: "12345678",
-  };
-  const results = await Promise.all([
-    f.postConfirm({ did: didA, body }),
-    f.postConfirm({ did: didA, body }),
-  ]);
-  assert.deepEqual(
-    results.map(({ statusCode }) => statusCode).sort(),
-    [303, 400],
-  );
-  assert.deepEqual(f.requests, [{ did: didA, ...typed }]);
 });

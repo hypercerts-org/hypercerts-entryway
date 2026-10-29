@@ -229,6 +229,7 @@ test("a session signed in more than ten minutes ago confirms it's you in place a
       },
     );
     expect(replayForm.status()).toBe(400);
+    expect(await replayForm.text()).toContain("Invalid or already used token");
   } finally {
     await context.close();
   }
