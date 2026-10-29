@@ -5,6 +5,7 @@ export function renderMigrationPanel({
   config,
   a,
   csrf,
+  accountContext,
   migrationState,
   migrationRecovery,
   migration,
@@ -32,12 +33,13 @@ export function renderMigrationPanel({
   let actions;
   if (migrationPending) {
     actions = recoveryRequired
-      ? `<form method="post" action="/account/migration-confirm">${hidden("csrf", csrf)}${hidden("pdsId", migrationState.targetPdsId)}<button disabled>Waiting for operator recovery</button></form>`
+      ? `<form method="post" action="/account/migration-confirm">${hidden("csrf", csrf)}${hidden("did", accountContext.did)}${hidden("pdsId", migrationState.targetPdsId)}<button disabled>Waiting for operator recovery</button></form>`
       : form(
           "migration-confirm",
           csrf,
           hidden("pdsId", migrationState.targetPdsId),
           "Resume data server migration",
+          accountContext,
         );
   } else if (destinations.length) {
     const options = destinations
@@ -52,6 +54,7 @@ export function renderMigrationPanel({
       csrf,
       destination,
       "Start data server migration",
+      accountContext,
     );
   } else {
     actions = "<p>No other data server is enrolled.</p>";

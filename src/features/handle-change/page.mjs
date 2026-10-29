@@ -1,7 +1,7 @@
 import { escapeHtml as esc } from "../../ui/html.mjs";
 import { field, form } from "../../ui/account-forms.mjs";
 
-export const renderHandleForm = ({ csrf, a }) =>
+export const renderHandleForm = ({ csrf, a, accountContext }) =>
   form(
     "handle",
     csrf,
@@ -12,4 +12,5 @@ export const renderHandleForm = ({ csrf, a }) =>
       `value="${esc(a.handle)}" maxlength="253"`,
     ),
     "Update handle",
+    accountContext,
   );

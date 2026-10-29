@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { openTestDatabase } from "../../../tests/support/database-fixture.mjs";
+import { createAccountAccess } from "../../../dist/src/accounts/account-access.mjs";
 import { createBrowserFlow } from "../../../dist/src/http/browser-flow.mjs";
 import { createConsent } from "../../../dist/src/features/oauth-authorization/consent.mjs";
 import { createLoginForms } from "../../../dist/src/features/email-login/page.mjs";
@@ -295,7 +296,11 @@ test("actual resend resolves the latest persisted email after an earlier flow re
   assert.equal(final.authDid, undefined);
 });
 
-async function verificationFixture(t, stage) {
+async function verificationFixture(
+  t,
+  stage,
+  { inactivePrimary = false, inactiveSecond = false, standalone = false } = {},
+) {
   const db = await openTestDatabase();
   t.after(() => db.close());
   const gate = barrier(),
@@ -305,9 +310,18 @@ async function verificationFixture(t, stage) {
     did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
     email: "old@example.test",
     handle: "owner.example.test",
-    status: "active",
+    status: inactivePrimary ? "deactivated" : "active",
   };
+  const secondRow = {
+    did: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
+    email: "old@example.test",
+    handle: "second.example.test",
+    status: inactiveSecond ? "deactivated" : "active",
+  };
+  let boundRows = stage === "multiple-accounts" ? [row, secondRow] : [row];
+  let session = null;
   let cookies = 0;
+  let loginEmailResolutions = 0;
   const provider = {
     deviceManager: {
       async load() {
@@ -335,30 +349,44 @@ async function verificationFixture(t, stage) {
     if (stage === "continuation" && rotate) await gate.pause();
     return loaded;
   };
+  const accountAccess =
+    stage === "multiple-accounts"
+      ? createAccountAccess({
+          async isVerifiedUserEmail({ userId, email }) {
+            return userId === "verified-user" && email === "old@example.test";
+          },
+          async listBoundAccounts(userId) {
+            return userId === "verified-user" ? boundRows : [];
+          },
+        })
+      : {
+          async requireBoundAccount(_identity, did) {
+            return { ...row, did };
+          },
+        };
   const { authenticated } = createConsent({
     db,
     provider,
     flows,
-    accountAccess: {
-      async requireBoundAccount(_identity, did) {
-        return { ...row, did };
-      },
-    },
+    accountAccess,
     stores: {
-      async account() {
+      async account(did) {
         if (stage === "consent") await gate.pause();
-        return row;
+        return boundRows.find((candidate) => candidate.did === did) ?? row;
       },
     },
   });
   const flow = await flows.newFlow(browser, {
     email: row.email,
     otpRequestCount: 1,
-    lastOtpSentAt: Date.now() - 5001,
-    requestUri: "request",
+    lastOtpSentAt: Date.now() - 10_000,
+    requestUri: standalone ? undefined : "request",
+    clientId: "client-id",
+    clientName: "Example Client",
     parameters: {
       redirect_uri: "https://client.example.test/callback",
-      scope: "atproto",
+      scope: "atproto transition:generic",
+      state: "original-state",
     },
   });
   await db.set("browser", browser.deviceId, {
@@ -379,19 +407,26 @@ async function verificationFixture(t, stage) {
       async queueSignInCode() {
         return { async deliver() {} };
       },
-      async verifySignInCode({ email }) {
+      async verifySignInCode({ email, otp }) {
         if (stage === "verification") await gate.pause();
+        if (stage === "multiple-accounts" && otp !== "valid-proof")
+          return { ok: false, status: 400 };
+        const principal = {
+          email,
+          userId: "verified-user",
+          emailVerified: true,
+        };
+        session = { ...principal, sessionId: "verified-session" };
         return {
           ok: true,
-          principal: {
-            email,
-            userId: "verified-user",
-            emailVerified: true,
-          },
+          principal,
           commitCookies() {
             cookies++;
           },
         };
+      },
+      async requireSession() {
+        return session;
       },
     },
     mail: { async supersedeOtp() {} },
@@ -401,10 +436,13 @@ async function verificationFixture(t, stage) {
       return "Signup form";
     },
     getAccountSecurity: () => ({
-      async assertLoginEmail() {
+      async assertLoginEmail(identity) {
+        loginEmailResolutions++;
         if (stage === "signup") return { kind: "unbound" };
         if (stage === "repair-required")
           return { kind: "account-requires-repair" };
+        if (stage === "multiple-accounts")
+          return await accountAccess.resolveBoundAccounts(identity);
         return { kind: "single", account: row };
       },
     }),
@@ -415,6 +453,12 @@ async function verificationFixture(t, stage) {
     gate,
     get cookies() {
       return cookies;
+    },
+    get loginEmailResolutions() {
+      return loginEmailResolutions;
+    },
+    removeBoundAccount(did) {
+      boundRows = boundRows.filter((account) => account.did !== did);
     },
     async request(path, body) {
       const res = {
@@ -433,8 +477,9 @@ async function verificationFixture(t, stage) {
           this.body = body;
           return this;
         },
-        redirect(code) {
+        redirect(code, url) {
           this.statusCode = code;
+          this.redirectUrl = url;
         },
       };
       await handlers.get(path)(
@@ -493,6 +538,211 @@ for (const stage of ["verification", "continuation", "consent", "signup"]) {
     assert.equal(f.cookies, 1);
   });
 }
+
+test("standalone verified login continues to the selected DID account page", async (t) => {
+  const f = await verificationFixture(t, "standalone", { standalone: true });
+  const selectedDid = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+
+  const response = await f.request("/auth/verify", {
+    otp: "controlled-proof",
+  });
+
+  assert.equal(response.statusCode, 303);
+  assert.equal(
+    response.redirectUrl,
+    `/account?did=${encodeURIComponent(selectedDid)}`,
+  );
+  assert.equal(f.cookies, 1);
+  assert.equal(
+    await f.db.get("fixture-device-accounts", "browser"),
+    selectedDid,
+  );
+  assert.equal(await f.db.get("auth-flows", f.flow.id), null);
+});
+
+test("inactive account continuation links to that account's settings", async (t) => {
+  const f = await verificationFixture(t, "inactive-account", {
+    inactivePrimary: true,
+  });
+  const selectedDid = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+
+  const response = await f.request("/auth/verify", {
+    otp: "controlled-proof",
+  });
+
+  assert.equal(response.statusCode, 403);
+  assert.match(response.body, /Account unavailable/);
+  assert.ok(
+    response.body.includes(
+      `href="/account?did=${encodeURIComponent(selectedDid)}"`,
+    ),
+  );
+  assert.equal(f.cookies, 1);
+  assert.equal(await f.db.get("fixture-device-accounts", "browser"), null);
+});
+
+test("verified multi-DID sign-in withholds bindings until OTP and continues only the explicitly chosen account", async (t) => {
+  const f = await verificationFixture(t, "multiple-accounts");
+  const invalid = await f.request("/auth/verify", { otp: "wrong-proof" });
+
+  assert.equal(invalid.statusCode, 400);
+  assert.doesNotMatch(
+    invalid.body,
+    /owner\.example\.test|second\.example\.test|did:plc:/,
+  );
+  assert.equal(f.loginEmailResolutions, 0);
+
+  const verified = await f.request("/auth/verify", { otp: "valid-proof" });
+  assert.equal(verified.statusCode, 200);
+  assert.match(verified.body, /action="\/auth\/select"/);
+  assert.match(verified.body, /did:plc:aaaaaaaaaaaaaaaaaaaaaaaa/);
+  assert.match(verified.body, /did:plc:bbbbbbbbbbbbbbbbbbbbbbbb/);
+  assert.match(verified.body, /owner\.example\.test/);
+  assert.match(verified.body, /second\.example\.test/);
+  assert.equal(f.loginEmailResolutions, 1);
+
+  let current = await f.db.get("auth-flows", f.flow.id);
+  assert.equal(current.authEmail, "old@example.test");
+  assert.equal(current.authUserId, "verified-user");
+  assert.equal(current.authDid, undefined);
+  assert.equal(f.cookies, 1);
+  assert.equal(await f.db.get("fixture-device-accounts", "browser"), null);
+
+  const selectedDid = "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb";
+  const consent = await f.request("/auth/select", { did: selectedDid });
+  assert.equal(consent.statusCode, 200);
+  assert.match(consent.body, /action="\/auth\/consent"/);
+  assert.match(consent.body, new RegExp(`name="did" value="${selectedDid}"`));
+  current = await f.db.get("auth-flows", f.flow.id);
+  assert.equal(current.authDid, selectedDid);
+  assert.equal(current.requestUri, "request");
+  assert.equal(current.clientId, "client-id");
+  assert.equal(current.parameters.scope, "atproto transition:generic");
+  assert.equal(current.parameters.state, "original-state");
+  assert.equal(
+    await f.db.get("fixture-device-accounts", "browser"),
+    selectedDid,
+  );
+
+  assert.equal(current.authUserId, "verified-user");
+  assert.match(consent.body, /action="\/auth\/choose"/);
+});
+
+test("a verified chooser can change its account before consent is granted", async (t) => {
+  const f = await verificationFixture(t, "multiple-accounts");
+  await f.request("/auth/verify", { otp: "valid-proof" });
+  const first = "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb";
+  const second = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+  await f.request("/auth/select", { did: first });
+
+  const chooser = await f.request("/auth/choose", {});
+  assert.equal(chooser.statusCode, 200);
+  assert.match(chooser.body, new RegExp(`name="did" value="${first}"`));
+  assert.match(chooser.body, new RegExp(`name="did" value="${second}"`));
+
+  const consent = await f.request("/auth/select", { did: second });
+  assert.equal(consent.statusCode, 200);
+  assert.match(consent.body, new RegExp(`name="did" value="${second}"`));
+  assert.doesNotMatch(consent.body, new RegExp(`name="did" value="${first}"`));
+  const current = await f.db.get("auth-flows", f.flow.id);
+  assert.equal(current.authDid, second);
+  assert.equal(current.authUserId, "verified-user");
+});
+
+test("changing the chooser account requires the same verified user", async (t) => {
+  const f = await verificationFixture(t, "multiple-accounts");
+  await f.request("/auth/verify", { otp: "valid-proof" });
+  await f.request("/auth/select", { did: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb" });
+  const current = await f.db.get("auth-flows", f.flow.id);
+  await f.db.set("auth-flows", f.flow.id, {
+    ...current,
+    authUserId: "another-user",
+  });
+
+  for (const path of ["/auth/choose", "/auth/select"]) {
+    const response = await f.request(path, {
+      did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
+    });
+    assert.equal(response.statusCode, 400);
+    assert.match(response.body, /Verified sign-in session expired/);
+  }
+  assert.equal(
+    (await f.db.get("auth-flows", f.flow.id)).authDid,
+    "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
+  );
+});
+
+test("an inactive chooser choice preserves verified identity so an active sibling can continue", async (t) => {
+  const f = await verificationFixture(t, "multiple-accounts", {
+    inactiveSecond: true,
+  });
+  await f.request("/auth/verify", { otp: "valid-proof" });
+
+  const unavailable = await f.request("/auth/select", {
+    did: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
+  });
+  assert.equal(unavailable.statusCode, 403);
+  const pending = await f.db.get("auth-flows", f.flow.id);
+  assert.equal(pending.authEmail, "old@example.test");
+  assert.equal(pending.authUserId, "verified-user");
+  assert.equal(pending.authDid, undefined);
+  assert.equal(await f.db.get("fixture-device-accounts", "browser"), null);
+
+  const activeDid = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+  const consent = await f.request("/auth/select", { did: activeDid });
+  assert.equal(consent.statusCode, 200);
+  assert.match(consent.body, new RegExp(`name="did" value="${activeDid}"`));
+  assert.doesNotMatch(
+    consent.body,
+    /name="did" value="did:plc:bbbbbbbbbbbbbbbbbbbbbbbb"/,
+  );
+  const selected = await f.db.get("auth-flows", f.flow.id);
+  assert.equal(selected.authDid, activeDid);
+  assert.equal(selected.authUserId, "verified-user");
+  assert.equal(await f.db.get("fixture-device-accounts", "browser"), activeDid);
+});
+
+test("chooser submission rejects a DID whose binding changed after proof", async (t) => {
+  const f = await verificationFixture(t, "multiple-accounts");
+  await f.request("/auth/verify", { otp: "valid-proof" });
+  f.removeBoundAccount("did:plc:bbbbbbbbbbbbbbbbbbbbbbbb");
+
+  const response = await f.request("/auth/select", {
+    did: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
+  });
+  assert.equal(response.statusCode, 400);
+  assert.match(response.body, /not linked to this verified identity/i);
+  assert.equal((await f.db.get("auth-flows", f.flow.id)).authDid, undefined);
+  assert.equal(await f.db.get("fixture-device-accounts", "browser"), null);
+});
+
+test("chooser submission rejects foreign-flow and superseded-flow requests", async (t) => {
+  const f = await verificationFixture(t, "multiple-accounts");
+  await f.request("/auth/verify", { otp: "valid-proof" });
+  const did = "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb";
+
+  const stored = await f.db.get("auth-flows", f.flow.id);
+  await f.db.set("auth-flows", "foreign-flow", {
+    ...stored,
+    id: "foreign-flow",
+    deviceId: "another-browser",
+  });
+  const foreign = await f.request("/auth/select", {
+    flow: "foreign-flow",
+    did,
+  });
+  assert.equal(foreign.statusCode, 400);
+  assert.equal((await f.db.get("auth-flows", f.flow.id)).authDid, undefined);
+
+  await f.request("/auth/resend", {});
+  const superseded = await f.request("/auth/select", { did });
+  assert.equal(superseded.statusCode, 400);
+  const current = await f.db.get("auth-flows", f.flow.id);
+  assert.equal(current.authEmail, undefined);
+  assert.equal(current.authUserId, undefined);
+  assert.equal(current.authDid, undefined);
+  assert.equal(await f.db.get("fixture-device-accounts", "browser"), null);
+});
 
 test("an existing unbound account gets a repair page instead of signup", async (t) => {
   const f = await verificationFixture(t, "repair-required");

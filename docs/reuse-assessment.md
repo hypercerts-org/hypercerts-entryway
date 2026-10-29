@@ -38,7 +38,9 @@ repair reject a normalized destination claimed by another DID; moving an existin
 shared account to an unused email leaves sibling claims and bindings unchanged.
 Authorized migration finalization may add a DID binding beside an unbound account
 with the same email, without binding that sibling. The post-verification chooser
-and joining-PDS association import remain unimplemented; the resolver returns
+is implemented for established bindings: email OTP precedes disclosure, and the
+selected binding is re-read before the original authorization continues. The
+joining-PDS association import remains unimplemented; the resolver returns
 `selection-required` and no DID is selected by email alone.
 
 Preserved MJS remains outside strict TypeScript coverage. Complete ePDS consent and

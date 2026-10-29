@@ -1,16 +1,19 @@
+import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { escapeHtml } from "../../ui/html.mjs";
 import { hidden } from "../../ui/forms.mjs";
 export function createConsent({ db, provider, stores, flows, accountAccess }) {
   const { fields, save, readCurrentIntent, pageForFlow } = flows;
+  const chooseAnotherAccountForm = (flow, browser) =>
+    `<form method="post" action="/auth/choose">${fields(flow, browser)}<button class="secondary">Choose a different account</button></form>`;
   const consentForm = (flow, browser, account) =>
-    `<div class="account"><strong>${escapeHtml(account.handle ?? account.did)}</strong><br><small>${escapeHtml(account.did)}</small></div><p><strong>${escapeHtml(flow.clientName ?? "Your application")}</strong> requests access:</p><p><code>${escapeHtml(flow.parameters?.scope)}</code></p><form method="post" action="/auth/consent">${fields(flow, browser)}${hidden("did", account.did)}<button name="decision" value="approve">Allow access</button> <button class="secondary" name="decision" value="deny">Cancel</button></form>`;
+    `<div class="account"><strong>${escapeHtml(account.handle ?? account.did)}</strong><br><small>${escapeHtml(account.did)}</small>${flow.authUserId ? chooseAnotherAccountForm(flow, browser) : ""}</div><p><strong>${escapeHtml(flow.clientName ?? "Your application")}</strong> requests access:</p><p><code>${escapeHtml(flow.parameters?.scope)}</code></p><form method="post" action="/auth/consent">${fields(flow, browser)}${hidden("did", account.did)}<button name="decision" value="approve">Allow access</button> <button class="secondary" name="decision" value="deny">Cancel</button></form>`;
   const authenticated = async (
     req,
     res,
     flow,
     browser,
     row,
-    { identity, commitCookies = () => {} } = {},
+    { identity, commitCookies = () => {}, fromChooser = false } = {},
   ) => {
     const displayAccount =
       row.status === "active" && flow.requestUri
@@ -18,7 +21,16 @@ export function createConsent({ db, provider, stores, flows, accountAccess }) {
         : null;
     const authorized = await db.transact(async () => {
       const current = await readCurrentIntent(flow, browser);
-      const account = await accountAccess.requireBoundAccount(identity, row.did);
+      if (
+        fromChooser &&
+        (current.authEmail !== identity.email.toLowerCase() ||
+          current.authUserId !== identity.userId)
+      )
+        throw new InvalidRequestError("This account choice is no longer valid");
+      const account = await accountAccess.requireBoundAccount(
+        identity,
+        row.did,
+      );
       current.authEmail = identity.email.toLowerCase();
       if (account.status === "active") {
         await provider.accountManager.upsertDeviceAccount(
@@ -47,12 +59,15 @@ export function createConsent({ db, provider, stores, flows, accountAccess }) {
       return pageForFlow(
         res,
         "Account unavailable",
-        '<p>This account is deactivated. <a href="/account">Open account settings</a> to reactivate it.</p>',
+        `<p>This account is deactivated. <a href="/account?did=${encodeURIComponent(authorized.account.did)}">Open account settings</a> to reactivate it.</p>`,
         authorized.current,
         403,
       );
     if (!authorized.current.requestUri)
-      return res.redirect(303, "/account");
+      return res.redirect(
+        303,
+        `/account?did=${encodeURIComponent(authorized.account.did)}`,
+      );
     return pageForFlow(
       res,
       "Authorize application",

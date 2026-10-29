@@ -1,6 +1,26 @@
 import express from "express";
 import { page, escapeHtml as esc } from "../ui/html.mjs";
+import { hidden } from "../ui/forms.mjs";
+import { accountUrl } from "../ui/account-forms.mjs";
 import { HttpError } from "./http-error.mjs";
+const invalidSelection = () =>
+  new HttpError(
+    400,
+    "InvalidAccountSelection",
+    "Choose exactly one linked account and reload the account page.",
+  );
+const selector = (value, optional = false) => {
+  if (value === undefined && optional) return undefined;
+  if (typeof value !== "string" || value.length === 0) throw invalidSelection();
+  return value;
+};
+const selectedDidFromPost = (req) => {
+  const did = selector(req.body?.did);
+  const queryDid = selector(req.query?.did, true);
+  if (queryDid !== undefined && queryDid !== did) throw invalidSelection();
+  return did;
+};
+const selectedDidFromQuery = (req) => selector(req.query?.did, true);
 
 const requireRecent = (session) => {
   const at = new Date(session.authenticatedAt).getTime();
@@ -33,42 +53,62 @@ export function createAccountConsole({
         recovery
           ? "Account change waiting for recovery"
           : "Account operation could not be completed",
-        `<p role="alert">${esc(error.message)}</p>${recovery ? "<p>Your saved change is still pending. Contact the service operator. Retrying or signing in again alone cannot settle an uncertain server request; continue the saved change after recovery is authorized.</p>" : ""}<p><a href="/account">Return to account settings</a> · <a href="/login">Sign in again</a></p>`,
+        `<p role="alert">${esc(error.message)}</p>${recovery ? "<p>Your saved change is still pending. Contact the service operator. Retrying or signing in again alone cannot settle an uncertain server request; continue the saved change after recovery is authorized.</p>" : ""}<p><a href="${esc(res.locals?.accountUrl ?? "/account")}">Return to account settings</a> · <a href="/login">Sign in again</a></p>`,
         status >= 400 && status < 600 ? status : 400,
       );
     }
   };
+  const noAccount = (res) => {
+    page(
+      res,
+      "No account",
+      '<p>No active account is linked to this email.</p><a href="/login">Sign in to another account</a>',
+      404,
+    );
+    return null;
+  };
+  const selectionForm = (browser, accounts) =>
+    `<p>More than one account is linked to this verified identity. Choose the account to manage.</p><form method="post" action="/account/select">${hidden("csrf", browser.csrf)}${accounts
+      .map(
+        ({ did, handle, status }) =>
+          `<label><input type="radio" name="did" value="${esc(did)}" required>${esc(handle ?? did)} <small>${esc(did)} · ${esc(status)}</small></label>`,
+      )
+      .join("")}<button>Continue with this account</button></form>`;
   const authenticated = async (req, res) => {
     const session = await oauth.requireSession(req);
     if (!session?.emailVerified) {
       res.redirect(303, "/login");
       return null;
     }
-    const resolution = await accountAccess.resolveBoundAccounts(session);
-    if (resolution.kind === "selection-required") {
-      page(
-        res,
-        "Account selection required",
-        '<p>More than one account is linked to this identity. Account selection is not available yet.</p><a href="/login">Return to sign in</a>',
-        409,
-      );
-      return null;
-    }
-    const account = resolution.kind === "single" ? resolution.account : null;
-    if (!account || account.status === "deleted") {
-      page(
-        res,
-        "No account",
-        '<p>No active account is linked to this email.</p><a href="/login">Sign in to another account</a>',
-        404,
-      );
-      return null;
-    }
     const browser = await oauth.loadBrowser(req, res);
+    let account;
+    let canSwitchAccount = false;
+    if (req.method === "POST") {
+      oauth.checkCsrf(req, browser);
+      const did = selectedDidFromPost(req);
+      res.locals.accountUrl = accountUrl(did);
+      account = await accountAccess.requireBoundAccount(session, did);
+    } else {
+      const did = selectedDidFromQuery(req);
+      if (did !== undefined) res.locals.accountUrl = accountUrl(did);
+      const resolution = await accountAccess.resolveBoundAccounts(session);
+      if (did === undefined && resolution.kind === "selection-required") {
+        page(res, "Choose an account", selectionForm(browser, resolution.accounts));
+        return null;
+      }
+      if (did === undefined && resolution.kind === "unbound") return noAccount(res);
+      const selectedDid = did ?? resolution.account.did;
+      account = await accountAccess.requireBoundAccount(session, selectedDid);
+      canSwitchAccount = resolution.kind === "selection-required";
+    }
+    if (account.status === "deleted") return noAccount(res);
+    res.locals.accountUrl = accountUrl(account.did);
     return {
       session,
       account,
       browser,
+      canSwitchAccount,
+      accountContext: { did: account.did },
       principal: {
         did: account.did,
         userId: session.userId,
@@ -78,6 +118,24 @@ export function createAccountConsole({
       },
     };
   };
+  app.post(
+    "/account/select",
+    express.urlencoded({ extended: false, limit: "16kb" }),
+    guarded(async (req, res) => {
+      const session = await oauth.requireSession(req);
+      if (!session?.emailVerified) {
+        res.redirect(303, "/login");
+        return;
+      }
+      const browser = await oauth.loadBrowser(req, res);
+      oauth.checkCsrf(req, browser);
+      const did = selectedDidFromPost(req);
+      res.locals.accountUrl = accountUrl(did);
+      const account = await accountAccess.requireBoundAccount(session, did);
+      if (account.status === "deleted") return noAccount(res);
+      return res.redirect(303, accountUrl(account.did));
+    }),
+  );
   const needed = () => {
     if (!security || !legacy)
       throw new HttpError(
@@ -107,8 +165,7 @@ export function createAccountConsole({
         return guarded(async (request, response) => {
           const ctx = await authenticated(request, response);
           if (!ctx) return;
-          oauth.checkCsrf(request, ctx.browser);
-          // Browser loading yields: recheck live binding/session before mutation.
+          // Resolve the request-carried DID against the live verified binding on every action.
           if (security) await security.summary(ctx.principal);
           if (!noRecentLogin.has(action)) requireRecent(ctx.session);
           const value = (name) => String(request.body[name] ?? "").trim();
@@ -128,14 +185,21 @@ export function createAccountConsole({
             return page(
               response,
               "Account change waiting for recovery",
-              `<p role="alert">Your change has an uncertain server outcome. Contact the service operator; retrying alone cannot settle it.</p><p>The saved account is <strong>${esc(ctx.account.handle)}</strong> (<code>${esc(ctx.account.did)}</code>) on ${esc(pending.target)}. Keep this account and the original requested change when continuing after verified recovery.</p><p><a href="/account">Return to account settings</a></p>`,
+              `<p role="alert">Your change has an uncertain server outcome. Contact the service operator; retrying alone cannot settle it.</p><p>The saved account is <strong>${esc(ctx.account.handle)}</strong> (<code>${esc(ctx.account.did)}</code>) on ${esc(pending.target)}. Keep this account and the original requested change when continuing after verified recovery.</p><p><a href="${esc(accountUrl(ctx.account.did))}">Return to account settings</a></p>`,
               409,
             );
           }
-          if (!response.headersSent) response.redirect(303, "/account");
+          if (!response.headersSent) response.redirect(303, accountUrl(ctx.account.did));
         })(req, res, next);
       },
     );
   };
-  return { guarded, authenticated, needed, mountActions, requireRecent };
+  return {
+    guarded,
+    authenticated,
+    needed,
+    mountActions,
+    requireRecent,
+    accountUrl,
+  };
 }
