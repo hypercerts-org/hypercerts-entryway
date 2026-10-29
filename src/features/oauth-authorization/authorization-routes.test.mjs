@@ -128,7 +128,10 @@ async function fixture(t, { authDid, authEmail } = {}) {
 test("consent cannot authorize a DID different from the email-verified choice", async (t) => {
   const selectedDid = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
   const otherDid = "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb";
-  const f = await fixture(t, { authDid: selectedDid });
+  const f = await fixture(t, {
+    authDid: selectedDid,
+    authEmail: "owner@example.test",
+  });
 
   const response = await f.approve(otherDid);
 
