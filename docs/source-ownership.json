@@ -257,6 +257,11 @@
       "kind": "preserved/extracted MJS; checkJs remains false"
     },
     {
+      "path": "src/features/oauth-authorization/complete-authorization.mjs",
+      "owner": "oauth-authorization",
+      "kind": "preserved/extracted MJS; checkJs remains false"
+    },
+    {
       "path": "src/features/oauth-authorization/consent.mjs",
       "owner": "oauth-authorization",
       "kind": "preserved/extracted MJS; checkJs remains false"

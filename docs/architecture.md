@@ -195,7 +195,8 @@ to email OTP for the selected DID. The authentication check revalidates the live
 DID binding before refreshing that DID's device membership. Account-console
 sensitive actions keep their separate ten-minute rule on the Better Auth session,
 which an in-place confirmation can renew ([Confirm it's you](#confirm-its-you)).
-This adds no consent bypass or new client-trust policy. Configured local public
+Client trust is one Entryway-wide list, and the only consent bypass is the
+opt-in [signup consent skip](#client-trust-and-signup-consent-skip). Configured local public
 and confidential client flows have verified hint acceptance, seven-day
 freshness and consent behavior. Full ePDS production consent/freshness parity
 remains outstanding.
@@ -251,6 +252,30 @@ Auth sessions for a DID's shared user. Ordinary verified email changes instead
 preserve sessions on the previous user while atomically moving only the selected
 DID binding to the verified destination user; sessions are not migrated to that
 user. OAuth and account data remain DID-scoped.
+
+### Client trust and signup consent skip
+
+Entryway is the authorization server for every PDS behind it, so client trust is
+one Entryway-wide list. A PDS's own `PDS_OAUTH_TRUSTED_CLIENTS` is not consulted.
+When neither `OAUTH_TRUSTED_CLIENTS` nor `trustedClientIds` in the service config
+file is set, only the primary client (`<clientUrl>/client-metadata.json`) is
+trusted. Setting `OAUTH_TRUSTED_CLIENTS` replaces both, so list every client that
+must stay trusted, including the primary one; an empty value trusts no client.
+
+A newly created account skips consent (ePDS parity) only when
+`SIGNUP_ALLOW_CONSENT_SKIP` is enabled, the client is trusted, and the client's
+metadata document contains `"epds_skip_consent_on_signup": true`. As in ePDS,
+`prompt=consent` does not override that opt-in. Any failure before the
+authorization code is issued, including a metadata read failure, shows consent.
+A skip records the granted scopes. Returning accounts keep the stock provider
+consent policy.
+
+| Setting                     | Values and behavior                                                                                                        |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `OAUTH_TRUSTED_CLIENTS`     | Comma-separated https client metadata URLs; replaces the config-file list and the primary-client default; `""` trusts none |
+| `SIGNUP_ALLOW_CONSENT_SKIP` | `true`/`1` or `false`/`0` (default off)                                                                                    |
+
+Invalid values fail startup with `InvalidOAuthClientPolicy` and never echo the value.
 
 Confidential clients also supply client authentication where required.
 The account page distinguishes ending a browser session, forgetting device membership,
