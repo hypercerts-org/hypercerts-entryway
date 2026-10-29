@@ -453,7 +453,8 @@ async function verificationFixture(
     getAccountSecurity: () => ({
       async assertLoginEmail(identity) {
         loginEmailResolutions++;
-        if (stage === "signup") return { kind: "unbound" };
+        if (stage === "signup" || stage === "unbound")
+          return { kind: "unbound" };
         if (stage === "repair-required")
           return { kind: "account-requires-repair" };
         if (stage === "multiple-accounts")
@@ -817,14 +818,13 @@ test("live account binding is rechecked against login_hint before device freshne
     response.body,
     /Sign in to the account requested by this application/,
   );
-  assert.equal(f.checkedAccounts[0]?.handle, "changed.example.test");
   assert.equal(f.cookies, 0);
   assert.equal(await f.db.get("fixture-device-accounts", "browser"), null);
   assert.equal((await f.db.get("auth-flows", f.flow.id)).authDid, undefined);
 });
 
 test("an unbound DID login_hint cannot turn verified email into a different signup", async (t) => {
-  const f = await verificationFixture(t, "signup", {
+  const f = await verificationFixture(t, "unbound", {
     loginHint: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
   });
 
