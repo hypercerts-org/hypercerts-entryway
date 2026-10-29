@@ -235,25 +235,47 @@ export function mountEmailLogin({
       }
     }),
   );
+  // The flow keeps authUserId until consent is approved or denied, so the
+  // verified browser identity can change its choice before granting access.
+  const requireChooserIdentity = async (req, flow) => {
+    const session = await authentication.requireSession(req);
+    if (
+      !flow.authEmail ||
+      !flow.authUserId ||
+      session?.emailVerified !== true ||
+      session.userId !== flow.authUserId ||
+      session.email.toLowerCase() !== flow.authEmail
+    )
+      throw new InvalidRequestError("Verified sign-in session expired");
+    return {
+      userId: session.userId,
+      email: session.email.toLowerCase(),
+      emailVerified: true,
+    };
+  };
+  app.post(
+    "/auth/choose",
+    form,
+    guarded(async (req, res) => {
+      const { flow, browser } = await getFlow(req, res);
+      const identity = await requireChooserIdentity(req, flow);
+      const resolution = await getAccountSecurity()?.assertLoginEmail(identity);
+      if (resolution?.kind !== "selection-required")
+        throw new InvalidRequestError("No other linked account is available");
+      return pageForFlow(
+        res,
+        "Choose an account",
+        forms.accountSelectionForm(flow, browser, resolution.accounts),
+        flow,
+      );
+    }),
+  );
   app.post(
     "/auth/select",
     form,
     guarded(async (req, res) => {
       const { flow, browser } = await getFlow(req, res);
-      const session = await authentication.requireSession(req);
-      if (
-        !flow.authEmail ||
-        !flow.authUserId ||
-        session?.emailVerified !== true ||
-        session.userId !== flow.authUserId ||
-        session.email.toLowerCase() !== flow.authEmail
-      )
-        throw new InvalidRequestError("Verified sign-in session expired");
-      const identity = {
-        userId: session.userId,
-        email: session.email.toLowerCase(),
-        emailVerified: true,
-      };
+      const identity = await requireChooserIdentity(req, flow);
       const selectedDid = String(req.body.did ?? "");
       let current;
       let selected;
@@ -261,8 +283,7 @@ export function mountEmailLogin({
         current = await readCurrentIntent(flow, browser);
         if (
           current.authEmail !== identity.email ||
-          current.authUserId !== identity.userId ||
-          current.authDid
+          current.authUserId !== identity.userId
         )
           throw new InvalidRequestError(
             "This account choice is no longer valid",
@@ -278,7 +299,7 @@ export function mountEmailLogin({
       });
       await authenticated(req, res, current, browser, selected, {
         identity,
-        requireUnselected: true,
+        fromChooser: true,
       });
     }),
   );

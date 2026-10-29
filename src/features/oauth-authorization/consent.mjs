@@ -4,14 +4,14 @@ import { hidden } from "../../ui/forms.mjs";
 export function createConsent({ db, provider, stores, flows, accountAccess }) {
   const { fields, save, readCurrentIntent, pageForFlow } = flows;
   const consentForm = (flow, browser, account) =>
-    `<div class="account"><strong>${escapeHtml(account.handle ?? account.did)}</strong><br><small>${escapeHtml(account.did)}</small></div><p><strong>${escapeHtml(flow.clientName ?? "Your application")}</strong> requests access:</p><p><code>${escapeHtml(flow.parameters?.scope)}</code></p><form method="post" action="/auth/consent">${fields(flow, browser)}${hidden("did", account.did)}<button name="decision" value="approve">Allow access</button> <button class="secondary" name="decision" value="deny">Cancel</button></form>`;
+    `<div class="account"><strong>${escapeHtml(account.handle ?? account.did)}</strong><br><small>${escapeHtml(account.did)}</small>${flow.authUserId ? `<form method="post" action="/auth/choose">${fields(flow, browser)}<button class="secondary">Choose a different account</button></form>` : ""}</div><p><strong>${escapeHtml(flow.clientName ?? "Your application")}</strong> requests access:</p><p><code>${escapeHtml(flow.parameters?.scope)}</code></p><form method="post" action="/auth/consent">${fields(flow, browser)}${hidden("did", account.did)}<button name="decision" value="approve">Allow access</button> <button class="secondary" name="decision" value="deny">Cancel</button></form>`;
   const authenticated = async (
     req,
     res,
     flow,
     browser,
     row,
-    { identity, commitCookies = () => {}, requireUnselected = false } = {},
+    { identity, commitCookies = () => {}, fromChooser = false } = {},
   ) => {
     const displayAccount =
       row.status === "active" && flow.requestUri
@@ -20,21 +20,17 @@ export function createConsent({ db, provider, stores, flows, accountAccess }) {
     const authorized = await db.transact(async () => {
       const current = await readCurrentIntent(flow, browser);
       if (
-        requireUnselected &&
-        (current.authDid ||
-          current.authEmail !== identity.email.toLowerCase() ||
+        fromChooser &&
+        (current.authEmail !== identity.email.toLowerCase() ||
           current.authUserId !== identity.userId)
       )
-        throw new InvalidRequestError(
-          "This account choice has already been used",
-        );
+        throw new InvalidRequestError("This account choice is no longer valid");
       const account = await accountAccess.requireBoundAccount(
         identity,
         row.did,
       );
       current.authEmail = identity.email.toLowerCase();
       if (account.status === "active") {
-        if (requireUnselected) delete current.authUserId;
         await provider.accountManager.upsertDeviceAccount(
           browser.deviceId,
           account.did,

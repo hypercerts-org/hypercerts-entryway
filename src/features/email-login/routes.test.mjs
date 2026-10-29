@@ -630,11 +630,51 @@ test("verified multi-DID sign-in withholds bindings until OTP and continues only
     selectedDid,
   );
 
-  const replay = await f.request("/auth/select", { did: selectedDid });
-  assert.equal(replay.statusCode, 400);
+  assert.equal(current.authUserId, "verified-user");
+  assert.match(consent.body, /action="\/auth\/choose"/);
+});
+
+test("a verified chooser can change its account before consent is granted", async (t) => {
+  const f = await verificationFixture(t, "multiple-accounts");
+  await f.request("/auth/verify", { otp: "valid-proof" });
+  const first = "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb";
+  const second = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+  await f.request("/auth/select", { did: first });
+
+  const chooser = await f.request("/auth/choose", {});
+  assert.equal(chooser.statusCode, 200);
+  assert.match(chooser.body, new RegExp(`name="did" value="${first}"`));
+  assert.match(chooser.body, new RegExp(`name="did" value="${second}"`));
+
+  const consent = await f.request("/auth/select", { did: second });
+  assert.equal(consent.statusCode, 200);
+  assert.match(consent.body, new RegExp(`name="did" value="${second}"`));
+  assert.doesNotMatch(consent.body, new RegExp(`name="did" value="${first}"`));
+  const current = await f.db.get("auth-flows", f.flow.id);
+  assert.equal(current.authDid, second);
+  assert.equal(current.authUserId, "verified-user");
+});
+
+test("changing the chooser account still requires the verified session", async (t) => {
+  const f = await verificationFixture(t, "multiple-accounts");
+  await f.request("/auth/verify", { otp: "valid-proof" });
+  await f.request("/auth/select", { did: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb" });
+  const current = await f.db.get("auth-flows", f.flow.id);
+  await f.db.set("auth-flows", f.flow.id, {
+    ...current,
+    authUserId: "another-user",
+  });
+
+  for (const path of ["/auth/choose", "/auth/select"]) {
+    const response = await f.request(path, {
+      did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
+    });
+    assert.equal(response.statusCode, 400);
+    assert.match(response.body, /Verified sign-in session expired/);
+  }
   assert.equal(
-    await f.db.get("fixture-device-accounts", "browser"),
-    selectedDid,
+    (await f.db.get("auth-flows", f.flow.id)).authDid,
+    "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
   );
 });
 
@@ -664,7 +704,7 @@ test("an inactive chooser choice preserves verified identity so an active siblin
   );
   const selected = await f.db.get("auth-flows", f.flow.id);
   assert.equal(selected.authDid, activeDid);
-  assert.equal(selected.authUserId, undefined);
+  assert.equal(selected.authUserId, "verified-user");
   assert.equal(await f.db.get("fixture-device-accounts", "browser"), activeDid);
 });
 

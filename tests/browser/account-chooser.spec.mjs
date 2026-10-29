@@ -137,15 +137,14 @@ async function selectAndAuthorize(browser, email, accounts, selected, tamper) {
     await form.getByRole("button").click();
     await expect(consentForm(page, selected.did)).toBeVisible();
 
+    await finishConsent(page, selected.did);
     const replay = await page.request.post(`${config.issuer}/auth/select`, {
       maxRedirects: 0,
       headers: { origin: config.issuer },
       form: submitted,
     });
     expect(replay.status()).toBe(400);
-    expect(await replay.text()).toContain("Verified sign-in session expired");
-
-    await finishConsent(page, selected.did);
+    expect(await replay.text()).toContain("This sign-in has expired");
     await assertOAuthSubjectAndWrite(page, selected);
   } finally {
     await context.close();

@@ -13,7 +13,8 @@ metadata URL and requested scope. Google/GitHub are outside this flow.
    account bindings are not disclosed before verification.
 3. Preserve the zero/single-account path. For multiple established bindings,
    explicitly choose one; selection re-reads current bindings and continues only
-   with that DID. This email chooser is distinct from the pre-existing device
+   with that DID. Before consent is granted, the user may return to the chooser
+   and pick another bound DID. This email chooser is distinct from the pre-existing device
    account picker.
 4. Complete the existing consent flow when required and assert the returned
    identity equals the intended DID and the original OAuth request is retained.
