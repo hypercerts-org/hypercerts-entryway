@@ -46,7 +46,11 @@ export function createConsent({ db, provider, stores, flows, accountAccess }) {
       // The latest choice wins. An unavailable account still replaces the
       // earlier selection, so that account's consent form no longer matches.
       current.authDid = account.status === "active" ? account.did : undefined;
-      if (account.status === "active")
+      // Inactive accounts still record this browser's fresh sign-in: the
+      // account console requires it, and it is the only place to reactivate
+      // or settle a migration. Authorization choosers skip deactivated
+      // device accounts, so this does not make the account usable for OAuth.
+      if (account.status !== "deleted")
         await provider.accountManager.upsertDeviceAccount(
           browser.deviceId,
           account.did,
