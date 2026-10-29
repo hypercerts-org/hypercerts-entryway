@@ -1,4 +1,3 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
 import express from "express";
 import { page, escapeHtml as esc } from "../ui/html.mjs";
 import { hidden } from "../ui/forms.mjs";
@@ -38,7 +37,6 @@ export function createAccountConsole({
   accounts,
   accountAccess,
   oauth,
-  config,
   security,
   legacy,
 }) {
@@ -60,25 +58,6 @@ export function createAccountConsole({
       );
     }
   };
-  const sessionFormProof = (session, intent, did = "") =>
-    createHmac("sha256", config.betterAuthSecret)
-      .update(
-        `account-console\0${intent}\0${session.userId}\0${session.sessionId}\0${did}`,
-      )
-      .digest("base64url");
-  const requireSessionFormProof = (req, session, intent, did = "") => {
-    const supplied = req.body?.selectionProof;
-    const expected = sessionFormProof(session, intent, did);
-    const actual =
-      typeof supplied === "string" ? Buffer.from(supplied) : Buffer.alloc(0);
-    const wanted = Buffer.from(expected);
-    if (actual.length !== wanted.length || !timingSafeEqual(actual, wanted))
-      throw new HttpError(
-        403,
-        "AccountContextMismatch",
-        "This form belongs to a different or expired account session. Reload account settings and try again.",
-      );
-  };
   const noAccount = (res) => {
     page(
       res,
@@ -88,8 +67,8 @@ export function createAccountConsole({
     );
     return null;
   };
-  const selectionForm = (session, browser, accounts) =>
-    `<p>More than one account is linked to this verified identity. Choose the account to manage.</p><form method="post" action="/account/select">${hidden("csrf", browser.csrf)}${hidden("selectionProof", sessionFormProof(session, "select"))}${accounts
+  const selectionForm = (browser, accounts) =>
+    `<p>More than one account is linked to this verified identity. Choose the account to manage.</p><form method="post" action="/account/select">${hidden("csrf", browser.csrf)}${accounts
       .map(
         ({ did, handle, status }) =>
           `<label><input type="radio" name="did" value="${esc(did)}" required>${esc(handle ?? did)} <small>${esc(did)} · ${esc(status)}</small></label>`,
@@ -108,7 +87,6 @@ export function createAccountConsole({
       oauth.checkCsrf(req, browser);
       const did = selectedDidFromPost(req);
       res.locals.accountUrl = accountUrl(did);
-      requireSessionFormProof(req, session, "action", did);
       account = await accountAccess.requireBoundAccount(session, did);
     } else {
       const did = selectedDidFromQuery(req);
@@ -118,7 +96,7 @@ export function createAccountConsole({
         page(
           res,
           "Choose an account",
-          selectionForm(session, browser, resolution.accounts),
+          selectionForm(browser, resolution.accounts),
         );
         return null;
       }
@@ -135,10 +113,7 @@ export function createAccountConsole({
       account,
       browser,
       canSwitchAccount,
-      accountContext: {
-        did: account.did,
-        selectionProof: sessionFormProof(session, "action", account.did),
-      },
+      accountContext: { did: account.did },
       principal: {
         did: account.did,
         userId: session.userId,
@@ -161,7 +136,6 @@ export function createAccountConsole({
       oauth.checkCsrf(req, browser);
       const did = selectedDidFromPost(req);
       res.locals.accountUrl = accountUrl(did);
-      requireSessionFormProof(req, session, "select");
       const account = await accountAccess.requireBoundAccount(session, did);
       if (account.status === "deleted") return noAccount(res);
       return res.redirect(303, accountUrl(account.did));
