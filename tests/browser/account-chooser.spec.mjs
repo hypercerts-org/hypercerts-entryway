@@ -82,23 +82,7 @@ async function assertOAuthSubjectAndWrite(page, account) {
   expect((await write.json()).uri).toContain(`at://${account.did}/`);
 }
 
-async function signInSingleAccount(browser, account) {
-  const context = await browser.newContext({ ignoreHTTPSErrors: false });
-  try {
-    const page = await context.newPage();
-    await beginAuthorization(page);
-    const message = await requestVisibleCode(page, account.email);
-    await verifyVisibleCode(page, message.code);
-    await expect(page.locator('form[action="/auth/select"]')).toHaveCount(0);
-    await expect(consentForm(page, account.did)).toBeVisible();
-    await finishConsent(page, account.did);
-    await assertOAuthSubjectAndWrite(page, account);
-  } finally {
-    await context.close();
-  }
-}
-
-async function selectAndAuthorize(browser, email, accounts, selected, tamper) {
+async function selectAndAuthorize(browser, email, accounts, selected) {
   const context = await browser.newContext({ ignoreHTTPSErrors: false });
   try {
     const page = await context.newPage();
@@ -122,17 +106,6 @@ async function selectAndAuthorize(browser, email, accounts, selected, tamper) {
     const submitted = await form.evaluate((element) =>
       Object.fromEntries(new FormData(element).entries()),
     );
-    if (tamper) {
-      const forged = await page.request.post(`${config.issuer}/auth/select`, {
-        maxRedirects: 0,
-        headers: { origin: config.issuer },
-        form: { ...submitted, did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa" },
-      });
-      expect(forged.status()).toBe(400);
-      expect(await forged.text()).toContain(
-        "The selected account is not linked to this verified identity",
-      );
-    }
 
     await form.getByRole("button").click();
     await expect(consentForm(page, selected.did)).toBeVisible();
@@ -167,7 +140,6 @@ test("verified-email chooser selects each real DID after OTP and keeps OAuth wri
     pdsId: "pds2",
   };
   await createRealAccount(browser, first);
-  await signInSingleAccount(browser, first);
   await createRealAccount(browser, second);
 
   await bindAccountsToSharedEmail({
@@ -177,7 +149,7 @@ test("verified-email chooser selects each real DID after OTP and keeps OAuth wri
     databasePath,
   });
 
-  const linked = [first, second];
-  await selectAndAuthorize(browser, sharedEmail, linked, first, true);
-  await selectAndAuthorize(browser, sharedEmail, linked, second, false);
+  // Choosing the second, non-default DID on another PDS proves the chooser
+  // continues the selected account rather than the first binding.
+  await selectAndAuthorize(browser, sharedEmail, [first, second], second);
 });

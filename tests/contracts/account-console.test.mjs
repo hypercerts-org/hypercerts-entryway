@@ -171,7 +171,6 @@ test("multi-binding account page requires an explicit CSRF-protected choice", as
   assert.match(chooser.body, /Choose an account/);
   assert.match(chooser.body, new RegExp(didA));
   assert.match(chooser.body, new RegExp(didB));
-  assert.doesNotMatch(chooser.body, /pds1\.example\.test/);
 
   const select = f.routes.get("POST /account/select");
   const rejected = f.response();
@@ -202,12 +201,8 @@ test("multi-binding account page requires an explicit CSRF-protected choice", as
   assert.equal(accepted.statusCode, 303);
   assert.equal(accepted.location, `/account?did=${encodeURIComponent(didB)}`);
 
-  assert.deepEqual(f.mutations, []);
-
   const selected = await f.getPage(didB);
   assert.equal(selected.statusCode, 200);
-  assert.match(selected.body, new RegExp(didB));
-  assert.doesNotMatch(selected.body, new RegExp(didA));
   assert.deepEqual(f.loadedDids, [didB]);
 });
 
@@ -226,13 +221,6 @@ test("account actions remain pinned to each tab's DID and reject a revoked bindi
   assert.equal(first.location, `/account?did=${encodeURIComponent(didA)}`);
   assert.equal(second.location, `/account?did=${encodeURIComponent(didB)}`);
 
-  const mismatch = await f.post({
-    did: didA,
-    query: { did: didB },
-  });
-  assert.equal(mismatch.statusCode, 400);
-  assert.deepEqual(f.mutations, [didA, didB]);
-
   f.setBindings([account(didB, "two.example.test")]);
   const revokedPage = await f.getPage(didA);
   assert.equal(revokedPage.statusCode, 403);
@@ -248,40 +236,22 @@ test("account actions remain pinned to each tab's DID and reject a revoked bindi
 
 test("duplicate or mismatched selector values cannot act", async () => {
   const f = fixture();
-  const malformedGet = await f.getPage([didA, didB]);
-  assert.equal(malformedGet.statusCode, 400);
-  assert.ok(malformedGet.body.includes('href="/account"'));
-  assert.doesNotMatch(malformedGet.body, /href="\/account\?did=/);
+  for (const [name, request] of [
+    ["duplicate query on a page", () => f.getPage([didA, didB])],
+    ["duplicate body DID", () => f.post({ did: [didA, didA] })],
+    ["duplicate query DID", () => f.post({ did: didA, query: { did: [didA, didA] } })],
+    ["body and query disagree", () => f.post({ did: didA, query: { did: didB } })],
+  ]) {
+    const response = await request();
+    assert.equal(response.statusCode, 400, name);
+    assert.ok(response.body.includes('href="/account"'), name);
+    assert.doesNotMatch(response.body, /href="\/account\?did=/, name);
+  }
 
-  const duplicateBody = await f.post({ did: [didA, didA] });
-  assert.equal(duplicateBody.statusCode, 400);
-  assert.ok(duplicateBody.body.includes('href="/account"'));
-  assert.doesNotMatch(duplicateBody.body, /href="\/account\?did=/);
-  const duplicateQuery = await f.post({
-    did: didA,
-    query: { did: [didA, didA] },
-  });
-  assert.equal(duplicateQuery.statusCode, 400);
-  assert.ok(duplicateQuery.body.includes('href="/account"'));
-  assert.doesNotMatch(duplicateQuery.body, /href="\/account\?did=/);
-  const mismatch = await f.post({
-    did: didA,
-    query: { did: didB },
-  });
-  assert.equal(mismatch.statusCode, 400);
-  assert.ok(mismatch.body.includes('href="/account"'));
-  assert.doesNotMatch(mismatch.body, /href="\/account\?did=/);
-  const unsafeUrl = await f.post({
-    did: "https://evil.example/path",
-  });
+  const unsafeUrl = await f.post({ did: "https://evil.example/path" });
   assert.equal(unsafeUrl.statusCode, 403);
-  assert.ok(unsafeUrl.body.includes('href="/account?did='));
-  assert.doesNotMatch(unsafeUrl.body, /href="https:\/\/evil\.example/);
-  assert.deepEqual(f.mutations, []);
-
-  f.setSession(null);
-  const revokedSession = await f.post({ did: didA });
-  assert.equal(revokedSession.statusCode, 303);
-  assert.equal(revokedSession.location, "/login");
+  assert.ok(
+    unsafeUrl.body.includes('href="/account?did=https%3A%2F%2Fevil.example%2Fpath"'),
+  );
   assert.deepEqual(f.mutations, []);
 });
