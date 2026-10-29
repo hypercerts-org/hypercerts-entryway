@@ -233,7 +233,10 @@ matching an email cannot add authority over an unbound DID. The email chooser is
 distinct from the existing OAuth device-account picker: it appears only after OTP
 verification and binds the pending flow to that verified browser identity.
 Submission re-reads current bindings, requires a bound DID, and limits consent to
-the chosen DID while preserving the original PAR, client and requested scope. The
+the chosen DID while preserving the original PAR, client and requested scope.
+Until consent is approved or denied, the same verified session may choose a
+different bound DID from the consent page; consent then applies only to the
+latest choice. The
 existing consent continuation remains in place; this change adds no freshness
 threshold or consent-skip policy. Security-revocation flows invalidate all Better
 Auth sessions for a DID's shared user. Ordinary verified email changes instead
