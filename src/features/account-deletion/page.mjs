@@ -7,7 +7,7 @@ export function renderLifecyclePanel({ csrf, a, statusForm, accountContext }) {
     `
       <p>Deactivation pauses repository writes. Reactivation restores them. Deleting the account removes the repository and blobs; the DID history remains.</p>
       ${statusForm}
-      ${form("delete", csrf, field("confirm", "Type your handle to delete this test account", "text", 'autocomplete="off"'), "Delete test account", "", accountContext)}
+      ${form("delete", csrf, field("confirm", "Type your handle to delete this test account", "text", 'autocomplete="off"'), "Delete test account", accountContext)}
     `,
   );
   return lifecycle;

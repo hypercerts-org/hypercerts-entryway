@@ -25,8 +25,8 @@ export async function loadConnectedApps({ db, oauth, legacy }, req, did) {
 }
 export function renderAppPasswords({ appPasswords, csrf, accountContext }) {
   return `      <h3>App passwords</h3><p>Give each legacy application its own password. The generated password is shown once; removing it also ends its legacy sessions.</p>
-      ${rows(appPasswords.passwords ?? [], (item) => `<strong>${esc(item.name)}</strong><span>Created ${esc(stamp(item.createdAt))}${item.privileged ? " · Direct-message access" : ""}</span>${form("app-password-revoke", csrf, hidden("name", item.name), "Revoke app password", "", accountContext)}`, "No app passwords.")}
-      ${form("app-password-create", csrf, field("name", "App password name", "text", 'maxlength="64"') + '<label class="check"><input type="checkbox" name="privileged" value="true">Allow direct-message access</label>', "Create app password", "", accountContext)}
+      ${rows(appPasswords.passwords ?? [], (item) => `<strong>${esc(item.name)}</strong><span>Created ${esc(stamp(item.createdAt))}${item.privileged ? " · Direct-message access" : ""}</span>${form("app-password-revoke", csrf, hidden("name", item.name), "Revoke app password", accountContext)}`, "No app passwords.")}
+      ${form("app-password-create", csrf, field("name", "App password name", "text", 'maxlength="64"') + '<label class="check"><input type="checkbox" name="privileged" value="true">Allow direct-message access</label>', "Create app password", accountContext)}
 `;
 }
 export function renderConnectedApps({
@@ -45,14 +45,14 @@ export function renderConnectedApps({
     "Applications and sessions",
     `
       <p>OAuth grants: ${grants.length}. Revocation prevents new refreshes; existing signed access tokens can remain valid until they expire, up to five minutes.</p>
-      <h3>Application permissions</h3>${rows(grants, ([clientId, grant]) => `<strong>${esc(clientId)}</strong><span>${esc((grant.authorizedScopes ?? []).join(" "))}</span>${form("grant-revoke", csrf, hidden("clientId", clientId), "Revoke application access", "", accountContext)}`, "No remembered application permissions.")}
-      <h3>OAuth sessions</h3>${rows(tokens, (token) => `<strong>${esc(token.data.clientId)}</strong><span>Created ${esc(stamp(token.data.createdAt))}</span>${form("oauth-session-revoke", csrf, hidden("sessionId", token.id), "Revoke OAuth session", "", accountContext)}`, "No active OAuth refresh sessions.")}
-      <h3>Legacy application sessions</h3>${rows(legacySessions, (item) => `<strong>${esc(item.appPasswordName ?? "Account password")}</strong><span>Created ${esc(stamp(item.createdAt))} · Expires ${esc(stamp(item.expiresAt))}</span>${form("legacy-session-revoke", csrf, hidden("sessionId", item.id), "Revoke legacy session", "", accountContext)}`, "No legacy application sessions.")}
-      ${form("revoke", csrf, "", "Revoke all app sessions", "", accountContext)}
+      <h3>Application permissions</h3>${rows(grants, ([clientId, grant]) => `<strong>${esc(clientId)}</strong><span>${esc((grant.authorizedScopes ?? []).join(" "))}</span>${form("grant-revoke", csrf, hidden("clientId", clientId), "Revoke application access", accountContext)}`, "No remembered application permissions.")}
+      <h3>OAuth sessions</h3>${rows(tokens, (token) => `<strong>${esc(token.data.clientId)}</strong><span>Created ${esc(stamp(token.data.createdAt))}</span>${form("oauth-session-revoke", csrf, hidden("sessionId", token.id), "Revoke OAuth session", accountContext)}`, "No active OAuth refresh sessions.")}
+      <h3>Legacy application sessions</h3>${rows(legacySessions, (item) => `<strong>${esc(item.appPasswordName ?? "Account password")}</strong><span>Created ${esc(stamp(item.createdAt))} · Expires ${esc(stamp(item.expiresAt))}</span>${form("legacy-session-revoke", csrf, hidden("sessionId", item.id), "Revoke legacy session", accountContext)}`, "No legacy application sessions.")}
+      ${form("revoke", csrf, "", "Revoke all app sessions", accountContext)}
       <h3>Account-settings sessions</h3><p>These sessions permit access to this console. OAuth device sign-ins and app permissions are listed separately.</p>
-      ${rows(baSessions, (item) => `<strong>${item.id === session.sessionId ? "This browser" : "Another browser"}</strong><span>${esc(item.userAgent ?? "Browser details unavailable")} · Created ${esc(stamp(item.createdAt))}</span>${form("browser-session-revoke", csrf, hidden("sessionId", item.id), "End account-settings session", "", accountContext)}`, "No browser sessions.")}
-      <h3>Remembered OAuth devices</h3>${rows(devices, (item) => `<strong>${item.deviceId === b.deviceId ? "This device" : "Another device"}</strong><span>Last used ${esc(stamp(item.updatedAt))}</span>${form("device-revoke", csrf, hidden("deviceId", item.deviceId), "Forget OAuth device", "", accountContext)}`, "No remembered OAuth devices.")}
-      ${form("browsers-revoke", csrf, "", "Sign out all browsers", "", accountContext)}
+      ${rows(baSessions, (item) => `<strong>${item.id === session.sessionId ? "This browser" : "Another browser"}</strong><span>${esc(item.userAgent ?? "Browser details unavailable")} · Created ${esc(stamp(item.createdAt))}</span>${form("browser-session-revoke", csrf, hidden("sessionId", item.id), "End account-settings session", accountContext)}`, "No browser sessions.")}
+      <h3>Remembered OAuth devices</h3>${rows(devices, (item) => `<strong>${item.deviceId === b.deviceId ? "This device" : "Another device"}</strong><span>Last used ${esc(stamp(item.updatedAt))}</span>${form("device-revoke", csrf, hidden("deviceId", item.deviceId), "Forget OAuth device", accountContext)}`, "No remembered OAuth devices.")}
+      ${form("browsers-revoke", csrf, "", "Sign out all browsers", accountContext)}
     `,
   );
   return sessions;
