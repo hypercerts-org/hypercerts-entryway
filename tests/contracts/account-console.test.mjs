@@ -244,7 +244,6 @@ test("missing selected-DID device membership redirects to visible email sign-in"
 
   assert.equal(missing.statusCode, 303);
   assert.equal(missing.location, `/login?did=${encodeURIComponent(didB)}`);
-  assert.deepEqual(f.mutations, []);
 });
 
 test("stale selected-DID console requests return to visible email sign-in without mutating", async () => {

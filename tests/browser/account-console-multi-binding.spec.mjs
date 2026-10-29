@@ -64,8 +64,9 @@ async function signInSelectedAccount(page, did, email) {
   const verifiedChoice = page
     .locator('form[action="/auth/select"]')
     .filter({ has: page.locator(`input[name="did"][value="${did}"]`) });
+  // Signing in for a selected DID offers only that account, not every binding.
+  await expect(page.locator('form[action="/auth/select"]')).toHaveCount(1);
   await expect(verifiedChoice).toHaveCount(1);
-  await expect(verifiedChoice.locator('input[name="did"]')).toHaveValue(did);
   await verifiedChoice.getByRole("button").click();
 }
 
