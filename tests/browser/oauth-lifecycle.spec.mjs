@@ -12,9 +12,12 @@ import {
 const accountForm = (page, action) => page.locator(`form[action="/account/${action}"]`)
 
 async function accountAction(page, action, values = {}) {
-  const csrf = await accountForm(page, action).first().locator('input[name="csrf"]').inputValue()
+  const form = accountForm(page, action).first()
+  const formValues = await form.evaluate((element) =>
+    Object.fromEntries(new FormData(element).entries()),
+  )
   return page.request.post(`${config.issuer}/account/${action}`, {
-    form: { csrf, ...values },
+    form: { ...formValues, ...values },
     headers: { origin: config.issuer },
     maxRedirects: 0,
   })

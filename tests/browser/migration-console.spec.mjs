@@ -116,15 +116,23 @@ test("console migrates its own DID, record and blob between enrolled PDSs with m
 
   await page.goto(`${config.issuer}/account`);
   const csrf = await page.locator('input[name="csrf"]').first().inputValue();
+  // Every account action names its DID, so these negative controls must send it
+  // to reach the migration guards rather than failing account selection.
+  const did = await page.locator('input[name="did"]').first().inputValue();
+  const notSelectionError = async (response) =>
+    expect(await response.text()).not.toContain("Choose exactly one linked account");
   const forbiddenTarget = await page.request.post(
     `${config.issuer}/account/migration-request`,
     {
       headers: { origin: config.issuer },
-      form: { csrf, pdsId: "https://unregistered.example.com" },
+      form: { csrf, did, pdsId: "https://unregistered.example.com" },
       maxRedirects: 0,
     },
   );
   expect(forbiddenTarget.status()).toBe(400);
+  expect(await forbiddenTarget.text()).toContain(
+    "Choose an enrolled destination data server",
+  );
   await accountForm(page, "migration-request")
     .getByLabel("Destination data server")
     .selectOption(target.id);
@@ -150,17 +158,19 @@ test("console migrates its own DID, record and blob between enrolled PDSs with m
     `${config.issuer}/account/migration-confirm`,
     {
       headers: { origin: config.issuer },
-      form: { csrf, pdsId: target.id, challengeId, token: wrongCode },
+      form: { csrf, did, pdsId: target.id, challengeId, token: wrongCode },
       maxRedirects: 0,
     },
   );
   expect(wrong.status()).toBe(400);
+  await notSelectionError(wrong);
   const foreignSelector = await page.request.post(
     `${config.issuer}/account/migration-confirm`,
     {
       headers: { origin: config.issuer },
       form: {
         csrf,
+        did,
         pdsId: target.id,
         challengeId: "another-browser-challenge",
         token: code,
@@ -169,6 +179,7 @@ test("console migrates its own DID, record and blob between enrolled PDSs with m
     },
   );
   expect(foreignSelector.status()).toBe(400);
+  await notSelectionError(foreignSelector);
   await page.getByLabel("Migration code").fill(code);
   const confirmation = page.waitForResponse(
     (response) =>
