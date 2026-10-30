@@ -177,11 +177,20 @@ export async function createLegacy({ db, config, accounts }) {
         : null;
     return passwordMatches(did, password, credential);
   };
+  const singleAccountForEmail = async (email) => {
+    const rows = await accounts.storage.listByEmail(email);
+    return rows.length === 1 ? rows[0] : null;
+  };
   const authenticate = async (input, password, options = {}) => {
     const normalized =
       typeof input === "string" ? input.trim().toLowerCase() : "";
     if (!normalized || normalized.length > 320) throw denied();
-    const initialAccount = await accounts.get(normalized);
+    // A shared email cannot pick one password among several DIDs. Treat it
+    // like an unknown identifier so the response never reveals the sharing;
+    // those users sign in with their handle or DID.
+    const initialAccount = normalized.includes("@")
+      ? await singleAccountForEmail(normalized)
+      : await accounts.get(normalized);
     const did = initialAccount?.did;
     const attemptKey =
       did ??

@@ -74,9 +74,8 @@ async function fixture(t) {
       ownership.accountStep(did, intent, operation),
     get(id) {
       return (
-        [alice, bob].find((row) =>
-          [row.did, row.email, row.handle].includes(id),
-        ) ?? null
+        [alice, bob].find((row) => [row.did, row.handle].includes(id)) ??
+        null
       );
     },
     plcClient: {

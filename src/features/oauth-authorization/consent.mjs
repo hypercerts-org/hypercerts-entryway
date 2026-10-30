@@ -1,6 +1,7 @@
 import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { escapeHtml } from "../../ui/html.mjs";
 import { hidden } from "../../ui/forms.mjs";
+import { matchesAuthorizationHint } from "../../accounts/rules.js";
 export function createConsent({ db, provider, stores, flows, accountAccess }) {
   const { fields, save, readCurrentIntent, pageForFlow } = flows;
   const chooseAnotherAccountForm = (flow, browser) =>
@@ -31,14 +32,27 @@ export function createConsent({ db, provider, stores, flows, accountAccess }) {
         identity,
         row.did,
       );
+      if (
+        !matchesAuthorizationHint(
+          account,
+          current.accountHint,
+          current.parameters?.login_hint,
+        )
+      )
+        throw new InvalidRequestError(
+          "Sign in to the account requested by this application",
+        );
       current.authEmail = identity.email.toLowerCase();
-      if (account.status === "active") {
+      // Inactive accounts still record this browser's fresh sign-in: the
+      // account console requires it, and it is the only place to reactivate
+      // or settle a migration. Authorization choosers skip deactivated
+      // device accounts, so this does not make the account usable for OAuth.
+      if (account.status !== "deleted")
         await provider.accountManager.upsertDeviceAccount(
           browser.deviceId,
           account.did,
         );
-        current.authDid = account.did;
-      }
+      if (account.status === "active") current.authDid = account.did;
       if (account.status === "active" && !current.requestUri)
         await db.delete("auth-flows", current.id);
       else await save(current);

@@ -54,3 +54,27 @@ export function assertBindingMatchesAccount(
   }
   return row;
 }
+
+interface HintableAccount {
+  did?: unknown;
+  handle?: unknown;
+}
+
+export function matchesLoginHint(
+  account: HintableAccount | null | undefined,
+  hint: unknown,
+): boolean {
+  if (hint == null) return true;
+  if (typeof hint !== "string" || !hint) return false;
+  const normalized = hint.toLowerCase();
+  return [account?.did, account?.handle].some(
+    (value) => typeof value === "string" && value.toLowerCase() === normalized,
+  );
+}
+
+export function matchesAuthorizationHint(
+  account: HintableAccount | null | undefined,
+  ...hints: unknown[]
+): boolean {
+  return hints.every((hint) => matchesLoginHint(account, hint));
+}

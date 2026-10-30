@@ -299,7 +299,12 @@ test("actual resend resolves the latest persisted email after an earlier flow re
 async function verificationFixture(
   t,
   stage,
-  { inactivePrimary = false, inactiveSecond = false, standalone = false } = {},
+  {
+    inactivePrimary = false,
+    inactiveSecond = false,
+    standalone = false,
+    loginHint,
+  } = {},
 ) {
   const db = await openTestDatabase();
   t.after(() => db.close());
@@ -322,6 +327,7 @@ async function verificationFixture(
   let session = null;
   let cookies = 0;
   let loginEmailResolutions = 0;
+  const checkedAccounts = [];
   const provider = {
     deviceManager: {
       async load() {
@@ -361,7 +367,15 @@ async function verificationFixture(
         })
       : {
           async requireBoundAccount(_identity, did) {
-            return { ...row, did };
+            const account = {
+              ...row,
+              did,
+              ...(stage === "hint-race"
+                ? { handle: "changed.example.test" }
+                : {}),
+            };
+            checkedAccounts.push(account);
+            return account;
           },
         };
   const { authenticated } = createConsent({
@@ -387,6 +401,7 @@ async function verificationFixture(
       redirect_uri: "https://client.example.test/callback",
       scope: "atproto transition:generic",
       state: "original-state",
+      ...(loginHint ? { login_hint: loginHint } : {}),
     },
   });
   await db.set("browser", browser.deviceId, {
@@ -438,7 +453,8 @@ async function verificationFixture(
     getAccountSecurity: () => ({
       async assertLoginEmail(identity) {
         loginEmailResolutions++;
-        if (stage === "signup") return { kind: "unbound" };
+        if (stage === "signup" || stage === "unbound")
+          return { kind: "unbound" };
         if (stage === "repair-required")
           return { kind: "account-requires-repair" };
         if (stage === "multiple-accounts")
@@ -456,6 +472,9 @@ async function verificationFixture(
     },
     get loginEmailResolutions() {
       return loginEmailResolutions;
+    },
+    get checkedAccounts() {
+      return checkedAccounts;
     },
     removeBoundAccount(did) {
       boundRows = boundRows.filter((account) => account.did !== did);
@@ -560,7 +579,7 @@ test("standalone verified login continues to the selected DID account page", asy
   assert.equal(await f.db.get("auth-flows", f.flow.id), null);
 });
 
-test("inactive account continuation links to that account's settings", async (t) => {
+test("inactive account continuation records the device sign-in its settings link requires", async (t) => {
   const f = await verificationFixture(t, "inactive-account", {
     inactivePrimary: true,
   });
@@ -578,7 +597,12 @@ test("inactive account continuation links to that account's settings", async (t)
     ),
   );
   assert.equal(f.cookies, 1);
-  assert.equal(await f.db.get("fixture-device-accounts", "browser"), null);
+  // The account console redirects to sign-in without fresh device membership,
+  // so omitting it here would loop the settings link back to /login.
+  assert.equal(
+    await f.db.get("fixture-device-accounts", "browser"),
+    selectedDid,
+  );
 });
 
 test("verified multi-DID sign-in withholds bindings until OTP and continues only the explicitly chosen account", async (t) => {
@@ -672,6 +696,37 @@ test("changing the chooser account requires the same verified user", async (t) =
   );
 });
 
+test("shared-email account choice stays mandatory and is constrained to login_hint", async (t) => {
+  const f = await verificationFixture(t, "multiple-accounts", {
+    loginHint: "second.example.test",
+  });
+  const verified = await f.request("/auth/verify", { otp: "valid-proof" });
+
+  assert.equal(verified.statusCode, 200);
+  assert.ok(verified.body.includes('action="/auth/select"'));
+  assert.match(verified.body, /did:plc:bbbbbbbbbbbbbbbbbbbbbbbb/);
+  assert.doesNotMatch(verified.body, /did:plc:aaaaaaaaaaaaaaaaaaaaaaaa/);
+  assert.doesNotMatch(verified.body, /owner\.example\.test/);
+  assert.match(verified.body, /second\.example\.test/);
+
+  const sibling = await f.request("/auth/select", {
+    did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
+  });
+  assert.equal(sibling.statusCode, 400);
+  assert.equal((await f.db.get("auth-flows", f.flow.id)).authDid, undefined);
+  assert.equal(await f.db.get("fixture-device-accounts", "browser"), null);
+
+  const selected = await f.request("/auth/select", {
+    did: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
+  });
+  assert.equal(selected.statusCode, 200);
+  assert.match(selected.body, /did:plc:bbbbbbbbbbbbbbbbbbbbbbbb/);
+  assert.equal(
+    (await f.db.get("auth-flows", f.flow.id)).authDid,
+    "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
+  );
+});
+
 test("an inactive chooser choice preserves verified identity so an active sibling can continue", async (t) => {
   const f = await verificationFixture(t, "multiple-accounts", {
     inactiveSecond: true,
@@ -686,7 +741,12 @@ test("an inactive chooser choice preserves verified identity so an active siblin
   assert.equal(pending.authEmail, "old@example.test");
   assert.equal(pending.authUserId, "verified-user");
   assert.equal(pending.authDid, undefined);
-  assert.equal(await f.db.get("fixture-device-accounts", "browser"), null);
+  // Device membership lets the inactive account open its settings to
+  // reactivate; authDid stays unset, so it cannot continue the OAuth request.
+  assert.equal(
+    await f.db.get("fixture-device-accounts", "browser"),
+    "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
+  );
 
   const activeDid = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
   const consent = await f.request("/auth/select", { did: activeDid });
@@ -741,6 +801,41 @@ test("chooser submission rejects foreign-flow and superseded-flow requests", asy
   assert.equal(current.authEmail, undefined);
   assert.equal(current.authUserId, undefined);
   assert.equal(current.authDid, undefined);
+  assert.equal(await f.db.get("fixture-device-accounts", "browser"), null);
+});
+
+test("live account binding is rechecked against login_hint before device freshness is updated", async (t) => {
+  const f = await verificationFixture(t, "hint-race", {
+    loginHint: "owner.example.test",
+  });
+  assert.equal(f.flow.parameters.login_hint, "owner.example.test");
+
+  const response = await f.request("/auth/verify", {
+    otp: "controlled-proof",
+  });
+  assert.equal(response.statusCode, 400);
+  assert.match(
+    response.body,
+    /Sign in to the account requested by this application/,
+  );
+  assert.equal(f.cookies, 0);
+  assert.equal(await f.db.get("fixture-device-accounts", "browser"), null);
+  assert.equal((await f.db.get("auth-flows", f.flow.id)).authDid, undefined);
+});
+
+test("an unbound DID login_hint cannot turn verified email into a different signup", async (t) => {
+  const f = await verificationFixture(t, "unbound", {
+    loginHint: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
+  });
+
+  const response = await f.request("/auth/verify", {
+    otp: "controlled-proof",
+  });
+
+  assert.equal(response.statusCode, 403);
+  assert.match(response.body, /not linked to the requested account/i);
+  assert.doesNotMatch(response.body, /Signup form/);
+  assert.equal(f.cookies, 0);
   assert.equal(await f.db.get("fixture-device-accounts", "browser"), null);
 });
 

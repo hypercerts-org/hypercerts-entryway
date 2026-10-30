@@ -44,13 +44,37 @@ async function signInSharedEmail(page, email) {
   await page.getByRole("button", { name: "Verify code" }).click();
 }
 
-async function chooseAccount(page, did) {
+async function signInSelectedAccount(page, did, email) {
+  await expect(
+    page.getByRole("heading", { name: "Sign in", exact: true }),
+  ).toBeVisible();
+  expect(new URL(page.url()).searchParams.get("did")).toBe(did);
+  const since = Date.now();
+  await page.getByLabel("Email address", { exact: true }).fill(email);
+  await page.getByRole("button", { name: "Send sign-in code" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Check your email" }),
+  ).toBeVisible();
+  const message = await waitForMailpitCode({ recipient: email, since });
+  await page.getByLabel("Sign-in code", { exact: true }).fill(message.code);
+  await page.getByRole("button", { name: "Verify code" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Choose an account" }),
+  ).toBeVisible();
+  const verifiedChoice = page
+    .locator('form[action="/auth/select"]')
+    .filter({ has: page.locator(`input[name="did"][value="${did}"]`) });
+  // Signing in for a selected DID offers only that account, not every binding.
+  await expect(page.locator('form[action="/auth/select"]')).toHaveCount(1);
+  await expect(verifiedChoice).toHaveCount(1);
+  await verifiedChoice.getByRole("button").click();
+}
+
+async function chooseAccount(page, did, email) {
   const form = selectionForm(page, did);
   await expect(form).toHaveCount(1);
-  const option = form.locator(`input[name="did"][value="${did}"]`);
-  await option.check();
-  await expect(option).toBeChecked();
   await form.getByRole("button").click();
+  await signInSelectedAccount(page, did, email);
   await expect(page.getByTestId("account-did")).toHaveText(did);
   expect(new URL(page.url()).searchParams.get("did")).toBe(did);
 }
@@ -88,9 +112,10 @@ test("shared verified email keeps each tab and account action bound to its selec
 
     const accountUrl = new URL("/account", config.issuer).href;
     await firstTab.goto(accountUrl);
+    await chooseAccount(firstTab, first.did, sharedEmail);
+    // The OTP rotates the browser session, so the second tab opens its chooser afterwards.
     await secondTab.goto(accountUrl);
-    await chooseAccount(firstTab, first.did);
-    await chooseAccount(secondTab, second.did);
+    await chooseAccount(secondTab, second.did, sharedEmail);
     await firstTab.reload();
     await expect(firstTab.getByTestId("account-did")).toHaveText(first.did);
     await expect(secondTab.getByTestId("account-did")).toHaveText(second.did);

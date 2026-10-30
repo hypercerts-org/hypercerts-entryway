@@ -64,7 +64,7 @@ async function fixture(t, { initialLogin = true } = {}) {
     async get(identifier) {
       return (
         (await storage.getByDid(identifier)) ??
-        (await storage.getByEmail(identifier))
+        (await storage.getByHandle(identifier))
       );
     },
     async list() {
@@ -130,7 +130,7 @@ async function fixture(t, { initialLogin = true } = {}) {
     assert.equal(response.status, 200);
     const identity = response.principal;
     // This fixture explicitly establishes existing-account ownership; production sign-in only reads it.
-    const existing = await accounts.get(email);
+    const [existing] = await storage.listByEmail(email);
     if (existing)
       await createAccountAuthority({ db, accounts }).bindVerifiedIdentity({
         did: existing.did,
@@ -142,7 +142,7 @@ async function fixture(t, { initialLogin = true } = {}) {
     response.commitCookies({ append: (_name, value) => cookies.push(value) });
     const cookie = cookies.map((value) => value.split(";")[0]).join("; ");
     const session = await f.oauth.requireSession({ headers: { cookie } });
-    const row = await accounts.get(email);
+    const [row] = await storage.listByEmail(email);
     return {
       cookie,
       user: { id: identity.userId, email: identity.email },
@@ -194,6 +194,35 @@ async function bindSiblingToSharedEmail(f, sharedUserId) {
   return sibling;
 }
 
+test("shared-email password reset and login answer like an unknown email", async (t) => {
+  const f = await fixture(t);
+  const sibling = await bindSiblingToSharedEmail(f, f.login.user.id);
+  const password = "a long shared-email password";
+  await f.legacy.setPassword(f.alice.did, password);
+  await f.legacy.setPassword(sibling.did, password);
+  const resetChallenges = async () =>
+    (await f.db.list("security:challenges")).filter(
+      ({ value }) => value.purpose === "password-reset",
+    ).length;
+  const challengesBefore = await resetChallenges();
+
+  for (const email of [f.alice.email, "unknown@example.com"])
+    assert.deepEqual(await f.security.requestPasswordReset({ email }), {});
+  assert.equal(await resetChallenges(), challengesBefore);
+
+  for (const identifier of [f.alice.email, "unknown@example.com"])
+    await assert.rejects(f.legacy.createSession({ identifier, password }), {
+      status: 401,
+      error: "AuthenticationRequired",
+    });
+  // Each shared DID remains reachable through its own identifier.
+  for (const { did, handle } of [f.alice, sibling])
+    assert.equal(
+      (await f.legacy.createSession({ identifier: handle, password })).did,
+      did,
+    );
+});
+
 test("login validation requires repair for an email-matched account without a binding", async (t) => {
   const f = await fixture(t, { initialLogin: false });
   await f.accounts.save({ ...f.alice, emailVerified: false });
@@ -239,7 +268,7 @@ test("login validation leaves a genuinely new verified email available for signu
   assert.deepEqual(await f.security.assertLoginEmail(response.principal), {
     kind: "unbound",
   });
-  assert.equal(await f.accounts.get(email), null);
+  assert.deepEqual(await f.accounts.storage.listByEmail(email), []);
 });
 
 test("account authorization rechecks the persisted Better Auth verification state", async (t) => {
@@ -1542,16 +1571,21 @@ test("password reset cannot issue current authority to a former primary email af
     release = resolve;
   });
   const get = f.accounts.get;
+  const storage = f.accounts.storage;
+  const listByEmail = storage.listByEmail;
   let pause = true;
-  f.accounts.get = async (identifier) => {
-    const row = await get(identifier);
-    if (pause && identifier === oldEmail) {
+  storage.listByEmail = async (email) => {
+    const rows = await listByEmail(email);
+    if (pause && email === oldEmail) {
       pause = false;
       entered();
       await continueRequest;
     }
-    return row;
+    return rows;
   };
+  t.after(() => {
+    storage.listByEmail = listByEmail;
+  });
   // Snapshot the mail projection so even a newly sent unusable code is noticed.
   const oldMail = await f.db.get("outbox", oldEmail);
   const pending = f.security.requestPasswordReset({ email: oldEmail });

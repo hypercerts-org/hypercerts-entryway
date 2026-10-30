@@ -99,16 +99,6 @@ export function createAccountStorage(
         orderBy: [asc(t.accounts.sequence)],
       })
     ).map((row) => parseAccount(row)!);
-  const getByEmail = async (email: string) => {
-    const rows = await listByEmail(email);
-    if (rows.length > 1)
-      throw new DomainError(
-        "AccountSelectionRequired",
-        409,
-        "This email matches multiple accounts; select one by DID",
-      );
-    return rows[0] ?? null;
-  };
   const getByHandle = async (handle: string) =>
     parseAccount(
       await one(
@@ -599,7 +589,6 @@ export function createAccountStorage(
     getByDid,
     listBoundAccounts,
     listByEmail,
-    getByEmail,
     getByHandle,
     listEmailClaims,
     getEmailClaim,

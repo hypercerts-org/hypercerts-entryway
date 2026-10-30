@@ -534,7 +534,7 @@ test("stale provisioning journal cannot recreate registration admission after a 
     },
   });
   await assert.rejects(f.accounts.create(alice), /Creation acknowledged/);
-  const row = await f.accounts.get(alice.email);
+  const row = (await f.accounts.storage.listByEmail(alice.email))[0] ?? null;
   const captured = Promise.withResolvers(),
     release = Promise.withResolvers();
   let paused = false;

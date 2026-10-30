@@ -2,6 +2,7 @@ import express from "express";
 import { page, escapeHtml as esc } from "../ui/html.mjs";
 import { hidden } from "../ui/forms.mjs";
 import { accountUrl } from "../ui/account-forms.mjs";
+import { accountChooser } from "../ui/account-chooser.mjs";
 import { HttpError } from "./http-error.mjs";
 const invalidSelection = () =>
   new HttpError(
@@ -68,12 +69,13 @@ export function createAccountConsole({
     return null;
   };
   const selectionForm = (browser, accounts) =>
-    `<p>More than one account is linked to this verified identity. Choose the account to manage.</p><form method="post" action="/account/select">${hidden("csrf", browser.csrf)}${accounts
-      .map(
-        ({ did, handle, status }) =>
-          `<label><input type="radio" name="did" value="${esc(did)}" required>${esc(handle ?? did)} <small>${esc(did)} · ${esc(status)}</small></label>`,
-      )
-      .join("")}<button>Continue with this account</button></form>`;
+    accountChooser({
+      accounts,
+      action: "/account/select",
+      fields: hidden("csrf", browser.csrf),
+      prompt:
+        "More than one account is linked to this verified identity. Choose the account to manage.",
+    });
   const authenticated = async (req, res) => {
     const session = await oauth.requireSession(req);
     if (!session?.emailVerified) {
@@ -102,6 +104,13 @@ export function createAccountConsole({
       canSwitchAccount = resolution.kind === "selection-required";
     }
     if (account.status === "deleted") return noAccount(res);
+    const deviceAccount = (
+      await oauth.provider.accountManager.listDeviceAccounts(browser.deviceId)
+    ).find(({ account: device }) => device.did === account.did);
+    if (!deviceAccount || oauth.provider.checkLoginRequired(deviceAccount)) {
+      res.redirect(303, `/login?did=${encodeURIComponent(account.did)}`);
+      return null;
+    }
     res.locals.accountUrl = accountUrl(account.did);
     return {
       session,

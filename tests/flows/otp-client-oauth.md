@@ -18,6 +18,9 @@ metadata URL and requested scope. Google/GitHub are outside this flow.
    account picker.
 4. Complete the existing consent flow when required and assert the returned
    identity equals the intended DID and the original OAuth request is retained.
+   A stale remembered device requires visible email OTP for its selected DID;
+   both the OAuth `login_hint` and selected-account hint must still match after
+   restart. Consent and client-trust behavior are unchanged.
 5. Use the resulting credentials for a real PDS write and refresh.
 6. Check denied/revoked paths in the accompanying lifecycle cases.
 

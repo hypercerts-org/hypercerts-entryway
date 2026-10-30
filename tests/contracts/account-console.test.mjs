@@ -32,6 +32,18 @@ function fixture() {
   const routes = new Map();
   const mutations = [];
   const loadedDids = [];
+  const deviceUpdatedAt = new Map();
+  const listedDeviceAccounts = (deviceId) =>
+    bindings
+      .filter(
+        ({ did }) =>
+          !deviceUpdatedAt.has(did) || deviceUpdatedAt.get(did) !== null,
+      )
+      .map(({ did }) => ({
+        deviceId,
+        account: { did },
+        updatedAt: deviceUpdatedAt.get(did) ?? new Date(),
+      }));
   const app = {
     get(path, ...handlers) {
       routes.set(`GET ${path}`, handlers.at(-1));
@@ -49,6 +61,23 @@ function fixture() {
     },
   });
   const oauth = {
+    provider: {
+      accountManager: {
+        async listDeviceAccounts(deviceId) {
+          return listedDeviceAccounts(deviceId);
+        },
+        async getDeviceAccount(deviceId, did) {
+          const deviceAccount = listedDeviceAccounts(deviceId).find(
+            (entry) => entry.account.did === did,
+          );
+          if (!deviceAccount) throw new Error("Account not found");
+          return deviceAccount;
+        },
+      },
+      checkLoginRequired(deviceAccount) {
+        return Date.now() - deviceAccount.updatedAt.getTime() > 7 * 24 * 60 * 60_000;
+      },
+    },
     async requireSession() {
       return session;
     },
@@ -160,6 +189,7 @@ function fixture() {
     loadedDids,
     setSession(value) { session = value; },
     setBindings(value) { bindings = value; },
+    setDeviceUpdatedAt(did, value) { deviceUpdatedAt.set(did, value); },
   };
 }
 
@@ -204,6 +234,31 @@ test("multi-binding account page requires an explicit CSRF-protected choice", as
   const selected = await f.getPage(didB);
   assert.equal(selected.statusCode, 200);
   assert.deepEqual(f.loadedDids, [didB]);
+});
+
+test("missing selected-DID device membership redirects to visible email sign-in", async () => {
+  const f = fixture();
+  f.setDeviceUpdatedAt(didB, null);
+
+  const missing = await f.getPage(didB);
+
+  assert.equal(missing.statusCode, 303);
+  assert.equal(missing.location, `/login?did=${encodeURIComponent(didB)}`);
+});
+
+test("stale selected-DID console requests return to visible email sign-in without mutating", async () => {
+  const f = fixture();
+  f.setDeviceUpdatedAt(didB, new Date(Date.now() - 8 * 24 * 60 * 60_000));
+
+  const stalePage = await f.getPage(didB);
+  assert.equal(stalePage.statusCode, 303);
+  assert.equal(stalePage.location, `/login?did=${encodeURIComponent(didB)}`);
+  assert.equal(stalePage.body, undefined);
+
+  const staleAction = await f.post({ did: didB });
+  assert.equal(staleAction.statusCode, 303);
+  assert.equal(staleAction.location, `/login?did=${encodeURIComponent(didB)}`);
+  assert.deepEqual(f.mutations, []);
 });
 
 test("account actions remain pinned to each tab's DID and reject a revoked binding", async () => {

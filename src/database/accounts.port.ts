@@ -17,7 +17,6 @@ export interface AccountReader {
   getByDid(did: string): Promise<AccountRow | null>;
   listBoundAccounts(userId: string): Promise<AccountRow[]>;
   listByEmail(email: string): Promise<AccountRow[]>;
-  getByEmail(email: string): Promise<AccountRow | null>;
   getByHandle(handle: string): Promise<AccountRow | null>;
   listEmailClaims(email: string): Promise<EmailClaim[]>;
   getEmailClaim(email: string): Promise<EmailClaim | null>;

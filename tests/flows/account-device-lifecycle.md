@@ -17,12 +17,16 @@ an application grant have distinct effects.
 
 Inspect `account-console.spec.mjs`, `account-security.test.mjs`,
 `account-schema.test.mjs`, `experience-browser.spec.mjs` and
-`oauth-lifecycle.spec.mjs`. Ordinary email changes, backup recovery and admin
-repair reject a normalized destination claimed as another DID's primary email.
-Moving an existing shared account to an unused address preserves sibling claims
-and bindings; authorized migration/import remains the explicit sharing exception.
-Browser-session removal does not necessarily revoke OAuth refresh credentials,
-and existing access tokens can remain valid until expiration.
+`oauth-lifecycle.spec.mjs` plus contract cases for the exact behavior. Ordinary
+email changes, backup recovery and admin repair reject a normalized destination
+claimed as another DID's primary email. Moving an existing shared account to an
+unused address preserves sibling claims and bindings; authorized migration/import
+remains the explicit sharing exception. Remembered OAuth device authentication
+expires after seven days and stale selected-DID account requests return to visible
+email sign-in; sensitive account-console actions retain a separate ten-minute
+Better Auth session check. Browser-session removal does not necessarily revoke
+OAuth refresh credentials, and existing access tokens can remain valid until
+expiration.
 
 **Repeat:** use a fresh isolated project for acceptance. Keep independent client
 accounts and avoid parallel state mutations. Run resilience only after these
