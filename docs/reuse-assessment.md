@@ -127,7 +127,7 @@ checks and outstanding requirements.
 | `next-spike/app/test/oauth-lifecycle.spec.mjs:161`            | Recorded unresolved freshness/identity case |
 | `next-spike/app/src/infra/mail/smtp-transport.ts:9`           | Sandbox transport                           |
 | `next-spike/app/tsconfig.json:19`                             | MJS excluded from strict typing             |
-| `ePDS/features/consent-screen.feature:50`                     | Required returning-user consent behaviour   |
+| `ePDS/features/consent-screen.feature:50`                     | Returning-user consent skip; not provided   |
 | `ePDS/features/session-reuse-bugs.feature:183`                | Required reauthentication behaviour         |
 
 The sibling ePDS harness is a model for orchestration and isolation, not proof

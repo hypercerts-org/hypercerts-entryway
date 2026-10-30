@@ -2,19 +2,63 @@ import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { escapeHtml } from "../../ui/html.mjs";
 import { hidden } from "../../ui/forms.mjs";
 import { matchesAuthorizationHint } from "../../accounts/rules.js";
-export function createConsent({ db, provider, stores, flows, accountAccess }) {
+import { completeAuthorization } from "./complete-authorization.mjs";
+export function createConsent({
+  db,
+  config,
+  provider,
+  stores,
+  flows,
+  accountAccess,
+  clientRequestsSignupConsentSkip,
+}) {
   const { fields, save, readCurrentIntent, pageForFlow } = flows;
   const chooseAnotherAccountForm = (flow, browser) =>
     `<form method="post" action="/auth/choose">${fields(flow, browser)}<button class="secondary">Choose a different account</button></form>`;
   const consentForm = (flow, browser, account) =>
     `<div class="account"><strong>${escapeHtml(account.handle ?? account.did)}</strong><br><small>${escapeHtml(account.did)}</small>${flow.authUserId ? chooseAnotherAccountForm(flow, browser) : ""}</div><p><strong>${escapeHtml(flow.clientName ?? "Your application")}</strong> requests access:</p><p><code>${escapeHtml(flow.parameters?.scope)}</code></p><form method="post" action="/auth/consent">${fields(flow, browser)}${hidden("did", account.did)}<button name="decision" value="approve">Allow access</button> <button class="secondary" name="decision" value="deny">Cancel</button></form>`;
+  // ePDS parity: a brand-new account skips consent only when the operator
+  // enabled it, the client is on the Entryway trusted list, and the client's
+  // metadata opts in with epds_skip_consent_on_signup. As in ePDS, a
+  // prompt=consent request does not override that opt-in. Every lookup that
+  // precedes issuing the code is inside the try, so any failure shows consent.
+  const signupConsentSkip = async (flow, browser, did) => {
+    if (config?.signupAllowConsentSkip !== true) return null;
+    try {
+      const client = await provider.clientManager.getClient(flow.clientId);
+      if (
+        client.isTrusted !== true ||
+        (await clientRequestsSignupConsentSkip(flow.clientId)) !== true
+      )
+        return null;
+      return {
+        client,
+        request: await provider.requestManager.get(
+          flow.requestUri,
+          browser.deviceId,
+          flow.clientId,
+        ),
+        deviceAccount: await provider.accountManager.getDeviceAccount(
+          browser.deviceId,
+          did,
+        ),
+      };
+    } catch {
+      return null;
+    }
+  };
   const authenticated = async (
     req,
     res,
     flow,
     browser,
     row,
-    { identity, commitCookies = () => {}, fromChooser = false } = {},
+    {
+      identity,
+      commitCookies = () => {},
+      fromChooser = false,
+      newAccount = false,
+    } = {},
   ) => {
     const displayAccount =
       row.status === "active" && flow.requestUri
@@ -82,6 +126,23 @@ export function createConsent({ db, provider, stores, flows, accountAccess }) {
         303,
         `/account?did=${encodeURIComponent(authorized.account.did)}`,
       );
+    const skip = newAccount
+      ? await signupConsentSkip(
+          authorized.current,
+          browser,
+          authorized.account.did,
+        )
+      : null;
+    if (skip)
+      return await completeAuthorization({
+        db,
+        config,
+        provider,
+        res,
+        flow: authorized.current,
+        browser,
+        ...skip,
+      });
     return pageForFlow(
       res,
       "Authorize application",
