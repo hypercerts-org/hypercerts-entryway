@@ -9,10 +9,16 @@ import { hidden } from "./forms.mjs";
  * renders the accounts it is given: callers pass linked accounts from
  * accountAccess and must re-check the submitted DID against current bindings.
  */
-export const accountChooser = ({ accounts, action, fields, prompt }) =>
-  `<p role="status">${escapeHtml(prompt)}</p>${accounts
-    .map(
-      ({ did, handle, status }) =>
-        `<div class="account"><strong>${escapeHtml(handle ?? did)}</strong><br><small>${escapeHtml(did)}${status ? ` · ${escapeHtml(status)}` : ""}</small><form method="post" action="${escapeHtml(action)}">${fields}${hidden("did", did)}<button>Continue with this account</button></form></div>`,
-    )
-    .join("")}`;
+const accountOption = ({ did, handle, status }, action, fields) => {
+  const details = status
+    ? `${escapeHtml(did)} · ${escapeHtml(status)}`
+    : escapeHtml(did);
+  return `<div class="account"><strong>${escapeHtml(handle ?? did)}</strong><br><small>${details}</small><form method="post" action="${escapeHtml(action)}">${fields}${hidden("did", did)}<button>Continue with this account</button></form></div>`;
+};
+
+export const accountChooser = ({ accounts, action, fields, prompt }) => {
+  const options = accounts
+    .map((account) => accountOption(account, action, fields))
+    .join("");
+  return `<p role="status">${escapeHtml(prompt)}</p>${options}`;
+};

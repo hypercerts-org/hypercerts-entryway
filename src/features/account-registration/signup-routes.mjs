@@ -41,6 +41,37 @@ function matchesRegistrationOwner(owner, session, email) {
   );
 }
 
+/** A signup started for a requested DID or handle may only create that account. */
+const signupMatchesHints = (flow, existing, input) =>
+  [flow.accountHint, flow.parameters?.login_hint]
+    .filter((hint) => hint != null)
+    .every((hint) => {
+      if (typeof hint !== "string") return false;
+      if (hint.startsWith("did:")) return existing?.did === hint;
+      return input.handle === hint.toLowerCase();
+    });
+
+function assertRegistrationAcquirable(existing, savedIntent, ownerMatches) {
+  if (existing && existing.status !== "provisioning")
+    throw new HttpError(
+      409,
+      "AccountUnavailable",
+      "This account cannot be registered again",
+    );
+  if (savedIntent && !ownerMatches)
+    throw new HttpError(
+      403,
+      "AccountMismatch",
+      "This saved registration belongs to a different verified identity",
+    );
+  if (existing && (!savedIntent || !ownerMatches))
+    throw new HttpError(
+      403,
+      "AccountMismatch",
+      "This account setup cannot be acquired through email sign-in",
+    );
+}
+
 export function mountSignupRoutes({
   app,
   db,
@@ -88,24 +119,7 @@ export function mountSignupRoutes({
         );
         return await authenticated(req, res, flow, browser, row, { identity });
       }
-      if (existing && existing.status !== "provisioning")
-        throw new HttpError(
-          409,
-          "AccountUnavailable",
-          "This account cannot be registered again",
-        );
-      if (savedIntent && !ownerMatches)
-        throw new HttpError(
-          403,
-          "AccountMismatch",
-          "This saved registration belongs to a different verified identity",
-        );
-      if (existing && (!savedIntent || !ownerMatches))
-        throw new HttpError(
-          403,
-          "AccountMismatch",
-          "This account setup cannot be acquired through email sign-in",
-        );
+      assertRegistrationAcquirable(existing, savedIntent, ownerMatches);
       const registrationIdentity = savedOwner ?? identity;
       const input = await registrationInput({
         db,
@@ -115,19 +129,7 @@ export function mountSignupRoutes({
         body: req.body,
         registrationIdentity,
       });
-      const requestedHints = [
-        flow.accountHint,
-        flow.parameters?.login_hint,
-      ].filter((hint) => hint != null);
-      if (
-        requestedHints.some(
-          (hint) =>
-            typeof hint !== "string" ||
-            (hint.startsWith("did:")
-              ? existing?.did !== hint
-              : input.handle !== hint.toLowerCase()),
-        )
-      )
+      if (!signupMatchesHints(flow, existing, input))
         throw new HttpError(
           403,
           "AccountMismatch",
