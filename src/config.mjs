@@ -35,7 +35,7 @@ export function loadOAuthClientPolicy(env) {
     policy.trustedClientIds = env.OAUTH_TRUSTED_CLIENTS.split(",")
       .map((clientId) => clientId.trim())
       .filter(Boolean);
-    if (!policy.trustedClientIds.every(isHttpsUrl))
+    if (!policy.trustedClientIds.every(isExactClientIdUrl))
       throw invalidOAuthClientPolicy(
         "OAUTH_TRUSTED_CLIENTS must be comma-separated https client metadata URLs",
       );
@@ -43,7 +43,7 @@ export function loadOAuthClientPolicy(env) {
   return policy;
 }
 
-function isHttpsUrl(value) {
+function isExactClientIdUrl(value) {
   try {
     // Trust is exact string equality with the client_id, so reject entries
     // that parse but could never match (normalised host, port or path).
