@@ -9,10 +9,13 @@ const did = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
 
 async function fixture(
   t,
-  { trusted = true, clientOptsIn = true, failing } = {},
+  { trusted = true, clientOptsIn = true, failing, prompt } = {},
 ) {
+  let failed;
   const failIf = (lookup) => {
-    if (failing === lookup) throw new Error(`Controlled ${lookup} failure`);
+    if (failing !== lookup) return;
+    failed = lookup;
+    throw new Error(`Controlled ${lookup} failure`);
   };
   const db = await openTestDatabase();
   t.after(() => db.close());
@@ -23,6 +26,7 @@ async function fixture(
     redirect_uri: "https://client.example.test/callback",
     scope: "atproto transition:generic",
     state: "original-state",
+    ...(prompt ? { prompt } : {}),
   };
   const account = {
     did,
@@ -97,6 +101,9 @@ async function fixture(
   return {
     authorized,
     grants,
+    get failed() {
+      return failed;
+    },
     async complete(options) {
       const res = {
         statusCode: 200,
@@ -150,6 +157,15 @@ test("a new account skips consent only for a trusted, opted-in client when the o
   ]);
 });
 
+test("prompt=consent does not override a trusted client's signup opt-in (ePDS parity)", async (t) => {
+  const f = await fixture(t, { prompt: "consent" });
+
+  const response = await f.complete({ newAccount: true });
+
+  assert.equal(response.statusCode, 303);
+  assert.deepEqual(f.authorized, [did]);
+});
+
 for (const [name, options] of [
   ["the client is not on the trusted list", { trusted: false }],
   ["the client metadata does not opt in", { clientOptsIn: false }],
@@ -165,9 +181,10 @@ for (const [name, options] of [
   });
 }
 
+// The metadata reader never rejects (it answers false), so only provider
+// lookups can fail here.
 for (const failing of [
   "client lookup",
-  "metadata lookup",
   "request lookup",
   "device-account lookup",
 ]) {
@@ -178,6 +195,7 @@ for (const failing of [
 
     assert.equal(response.statusCode, 200);
     assert.match(response.body, /action="\/auth\/consent"/);
+    assert.equal(f.failed, failing);
     assert.deepEqual(f.authorized, []);
     assert.deepEqual(f.grants, []);
   });
