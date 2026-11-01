@@ -8,6 +8,8 @@ import { createServiceJwt } from "@atproto/xrpc-server";
 import * as plc from "@did-plc/lib";
 import { createLegacy } from "../../dist/src/oauth/legacy-credentials.mjs";
 import { mountXrpc } from "../../dist/src/compose-protocol.mjs";
+import { refuseOAuthAccountMethod } from "../../dist/src/http/protocol-authentication.mjs";
+import { ScopePermissionsTransition } from "@atproto/oauth-scopes";
 import {
   testDatabaseConfiguration,
   query,
@@ -377,4 +379,57 @@ test("mounted credential mutation commits before a contending reset which revoke
   await assert.rejects(legacy.verifyAccess(session.accessJwt), {
     error: "ExpiredToken",
   });
+});
+
+test("OAuth account refusals match the stock PDS error names and messages", () => {
+  const granted = (...scopes) =>
+    new ScopePermissionsTransition(["atproto", ...scopes]);
+  const refusal = (method, permissions = granted()) => {
+    const error = refuseOAuthAccountMethod(method, permissions);
+    return (
+      error && {
+        status: error.status,
+        error: error.error,
+        message: error.message,
+      }
+    );
+  };
+
+  for (const method of ["requestEmailUpdate", "updateEmail"])
+    assert.deepEqual(refusal(method, granted("account:email?action=manage")), {
+      status: 403,
+      error: "Forbidden",
+      message:
+        "Use the account manager interface to update email address associated with an account",
+    });
+  for (const method of [
+    "requestAccountDelete",
+    "deactivateAccount",
+    "activateAccount",
+    "createAppPassword",
+    "revokeAppPassword",
+  ])
+    assert.deepEqual(refusal(method, granted("identity:*")), {
+      status: 403,
+      error: "Forbidden",
+      message: "OAuth credentials are not supported for this endpoint",
+    });
+
+  // A missing permission names the scope the app must request.
+  assert.deepEqual(refusal("updateHandle"), {
+    status: 403,
+    error: "ScopeMissingError",
+    message: 'Missing required scope "identity:handle"',
+  });
+  assert.equal(refusal("signPlcOperation").error, "ScopeMissingError");
+  assert.equal(refusal("confirmEmail").error, "ScopeMissingError");
+
+  // Granted permissions and always-allowed methods pass.
+  assert.equal(refusal("getSession"), null);
+  assert.equal(refusal("updateHandle", granted("identity:handle")), null);
+  assert.equal(refusal("signPlcOperation", granted("identity:*")), null);
+  assert.equal(
+    refusal("confirmEmail", granted("account:email?action=manage")),
+    null,
+  );
 });
