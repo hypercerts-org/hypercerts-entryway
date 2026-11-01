@@ -1,7 +1,7 @@
 import express from "express";
 import { page, escapeHtml as esc } from "../ui/html.mjs";
 import { hidden } from "../ui/forms.mjs";
-import { accountUrl } from "../ui/account-forms.mjs";
+import { accountUrl, manageUrl } from "../ui/account-forms.mjs";
 import { accountChooser } from "../ui/account-chooser.mjs";
 import { HttpError } from "./http-error.mjs";
 const invalidSelection = () =>
@@ -23,13 +23,6 @@ const selectedDidFromPost = (req) => {
 };
 const selectedDidFromQuery = (req) => selector(req.query?.did, true);
 
-// Per-request proofs are derived again when a saved action is replayed; the
-// rest of the posted form is the user's own input.
-const requestProofs = new Set(["csrf", "did"]);
-const savedFields = (body) =>
-  Object.fromEntries(
-    Object.entries(body ?? {}).filter(([name]) => !requestProofs.has(name)),
-  );
 // A wrong or rate-limited code leaves the confirmation page usable. An expired
 // one ends it, so it is not listed here.
 const retryableCodeFailures = new Set(["InvalidToken", "RateLimitExceeded"]);
@@ -191,10 +184,34 @@ export function createAccountConsole({
     ...ownMailboxCode,
     ...publicIdentity,
   ]);
-  // Every mounted action by name, so a confirmed action can be replayed.
-  const actionHandlers = new Map();
+  // Where a stale session lands after confirming it's you: the protected page
+  // that declared the gated action (see mountProtectedPage). The user makes the
+  // change there again; nothing they typed is kept while the code is
+  // outstanding. A gated action no page declares returns to account settings.
+  const confirmReturn = new Map();
+  const SETTINGS = "settings";
+  const protectedPages = new Set();
+  const returnUrl = (returnTo, did) =>
+    protectedPages.has(returnTo) ? manageUrl(returnTo, did) : accountUrl(did);
   const isRecent = async (principal) =>
     Boolean(security) && (await security.isRecent(principal));
+  const proofFields = (ctx) =>
+    hidden("csrf", ctx.browser.csrf) + hidden("did", ctx.account.did);
+  const cancelLink = (ctx) =>
+    `<p><a href="${esc(accountUrl(ctx.account.did))}">Cancel and return to account settings</a></p>`;
+  // The first step: explain why and offer to send the code. Opening a protected
+  // page sends nothing; only "Send code" does.
+  const startPage = (res, ctx, { returnTo, notMade = false }) => {
+    const notice = notMade
+      ? `<p role="alert">Your change was not made. It has been more than ten minutes since you signed in or last confirmed it's you. Confirm it's you, then make the change again.</p>`
+      : "";
+    return page(
+      res,
+      "Confirm it's you",
+      `${notice}<p id="reconfirm-help">For your security, changes to account security settings need a recent confirmation. We'll send an eight-digit code to <strong>${esc(ctx.account.email)}</strong>.</p><form method="post" action="/account/confirm/start">${proofFields(ctx)}${hidden("returnTo", returnTo)}<button aria-describedby="reconfirm-help">Send code</button></form>${cancelLink(ctx)}`,
+      notMade ? 403 : 200,
+    );
+  };
   // The code form and "Send a new code" carry the same proofs: CSRF, the selected
   // DID and the challenge selector.
   const confirmPage = (
@@ -202,19 +219,16 @@ export function createAccountConsole({
     ctx,
     { challengeId, resent = false, error, status = 200 },
   ) => {
-    const proofs =
-      hidden("csrf", ctx.browser.csrf) +
-      hidden("did", ctx.account.did) +
-      hidden("challengeId", challengeId);
+    const proofs = proofFields(ctx) + hidden("challengeId", challengeId);
     const sentTo = `<strong>${esc(ctx.account.email)}</strong>`;
     const message = resent
       ? `We sent a new code to ${sentTo}. The earlier code no longer works. This one expires in ten minutes.`
-      : `For your security, changes to account security settings need a recent confirmation. We sent a code to ${sentTo}. Enter it to continue; it expires in ten minutes.`;
+      : `We sent a code to ${sentTo}. Enter it to continue; it expires in ten minutes.`;
     const alert = error ? `<p role="alert">${esc(error)}</p>` : "";
     return page(
       res,
       "Confirm it's you",
-      `${alert}<p id="reconfirm-help" role="status">${message}</p><form method="post" action="/account/confirm">${proofs}<label for="reconfirm-code">Confirmation code</label><input id="reconfirm-code" name="token" inputmode="numeric" autocomplete="one-time-code" minlength="8" maxlength="8" aria-describedby="reconfirm-help" required><button>Confirm and continue</button></form><form method="post" action="/account/confirm">${proofs}${hidden("resend", "1")}<button class="secondary">Send a new code</button></form><p><a href="${esc(accountUrl(ctx.account.did))}">Cancel and return to account settings</a></p>`,
+      `${alert}<p id="reconfirm-help" role="status">${message}</p><form method="post" action="/account/confirm">${proofs}<label for="reconfirm-code">Confirmation code</label><input id="reconfirm-code" name="token" inputmode="numeric" autocomplete="one-time-code" minlength="8" maxlength="8" aria-describedby="reconfirm-help" required><button>Confirm and continue</button></form><form method="post" action="/account/confirm">${proofs}${hidden("resend", "1")}<button class="secondary">Send a new code</button></form>${cancelLink(ctx)}`,
       status,
     );
   };
@@ -241,15 +255,17 @@ export function createAccountConsole({
       message: "This code can no longer be used. Start the change again.",
       status: 400,
     });
-  const askToConfirm = async ({ action, ctx, req, res }) => {
-    needed();
+  const sendCode = async (ctx, req, res) => {
+    const returnTo = String(req.body.returnTo ?? "");
+    if (returnTo !== SETTINGS && !protectedPages.has(returnTo))
+      throw new HttpError(
+        400,
+        "InvalidRequest",
+        "Choose the settings change again from account settings.",
+      );
     let begun;
     try {
-      begun = await security.beginReconfirm(ctx.principal, {
-        action,
-        did: ctx.account.did,
-        fields: savedFields(req.body),
-      });
+      begun = await security.beginReconfirm(ctx.principal, { returnTo });
     } catch (failure) {
       if (failure.error !== "RateLimitExceeded") throw failure;
       return endedPage(res, ctx, {
@@ -280,37 +296,27 @@ export function createAccountConsole({
     }
     if (!res.headersSent) res.redirect(303, accountUrl(ctx.account.did));
   };
-  /** Every console action runs through here. A direct post and a replay after
-   * "Confirm it's you" share it, so each check runs again before the action. */
-  const dispatch = async ({
-    action,
-    handler,
-    ctx,
-    req,
-    res,
-    replay = false,
-  }) => {
+  /** Every console action runs through here. A gated action from a session that
+   * is no longer recent is not made: the user confirms, returns to the page
+   * that owns it and makes the change again. */
+  const dispatch = async ({ action, handler, ctx, req, res }) => {
     // Resolve the request-carried DID against the live verified binding on every action.
     if (security) await security.summary(ctx.principal);
     if (!noRecentLogin.has(action) && !(await isRecent(ctx.principal))) {
-      // The confirmation behind a replay was just recorded. If it still does not
-      // count, asking again would loop instead of failing.
-      if (replay)
-        throw new HttpError(
-          403,
-          "ReauthenticationRequired",
-          "Confirm it's you again before changing account security settings.",
-        );
-      return await askToConfirm({ action, ctx, req, res });
+      needed();
+      return startPage(res, ctx, {
+        returnTo: confirmReturn.get(action) ?? SETTINGS,
+        notMade: true,
+      });
     }
     return await runAction({ handler, ctx, req, res });
   };
   const confirmWithCode = async (ctx, req, res) => {
     const challengeId = String(req.body.challengeId ?? "");
     const code = String(req.body.token ?? "").trim();
-    let saved;
+    let confirmed;
     try {
-      saved = await security.completeReconfirm(
+      confirmed = await security.completeReconfirm(
         ctx.principal,
         `${challengeId}.${code}`,
       );
@@ -323,19 +329,7 @@ export function createAccountConsole({
         status: failure.status,
       });
     }
-    const handler = actionHandlers.get(saved.action);
-    if (!handler)
-      throw new HttpError(404, "NotFound", "Unknown account operation");
-    // The saved fields stand in for this form, as if the action had just been posted.
-    req.body = { ...saved.fields, did: saved.did };
-    return await dispatch({
-      action: saved.action,
-      handler,
-      ctx,
-      req,
-      res,
-      replay: true,
-    });
+    return res.redirect(303, returnUrl(confirmed.returnTo, confirmed.did));
   };
   const resendCode = async (ctx, req, res) => {
     const challengeId = String(req.body.challengeId ?? "");
@@ -358,23 +352,48 @@ export function createAccountConsole({
     }
   };
   // Registered with the console, ahead of every /account/:action route.
-  app.post(
-    "/account/confirm",
-    express.urlencoded({ extended: false, limit: "16kb" }),
-    guarded(async (req, res) => {
-      const ctx = await authenticated(req, res);
-      if (!ctx) return;
-      needed();
-      return await (req.body.resend === "1" ? resendCode : confirmWithCode)(
-        ctx,
-        req,
-        res,
-      );
-    }),
+  const confirmRoute = (path, handle) =>
+    app.post(
+      path,
+      express.urlencoded({ extended: false, limit: "16kb" }),
+      guarded(async (req, res) => {
+        const ctx = await authenticated(req, res);
+        if (!ctx) return;
+        needed();
+        return await handle(ctx, req, res);
+      }),
+    );
+  confirmRoute("/account/confirm/start", sendCode);
+  confirmRoute("/account/confirm", (ctx, req, res) =>
+    (req.body.resend === "1" ? resendCode : confirmWithCode)(ctx, req, res),
   );
+  /** A settings page whose forms make gated changes. A recent session sees the
+   * forms; any other is asked to confirm it's you first and comes back here. */
+  /** A settings page whose forms make the gated `actions`. A recent session
+   * sees the forms; any other is asked to confirm it's you first and comes back
+   * here, as does a stale submission of one of those actions. */
+  const mountProtectedPage = (name, { actions, render }) => {
+    protectedPages.add(name);
+    for (const action of actions) {
+      if (confirmReturn.has(action))
+        throw new Error(`Account action ${action} already belongs to a page`);
+      confirmReturn.set(action, name);
+    }
+    app.get(
+      `/account/manage/${name}`,
+      guarded(async (req, res) => {
+        const ctx = await authenticated(req, res);
+        if (!ctx) return;
+        needed();
+        // Resolve the selected DID against the live verified binding first.
+        await security.summary(ctx.principal);
+        if (!(await isRecent(ctx.principal)))
+          return startPage(res, ctx, { returnTo: name });
+        return await render({ ...ctx, req, res });
+      }),
+    );
+  };
   const mountActions = (actions) => {
-    for (const [name, handler] of Object.entries(actions))
-      if (!actionHandlers.has(name)) actionHandlers.set(name, handler);
     app.post(
       "/account/:action",
       express.urlencoded({ extended: false, limit: "16kb" }),
@@ -397,5 +416,12 @@ export function createAccountConsole({
       },
     );
   };
-  return { guarded, authenticated, needed, mountActions, accountUrl };
+  return {
+    guarded,
+    authenticated,
+    needed,
+    mountActions,
+    mountProtectedPage,
+    accountUrl,
+  };
 }

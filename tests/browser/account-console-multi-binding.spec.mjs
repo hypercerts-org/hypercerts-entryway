@@ -118,6 +118,9 @@ test("shared verified email keeps each tab and account action bound to its selec
     await expect(firstTab.getByTestId("account-did")).toHaveText(first.did);
     await expect(secondTab.getByTestId("account-did")).toHaveText(second.did);
 
+    // Deactivation is a protected page; its link and form keep the tab's DID.
+    await secondTab.getByRole("link", { name: "Deactivate account" }).click();
+    expect(new URL(secondTab.url()).searchParams.get("did")).toBe(second.did);
     const secondForm = statusForm(secondTab);
     await expect(secondForm).toHaveCount(1);
     const secondAction = await secondForm.getAttribute("action");

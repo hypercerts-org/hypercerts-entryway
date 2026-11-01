@@ -12,6 +12,7 @@ import {
   loadConnectedApps,
   renderConnectedApps,
   renderAppPasswords,
+  renderAppPasswordForm,
 } from "./features/connected-apps/page.mjs";
 import { createDeletionActions } from "./features/account-deletion/actions.mjs";
 import { renderLifecyclePanel } from "./features/account-deletion/page.mjs";
@@ -28,6 +29,7 @@ export function mountAccountUi(context) {
     loadConnections: (req, did) => loadConnectedApps(context, req, did),
     renderConnections: renderConnectedApps,
     renderAppPasswords,
+    renderAppPasswordForm,
     renderHandle: renderHandleForm,
     renderLifecycle: renderLifecyclePanel,
     renderMigration: renderMigrationPanel,

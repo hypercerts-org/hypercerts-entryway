@@ -2,10 +2,11 @@
 "hypercerts-entryway": minor
 ---
 
-Account settings now asks a user to confirm it's them in place instead of sending them back to sign in.
+Account settings now asks a user to confirm it's them by email code instead of sending them back to sign in.
 
-- Setting or removing a password, creating an app password, changing a recovery email, deactivating or reactivating the account or completing a data server migration on a session signed in more than ten minutes ago shows "Confirm it's you" and emails an eight-digit code to the primary email.
-- Entering the code continues the original change and covers further changes in that browser session for ten minutes.
+- Setting or removing a password, creating an app password, managing recovery emails and deactivating or reactivating the account are now buttons on the settings page. Each opens its own page; when the session signed in more than ten minutes ago, that page first shows "Confirm it's you" and emails an eight-digit code to the primary email on request.
+- Entering the code returns to the page the user opened and covers further changes in that browser session for ten minutes.
+- A protected change submitted after the ten minutes have passed, including completing a data server migration, is not made; the user confirms and makes the change again.
 - The code expires after ten minutes, allows five guesses, works only in the browser session that requested it and counts against the existing limit of five emailed codes per mailbox every ten minutes.
 - Email change, account deletion and requesting a data server migration no longer need a recent sign-in, because each flow already requires a code sent to the primary email.
 - Revoking an app password no longer needs a recent sign-in, matching the other revocations.
