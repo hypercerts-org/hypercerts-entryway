@@ -158,25 +158,3 @@ export function mountSignupRoutes({
     }),
   );
 }
-
-/** Rejects registration when a non-active account or saved intent belongs to someone else. */
-function assertRegistrationAcquirable(existing, savedIntent, ownerMatches) {
-  if (existing && existing.status !== "provisioning")
-    throw new HttpError(
-      409,
-      "AccountUnavailable",
-      "This account cannot be registered again",
-    );
-  if (savedIntent && !ownerMatches)
-    throw new HttpError(
-      403,
-      "AccountMismatch",
-      "This saved registration belongs to a different verified identity",
-    );
-  if (existing && (!savedIntent || !ownerMatches))
-    throw new HttpError(
-      403,
-      "AccountMismatch",
-      "This account setup cannot be acquired through email sign-in",
-    );
-}
