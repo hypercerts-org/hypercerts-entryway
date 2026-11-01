@@ -837,6 +837,21 @@ test("an unbound DID login_hint cannot turn verified email into a different sign
   assert.doesNotMatch(response.body, /Signup form/);
   assert.equal(f.cookies, 0);
   assert.equal(await f.db.get("fixture-device-accounts", "browser"), null);
+
+  // The page offers a way out: the same flow, so the request and restriction stay.
+  assert.match(response.body, /<form method="post" action="\/auth\/email">/);
+  assert.match(response.body, new RegExp(`name="flow" value="${f.flow.id}"`));
+  const retried = await f.request("/auth/email", {
+    email: "other@example.test",
+  });
+  assert.equal(retried.statusCode, 200);
+  const current = await f.db.get("auth-flows", f.flow.id);
+  assert.equal(current.email, "other@example.test");
+  assert.equal(current.requestUri, "request");
+  assert.equal(
+    current.parameters.login_hint,
+    "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
+  );
 });
 
 test("an existing unbound account gets a repair page instead of signup", async (t) => {
