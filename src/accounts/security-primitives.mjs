@@ -334,9 +334,9 @@ export function createSecurityPrimitives({
       async (proof) => {
         const now = Date.now();
         // The code and the confirmation change together. Confirmations that can
-        // no longer make a session recent are pruned on the way.
-        for (const { key, value } of await db.list(RECONFIRMED))
-          if (now - value.at > TEN_MINUTES) await db.delete(RECONFIRMED, key);
+        // no longer make a session recent are pruned by one statement, not by
+        // reading every row while this transaction holds the authority lock.
+        await db.deleteStateBefore(RECONFIRMED, "at", now - TEN_MINUTES);
         await db.set(RECONFIRMED, actor.sessionId, {
           userId: actor.userId,
           at: now,
