@@ -1931,9 +1931,18 @@ test("a confirmation code returns its page once, stores no code and records the 
     userId: f.login.user.id,
     at: Date.now() - 601_000,
   });
+  await f.db.set("account:reconfirm", "other-live-session", {
+    userId: f.login.user.id,
+    at: Date.now() - 1_000,
+  });
   const next = await beginConfirmation(f, stale);
   await f.security.completeReconfirm(stale, next.token);
   assert.equal(await f.db.get("account:reconfirm", "ended-session"), null);
+  assert.equal(
+    (await f.db.get("account:reconfirm", "other-live-session")).userId,
+    f.login.user.id,
+    "a confirmation that still makes its session recent is kept",
+  );
   assert.equal(
     (await f.db.get("account:reconfirm", stale.sessionId)).userId,
     f.login.user.id,
