@@ -43,7 +43,24 @@ export function createSignupForm({ db, config, accounts, fields }) {
       (await db.list("entryway:invites")).length
         ? `<label for="inviteCode">Invite code${config.inviteCodeRequired ? "" : " (optional)"}</label><input id="inviteCode" name="inviteCode" value="${escapeHtml(reservedInvite ?? "")}" ${config.inviteCodeRequired ? "required" : ""} ${reservedInvite ? "readonly" : ""}>`
         : "";
-    return `<p>${recoveryRequired ? "Your account setup is saved and waiting for operator recovery. Contact the service operator; retrying alone cannot resolve an uncertain server request. Your saved identity and data server will be preserved." : retry ? "Your account setup is unfinished. Retry the saved handle and data server." : "Your email is verified. Choose where your data will live."}</p><form method="post" action="/auth/account">${fields(flow, browser)}<label for="handle">Handle</label><input id="handle" name="handle" placeholder="${escapeHtml(config.publicHandles?.[0] ?? "alice.entryway.test")}" value="${escapeHtml(initialHandle)}" ${retry || hintedHandle ? "readonly" : ""} ${config.publicHandles ? 'list="public-handles"' : ""} required>${suggestions}<small>${handleHelp}</small><label for="pdsId">Personal data server</label><select id="pdsId" name="pdsId" ${retry ? "disabled" : ""}>${config.pds.map((p) => `<option value="${escapeHtml(p.id)}"${retry && p.id === pending.pdsId ? " selected" : ""}>${escapeHtml(p.id)} — ${escapeHtml(p.url)}</option>`).join("")}</select>${inviteInput}<button ${recoveryRequired ? "disabled" : ""}>${recoveryRequired ? "Waiting for operator recovery" : retry ? "Retry account setup" : "Create account"}</button></form>`;
+    let intro = "Your email is verified. Choose where your data will live.";
+    let submitLabel = "Create account";
+    if (recoveryRequired) {
+      intro =
+        "Your account setup is saved and waiting for operator recovery. Contact the service operator; retrying alone cannot resolve an uncertain server request. Your saved identity and data server will be preserved.";
+      submitLabel = "Waiting for operator recovery";
+    } else if (retry) {
+      intro =
+        "Your account setup is unfinished. Retry the saved handle and data server.";
+      submitLabel = "Retry account setup";
+    }
+    const pdsOptions = config.pds
+      .map((p) => {
+        const selected = retry && p.id === pending.pdsId ? " selected" : "";
+        return `<option value="${escapeHtml(p.id)}"${selected}>${escapeHtml(p.id)} — ${escapeHtml(p.url)}</option>`;
+      })
+      .join("");
+    return `<p>${intro}</p><form method="post" action="/auth/account">${fields(flow, browser)}<label for="handle">Handle</label><input id="handle" name="handle" placeholder="${escapeHtml(config.publicHandles?.[0] ?? "alice.entryway.test")}" value="${escapeHtml(initialHandle)}" ${retry || hintedHandle ? "readonly" : ""} ${config.publicHandles ? 'list="public-handles"' : ""} required>${suggestions}<small>${handleHelp}</small><label for="pdsId">Personal data server</label><select id="pdsId" name="pdsId" ${retry ? "disabled" : ""}>${pdsOptions}</select>${inviteInput}<button ${recoveryRequired ? "disabled" : ""}>${submitLabel}</button></form>`;
   };
   return signupForm;
 }
