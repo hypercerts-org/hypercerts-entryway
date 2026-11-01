@@ -11,8 +11,8 @@ import { hidden } from "./forms.mjs";
  */
 export const accountChooser = ({ accounts, action, fields, prompt }) =>
   `<p role="status">${escapeHtml(prompt)}</p>${accounts
-    .map(
-      ({ did, handle, status }) =>
-        `<div class="account"><strong>${escapeHtml(handle ?? did)}</strong><br><small>${escapeHtml(did)}${status ? ` · ${escapeHtml(status)}` : ""}</small><form method="post" action="${escapeHtml(action)}">${fields}${hidden("did", did)}<button>Continue with this account</button></form></div>`,
-    )
+    .map(({ did, handle, status }) => {
+      const statusSuffix = status ? " · " + escapeHtml(status) : "";
+      return `<div class="account"><strong>${escapeHtml(handle ?? did)}</strong><br><small>${escapeHtml(did)}${statusSuffix}</small><form method="post" action="${escapeHtml(action)}">${fields}${hidden("did", did)}<button>Continue with this account</button></form></div>`;
+    })
     .join("")}`;
