@@ -31,7 +31,9 @@ Matching local requests coalesce; changed public recovery custody is a conflict.
 Invite codes, passwords and proof secrets are excluded from request digests.
 
 The coordinator defaults to a 120-second execution lease and a 30-second renewal
-interval. Local scheduling retains ordered calls within one instance; database
+interval. `OPERATION_LEASE_MS` (5000 to 600000) overrides the lease; renewal then
+runs every 30 seconds or a quarter of the lease, whichever is shorter. A shorter
+lease lets recovery claim a crashed owner's operation sooner. Local scheduling retains ordered calls within one instance; database
 claims own exclusion between independent instances. Nested work must have the
 same operation, intent and already-bound resource. Named delegated account work
 may reuse its outer operation only for that admitted DID; another DID is rejected. Request digests describe only

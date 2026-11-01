@@ -31,13 +31,17 @@ filewait() {
   for i in {1..100}; do [[ -f $1 ]] && return; sleep 1; done
   echo "Checkpoint missing: $1" >&2; return 1
 }
+# before-pds proves recovery after the default 120-second lease; after-pds uses
+# a short configured lease for the same real crash, isolation and recovery.
 for mode in before-pds after-pds; do
   run="$(date -u +%Y%m%dt%H%M%Sz)-$mode"
+  lease_ms=120000
+  [[ "$mode" == after-pds ]] && lease_ms=15000
   prefix="$artifacts/crash-$run"
   active=true
   compose stop --timeout 10 entryway >/dev/null
   compose run -d --no-deps --use-aliases --name "$name" \
-    -e CRASH_PROBE_RUN="$run" -e CRASH_PROBE_MODE="$mode" \
+    -e CRASH_PROBE_RUN="$run" -e CRASH_PROBE_MODE="$mode" -e OPERATION_LEASE_MS="$lease_ms" \
     entryway node --import ./tests/support/crash-checkpoint.mjs dist/src/main.mjs >/dev/null
   health
   compose run --rm --no-deps --name "${project}-operational-browser" -e CRASH_PROBE_RUN="$run" -e CRASH_PROBE_MODE="$mode" \
@@ -62,7 +66,7 @@ for mode in before-pds after-pds; do
   compose exec -T entryway node --input-type=module -e 'import{writeFileSync}from"node:fs";writeFileSync(process.argv[1], "")' "/app/artifacts/crash-$run-restarted"
   filewait "$prefix-pending-ui.json"
   compose exec -T entryway node --input-type=module -e 'import{writeFileSync}from"node:fs";const [run,dispatcherId,upstreamId]=process.argv.slice(1);writeFileSync(`/app/artifacts/crash-${run}-isolation.json`,JSON.stringify({run,dispatcherId,dispatcherExit:137,dispatcherRemoved:true,upstreamId,upstreamStopped:true,upstreamRestarted:true,at:new Date().toISOString()}))' "$run" "$dispatcher_id" "$upstream_id"
-  compose exec -T entryway node tests/support/recover-crash-operation.mjs "$run" > "$artifacts/crash-$mode-recovery.log" 2>&1
+  compose exec -T -e CRASH_LEASE_MS="$lease_ms" entryway node tests/support/recover-crash-operation.mjs "$run" > "$artifacts/crash-$mode-recovery.log" 2>&1
   wait "$browser_pid"
   browser_pid=''
   cp "$prefix-result.json" "$artifacts/crash-$mode.json"
