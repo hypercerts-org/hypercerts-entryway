@@ -37,30 +37,68 @@ external_browser() { local phase=$1; compose run --rm --no-deps -e "EXTERNAL_PHA
 migration_command() { compose exec -T entryway node tests/support/external-migration.mjs "$@"; }
 case "$command" in
   fresh)
+    # Each group gets its own sandbox, so groups run in parallel without sharing
+    # state. Steps inside a group stay sequential because later steps read state
+    # earlier steps created (contracts and resilience read browser-made accounts)
+    # or stop and restart shared containers.
+    run_id="hypercerts-entryway-$(date +%s)-$$"
+    report_root="$root/tests/artifacts/$run_id"
+    mkdir -p "$report_root" "$root/tests/.runtime"
+    pids=() names=()
+    start_group() {
+      local name=$1; shift
+      SANDBOX_PROJECT="$run_id-$name" ACCEPTANCE_REPORT_DIR="$report_root/$name" \
+        "$root/tests/local.sh" fresh-group "$@" > "$report_root/$name.log" 2>&1 &
+      pids+=("$!") names+=("$name")
+      echo "Started $name (log: $report_root/$name.log)"
+    }
+    trap 'kill "${pids[@]}" 2>/dev/null; wait; exit 130' INT
+    trap 'kill "${pids[@]}" 2>/dev/null; wait; exit 143' TERM
+    start_group journeys browser contracts resilience
+    start_group migration migration interop-acceptance
+    start_group faults plc-recovery process-crash managed-recovery authority-drills
+    result=0
+    for i in "${!pids[@]}"; do
+      status=0
+      wait "${pids[$i]}" || status=$?
+      echo "${names[$i]}: exit $status"
+      (( status == 0 )) || result=1
+    done
+    echo "Run exit: $result; reports: $report_root"
+    exit "$result"
+    ;;
+  fresh-group)
+    # One disposable sandbox running the given steps in order, then removed.
+    shift
     temp=$(mktemp -d "$root/tests/.runtime/hypercerts-entryway-e2e.XXXXXX")
     export SANDBOX_CHECKOUT="$temp/atmosphereinabox"
-    export SANDBOX_PROJECT="hypercerts-entryway-$(date +%s)-$$"
-    export ACCEPTANCE_REPORT_DIR="$root/tests/artifacts/$SANDBOX_PROJECT"
     cleanup() {
       result=$?
       if (( result != 0 )) && [[ "${KEEP_FAILED_SANDBOX:-0}" == 1 ]]; then
         echo "Preserved project $SANDBOX_PROJECT at $temp" >&2
       else
-        if test -f "$SANDBOX_CHECKOUT/compose.yaml" && ! docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" down --volumes --remove-orphans; then
-          echo "Scoped cleanup failed; preserved $temp for project $SANDBOX_PROJECT" >&2
-          (( result != 0 )) || result=1
-          echo "Run exit: $result; reports: $ACCEPTANCE_REPORT_DIR"
-          exit "$result"
+        if test -f "$SANDBOX_CHECKOUT/compose.yaml"; then
+          if ! docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" down --volumes --remove-orphans; then
+            echo "Scoped cleanup failed; preserved $temp for project $SANDBOX_PROJECT" >&2
+            (( result != 0 )) || result=1
+            echo "Group exit: $result; reports: $ACCEPTANCE_REPORT_DIR"
+            exit "$result"
+          fi
         fi
         rm -rf -- "$temp"
       fi
-      echo "Run exit: $result; reports: $ACCEPTANCE_REPORT_DIR"
+      echo "Group exit: $result; reports: $ACCEPTANCE_REPORT_DIR"
       exit "$result"
     }
     trap cleanup EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    "$root/tests/local.sh" all
+    "$root/tests/local.sh" prepare
+    "$root/tests/local.sh" up
+    for step in "$@"; do
+      echo "== $step"
+      "$root/tests/local.sh" "$step"
+    done
     ;;
   prepare)
     if test -f state/manifest.json; then guard_project; fi
@@ -155,6 +193,14 @@ case "$command" in
     record_candidate interop-profile
     compose exec -T entryway node tests/support/interop-profile-probe.mjs > "$artifacts/interop-profile.json"
     ;;
+  interop-acceptance)
+    require_state
+    # Profile remains exit 2; record and assert exactly the predeclared product gap.
+    profile_status=0
+    "$root/tests/local.sh" interop-profile || profile_status=$?
+    printf '%s\n' "$profile_status" > "$artifacts/interop-profile-exit.txt"
+    compose run --rm --no-deps test node tests/support/assert-interop-profile.mjs /app/artifacts/interop-profile.json "$profile_status" /app/artifacts/interop-profile-acceptance.json
+    ;;
   plc-recovery|process-crash|managed-recovery|authority-drills)
     require_state
     bash "$root/tests/support/run-$command.sh"
@@ -165,11 +211,7 @@ case "$command" in
     "$root/tests/local.sh" browser
     "$root/tests/local.sh" contracts
     "$root/tests/local.sh" migration
-    # Profile remains exit 2; record and assert exactly the predeclared product gap.
-    profile_status=0
-    "$root/tests/local.sh" interop-profile || profile_status=$?
-    printf '%s\n' "$profile_status" > "$artifacts/interop-profile-exit.txt"
-    compose run --rm --no-deps test node tests/support/assert-interop-profile.mjs /app/artifacts/interop-profile.json "$profile_status" /app/artifacts/interop-profile-acceptance.json
+    "$root/tests/local.sh" interop-acceptance
     "$root/tests/local.sh" plc-recovery
     "$root/tests/local.sh" process-crash
     "$root/tests/local.sh" managed-recovery
@@ -185,7 +227,7 @@ case "$command" in
     deno task sandbox status
     ;;
   *)
-    echo 'Usage: ./tests/local.sh fresh|prepare|up|browser|contracts|database-contracts|database-profile|resilience-profiles|migration|migration-resume|reverify|interop-profile|plc-recovery|process-crash|managed-recovery|authority-drills|resilience|all|status|down'
+    echo 'Usage: ./tests/local.sh fresh|fresh-group <steps...>|prepare|up|browser|contracts|database-contracts|database-profile|resilience-profiles|migration|migration-resume|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience|all|status|down'
     echo 'all requires a fresh project fixture; down retains state and volumes. No implicit reset.'
     ;;
 esac
