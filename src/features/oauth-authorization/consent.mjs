@@ -29,18 +29,16 @@ export function createConsent({
         (await clientRequestsSignupConsentSkip(flow.clientId)) !== true
       )
         return null;
-      return {
-        client,
-        request: await provider.requestManager.get(
-          flow.requestUri,
-          browser.deviceId,
-          flow.clientId,
-        ),
-        deviceAccount: await provider.accountManager.getDeviceAccount(
-          browser.deviceId,
-          did,
-        ),
-      };
+      const request = await provider.requestManager.get(
+        flow.requestUri,
+        browser.deviceId,
+        flow.clientId,
+      );
+      const deviceAccount = await provider.accountManager.getDeviceAccount(
+        browser.deviceId,
+        did,
+      );
+      return deviceAccount ? { client, request, deviceAccount } : null;
     } catch {
       return null;
     }

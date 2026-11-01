@@ -9,7 +9,13 @@ const did = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
 
 async function fixture(
   t,
-  { trusted = true, clientOptsIn = true, failing, prompt } = {},
+  {
+    trusted = true,
+    clientOptsIn = true,
+    deviceAccountMissing = false,
+    failing,
+    prompt,
+  } = {},
 ) {
   let failed;
   const failIf = (lookup) => {
@@ -59,7 +65,9 @@ async function fixture(
       async upsertDeviceAccount() {},
       async getDeviceAccount() {
         failIf("device-account lookup");
-        return { account, authorizedClients: new Map() };
+        return deviceAccountMissing
+          ? null
+          : { account, authorizedClients: new Map() };
       },
       async setAuthorizedClient(_account, client, data) {
         grants.push({ clientId: client.id, ...data });
@@ -169,6 +177,7 @@ test("prompt=consent does not override a trusted client's signup opt-in (ePDS pa
 for (const [name, options] of [
   ["the client is not on the trusted list", { trusted: false }],
   ["the client metadata does not opt in", { clientOptsIn: false }],
+  ["the browser has no device account for it", { deviceAccountMissing: true }],
 ]) {
   test(`a new account sees consent when ${name}`, async (t) => {
     const f = await fixture(t, options);
