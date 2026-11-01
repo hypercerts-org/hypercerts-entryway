@@ -3,6 +3,10 @@ import { FLOW_LIFETIME } from "../../http/browser-flow.mjs";
 import { escapeHtml } from "../../ui/html.mjs";
 import { hidden } from "../../ui/forms.mjs";
 import { authorizationRedirect } from "./redirect.mjs";
+import {
+  completeAuthorization,
+  flowBindsAnotherAccount,
+} from "./complete-authorization.mjs";
 import { matchesAuthorizationHint } from "../../accounts/rules.js";
 export function mountAuthorizationRoutes({
   app,
@@ -16,7 +20,6 @@ export function mountAuthorizationRoutes({
   const {
     newFlow,
     getFlow,
-    refreshFlow,
     loadBrowser,
     fields,
     checkCsrf,
@@ -269,9 +272,6 @@ export function mountAuthorizationRoutes({
       if (req.body.decision !== "approve")
         throw new InvalidRequestError("Choose whether to allow access");
       const did = String(req.body.did ?? "");
-      const bindsAnotherAccount = (current) =>
-        ((current.authEmail || current.authDid) && current.authDid !== did) ||
-        (request.parameters.prompt === "login" && current.authDid !== did);
       const session = await provider.accountManager.getDeviceAccount(
         browser.deviceId,
         did,
@@ -284,39 +284,21 @@ export function mountAuthorizationRoutes({
           request.parameters.login_hint,
         ) ||
         provider.checkLoginRequired(session) ||
-        bindsAnotherAccount(flow)
+        flowBindsAnotherAccount(flow, did, request)
       )
         throw new InvalidRequestError("Sign in to this account first");
       const client = await provider.clientManager.getClient(flow.clientId);
-      // The lookups above yield, so /auth/select may have bound another account
-      // since this flow was read. Re-read and delete it in one transaction: either
-      // the approved DID is still the bound one and this request owns the flow,
-      // or the approval fails. Later writers fail because the flow is gone.
-      await db.transact(async () => {
-        if (bindsAnotherAccount(await refreshFlow(flow, browser)))
-          throw new InvalidRequestError("Sign in to this account first");
-        await db.delete("auth-flows", flow.id);
+      await completeAuthorization({
+        db,
+        config,
+        provider,
+        res,
+        flow,
+        browser,
+        client,
+        request,
+        deviceAccount: session,
       });
-      const code = await provider.requestManager.setAuthorized(
-        flow.requestUri,
-        client,
-        session.account,
-        browser.deviceId,
-        browser.deviceMetadata,
-      );
-      const granted = new Set(
-        session.authorizedClients.get(flow.clientId)?.authorizedScopes ?? [],
-      );
-      for (const scope of request.parameters.scope?.split(" ") ?? [])
-        granted.add(scope);
-      await provider.accountManager.setAuthorizedClient(
-        session.account,
-        client,
-        {
-          authorizedScopes: [...granted],
-        },
-      );
-      authorizationRedirect(res, config.issuer, request.parameters, { code });
     }),
   );
 }
