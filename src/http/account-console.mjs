@@ -172,8 +172,10 @@ export function createAccountConsole({
     "device-revoke",
     "app-password-revoke",
   ];
-  // These already require a code sent to the primary email before anything
-  // changes, which is the same proof a confirmation would ask for.
+  // These flows already require a code sent to the primary email before
+  // anything changes, which is the same proof a confirmation would ask for.
+  // migration-confirm stays gated: it contacts the target PDS before it checks
+  // the migration code, and continuing a saved migration checks no code.
   const ownMailboxCode = [
     "email-request",
     "email-update",
@@ -181,7 +183,6 @@ export function createAccountConsole({
     "delete",
     "delete-confirm",
     "migration-request",
-    "migration-confirm",
   ];
   // An OAuth app with the handle permission can already change it without one.
   const publicIdentity = ["handle"];
@@ -208,7 +209,7 @@ export function createAccountConsole({
     const sentTo = `<strong>${esc(ctx.account.email)}</strong>`;
     const message = resent
       ? `We sent a new code to ${sentTo}. The earlier code no longer works. This one expires in ten minutes.`
-      : `For your security, changes to account security or identity settings need a recent confirmation. We sent a code to ${sentTo}. Enter it to continue; it expires in ten minutes.`;
+      : `For your security, changes to account security settings need a recent confirmation. We sent a code to ${sentTo}. Enter it to continue; it expires in ten minutes.`;
     const alert = error ? `<p role="alert">${esc(error)}</p>` : "";
     return page(
       res,
@@ -298,7 +299,7 @@ export function createAccountConsole({
         throw new HttpError(
           403,
           "ReauthenticationRequired",
-          "Confirm it's you again before changing account security or identity settings.",
+          "Confirm it's you again before changing account security settings.",
         );
       return await askToConfirm({ action, ctx, req, res });
     }

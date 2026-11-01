@@ -1873,10 +1873,19 @@ test("a browser session is recent for ten minutes after sign-in or an in-place c
       false,
     );
   // Direct callers keep the same refusal and error code; nothing is bypassed.
+  // For password changes it is the only check, since no current password is asked.
   await assert.rejects(
     f.security.requestBackupEmail(stale, { email: "backup@example.com" }),
     { status: 403, error: "ReauthenticationRequired" },
   );
+  await assert.rejects(
+    f.security.setPassword(stale, { password: "a stale replacement password" }),
+    { status: 403, error: "ReauthenticationRequired" },
+  );
+  await assert.rejects(f.security.removePassword(stale), {
+    status: 403,
+    error: "ReauthenticationRequired",
+  });
 
   const { token } = await beginConfirmation(f, stale);
   assert.equal(
@@ -2002,7 +2011,7 @@ test("a saved action is unusable once its code is used, superseded or expired", 
   await beginConfirmation(
     f,
     bob,
-    { did: f.bob.did, action: "email-request", fields: {} },
+    { did: f.bob.did, action: "backup-request", fields: {} },
     f.bob.email,
   );
   assert.deepEqual(
@@ -2106,7 +2115,7 @@ test("another session or person is told nothing about an expired or swept code",
   await beginConfirmation(
     f,
     bob,
-    { did: f.bob.did, action: "email-request", fields: {} },
+    { did: f.bob.did, action: "backup-request", fields: {} },
     f.bob.email,
   );
   assert.deepEqual(await challengeData(f, challengeId), spentData(stale));
@@ -2254,7 +2263,7 @@ test("a confirmation code belongs to its account when a verified email is shared
   // other, and the saved action cannot be moved between them.
   const theirs = await beginConfirmation(f, siblingActor, {
     did: sibling.did,
-    action: "email-request",
+    action: "backup-request",
     fields: {},
   });
   const graft = (await challengeData(f, ours.challengeId)).sealed;
