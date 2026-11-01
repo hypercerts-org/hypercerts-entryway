@@ -272,20 +272,18 @@ schema or persistent selection state is added.
 
 Sensitive account-console actions need a recent browser session: one that signed
 in, or last confirmed it's you, within ten minutes (`isRecent` in the shared
-security primitives). Anything not exempted in `noRecentLogin` counts as
-sensitive.
+security primitives). Every action needs one unless `noRecentLogin` exempts it,
+so a new action is protected by default.
 
-| Needs a recent session                                            | Never asks                                      |
-| ----------------------------------------------------------------- | ----------------------------------------------- |
-| Email: `email-request`, `email-update`, `email-confirm`           | Viewing settings                                |
-| Backup email: `backup-request`, `backup-confirm`, `backup-remove` | `revoke`, `grant-revoke`                        |
-| Password: `password-set`, `password-remove`                       | `oauth-session-revoke`, `legacy-session-revoke` |
-| Handle: `handle`                                                  | `browser-session-revoke`, `browsers-revoke`     |
-| App passwords: `app-password-create`, `app-password-revoke`       | `device-revoke`                                 |
-| Migration: `migration-request`, `migration-confirm`               |                                                 |
-| Deletion: `delete`, `delete-confirm`                              |                                                 |
+| Rule                   | Actions                                                                                                                                                                                    | Why                                                                                                           |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| Needs a recent session | `password-set`, `password-remove`, `app-password-create`, `backup-request`, `backup-confirm`, `backup-remove`                                                                              | No proof of their own. A backup email can recover the account, and an app password is a long-lived credential |
+| Own primary-email code | `email-request`, `email-update`, `email-confirm`, `delete`, `delete-confirm`, `migration-request`, `migration-confirm`                                                                     | Each already needs a code sent to the primary email, the same proof a confirmation asks for                   |
+| Never asks             | Viewing settings, `handle`, `revoke`, `grant-revoke`, `oauth-session-revoke`, `legacy-session-revoke`, `browser-session-revoke`, `browsers-revoke`, `device-revoke`, `app-password-revoke` | Revocations only reduce access; an OAuth app with the handle permission can already change the handle         |
 
-Revocations are exempt because they only reduce access.
+Changing or removing a password does not ask for the current password: a
+passwordless account has none, and the recent session is the proof. Deletion
+still asks for the password of an account that has one.
 
 When the session is not recent, the console does not redirect to `/login`. It
 answers the original POST with a "Confirm it's you" page and emails a one-use

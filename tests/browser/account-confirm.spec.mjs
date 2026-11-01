@@ -22,13 +22,13 @@ const owner = {
   handle: `confirm-${run}.entryway.atmosbox.test`,
   pdsId: "pds1",
 };
-const nextEmail = `confirmed-${run}@example.com`;
+const backupEmail = `confirm-backup-${run}@example.com`;
 const midFlow = {
   email: `midflow-${run}@example.com`,
   handle: `midflow-${run}.entryway.atmosbox.test`,
   pdsId: "pds2",
 };
-const midFlowNextEmail = `midflow-changed-${run}@example.com`;
+const midFlowBackupEmail = `midflow-backup-${run}@example.com`;
 
 const accountForm = (page, action) =>
   page.locator(`form[action="/account/${action}"]`);
@@ -112,16 +112,29 @@ test("a session signed in more than ten minutes ago confirms it's you in place a
       page.getByRole("heading", { name: "Account settings", exact: true }),
     ).toBeVisible();
 
+    // An email change already sends its own code to the primary email, so it
+    // goes straight to that step without a separate confirmation.
+    const emailStep = posted(page, "/account/email-request");
+    await accountForm(page, "email-request").getByRole("button").click();
+    expect((await emailStep).status()).toBe(200);
+    await expect(
+      page.getByRole("heading", { name: "Verify current email" }),
+    ).toBeVisible();
+    await page.goto(new URL("/account", config.issuer).href);
+
     // A protected action asks for a code on the same request: no redirect to
     // sign in, no 403.
     const confirmSince = Date.now();
-    const prompt = posted(page, "/account/email-request");
-    await accountForm(page, "email-request").getByRole("button").click();
+    const prompt = posted(page, "/account/backup-request");
+    await accountForm(page, "backup-request")
+      .getByLabel("Recovery email address")
+      .fill(backupEmail);
+    await accountForm(page, "backup-request").getByRole("button").click();
     expect((await prompt).status()).toBe(200);
     await expect(
       page.getByRole("heading", { name: "Confirm it's you" }),
     ).toBeVisible();
-    expect(new URL(page.url()).pathname).toBe("/account/email-request");
+    expect(new URL(page.url()).pathname).toBe("/account/backup-request");
     await expect(
       page.locator("strong", { hasText: owner.email }),
     ).toBeVisible();
@@ -142,7 +155,7 @@ test("a session signed in more than ten minutes ago confirms it's you in place a
     try {
       const otherPage = await otherContext.newPage();
       await signIn(otherPage, owner);
-      const form = accountForm(otherPage, "email-request");
+      const form = accountForm(otherPage, "backup-request");
       const foreign = await otherPage.request.post(
         new URL("/account/confirm", config.issuer).href,
         {
@@ -176,48 +189,38 @@ test("a session signed in more than ten minutes ago confirms it's you in place a
     ).toBeVisible();
 
     // The other session's attempt and the wrong guess did not consume or
-    // supersede the owner's code: it still continues the original action, here
-    // the current-email code the email change would have sent without the
-    // confirmation step.
-    const currentSince = Date.now();
+    // supersede the owner's code: it still continues the original action, which
+    // sends the recovery address its verification code.
+    const backupSince = Date.now();
     await page.getByLabel("Confirmation code").fill(first.code);
     const confirmed = posted(page, "/account/confirm");
     await page.getByRole("button", { name: "Confirm and continue" }).click();
     expect((await confirmed).status()).toBe(200);
     await expect(
-      page.getByRole("heading", { name: "Verify current email" }),
+      page.getByRole("heading", { name: "Verify recovery email" }),
     ).toBeVisible();
-    const current = await waitForMailpitCode({
-      recipient: owner.email,
-      since: currentSince,
-      excludeIds: [first.messageId],
+    const backup = await waitForMailpitCode({
+      recipient: backupEmail,
+      since: backupSince,
     });
-    expect(await mailText(current.messageId)).toContain(
-      "to confirm your current email.",
+    expect(await mailText(backup.messageId)).toContain(
+      "to verify your recovery email.",
     );
 
     // The confirmation covers the next protected step for ten minutes.
-    const newSince = Date.now();
-    await page.getByLabel("Current email verification code").fill(current.code);
-    await page.getByLabel("New primary email", { exact: true }).fill(nextEmail);
-    const update = posted(page, "/account/email-update");
-    await accountForm(page, "email-update").getByRole("button").click();
-    expect((await update).status()).toBe(200);
-    await expect(
-      page.getByRole("heading", { name: "Verify new email", exact: true }),
-    ).toBeVisible();
-    const destination = await waitForMailpitCode({
-      recipient: nextEmail,
-      since: newSince,
-    });
-    expect(destination.code).toMatch(/^\d{8}$/);
+    await page.getByLabel("Recovery email verification code").fill(backup.code);
+    const verified = posted(page, "/account/backup-confirm");
+    await accountForm(page, "backup-confirm").getByRole("button").click();
+    expect((await verified).status()).toBe(303);
+    await expect(page.locator("#recovery")).toContainText(backupEmail);
+    await expect(page.locator("#recovery")).toContainText("Verified");
 
     // A used code and its saved action cannot be replayed.
     const replayForm = await page.request.post(
       new URL("/account/confirm", config.issuer).href,
       {
         form: {
-          csrf: await accountForm(page, "email-confirm")
+          csrf: await accountForm(page, "backup-request")
             .locator('input[name="csrf"]')
             .inputValue(),
           did: owner.did,
@@ -235,7 +238,7 @@ test("a session signed in more than ten minutes ago confirms it's you in place a
   }
 });
 
-test("an email change interrupted by the ten-minute window resumes with its own mailbox codes after confirming", async ({
+test("a recovery email interrupted by the ten-minute window resumes with its own mailbox code after confirming", async ({
   browser,
 }) => {
   const context = await browser.newContext({ ignoreHTTPSErrors: false });
@@ -243,27 +246,27 @@ test("an email change interrupted by the ten-minute window resumes with its own 
   try {
     await signIn(page, midFlow, { create: true });
 
-    // The first step runs while the session is fresh and mails the current-email
-    // code.
-    const currentSince = Date.now();
-    await accountForm(page, "email-request").getByRole("button").click();
+    // The first step runs while the session is fresh and mails the recovery
+    // address its code.
+    const backupSince = Date.now();
+    await accountForm(page, "backup-request")
+      .getByLabel("Recovery email address")
+      .fill(midFlowBackupEmail);
+    await accountForm(page, "backup-request").getByRole("button").click();
     await expect(
-      page.getByRole("heading", { name: "Verify current email" }),
+      page.getByRole("heading", { name: "Verify recovery email" }),
     ).toBeVisible();
-    const current = await waitForMailpitCode({
-      recipient: midFlow.email,
-      since: currentSince,
+    const backup = await waitForMailpitCode({
+      recipient: midFlowBackupEmail,
+      since: backupSince,
     });
 
     // The window passes before the second step is submitted.
     ageSessions(midFlow.email, 11);
-    await page.getByLabel("Current email verification code").fill(current.code);
-    await page
-      .getByLabel("New primary email", { exact: true })
-      .fill(midFlowNextEmail);
+    await page.getByLabel("Recovery email verification code").fill(backup.code);
     const confirmSince = Date.now();
-    const prompt = posted(page, "/account/email-update");
-    await accountForm(page, "email-update").getByRole("button").click();
+    const prompt = posted(page, "/account/backup-confirm");
+    await accountForm(page, "backup-confirm").getByRole("button").click();
     expect((await prompt).status()).toBe(200);
     await expect(
       page.getByRole("heading", { name: "Confirm it's you" }),
@@ -271,7 +274,6 @@ test("an email change interrupted by the ten-minute window resumes with its own 
     const first = await waitForMailpitCode({
       recipient: midFlow.email,
       since: confirmSince,
-      excludeIds: [current.messageId],
     });
 
     // A new code replaces the first one, which then stops working.
@@ -281,7 +283,7 @@ test("an email change interrupted by the ten-minute window resumes with its own 
     const second = await waitForMailpitCode({
       recipient: midFlow.email,
       since: resendSince,
-      excludeIds: [current.messageId, first.messageId],
+      excludeIds: [first.messageId],
     });
     await page.getByLabel("Confirmation code").fill(first.code);
     const superseded = posted(page, "/account/confirm");
@@ -291,23 +293,14 @@ test("an email change interrupted by the ten-minute window resumes with its own 
       "Invalid or already used token",
     );
 
-    // The saved step replays with the code and address typed before the prompt,
-    // not with the confirmation code, and the change then completes normally.
-    const newSince = Date.now();
+    // The saved step replays with the recovery code typed before the prompt, not
+    // with the confirmation code, and the recovery email is then verified.
     await page.getByLabel("Confirmation code").fill(second.code);
+    const replayed = posted(page, "/account/confirm");
     await page.getByRole("button", { name: "Confirm and continue" }).click();
-    await expect(
-      page.getByRole("heading", { name: "Verify new email", exact: true }),
-    ).toBeVisible();
-    const destination = await waitForMailpitCode({
-      recipient: midFlowNextEmail,
-      since: newSince,
-    });
-    await page.getByLabel("New email verification code").fill(destination.code);
-    await accountForm(page, "email-confirm").getByRole("button").click();
-    await expect(
-      page.getByRole("heading", { name: "Primary email updated" }),
-    ).toBeVisible();
+    expect((await replayed).status()).toBe(303);
+    await expect(page.locator("#recovery")).toContainText(midFlowBackupEmail);
+    await expect(page.locator("#recovery")).toContainText("Verified");
   } finally {
     await context.close();
   }

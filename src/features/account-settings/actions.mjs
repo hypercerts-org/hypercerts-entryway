@@ -140,7 +140,6 @@ export function createAccountSettingsActions({
 
       await security.setPassword(principal, {
         password: String(req.body.password ?? ""),
-        currentPassword: String(req.body.currentPassword ?? "") || undefined,
       });
       return page(
         res,
@@ -148,12 +147,10 @@ export function createAccountSettingsActions({
         `<p>Your password was updated. Existing sessions and app passwords were revoked.</p><a href="/login">Sign in again</a><p><a href="${accountContext?.did ? accountUrl(accountContext.did) : "/account"}">Return to account settings</a></p>`,
       );
     },
-    "password-remove": async ({ req, res, principal, accountContext }) => {
+    "password-remove": async ({ res, principal, accountContext }) => {
       console.needed();
 
-      await security.removePassword(principal, {
-        currentPassword: String(req.body.currentPassword ?? "") || undefined,
-      });
+      await security.removePassword(principal);
       return page(
         res,
         "Account password removed",

@@ -159,7 +159,10 @@ export function createAccountConsole({
         "Account security is not available yet. Try again shortly.",
       );
   };
-  const noRecentLogin = new Set([
+  // Every action needs a recent session unless it is listed here, so a new
+  // action is protected until someone decides otherwise. Keep the reason with it.
+  // Revocations only reduce access.
+  const revocations = [
     "revoke",
     "grant-revoke",
     "oauth-session-revoke",
@@ -167,6 +170,25 @@ export function createAccountConsole({
     "browser-session-revoke",
     "browsers-revoke",
     "device-revoke",
+    "app-password-revoke",
+  ];
+  // These already require a code sent to the primary email before anything
+  // changes, which is the same proof a confirmation would ask for.
+  const ownMailboxCode = [
+    "email-request",
+    "email-update",
+    "email-confirm",
+    "delete",
+    "delete-confirm",
+    "migration-request",
+    "migration-confirm",
+  ];
+  // An OAuth app with the handle permission can already change it without one.
+  const publicIdentity = ["handle"];
+  const noRecentLogin = new Set([
+    ...revocations,
+    ...ownMailboxCode,
+    ...publicIdentity,
   ]);
   // Every mounted action by name, so a confirmed action can be replayed.
   const actionHandlers = new Map();

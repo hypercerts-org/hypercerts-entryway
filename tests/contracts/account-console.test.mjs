@@ -6,6 +6,33 @@ import { createAccountConsole } from "../../dist/src/http/account-console.mjs";
 import { HttpError } from "../../dist/src/http/http-error.mjs";
 
 const didA = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+// Actions that never ask a stale session to confirm: revocations, actions that
+// send their own code to the primary email, and the handle.
+const exemptActions = [
+  "grant-revoke",
+  "oauth-session-revoke",
+  "legacy-session-revoke",
+  "browser-session-revoke",
+  "browsers-revoke",
+  "device-revoke",
+  "app-password-revoke",
+  "email-request",
+  "email-update",
+  "email-confirm",
+  "delete",
+  "delete-confirm",
+  "migration-request",
+  "migration-confirm",
+  "handle",
+];
+// Actions with no proof of their own (backup-request and backup-confirm are
+// mounted separately below).
+const gatedActions = [
+  "password-set",
+  "password-remove",
+  "app-password-create",
+  "backup-remove",
+];
 const didB = "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb";
 const csrf = "browser-csrf-value";
 const origin = "https://entryway.example.test";
@@ -32,6 +59,7 @@ function fixture({ authenticatedAt = new Date() } = {}) {
   ];
   const routes = new Map();
   const mutations = [];
+  const ran = [];
   const requests = [];
   const proofs = [];
   const reconfirmations = [];
@@ -197,10 +225,19 @@ function fixture({ authenticatedAt = new Date() } = {}) {
     renderLifecycle: () => "",
     renderMigration: () => "",
   });
+  // Stand-ins for real console actions, so the recent-session policy is checked
+  // by action name; each records only that it ran.
+  const policyActions = Object.fromEntries(
+    [...exemptActions, ...gatedActions].map((name) => [
+      name,
+      async () => ran.push(name),
+    ]),
+  );
   console.mountActions({
+    ...policyActions,
     revoke: async ({ account: selected }) => mutations.push(selected.did),
     // A protected action reading its input both ways handlers do today.
-    "email-request": async ({ account: selected, req, value }) => {
+    "backup-request": async ({ account: selected, req, value }) => {
       requests.push({
         did: selected.did,
         email: value("email"),
@@ -209,7 +246,7 @@ function fixture({ authenticatedAt = new Date() } = {}) {
     },
     // A mailbox-code step: its own challengeId and token fields share names with
     // the confirmation form's.
-    "email-update": async ({ account: selected, value, token }) => {
+    "backup-confirm": async ({ account: selected, value, token }) => {
       proofs.push({
         did: selected.did,
         challengeId: value("challengeId"),
@@ -303,6 +340,7 @@ function fixture({ authenticatedAt = new Date() } = {}) {
       postRoute("POST /account/:action", { action }, input),
     postConfirm: (input) => postRoute("POST /account/confirm", {}, input),
     mutations,
+    ran,
     requests,
     proofs,
     reconfirmations,
@@ -479,7 +517,7 @@ const saved = (f) =>
 test("a stale session is asked to confirm it's you on the same request, then the saved action continues", async () => {
   const f = fixture({ authenticatedAt: minutesAgo(11) });
 
-  const prompted = await f.postAction("email-request", {
+  const prompted = await f.postAction("backup-request", {
     did: didA,
     body: typed,
   });
@@ -497,7 +535,7 @@ test("a stale session is asked to confirm it's you on the same request, then the
     "the saved fields are never echoed",
   );
   assert.deepEqual(saved(f), [
-    { action: "email-request", did: didA, fields: typed },
+    { action: "backup-request", did: didA, fields: typed },
   ]);
   assert.deepEqual(f.requests, [], "the action waits for the code");
 
@@ -520,7 +558,7 @@ test("a stale session is asked to confirm it's you on the same request, then the
   assert.deepEqual(f.requests, [{ did: didA, ...typed }]);
 
   // The confirmation covers the next protected action without another prompt.
-  const later = await f.postAction("email-request", {
+  const later = await f.postAction("backup-request", {
     did: didA,
     body: { email: "again@example.test" },
   });
@@ -531,7 +569,7 @@ test("a stale session is asked to confirm it's you on the same request, then the
 
 test("fresh sessions and actions that never needed a recent sign-in are not asked to confirm", async () => {
   const fresh = fixture();
-  const run = await fresh.postAction("email-request", {
+  const run = await fresh.postAction("backup-request", {
     did: didA,
     body: typed,
   });
@@ -548,9 +586,24 @@ test("fresh sessions and actions that never needed a recent sign-in are not aske
   assert.deepEqual(stale.reconfirmations, []);
 });
 
+test("a stale session confirms only actions without their own proof", async () => {
+  const stale = fixture({ authenticatedAt: minutesAgo(11) });
+  for (const action of exemptActions) {
+    const res = await stale.postAction(action, { did: didA });
+    assert.equal(res.statusCode, 303, action);
+  }
+  assert.deepEqual(stale.ran, exemptActions);
+  for (const action of gatedActions) {
+    const res = await stale.postAction(action, { did: didA });
+    assert.match(res.body, /<h1>Confirm it&#39;s you<\/h1>/, action);
+  }
+  assert.deepEqual(stale.ran, exemptActions, "gated actions wait for the code");
+  assert.equal(stale.reconfirmations.length, gatedActions.length);
+});
+
 test("Send a new code re-issues the same saved action and a refusal keeps the earlier code", async () => {
   const f = fixture({ authenticatedAt: minutesAgo(11) });
-  const prompted = await f.postAction("email-request", {
+  const prompted = await f.postAction("backup-request", {
     did: didA,
     body: typed,
   });
@@ -592,7 +645,7 @@ test("Send a new code re-issues the same saved action and a refusal keeps the ea
 
 test("the confirmation form needs the console's CSRF token and selected account", async () => {
   const f = fixture({ authenticatedAt: minutesAgo(11) });
-  const prompted = await f.postAction("email-request", {
+  const prompted = await f.postAction("backup-request", {
     did: didA,
     body: typed,
   });
@@ -626,7 +679,7 @@ test("a saved action whose confirmation does not count fails instead of promptin
   const prompt = async () =>
     hiddenValue(
       (
-        await f.postAction("email-request", {
+        await f.postAction("backup-request", {
           did: didA,
           body: typed,
         })
@@ -649,7 +702,7 @@ test("a saved action whose confirmation does not count fails instead of promptin
 
 test("a mailbox-code step replays its own code and selector, not the confirmation form's", async () => {
   const f = fixture({ authenticatedAt: minutesAgo(11) });
-  const prompted = await f.postAction("email-update", {
+  const prompted = await f.postAction("backup-confirm", {
     did: didA,
     body: { challengeId: "mailbox-challenge", token: "87654321" },
   });
@@ -692,7 +745,7 @@ const assertEnded = (
 
 test("an expired code ends the confirmation page without a way to retry or sign in", async () => {
   const f = fixture({ authenticatedAt: minutesAgo(11) });
-  const prompted = await f.postAction("email-request", {
+  const prompted = await f.postAction("backup-request", {
     did: didA,
     body: typed,
   });
@@ -733,7 +786,7 @@ test("an expired code ends the confirmation page without a way to retry or sign 
 
 test("re-sending a used, superseded or voided code ends the page without a sign-in link", async () => {
   const f = fixture({ authenticatedAt: minutesAgo(11) });
-  const prompted = await f.postAction("email-request", {
+  const prompted = await f.postAction("backup-request", {
     did: didA,
     body: typed,
   });
@@ -769,13 +822,16 @@ test("a refused confirmation code explains the rate limit and offers a plain sig
       "Too many attempts; try again later",
     ),
   );
-  assertEnded(await f.postAction("email-request", { did: didA, body: typed }), {
-    status: 429,
-    heading: "Too many codes requested",
-    message:
-      "Too many codes were requested for this email address. Try again in a few minutes.",
-    did: didA,
-    signIn: true,
-  });
+  assertEnded(
+    await f.postAction("backup-request", { did: didA, body: typed }),
+    {
+      status: 429,
+      heading: "Too many codes requested",
+      message:
+        "Too many codes were requested for this email address. Try again in a few minutes.",
+      did: didA,
+      signIn: true,
+    },
+  );
   assert.deepEqual(f.requests, []);
 });
