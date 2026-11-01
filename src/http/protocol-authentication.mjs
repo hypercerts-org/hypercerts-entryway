@@ -38,11 +38,11 @@ export const phaseOneUnsupported = [
 ];
 export const unsupported = [];
 
-const plcMethods = [
+const plcMethods = new Set([
   "requestPlcOperationSignature",
   "signPlcOperation",
   "submitPlcOperation",
-];
+]);
 
 /**
  * Decides whether an OAuth credential may call an account method Entryway
@@ -60,8 +60,7 @@ export function refuseOAuthAccountMethod(method, permissions) {
   try {
     if (method === "updateHandle")
       permissions.assertIdentity({ attr: "handle" });
-    else if (plcMethods.includes(method))
-      permissions.assertIdentity({ attr: "*" });
+    else if (plcMethods.has(method)) permissions.assertIdentity({ attr: "*" });
     else if (["requestEmailConfirmation", "confirmEmail"].includes(method))
       permissions.assertAccount({ attr: "email", action: "manage" });
     else
