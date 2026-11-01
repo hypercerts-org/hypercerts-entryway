@@ -4,11 +4,17 @@ import { createAccountAccess } from "../../dist/src/accounts/account-access.mjs"
 import { mountAccountSettingsPage } from "../../dist/src/features/account-settings/page.mjs";
 import { createAccountConsole } from "../../dist/src/http/account-console.mjs";
 import { HttpError } from "../../dist/src/http/http-error.mjs";
+import { createAccountSettingsActions } from "../../dist/src/features/account-settings/actions.mjs";
+import { createConnectedAppsActions } from "../../dist/src/features/connected-apps/actions.mjs";
+import { createDeletionActions } from "../../dist/src/features/account-deletion/actions.mjs";
+import { createMigrationActions } from "../../dist/src/features/pds-migration/actions.mjs";
+import { createHandleActions } from "../../dist/src/features/handle-change/actions.mjs";
 
 const didA = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
-// Actions that never ask a stale session to confirm: revocations, actions that
-// send their own code to the primary email, and the handle.
+// Actions that never ask a stale session to confirm: revocations, flows that
+// require their own primary-email code, and the handle.
 const exemptActions = [
+  "revoke",
   "grant-revoke",
   "oauth-session-revoke",
   "legacy-session-revoke",
@@ -22,17 +28,32 @@ const exemptActions = [
   "delete",
   "delete-confirm",
   "migration-request",
-  "migration-confirm",
   "handle",
 ];
-// Actions with no proof of their own (backup-request and backup-confirm are
-// mounted separately below).
+// Actions that ask a stale session to confirm.
 const gatedActions = [
   "password-set",
   "password-remove",
   "app-password-create",
+  "backup-request",
+  "backup-confirm",
   "backup-remove",
+  "migration-confirm",
+  "status",
 ];
+// Actions the fixture mounts with recording handlers of its own; the other
+// tests cover how a stale session treats them.
+const fixtureActions = new Set(["revoke", "backup-request", "backup-confirm"]);
+// Every action the real account UI mounts (see compose-account-ui.mjs). Building
+// the maps only reads their keys; no dependency is called.
+const mountedActionNames = () =>
+  [
+    createAccountSettingsActions({}),
+    createConnectedAppsActions({}),
+    createDeletionActions({}),
+    createMigrationActions({}),
+    createHandleActions({}),
+  ].flatMap((actions) => Object.keys(actions));
 const didB = "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb";
 const csrf = "browser-csrf-value";
 const origin = "https://entryway.example.test";
@@ -228,10 +249,9 @@ function fixture({ authenticatedAt = new Date() } = {}) {
   // Stand-ins for real console actions, so the recent-session policy is checked
   // by action name; each records only that it ran.
   const policyActions = Object.fromEntries(
-    [...exemptActions, ...gatedActions].map((name) => [
-      name,
-      async () => ran.push(name),
-    ]),
+    [...exemptActions, ...gatedActions]
+      .filter((name) => !fixtureActions.has(name))
+      .map((name) => [name, async () => ran.push(name)]),
   );
   console.mountActions({
     ...policyActions,
@@ -586,19 +606,28 @@ test("fresh sessions and actions that never needed a recent sign-in are not aske
   assert.deepEqual(stale.reconfirmations, []);
 });
 
+test("every mounted account action is classified as gated or exempt", () => {
+  assert.deepEqual(
+    mountedActionNames().sort(),
+    [...exemptActions, ...gatedActions].sort(),
+  );
+});
+
 test("a stale session confirms only actions without their own proof", async () => {
+  const exempt = exemptActions.filter((name) => !fixtureActions.has(name));
+  const gated = gatedActions.filter((name) => !fixtureActions.has(name));
   const stale = fixture({ authenticatedAt: minutesAgo(11) });
-  for (const action of exemptActions) {
+  for (const action of exempt) {
     const res = await stale.postAction(action, { did: didA });
     assert.equal(res.statusCode, 303, action);
   }
-  assert.deepEqual(stale.ran, exemptActions);
-  for (const action of gatedActions) {
+  assert.deepEqual(stale.ran, exempt);
+  for (const action of gated) {
     const res = await stale.postAction(action, { did: didA });
     assert.match(res.body, /<h1>Confirm it&#39;s you<\/h1>/, action);
   }
-  assert.deepEqual(stale.ran, exemptActions, "gated actions wait for the code");
-  assert.equal(stale.reconfirmations.length, gatedActions.length);
+  assert.deepEqual(stale.ran, exempt, "gated actions wait for the code");
+  assert.equal(stale.reconfirmations.length, gated.length);
 });
 
 test("Send a new code re-issues the same saved action and a refusal keeps the earlier code", async () => {
