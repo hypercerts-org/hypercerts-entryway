@@ -224,7 +224,7 @@ export function mountEmailLogin({
           return pageForFlow(
             res,
             "Account not linked",
-            '<p role="alert">Your verified email is not linked to the requested account. Use the email associated with that account.</p>',
+            `<p role="alert">Your verified email is not linked to the requested account. Use the email associated with that account.</p>${loginForm(flow, rotated)}`,
             flow,
             403,
           );
