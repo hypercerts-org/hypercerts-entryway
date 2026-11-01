@@ -179,8 +179,8 @@ export function createAccountConsole({
     let begun;
     try {
       begun = await security.beginReconfirm(ctx.principal, { returnTo });
-    } catch (failure) {
-      if (failure.error !== "RateLimitExceeded") throw failure;
+    } catch (error_) {
+      if (error_.error !== "RateLimitExceeded") throw error_;
       return endedPage(res, ctx, {
         title: "Too many codes requested",
         message:
@@ -195,11 +195,11 @@ export function createAccountConsole({
     const value = (name) => String(req.body[name] ?? "").trim();
     try {
       await handler({ ...ctx, req, res, value, token: () => value("token") });
-    } catch (failure) {
+    } catch (error_) {
       const pending = await accounts.ownership?.pendingExternal(
         ctx.account.did,
       );
-      if (!pending) throw failure;
+      if (!pending) throw error_;
       return page(
         res,
         "Account change waiting for recovery",
@@ -233,13 +233,13 @@ export function createAccountConsole({
         ctx.principal,
         `${challengeId}.${code}`,
       );
-    } catch (failure) {
-      if (failure.error === "ExpiredToken") return expiredPage(res, ctx);
-      if (!retryableCodeFailures.has(failure.error)) throw failure;
+    } catch (error_) {
+      if (error_.error === "ExpiredToken") return expiredPage(res, ctx);
+      if (!retryableCodeFailures.has(error_.error)) throw error_;
       return confirmPage(res, ctx, {
         challengeId,
-        error: failure.message,
-        status: failure.status,
+        error: error_.message,
+        status: error_.status,
       });
     }
     return res.redirect(303, returnUrl(confirmed.returnTo, confirmed.did));
@@ -252,15 +252,15 @@ export function createAccountConsole({
         challengeId: issued.challengeId,
         resent: true,
       });
-    } catch (failure) {
-      if (failure.error === "ExpiredToken") return expiredPage(res, ctx);
-      if (failure.error === "InvalidToken") return unusablePage(res, ctx);
+    } catch (error_) {
+      if (error_.error === "ExpiredToken") return expiredPage(res, ctx);
+      if (error_.error === "InvalidToken") return unusablePage(res, ctx);
       // A refused new code leaves the earlier one usable.
-      if (failure.error !== "RateLimitExceeded") throw failure;
+      if (error_.error !== "RateLimitExceeded") throw error_;
       return confirmPage(res, ctx, {
         challengeId,
-        error: failure.message,
-        status: failure.status,
+        error: error_.message,
+        status: error_.status,
       });
     }
   };
