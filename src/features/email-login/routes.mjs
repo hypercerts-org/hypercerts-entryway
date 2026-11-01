@@ -16,6 +16,13 @@ const linkedAccounts = (resolution) => {
   return [];
 };
 
+// A trusted client can skip consent after signup, so submitting this page may
+// redirect straight to the client's redirect_uri. The CSP applies to that
+// redirect, so the page must allow the client's origin as a form-action target.
+const clientFormPolicy = (flow) =>
+  flow.requestUri
+    ? { formOrigin: new URL(flow.parameters.redirect_uri).origin }
+    : {};
 export function mountEmailLogin({
   app,
   db,
@@ -258,7 +265,14 @@ export function mountEmailLogin({
             return current;
           });
           response.commitCookies(res);
-          return pageForFlow(res, "Create your account", body, current);
+          return pageForFlow(
+            res,
+            "Create your account",
+            body,
+            current,
+            200,
+            clientFormPolicy(current),
+          );
         }
         if (resolution.kind === "selection-required") {
           response.commitCookies(res);

@@ -482,7 +482,9 @@ async function verificationFixture(
     async request(path, body) {
       const res = {
         statusCode: 200,
-        set() {
+        headers: {},
+        set(headers) {
+          Object.assign(this.headers, headers);
           return this;
         },
         status(code) {
@@ -851,6 +853,33 @@ test("an unbound DID login_hint cannot turn verified email into a different sign
   assert.equal(
     current.parameters.login_hint,
     "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
+  );
+});
+
+test("the signup page allows the client's redirect origin as a form target only for an authorization flow", async (t) => {
+  // A trusted client can skip consent after signup, and the redirect to the
+  // client is checked against this page's form-action.
+  const authorization = await verificationFixture(t, "unbound");
+  const standalone = await verificationFixture(t, "unbound", {
+    standalone: true,
+  });
+
+  const withClient = await authorization.request("/auth/verify", {
+    otp: "controlled-proof",
+  });
+  const without = await standalone.request("/auth/verify", {
+    otp: "controlled-proof",
+  });
+
+  assert.match(withClient.body, /Signup form/);
+  assert.match(
+    withClient.headers["Content-Security-Policy"],
+    /form-action 'self' https:\/\/client\.example\.test;/,
+  );
+  assert.match(without.body, /Signup form/);
+  assert.match(
+    without.headers["Content-Security-Policy"],
+    /form-action 'self';/,
   );
 });
 
