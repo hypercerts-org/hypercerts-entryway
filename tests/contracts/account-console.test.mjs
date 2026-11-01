@@ -85,9 +85,8 @@ function fixture({ authenticatedAt = new Date() } = {}) {
   const proofs = [];
   const reconfirmations = [];
   const completions = [];
-  const saved = new Map();
+  const issued = new Map();
   const reconfirmed = new Set();
-  let confirmationCounts = true;
   // Operation name -> the error that operation throws, to drive failure paths.
   const failures = new Map();
   const failing = (operation) => {
@@ -177,27 +176,30 @@ function fixture({ authenticatedAt = new Date() } = {}) {
         Date.now() - new Date(actor.authenticatedAt).getTime() <= 600_000
       );
     },
-    async beginReconfirm(actor, pending) {
+    async beginReconfirm(actor, input) {
       failing("begin");
       const challengeId = `challenge-${reconfirmations.length + 1}`;
-      reconfirmations.push({ ...pending, challengeId });
-      saved.set(challengeId, { ...pending, sessionId: actor.sessionId });
+      reconfirmations.push({ ...input, did: actor.did });
+      issued.set(challengeId, {
+        ...input,
+        did: actor.did,
+        sessionId: actor.sessionId,
+      });
       return { challengeId };
     },
     async resendReconfirm(actor, challengeId) {
       failing("resend");
-      const { challengeId: next } = await this.beginReconfirm(
-        actor,
-        saved.get(challengeId),
-      );
-      saved.delete(challengeId);
+      const { challengeId: next } = await this.beginReconfirm(actor, {
+        returnTo: issued.get(challengeId).returnTo,
+      });
+      issued.delete(challengeId);
       return { challengeId: next };
     },
     async completeReconfirm(actor, token) {
       completions.push(token);
       failing("complete");
       const [challengeId, code] = token.split(".");
-      const entry = saved.get(challengeId);
+      const entry = issued.get(challengeId);
       if (
         !entry ||
         entry.sessionId !== actor.sessionId ||
@@ -209,9 +211,9 @@ function fixture({ authenticatedAt = new Date() } = {}) {
           "InvalidToken",
           "Invalid or already used token",
         );
-      saved.delete(challengeId);
-      if (confirmationCounts) reconfirmed.add(actor.sessionId);
-      return { action: entry.action, did: entry.did, fields: entry.fields };
+      issued.delete(challengeId);
+      reconfirmed.add(actor.sessionId);
+      return { did: entry.did, returnTo: entry.returnTo };
     },
   };
   const console = createAccountConsole({
@@ -225,7 +227,6 @@ function fixture({ authenticatedAt = new Date() } = {}) {
     },
     accountAccess,
     oauth,
-    config: { betterAuthSecret: "test-only-secret" },
     security,
     legacy: {},
   });
@@ -242,6 +243,7 @@ function fixture({ authenticatedAt = new Date() } = {}) {
     },
     renderConnections: () => "<section>Connections</section>",
     renderAppPasswords: () => "",
+    renderAppPasswordForm: () => "<form>app password form</form>",
     renderHandle: () => "",
     renderLifecycle: () => "",
     renderMigration: () => "",
@@ -359,6 +361,18 @@ function fixture({ authenticatedAt = new Date() } = {}) {
     postAction: (action, input) =>
       postRoute("POST /account/:action", { action }, input),
     postConfirm: (input) => postRoute("POST /account/confirm", {}, input),
+    postStart: (input) => postRoute("POST /account/confirm/start", {}, input),
+    getManage: async (name, did) => {
+      const res = response();
+      await routes.get(`GET /account/manage/${name}`)(
+        { method: "GET", query: { did }, body: {}, headers: {} },
+        res,
+        (error) => {
+          throw error;
+        },
+      );
+      return res;
+    },
     mutations,
     ran,
     requests,
@@ -368,9 +382,6 @@ function fixture({ authenticatedAt = new Date() } = {}) {
     failWith(operation, error) {
       if (error) failures.set(operation, error);
       else failures.delete(operation);
-    },
-    confirmationCounts(value) {
-      confirmationCounts = value;
     },
     loadedDids,
     setSession(value) {
@@ -465,6 +476,12 @@ test("account actions remain pinned to each tab's DID and reject a revoked bindi
   assert.doesNotMatch(tabA.body, new RegExp(didB));
   assert.match(tabB.body, new RegExp(didB));
   assert.doesNotMatch(tabB.body, new RegExp(didA));
+  // Settings buttons open protected pages for the tab's own DID.
+  assert.ok(
+    tabB.body.includes(
+      `href="/account/manage/password?did=${encodeURIComponent(didB)}"`,
+    ),
+  );
 
   const first = await f.post({ did: didA });
   const second = await f.post({ did: didB });
@@ -481,6 +498,10 @@ test("account actions remain pinned to each tab's DID and reject a revoked bindi
     ),
   );
   assert.doesNotMatch(revokedPage.body, /two\.example\.test/);
+
+  const revokedManage = await f.getManage("password", didA);
+  assert.equal(revokedManage.statusCode, 403);
+  assert.doesNotMatch(revokedManage.body, /password-set/);
 
   const revoked = await f.post({ did: didA });
   assert.equal(revoked.statusCode, 403);
@@ -527,39 +548,49 @@ const hiddenValue = (html, name) => {
   return match[1];
 };
 
-// "Confirm it's you": the console asks a stale session for an emailed code on the
-// same request and then replays the saved action through the same checks.
+// "Confirm it's you": a stale session confirms before a protected page shows
+// its form, then makes the change itself. Nothing typed is ever kept.
 const minutesAgo = (minutes) => new Date(Date.now() - minutes * 60_000);
 const typed = { email: "new@example.test", password: "typed secret" };
-const saved = (f) =>
-  f.reconfirmations.map(({ action, did, fields }) => ({ action, did, fields }));
+const manageUrl = (name, did) =>
+  `/account/manage/${name}?did=${encodeURIComponent(did)}`;
+// The page each gated action belongs to; "settings" is the account page.
+const confirmReturns = {
+  "password-set": "password",
+  "password-remove": "password",
+  "app-password-create": "app-password",
+  "backup-request": "recovery",
+  "backup-confirm": "recovery",
+  "backup-remove": "recovery",
+  status: "status",
+  "migration-confirm": "settings",
+};
+const protectedPages = ["password", "app-password", "recovery", "status"];
 
-test("a stale session is asked to confirm it's you on the same request, then the saved action continues", async () => {
+async function confirmFrom(f, returnTo, did = didA) {
+  const sent = await f.postStart({ did, body: { returnTo } });
+  assert.equal(sent.statusCode, 200);
+  return hiddenValue(sent.body, "challengeId");
+}
+
+test("a stale session confirms before a protected page shows its form, then returns to it", async () => {
   const f = fixture({ authenticatedAt: minutesAgo(11) });
 
-  const prompted = await f.postAction("backup-request", {
-    did: didA,
-    body: typed,
-  });
-  assert.equal(prompted.statusCode, 200);
-  assert.equal(prompted.location, undefined, "no redirect to sign in");
-  assert.match(prompted.body, /<h1>Confirm it&#39;s you<\/h1>/);
-  assert.match(prompted.body, /owner@example\.test/);
-  assert.match(prompted.body, /<button class="secondary">Send a new code</);
-  assert.ok(
-    prompted.body.includes(`href="/account?did=${encodeURIComponent(didA)}"`),
-  );
+  const asked = await f.getManage("recovery", didA);
+  assert.equal(asked.statusCode, 200);
+  assert.match(asked.body, /<h1>Confirm it&#39;s you<\/h1>/);
+  assert.match(asked.body, /owner@example\.test/);
+  assert.equal(hiddenValue(asked.body, "returnTo"), "recovery");
   assert.doesNotMatch(
-    prompted.body,
-    /typed secret|new@example\.test/,
-    "the saved fields are never echoed",
+    asked.body,
+    /backup-request/,
+    "no form before confirming",
   );
-  assert.deepEqual(saved(f), [
-    { action: "backup-request", did: didA, fields: typed },
-  ]);
-  assert.deepEqual(f.requests, [], "the action waits for the code");
+  assert.deepEqual(f.reconfirmations, [], "opening the page sends no code");
 
-  const challengeId = hiddenValue(prompted.body, "challengeId");
+  const challengeId = await confirmFrom(f, "recovery");
+  assert.deepEqual(f.reconfirmations, [{ returnTo: "recovery", did: didA }]);
+
   const wrong = await f.postConfirm({
     did: didA,
     body: { challengeId, token: "00000000" },
@@ -567,28 +598,43 @@ test("a stale session is asked to confirm it's you on the same request, then the
   assert.equal(wrong.statusCode, 400);
   assert.match(wrong.body, /role="alert">Invalid or already used token/);
   assert.equal(hiddenValue(wrong.body, "challengeId"), challengeId);
-  assert.deepEqual(f.requests, []);
 
   const done = await f.postConfirm({
     did: didA,
     body: { challengeId, token: " 12345678 " },
   });
   assert.equal(done.statusCode, 303);
-  assert.equal(done.location, `/account?did=${encodeURIComponent(didA)}`);
-  assert.deepEqual(f.requests, [{ did: didA, ...typed }]);
+  assert.equal(done.location, manageUrl("recovery", didA));
+  assert.deepEqual(f.requests, [], "confirming makes no change by itself");
 
-  // The confirmation covers the next protected action without another prompt.
-  const later = await f.postAction("backup-request", {
-    did: didA,
-    body: { email: "again@example.test" },
-  });
-  assert.equal(later.statusCode, 303);
-  assert.equal(f.reconfirmations.length, 1);
-  assert.equal(f.requests.length, 2);
+  const opened = await f.getManage("recovery", didA);
+  assert.match(opened.body, /action="\/account\/backup-request"/);
+  const made = await f.postAction("backup-request", { did: didA, body: typed });
+  assert.equal(made.statusCode, 303);
+  assert.deepEqual(f.requests, [{ did: didA, ...typed }]);
+  assert.equal(f.reconfirmations.length, 1, "one confirmation covers both");
 });
 
-test("fresh sessions and actions that never needed a recent sign-in are not asked to confirm", async () => {
+// The form each protected page shows to a recent session. The app-password
+// form comes from the connected-apps feature; the fixture renders a stub.
+const pageForms = {
+  password: "/account/password-set",
+  recovery: "/account/backup-request",
+  status: "/account/status",
+};
+
+test("fresh sessions see protected forms directly and exempt actions never ask", async () => {
   const fresh = fixture();
+  for (const did of [didA, didB])
+    for (const name of protectedPages) {
+      const opened = await fresh.getManage(name, did);
+      assert.equal(opened.statusCode, 200, name);
+      assert.doesNotMatch(opened.body, /Confirm it&#39;s you/, name);
+      if (pageForms[name]) {
+        assert.ok(opened.body.includes(`action="${pageForms[name]}"`), name);
+        assert.equal(hiddenValue(opened.body, "did"), did, name);
+      }
+    }
   const run = await fresh.postAction("backup-request", {
     did: didA,
     body: typed,
@@ -598,9 +644,7 @@ test("fresh sessions and actions that never needed a recent sign-in are not aske
   assert.deepEqual(fresh.reconfirmations, []);
 
   const stale = fixture({ authenticatedAt: minutesAgo(11) });
-  const revoked = await stale.postAction("revoke", {
-    did: didA,
-  });
+  const revoked = await stale.postAction("revoke", { did: didA });
   assert.equal(revoked.statusCode, 303);
   assert.deepEqual(stale.mutations, [didA]);
   assert.deepEqual(stale.reconfirmations, []);
@@ -611,32 +655,65 @@ test("every mounted account action is classified as gated or exempt", () => {
     mountedActionNames().sort(),
     [...exemptActions, ...gatedActions].sort(),
   );
+  assert.deepEqual(
+    Object.keys(confirmReturns).sort(),
+    [...gatedActions].sort(),
+  );
 });
 
-test("a stale session confirms only actions without their own proof", async () => {
+test("a stale gated change is not made or kept, and points back to its page", async () => {
   const exempt = exemptActions.filter((name) => !fixtureActions.has(name));
-  const gated = gatedActions.filter((name) => !fixtureActions.has(name));
   const stale = fixture({ authenticatedAt: minutesAgo(11) });
   for (const action of exempt) {
     const res = await stale.postAction(action, { did: didA });
     assert.equal(res.statusCode, 303, action);
   }
   assert.deepEqual(stale.ran, exempt);
-  for (const action of gated) {
-    const res = await stale.postAction(action, { did: didA });
-    assert.match(res.body, /<h1>Confirm it&#39;s you<\/h1>/, action);
+  for (const action of gatedActions) {
+    const res = await stale.postAction(action, { did: didA, body: typed });
+    assert.equal(res.statusCode, 403, action);
+    assert.match(res.body, /role="alert">Your change was not made\./, action);
+    assert.equal(
+      hiddenValue(res.body, "returnTo"),
+      confirmReturns[action],
+      action,
+    );
+    assert.doesNotMatch(res.body, /typed secret|new@example\.test/, action);
   }
-  assert.deepEqual(stale.ran, exempt, "gated actions wait for the code");
-  assert.equal(stale.reconfirmations.length, gated.length);
+  assert.deepEqual(stale.ran, exempt, "no gated action ran");
+  assert.deepEqual(stale.requests, []);
+  assert.deepEqual(stale.proofs, []);
+  assert.deepEqual(stale.reconfirmations, [], "no code until the user asks");
+
+  // Each return target is one the console accepts, and confirming lands there.
+  for (const returnTo of new Set(Object.values(confirmReturns))) {
+    const challengeId = await confirmFrom(stale, returnTo);
+    const done = await stale.postConfirm({
+      did: didA,
+      body: { challengeId, token: "12345678" },
+    });
+    assert.equal(
+      done.location,
+      returnTo === "settings"
+        ? `/account?did=${encodeURIComponent(didA)}`
+        : manageUrl(returnTo, didA),
+      returnTo,
+    );
+  }
 });
 
-test("Send a new code re-issues the same saved action and a refusal keeps the earlier code", async () => {
+test("a code is sent only for a page the console serves", async () => {
   const f = fixture({ authenticatedAt: minutesAgo(11) });
-  const prompted = await f.postAction("backup-request", {
-    did: didA,
-    body: typed,
-  });
-  const first = hiddenValue(prompted.body, "challengeId");
+  for (const returnTo of ["", "https://evil.example", "unknown", undefined]) {
+    const res = await f.postStart({ did: didA, body: { returnTo } });
+    assert.equal(res.statusCode, 400, String(returnTo));
+  }
+  assert.deepEqual(f.reconfirmations, []);
+});
+
+test("Send a new code keeps the return page and a refusal keeps the earlier code", async () => {
+  const f = fixture({ authenticatedAt: minutesAgo(11) });
+  const first = await confirmFrom(f, "password");
 
   const resent = await f.postConfirm({
     did: didA,
@@ -668,26 +745,24 @@ test("Send a new code re-issues the same saved action and a refusal keeps the ea
     did: didA,
     body: { challengeId: second, token: "12345678" },
   });
-  assert.equal(done.statusCode, 303);
-  assert.deepEqual(f.requests, [{ did: didA, ...typed }]);
+  assert.equal(done.location, manageUrl("password", didA));
 });
 
-test("the confirmation form needs the console's CSRF token and selected account", async () => {
+test("the confirmation forms need the console's CSRF token and selected account", async () => {
   const f = fixture({ authenticatedAt: minutesAgo(11) });
-  const prompted = await f.postAction("backup-request", {
-    did: didA,
-    body: typed,
-  });
-  const body = {
-    challengeId: hiddenValue(prompted.body, "challengeId"),
-    token: "12345678",
-  };
-
-  const forged = await f.postConfirm({
+  const forgedStart = await f.postStart({
     did: didA,
     csrfValue: "forged",
-    body,
+    body: { returnTo: "recovery" },
   });
+  assert.equal(forgedStart.statusCode, 400);
+  assert.deepEqual(f.reconfirmations, [], "no code for a forged form");
+
+  const body = {
+    challengeId: await confirmFrom(f, "recovery"),
+    token: "12345678",
+  };
+  const forged = await f.postConfirm({ did: didA, csrfValue: "forged", body });
   assert.equal(forged.statusCode, 400);
   assert.deepEqual(f.completions, [], "the code is not even checked");
 
@@ -700,55 +775,6 @@ test("the confirmation form needs the console's CSRF token and selected account"
   const signedOut = await f.postConfirm({ did: didA, body });
   assert.equal(signedOut.statusCode, 303);
   assert.equal(signedOut.location, "/login");
-  assert.deepEqual(f.requests, []);
-});
-
-test("a saved action whose confirmation does not count fails instead of prompting again", async () => {
-  const f = fixture({ authenticatedAt: minutesAgo(11) });
-  const prompt = async () =>
-    hiddenValue(
-      (
-        await f.postAction("backup-request", {
-          did: didA,
-          body: typed,
-        })
-      ).body,
-      "challengeId",
-    );
-
-  // If a confirmation somehow does not count, the replay fails instead of looping.
-  f.confirmationCounts(false);
-  const second = await prompt();
-  const uncounted = await f.postConfirm({
-    did: didA,
-    body: { challengeId: second, token: "12345678" },
-  });
-  assert.equal(uncounted.statusCode, 403);
-  assert.match(uncounted.body, /Confirm it&#39;s you again/);
-  assert.equal(f.reconfirmations.length, 1, "only the original prompt");
-  assert.deepEqual(f.requests, []);
-});
-
-test("a mailbox-code step replays its own code and selector, not the confirmation form's", async () => {
-  const f = fixture({ authenticatedAt: minutesAgo(11) });
-  const prompted = await f.postAction("backup-confirm", {
-    did: didA,
-    body: { challengeId: "mailbox-challenge", token: "87654321" },
-  });
-  assert.equal(prompted.statusCode, 200);
-  assert.deepEqual(f.proofs, []);
-
-  const done = await f.postConfirm({
-    did: didA,
-    body: {
-      challengeId: hiddenValue(prompted.body, "challengeId"),
-      token: "12345678",
-    },
-  });
-  assert.equal(done.statusCode, 303);
-  assert.deepEqual(f.proofs, [
-    { did: didA, challengeId: "mailbox-challenge", token: "87654321" },
-  ]);
 });
 
 const assertEnded = (
@@ -774,11 +800,7 @@ const assertEnded = (
 
 test("an expired code ends the confirmation page without a way to retry or sign in", async () => {
   const f = fixture({ authenticatedAt: minutesAgo(11) });
-  const prompted = await f.postAction("backup-request", {
-    did: didA,
-    body: typed,
-  });
-  const challengeId = hiddenValue(prompted.body, "challengeId");
+  const challengeId = await confirmFrom(f, "recovery");
   const expired = {
     status: 400,
     heading: "Confirmation code expired",
@@ -804,33 +826,20 @@ test("an expired code ends the confirmation page without a way to retry or sign 
     new HttpError(400, "ExpiredToken", "This token has expired"),
   );
   assertEnded(
-    await f.postConfirm({
-      did: didA,
-      body: { challengeId, resend: "1" },
-    }),
+    await f.postConfirm({ did: didA, body: { challengeId, resend: "1" } }),
     expired,
   );
-  assert.deepEqual(f.requests, []);
 });
 
 test("re-sending a used, superseded or voided code ends the page without a sign-in link", async () => {
   const f = fixture({ authenticatedAt: minutesAgo(11) });
-  const prompted = await f.postAction("backup-request", {
-    did: didA,
-    body: typed,
-  });
+  const challengeId = await confirmFrom(f, "recovery");
   f.failWith(
     "resend",
     new HttpError(400, "InvalidToken", "Invalid or already used token"),
   );
   assertEnded(
-    await f.postConfirm({
-      did: didA,
-      body: {
-        challengeId: hiddenValue(prompted.body, "challengeId"),
-        resend: "1",
-      },
-    }),
+    await f.postConfirm({ did: didA, body: { challengeId, resend: "1" } }),
     {
       status: 400,
       heading: "Confirmation code no longer valid",
@@ -838,7 +847,6 @@ test("re-sending a used, superseded or voided code ends the page without a sign-
       did: didA,
     },
   );
-  assert.deepEqual(f.requests, []);
 });
 
 test("a refused confirmation code explains the rate limit and offers a plain sign-in line", async () => {
@@ -852,7 +860,7 @@ test("a refused confirmation code explains the rate limit and offers a plain sig
     ),
   );
   assertEnded(
-    await f.postAction("backup-request", { did: didA, body: typed }),
+    await f.postStart({ did: didA, body: { returnTo: "recovery" } }),
     {
       status: 429,
       heading: "Too many codes requested",
@@ -862,5 +870,4 @@ test("a refused confirmation code explains the rate limit and offers a plain sig
       signIn: true,
     },
   );
-  assert.deepEqual(f.requests, []);
 });

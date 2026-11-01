@@ -58,6 +58,7 @@ async function signIn(page, create = false, pendingMigration = false) {
   ).toBeVisible();
 }
 async function appSession(page, pds, name) {
+  await page.getByRole("link", { name: "Create app password" }).click();
   await accountForm(page, "app-password-create")
     .getByLabel("App password name")
     .fill(name);

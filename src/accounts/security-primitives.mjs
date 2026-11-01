@@ -1,25 +1,16 @@
-import {
-  createCipheriv,
-  createDecipheriv,
-  createHmac,
-  randomBytes,
-  randomInt,
-} from "node:crypto";
+import { createHmac, randomBytes, randomInt } from "node:crypto";
 import { HttpError } from "../http/http-error.mjs";
 import { z } from "zod";
 import { accountEmailSchema } from "./input-schema.js";
 
 const TEN_MINUTES = 600_000;
-// The account change sealed before reconfirmation and replayed after it.
-const savedActionSchema = z.strictObject({
-  action: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
-  did: z.string(),
-  fields: z.record(z.string(), z.union([z.string(), z.array(z.string())])),
+// Where the browser goes back to after confirming: a page name, never a URL.
+// The console maps it to a route; the confirmation carries no form input.
+const reconfirmSchema = z.strictObject({
+  returnTo: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
 });
-// Browser sessions that confirmed their email in place, keyed by session ID.
+// Browser sessions that confirmed it's you by email code, keyed by session ID.
 const RECONFIRMED = "account:reconfirm";
-// Full-length tags only: GCM would otherwise accept a truncated one.
-const TAG = { authTagLength: 16 };
 export const fail = (status, error, message) =>
   new HttpError(status, error, message);
 const invalidToken = () =>
@@ -51,7 +42,7 @@ export function createSecurityPrimitives({
       email: normalizeEmail(input.email),
     });
   /** A browser session is recent for ten minutes after it signed in or last
-   * confirmed its email in place. Each time is judged on its own, so a
+   * confirmed it's you by email code. Each time is judged on its own, so a
    * future-dated sign-in cannot hide a valid confirmation. This judges the
    * actor's timestamps only, not whether its session is still live: call it
    * after principal() or summary(), as every caller here does. */
@@ -255,59 +246,9 @@ export function createSecurityPrimitives({
   };
   // "Confirm it's you": a browser session whose sign-in is older than ten
   // minutes proves its mailbox again instead of signing in again. The code is an
-  // ordinary one-use proof. The action it unlocks rides in that challenge, so it
-  // lives and dies with the code and only the session that asked can complete it.
-  //
-  // The saved action can hold passwords and one-use mailbox codes, so it is
-  // sealed with AES-256-GCM. The key comes from the server secret under a
-  // versioned label plus the session, user, account and action it belongs to:
-  // nothing else can open it, and no new secret or setting is involved. Opening
-  // happens only behind the checks that its code is live, and dropSpentActions
-  // removes it once the code is used, superseded or expired.
-  const sealing = (actor, did, action) => {
-    const key = createHmac("sha256", config.betterAuthSecret)
-      .update(
-        JSON.stringify([
-          "entryway-reconfirm-v1",
-          actor.sessionId,
-          actor.userId,
-          did,
-          action,
-        ]),
-      )
-      .digest();
-    return {
-      seal(fields) {
-        const iv = randomBytes(12);
-        const cipher = createCipheriv("aes-256-gcm", key, iv, TAG);
-        const body = Buffer.concat([
-          cipher.update(JSON.stringify(fields), "utf8"),
-          cipher.final(),
-        ]);
-        return Buffer.concat([iv, cipher.getAuthTag(), body]).toString(
-          "base64url",
-        );
-      },
-      open(sealed) {
-        try {
-          const bytes = Buffer.from(sealed, "base64url");
-          const decipher = createDecipheriv(
-            "aes-256-gcm",
-            key,
-            bytes.subarray(0, 12),
-            TAG,
-          ).setAuthTag(bytes.subarray(12, 28));
-          const body = Buffer.concat([
-            decipher.update(bytes.subarray(28)),
-            decipher.final(),
-          ]);
-          return JSON.parse(body.toString("utf8"));
-        } catch {
-          throw invalidToken();
-        }
-      },
-    };
-  };
+  // ordinary one-use proof that only the session that asked can complete. It
+  // carries no form input: the user makes the change after confirming, so
+  // nothing they typed is stored while the code is outstanding.
   const requireBrowserSession = (actor) => {
     if (actor.kind !== "better-auth")
       throw fail(
@@ -316,16 +257,15 @@ export function createSecurityPrimitives({
         "Only a signed-in browser session can confirm its identity",
       );
   };
-  const savedAction = (row, pending) => {
-    const parsed = savedActionSchema.safeParse(pending);
-    if (!parsed.success || parsed.data.did !== row.did)
+  const reconfirmRequest = (input) => {
+    const parsed = reconfirmSchema.safeParse(input);
+    if (!parsed.success)
       throw fail(
         400,
         "InvalidRequest",
-        "The account change to continue after confirmation is invalid",
+        "The page to return to after confirmation is invalid",
       );
-    const { action, fields } = parsed.data;
-    return { action, fields };
+    return parsed.data;
   };
   // Authorize the selector before its code is checked. Another session, user or
   // account gets the ordinary InvalidToken answer and cannot spend this
@@ -344,37 +284,15 @@ export function createSecurityPrimitives({
       throw invalidToken();
     return challenge;
   };
-  // A saved action outlives neither its code nor a newer code. A used,
-  // superseded or expired challenge keeps who asked and for what, so a late
-  // attempt is still told "expired" or "used", but not the sealed fields.
-  const dropSpentActions = async (now) => {
-    for (const { key, value } of await db.list("security:challenges"))
-      if (
-        value.purpose === "reconfirm" &&
-        value.data?.sealed &&
-        (value.consumedAt || value.expiresAt <= now)
-      ) {
-        const { sessionId, userId, action } = value.data;
-        await db.set("security:challenges", key, {
-          ...value,
-          data: { sessionId, userId, action },
-        });
-      }
-  };
-  const beginReconfirm = async (actor, pending) => {
+  const beginReconfirm = async (actor, input) => {
     const row = await principal(actor);
     requireBrowserSession(actor);
-    const { action, fields } = savedAction(row, pending);
+    const { returnTo } = reconfirmRequest(input);
     const issued = await issue(
       "reconfirm",
       row,
       row.email,
-      {
-        sessionId: actor.sessionId,
-        userId: actor.userId,
-        action,
-        sealed: sealing(actor, row.did, action).seal(fields),
-      },
+      { sessionId: actor.sessionId, userId: actor.userId, returnTo },
       { exposeChallengeId: true },
     );
     // issue() answers with nothing when the account moved under it. The caller is
@@ -385,14 +303,12 @@ export function createSecurityPrimitives({
         "IdentityChanged",
         "This account changed while you were confirming. Reload account settings and try again.",
       );
-    // The code just issued superseded any earlier one.
-    await db.transact(() => dropSpentActions(Date.now()));
     return { challengeId: issued.challengeId };
   };
   // A code that is used, superseded, expired or voided by an account change
   // cannot be re-sent; one exhausted by wrong guesses can. The checks follow
   // consumeChallenge's order, so a late attempt gets the same answer either way.
-  // The new code carries the action and replaces this one.
+  // The new code keeps the return page and replaces this one.
   const resendReconfirm = async (actor, challengeId) => {
     const row = await principal(actor);
     requireBrowserSession(actor);
@@ -405,9 +321,7 @@ export function createSecurityPrimitives({
     if (challenge.expiresAt <= Date.now())
       throw fail(400, "ExpiredToken", "This token has expired");
     if (challenge.version !== (await version(row.did))) throw invalidToken();
-    const { action, sealed } = challenge.data;
-    const fields = sealing(actor, row.did, action).open(sealed);
-    return await beginReconfirm(actor, { action, did: row.did, fields });
+    return await beginReconfirm(actor, { returnTo: challenge.data.returnTo });
   };
   const completeReconfirm = async (actor, token) => {
     const row = await principal(actor);
@@ -418,21 +332,16 @@ export function createSecurityPrimitives({
       "reconfirm",
       { did: row.did, email: row.email },
       async (proof) => {
-        const { action, sealed } = proof.data;
-        const fields = sealing(actor, row.did, action).open(sealed);
         const now = Date.now();
-        // The code, the confirmation and the end of the saved action change
-        // together. This challenge is already marked used, so the sweep drops
-        // its action along with any other that is spent. Confirmations that can
-        // no longer make a session recent are pruned too.
-        await dropSpentActions(now);
+        // The code and the confirmation change together. Confirmations that can
+        // no longer make a session recent are pruned on the way.
         for (const { key, value } of await db.list(RECONFIRMED))
           if (now - value.at > TEN_MINUTES) await db.delete(RECONFIRMED, key);
         await db.set(RECONFIRMED, actor.sessionId, {
           userId: actor.userId,
           at: now,
         });
-        return { action, did: row.did, fields };
+        return { did: row.did, returnTo: proof.data.returnTo };
       },
     );
   };

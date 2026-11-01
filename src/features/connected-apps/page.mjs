@@ -3,6 +3,7 @@ import {
   field,
   hidden,
   form,
+  manageLink,
   stamp,
   section,
   rows,
@@ -26,8 +27,11 @@ export async function loadConnectedApps({ db, oauth, legacy }, req, did) {
 export function renderAppPasswords({ appPasswords, csrf, accountContext }) {
   return `      <h3>App passwords</h3><p>Give each legacy application its own password. The generated password is shown once; removing it also ends its legacy sessions.</p>
       ${rows(appPasswords.passwords ?? [], (item) => `<strong>${esc(item.name)}</strong><span>Created ${esc(stamp(item.createdAt))}${item.privileged ? " · Direct-message access" : ""}</span>${form("app-password-revoke", csrf, hidden("name", item.name), "Revoke app password", accountContext)}`, "No app passwords.")}
-      ${form("app-password-create", csrf, field("name", "App password name", "text", 'maxlength="64"') + '<label class="check"><input type="checkbox" name="privileged" value="true">Allow direct-message access</label>', "Create app password", accountContext)}
+      ${manageLink("app-password", "Create app password", accountContext)}
 `;
+}
+export function renderAppPasswordForm({ csrf, accountContext }) {
+  return `<p>Give each legacy application its own password. The generated password is shown once.</p>${form("app-password-create", csrf, field("name", "App password name", "text", 'maxlength="64"') + '<label class="check"><input type="checkbox" name="privileged" value="true">Allow direct-message access</label>', "Create app password", accountContext)}`;
 }
 export function renderConnectedApps({
   csrf,
