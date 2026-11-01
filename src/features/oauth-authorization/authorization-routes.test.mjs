@@ -3,6 +3,35 @@ import test from "node:test";
 import { openTestDatabase } from "../../../tests/support/database-fixture.mjs";
 import { createBrowserFlow } from "../../../dist/src/http/browser-flow.mjs";
 import { mountAuthorizationRoutes } from "../../../dist/src/features/oauth-authorization/authorization-routes.mjs";
+import { createConsent } from "../../../dist/src/features/oauth-authorization/consent.mjs";
+
+const verifiedEmail = "owner@example.test";
+const identity = { userId: "user-id", email: verifiedEmail };
+
+function response() {
+  return {
+    statusCode: 200,
+    set() {
+      return this;
+    },
+    status(code) {
+      this.statusCode = code;
+      return this;
+    },
+    type() {
+      return this;
+    },
+    send(body) {
+      this.body = body;
+      return this;
+    },
+    redirect(code, url) {
+      this.statusCode = code;
+      this.redirectUrl = url;
+      return this;
+    },
+  };
+}
 
 async function fixture(t, { authDid, authEmail } = {}) {
   const db = await openTestDatabase();
@@ -20,6 +49,7 @@ async function fixture(t, { authDid, authEmail } = {}) {
     "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
     "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
   ];
+  let lookup;
   const sessions = new Map(
     dids.map((did) => [
       did,
@@ -44,6 +74,7 @@ async function fixture(t, { authDid, authEmail } = {}) {
     },
     clientManager: {
       async getClient() {
+        await lookup?.hold();
         return { clientId: "client-id" };
       },
     },
@@ -52,6 +83,7 @@ async function fixture(t, { authDid, authEmail } = {}) {
         return sessions.get(did) ?? null;
       },
       async setAuthorizedClient() {},
+      async upsertDeviceAccount() {},
     },
     checkLoginRequired() {
       return false;
@@ -68,7 +100,7 @@ async function fixture(t, { authDid, authEmail } = {}) {
     clientName: "Example Client",
     parameters,
     ...(authDid ? { authDid } : {}),
-    ...(authEmail ? { authEmail } : {}),
+    ...(authEmail ? { authEmail, authUserId: identity.userId } : {}),
   });
   await db.set("browser", browser.deviceId, { csrf, createdAt: new Date() });
   mountAuthorizationRoutes({
@@ -85,31 +117,49 @@ async function fixture(t, { authDid, authEmail } = {}) {
     loginForm: () => "",
     consentForm: () => "",
   });
+  const { authenticated } = createConsent({
+    db,
+    provider,
+    stores: { account: async () => null },
+    flows,
+    accountAccess: {
+      async requireBoundAccount(_identity, did) {
+        return { did, status: "active" };
+      },
+    },
+  });
   return {
     approved,
-    async approve(did) {
-      const res = {
-        statusCode: 200,
-        set() {
-          return this;
-        },
-        status(code) {
-          this.statusCode = code;
-          return this;
-        },
-        type() {
-          return this;
-        },
-        send(body) {
-          this.body = body;
-          return this;
-        },
-        redirect(code, url) {
-          this.statusCode = code;
-          this.redirectUrl = url;
-          return this;
+    flowId: flow.id,
+    db,
+    // Stops the next consent request at its client lookup until released.
+    pauseNextConsentLookup() {
+      let entered;
+      let release;
+      const reached = new Promise((resolve) => (entered = resolve));
+      const released = new Promise((resolve) => (release = resolve));
+      lookup = {
+        async hold() {
+          lookup = undefined;
+          entered();
+          await released;
         },
       };
+      return { reached, release };
+    },
+    // The same call /auth/select makes after the verified user picks a DID.
+    select(did) {
+      return authenticated(
+        {},
+        response(),
+        flow,
+        browser,
+        { did, status: "active" },
+        { identity, fromChooser: true },
+      );
+    },
+    async approve(did) {
+      const res = response();
       await handlers.get("/auth/consent")(
         {
           headers: { origin: "https://entryway.example.test" },
@@ -157,4 +207,44 @@ test("the existing device-account picker remains available before an email ident
   assert.equal(response.statusCode, 303);
   assert.deepEqual(f.approved, [otherDid]);
   assert.match(response.redirectUrl, /state=original-state/);
+});
+
+test("consent for a DID that /auth/select replaced while its lookups were pending issues no code", async (t) => {
+  const selectedDid = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+  const replacementDid = "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb";
+  const f = await fixture(t, {
+    authDid: selectedDid,
+    authEmail: verifiedEmail,
+  });
+  const paused = f.pauseNextConsentLookup();
+
+  const stale = f.approve(selectedDid);
+  await paused.reached;
+  await f.select(replacementDid);
+  paused.release();
+  const response = await stale;
+
+  assert.equal(response.statusCode, 400);
+  assert.deepEqual(f.approved, []);
+  assert.equal(
+    (await f.db.get("auth-flows", f.flowId)).authDid,
+    replacementDid,
+  );
+});
+
+test("a consent that claimed the flow cannot be undone or recreated by a later account selection", async (t) => {
+  const selectedDid = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+  const f = await fixture(t, {
+    authDid: selectedDid,
+    authEmail: verifiedEmail,
+  });
+
+  const approval = await f.approve(selectedDid);
+
+  assert.equal(approval.statusCode, 303);
+  assert.deepEqual(f.approved, [selectedDid]);
+  await assert.rejects(f.select("did:plc:bbbbbbbbbbbbbbbbbbbbbbbb"), {
+    message: /expired/,
+  });
+  assert.equal(await f.db.get("auth-flows", f.flowId), null);
 });
