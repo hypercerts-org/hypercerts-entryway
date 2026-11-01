@@ -290,9 +290,9 @@ test("app passwords are displayed once and revocation stops actual PDS login", a
 });
 
 test("optional password removal keeps email login and disables password login", async () => {
-  await accountForm(page, "password-remove")
-    .getByLabel("Current password")
-    .fill(password);
+  await expect(
+    accountForm(page, "password-remove").getByLabel("Current password"),
+  ).toHaveCount(0);
   await submit(page, "password-remove");
   await expect(
     page.getByRole("heading", { name: "Account password removed" }),

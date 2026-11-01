@@ -1190,7 +1190,7 @@ test("removing a backup invalidates recovery already advanced to replacement-ema
   assert.equal((await f.accounts.get(f.alice.did)).email, f.alice.email);
 });
 
-test("password reset works for passwordless accounts and revokes sessions; settings require current password", async (t) => {
+test("password reset works for passwordless accounts and revokes sessions; settings removal needs no current password", async (t) => {
   const f = await fixture(t);
   assert.deepEqual(
     await f.security.requestPasswordReset({ email: "unknown@example.com" }),
@@ -1217,15 +1217,8 @@ test("password reset works for passwordless accounts and revokes sessions; setti
     },
   );
   const login = await f.signIn(f.alice.email);
-  await assert.rejects(
-    f.security.removePassword(login.actor, {
-      currentPassword: "wrong password",
-    }),
-    { error: "InvalidPassword" },
-  );
-  await f.security.removePassword(login.actor, {
-    currentPassword: "newly chosen strong password",
-  });
+  // A recent session is the proof; the current password is not asked for.
+  await f.security.removePassword(login.actor);
   assert.equal(await f.legacy.hasPassword(f.alice.did), false);
   assert.equal(
     await f.oauth.requireSession({ headers: { cookie: login.cookie } }),
@@ -1915,10 +1908,9 @@ test("a confirmation code returns its saved action once and keeps no plaintext o
   const f = await fixture(t);
   const stale = staleActor(f.actor);
   const password = "a sealed replacement password";
-  const previous = "the previous sealed password";
   const { challengeId, token, saved } = await beginConfirmation(f, stale, {
     action: "password-set",
-    fields: { password, currentPassword: previous, token: "12345678" },
+    fields: { password, token: "12345678" },
   });
   const [, code] = token.split(".");
   const stored = await f.db.get("security:challenges", challengeId);
@@ -1927,7 +1919,7 @@ test("a confirmation code returns its saved action once and keeps no plaintext o
   assert.equal(stored.email, f.alice.email);
   assert.equal(stored.data.action, "password-set");
   const persisted = JSON.stringify(stored);
-  for (const secret of [password, previous, code])
+  for (const secret of [password, code])
     assert.ok(
       !persisted.includes(secret),
       "the saved action and the code are not stored in plaintext",

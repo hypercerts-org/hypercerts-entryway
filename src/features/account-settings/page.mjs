@@ -73,14 +73,6 @@ function renderPasswordPanel({
       "Passwords",
       "<p>Password management is not available yet.</p>",
     );
-  const passwordInput = state.passwordEnabled
-    ? field(
-        "currentPassword",
-        "Current password",
-        "password",
-        'autocomplete="current-password" maxlength="256"',
-      )
-    : "";
   const passwordStatus = state.passwordEnabled
     ? "Optional account password is enabled."
     : "This account has no account password. Email sign-in remains available.";
@@ -91,7 +83,7 @@ function renderPasswordPanel({
     ? form(
         "password-remove",
         csrf,
-        passwordInput,
+        "",
         "Remove account password",
         accountContext,
       )
@@ -101,7 +93,7 @@ function renderPasswordPanel({
     "Passwords",
     `
       <p>${passwordStatus} Passwords here support apps that use the legacy AT Protocol sign-in API. Changing or removing a password ends all sessions and removes existing app passwords.</p>
-      ${form("password-set", csrf, passwordInput + field("password", "New account password", "password", 'autocomplete="new-password" minlength="12" maxlength="256"'), setPasswordLabel, accountContext)}
+      ${form("password-set", csrf, field("password", "New account password", "password", 'autocomplete="new-password" minlength="12" maxlength="256"'), setPasswordLabel, accountContext)}
       ${removePasswordForm}
       ${renderAppPasswords({ appPasswords, csrf, accountContext })}
     `,
