@@ -48,7 +48,7 @@ export function mountEmailLogin({
     form,
   } = flows;
   const { loginForm, otpForm } = forms;
-  const sendCode = async (res, flow, browser, emailValue) => {
+  const sendCode = async (res, flow, browser, emailValue, options = {}) => {
     let email;
     let reserved;
     let preparingMail = false;
@@ -65,6 +65,10 @@ export function mountEmailLogin({
         if (!input.success)
           throw new InvalidRequestError("Enter a valid email address");
         email = input.data;
+        // A new address keeps the caller's masking choice; a resend keeps the
+        // flow's. Set before any refusal so every rendered page honors it.
+        if (emailValue !== undefined)
+          flow.maskEmail = options.maskEmail === true;
         const now = Date.now();
         if (flow.otpRequestCount >= 5) return { reason: "flow-limit" };
         if (flow.lastOtpSentAt && now - flow.lastOtpSentAt < RESEND_COOLDOWN)

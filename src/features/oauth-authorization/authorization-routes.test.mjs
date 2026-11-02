@@ -18,6 +18,9 @@ async function fixture(
     accountHint,
     autoRedirect = false,
     statuses = {},
+    accountEmails = {
+      "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa": "first@example.test",
+    },
   } = {},
 ) {
   const db = await openTestDatabase();
@@ -153,10 +156,16 @@ async function fixture(
       `<form method="post" action="/auth/email">${flows.fields(flow, browser)}<label>Email address</label><input type="email"></form>`,
     consentForm: (_flow, _browser, account) =>
       `<form method="post" action="/auth/consent"><input name="did" value="${account.did}"></form>`,
-    async startEmailCode(res, codeFlow, _browser, email) {
-      emailCodes.push({ flow: codeFlow.requestUri, email });
+    async startEmailCode(res, codeFlow, _browser, email, options) {
+      emailCodes.push({
+        flow: codeFlow.requestUri,
+        flowId: codeFlow.id,
+        email,
+        ...(options ? { options } : {}),
+      });
       res.send("<check-your-email>");
     },
+    accountEmail: async (did) => accountEmails[did],
   });
   const response = () => ({
     statusCode: 200,
@@ -415,11 +424,13 @@ test("stale remembered accounts start email OTP bound to the selected DID", asyn
   assert.ok(flow);
   assert.ok(csrf);
   const otp = await f.chooseRemembered({ flow, csrf, did: staleDid });
-  assert.equal(otp.statusCode, 200);
-  assert.ok(otp.body.includes('type="email"'));
+  assert.equal(otp.body, "<check-your-email>");
   assert.deepEqual(f.upserts, []);
-  const selectedFlowId = otp.body.match(/name="flow" value="([^"]+)"/)?.[1];
-  const selectedFlow = await f.db.get("auth-flows", selectedFlowId);
+  const [code] = f.emailCodes;
+  assert.equal(f.emailCodes.length, 1);
+  assert.equal(code.email, "first@example.test");
+  assert.deepEqual(code.options, { maskEmail: true });
+  const selectedFlow = await f.db.get("auth-flows", code.flowId);
   assert.equal(selectedFlow.accountHint, staleDid);
   assert.equal(selectedFlow.requestUri, "request-uri");
   assert.equal(selectedFlow.parameters.state, "original-state");
@@ -500,9 +511,10 @@ test("an email login_hint on the redirect URL sends a code to the normalized ema
     `&login_hint=${encodeURIComponent(" Owner@Example.Test ")}`,
   );
 
-  assert.deepEqual(f.emailCodes, [
-    { flow: "request-uri", email: "owner@example.test" },
-  ]);
+  assert.deepEqual(
+    f.emailCodes.map(({ flow, email, options }) => ({ flow, email, options })),
+    [{ flow: "request-uri", email: "owner@example.test", options: undefined }],
+  );
   assert.equal(response.body, "<check-your-email>");
 });
 
@@ -537,4 +549,17 @@ test("a PAR handle or DID login_hint takes precedence over a redirect email hint
   assert.deepEqual(f.emailCodes, []);
   assert.match(response.body, /did:plc:aaaaaaaaaaaaaaaaaaaaaaaa/);
   assert.doesNotMatch(response.body, /did:plc:bbbbbbbbbbbbbbbbbbbbbbbb/);
+});
+
+test("a remembered account without a stored email falls back to the email form", async (t) => {
+  const staleDid = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+  const f = await fixture(t, { staleDid, accountEmails: {} });
+  const page = await f.startAuthorization();
+  const flow = page.body.match(/name="flow" value="([^"]+)"/)?.[1];
+  const csrf = page.body.match(/name="csrf" value="([^"]+)"/)?.[1];
+
+  const otp = await f.chooseRemembered({ flow, csrf, did: staleDid });
+
+  assert.deepEqual(f.emailCodes, []);
+  assert.match(otp.body, /action="\/auth\/email"/);
 });

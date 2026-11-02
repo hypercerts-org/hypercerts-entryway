@@ -52,7 +52,7 @@ async function fixture(t) {
       };
     },
   };
-  mountEmailLogin({
+  const { startEmailCode } = mountEmailLogin({
     app,
     db,
     flows,
@@ -72,6 +72,7 @@ async function fixture(t) {
     db,
     flows,
     authentication,
+    startEmailCode,
     get sent() {
       return sent;
     },
@@ -168,6 +169,29 @@ test("concurrent requests for one sign-in flow preserve count, cooldown and late
     (await f.db.list("otp-limits")).reduce((sum, row) => sum + row.value, 0),
     1,
   );
+});
+
+test("a masked code request stays masked on resend until the user types an address", async (t) => {
+  const f = await fixture(t),
+    flow = await f.flow("masked");
+  await f.startEmailCode({}, flow, {}, "owner@example.test", {
+    maskEmail: true,
+  });
+  assert.equal((await f.db.get("auth-flows", flow.id)).maskEmail, true);
+
+  const age = async () =>
+    f.db.set("auth-flows", flow.id, {
+      ...(await f.db.get("auth-flows", flow.id)),
+      lastOtpSentAt: 0,
+    });
+  await age();
+  assert.equal((await f.route("/auth/resend", flow)).status, 200);
+  assert.equal((await f.db.get("auth-flows", flow.id)).maskEmail, true);
+
+  await age();
+  assert.equal((await f.request(flow, "other@example.test")).status, 200);
+  assert.equal((await f.db.get("auth-flows", flow.id)).maskEmail, false);
+  assert.equal(f.sent, 3);
 });
 
 test("same-flow concurrent resend preserves the existing five-second cooldown below the flow limit", async (t) => {
