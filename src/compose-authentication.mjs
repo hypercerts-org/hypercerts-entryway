@@ -85,6 +85,7 @@ export async function createAuthentication({
     flows,
     signupForm,
     authenticated,
+    handleDomain: config.publicHandles ? undefined : config.handleDomains?.[0],
   });
   mountAuthorizationRoutes({
     app,

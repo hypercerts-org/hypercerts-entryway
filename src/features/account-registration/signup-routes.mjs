@@ -9,6 +9,7 @@ async function registrationInput({
   email,
   body,
   registrationIdentity,
+  handleDomain,
 }) {
   if (existing)
     return {
@@ -24,13 +25,23 @@ async function registrationInput({
   return {
     email,
     recoveryKey: savedIntent?.recoveryKey ?? undefined,
-    handle: String(savedIntent?.handle ?? body.handle ?? "")
-      .trim()
-      .toLowerCase(),
+    handle: savedIntent?.handle
+      ? String(savedIntent.handle).trim().toLowerCase()
+      : withHandleDomain(body.handle, handleDomain),
     pdsId: String(savedIntent?.pdsId ?? body.pdsId ?? ""),
     inviteCode: body.inviteCode,
     registrationIdentity,
   };
+}
+
+// The signup form shows the hosted domain as a fixed suffix, so a bare name
+// (no dot) gets that domain; a full handle is kept as typed.
+function withHandleDomain(value, handleDomain) {
+  const handle = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (!handle || handle.includes(".") || !handleDomain) return handle;
+  return `${handle}.${handleDomain.replace(/^\./, "")}`;
 }
 
 // An OAuth flow ends at the client's redirect_uri, so its form pages must
@@ -88,6 +99,7 @@ export function mountSignupRoutes({
   flows,
   signupForm,
   authenticated,
+  handleDomain,
 }) {
   const { getFlow, pageForFlow, guarded, form } = flows;
   app.post(
@@ -135,6 +147,7 @@ export function mountSignupRoutes({
         email: flow.authEmail,
         body: req.body,
         registrationIdentity,
+        handleDomain,
       });
       if (!signupMatchesHints(flow, existing, input))
         throw new HttpError(
