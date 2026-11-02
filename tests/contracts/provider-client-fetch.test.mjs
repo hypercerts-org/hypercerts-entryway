@@ -29,6 +29,7 @@ test("only configured client metadata URLs bypass private-network SSRF protectio
     config.browserClientMetadataUrl,
     `${config.clientUrl}/client-metadata.json`,
     `${config.clientUrl}/client-metadata-secondary.json`,
+    `${config.clientUrl}/client-metadata-untrusted.json`,
   ]) {
     assert.equal((await fetch(url)).status, 200);
   }
@@ -45,6 +46,7 @@ test("only configured client metadata URLs bypass private-network SSRF protectio
   assert.deepEqual(
     visited.map(([kind]) => kind),
     [
+      "private",
       "private",
       "private",
       "private",
