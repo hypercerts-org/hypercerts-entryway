@@ -50,6 +50,7 @@ async function fixture(
     ]),
   );
   const upserts = [];
+  const emailCodes = [];
   let authorizeCalls = 0;
   let lookup;
   const provider = {
@@ -152,6 +153,10 @@ async function fixture(
       `<form method="post" action="/auth/email">${flows.fields(flow, browser)}<label>Email address</label><input type="email"></form>`,
     consentForm: (_flow, _browser, account) =>
       `<form method="post" action="/auth/consent"><input name="did" value="${account.did}"></form>`,
+    async startEmailCode(res, codeFlow, _browser, email) {
+      emailCodes.push({ flow: codeFlow.requestUri, email });
+      res.send("<check-your-email>");
+    },
   });
   const response = () => ({
     statusCode: 200,
@@ -191,6 +196,7 @@ async function fixture(
     flow,
     approved,
     upserts,
+    emailCodes,
     // Stops the next consent request at its client lookup until released.
     pauseNextConsentLookup() {
       let entered;
@@ -234,12 +240,11 @@ async function fixture(
       );
       return res;
     },
-    async startAuthorization() {
+    async startAuthorization(extraQuery = "") {
       const res = response();
       await handlers.get("/oauth/authorize")(
         {
-          originalUrl:
-            "/oauth/authorize?client_id=client-id&request_uri=request-uri",
+          originalUrl: `/oauth/authorize?client_id=client-id&request_uri=request-uri${extraQuery}`,
           headers: {},
         },
         res,
@@ -486,4 +491,50 @@ test("a consent that claimed the flow cannot be undone or recreated by a later a
     message: /expired/,
   });
   assert.equal(await f.db.get("auth-flows", f.flow.id), null);
+});
+
+test("an email login_hint on the redirect URL sends a code to the normalized email", async (t) => {
+  const f = await fixture(t);
+
+  const response = await f.startAuthorization(
+    `&login_hint=${encodeURIComponent(" Owner@Example.Test ")}`,
+  );
+
+  assert.deepEqual(f.emailCodes, [
+    { flow: "request-uri", email: "owner@example.test" },
+  ]);
+  assert.equal(response.body, "<check-your-email>");
+});
+
+test("unusable redirect login_hints fall back to the sign-in page without reflecting the value", async (t) => {
+  for (const extraQuery of [
+    `&login_hint=${encodeURIComponent('a"><script>alert(1)</script>@x.test')}`,
+    `&login_hint=${encodeURIComponent("<svg onload=alert(1)>")}`,
+    `&login_hint=${encodeURIComponent("owner.example.test")}`,
+    "&login_hint=one%40example.test&login_hint=two%40example.test",
+  ]) {
+    const f = await fixture(t);
+
+    const response = await f.startAuthorization(extraQuery);
+
+    assert.deepEqual(f.emailCodes, [], extraQuery);
+    assert.match(response.body, /action="\/auth\/email"/, extraQuery);
+    assert.doesNotMatch(
+      response.body,
+      /<script|<svg|alert\(1\)|login_hint|x\.test|owner\.example/,
+      extraQuery,
+    );
+  }
+});
+
+test("a PAR handle or DID login_hint takes precedence over a redirect email hint", async (t) => {
+  const f = await fixture(t, { loginHint: "account-1.example.test" });
+
+  const response = await f.startAuthorization(
+    "&login_hint=owner%40example.test",
+  );
+
+  assert.deepEqual(f.emailCodes, []);
+  assert.match(response.body, /did:plc:aaaaaaaaaaaaaaaaaaaaaaaa/);
+  assert.doesNotMatch(response.body, /did:plc:bbbbbbbbbbbbbbbbbbbbbbbb/);
 });
