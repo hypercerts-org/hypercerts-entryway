@@ -195,8 +195,9 @@ to email OTP for the selected DID. The authentication check revalidates the live
 DID binding before refreshing that DID's device membership. Account-console
 sensitive actions keep their separate ten-minute rule on the Better Auth session,
 which a confirmation by email code can renew ([Confirm it's you](#confirm-its-you)).
-Client trust is one Entryway-wide list, and the only consent bypass is the
-opt-in [signup consent skip](#client-trust-and-signup-consent-skip). Configured local public
+Client trust is one Entryway-wide list. Consent is skipped only by the opt-in
+[signup consent skip](#client-trust-and-signup-consent-skip) or by a returning
+account's [prior approval](#client-trust-and-signup-consent-skip). Configured local public
 and confidential client flows have verified hint acceptance, seven-day
 freshness and consent behavior. Full ePDS production consent/freshness parity
 remains outstanding.
@@ -244,10 +245,22 @@ Submission re-reads current bindings, requires a bound DID, and limits consent t
 the chosen DID while preserving the original PAR, client and requested scope.
 Until consent is approved or denied, the same verified session may choose a
 different bound DID from the consent page; consent then applies only to the
-latest choice. Stale selected accounts re-enter the existing visible email-OTP flow. The
-provider request's `login_hint` and any selected-account hint both remain binding
+latest choice. Stale selected accounts re-enter the existing visible email-OTP flow. A
+handle or DID `login_hint` in the pushed request that names an active hosted
+account with an email, which this browser does not remember, goes straight to
+that account's code step; the page masks the address. The usual sign-in page
+still appears for an unknown hint, when a remembered session already matches the
+hint, for `prompt=create`, and for `prompt=select_account` from trusted or
+confidential clients. For an untrusted public client the provider stores every
+prompt except `create` as `consent`, and Entryway reads the stored value, so
+`select_account` cannot be told apart there. The code limits are per email
+address and shared with the email form, not per authorization request: repeated
+hinted requests for one public handle can use up that account's budget of five
+codes per ten minutes.
+
+The provider request's `login_hint` and any selected-account hint both remain binding
 across authentication and flow restart; current account binding is checked before
-device membership is refreshed. Existing consent behavior remains unchanged. Security-revocation flows invalidate all Better
+device membership is refreshed. Security-revocation flows invalidate all Better
 Auth sessions for a DID's shared user. Ordinary verified email changes instead
 preserve sessions on the previous user while atomically moving only the selected
 DID binding to the verified destination user; sessions are not migrated to that
@@ -267,9 +280,18 @@ trusted and the client's metadata document contains `"epds_skip_consent_on_signu
 `prompt=consent` does not override that opt-in. If checking the skip fails,
 including a metadata read failure, consent is shown instead. A failure while
 issuing the authorization code itself happens after the sign-in is claimed, so
-the user restarts from the app.
-A skip records the granted scopes. Returning accounts keep the stock provider
-consent policy.
+the user restarts from the app. A skip records the granted scopes.
+
+A returning account that signs in with a code skips consent when the stock
+provider policy (`checkConsentRequired`) finds that this client already holds
+every requested scope for that account. Consent is still shown for a client the
+account never approved, a new scope and `prompt=consent`. Untrusted public
+clients always see consent after code sign-in: Entryway checks this itself and
+does not rely on the provider rewriting their stored prompt. The decision is
+repeated on the grant read inside the authorization transaction, so a grant
+revoked in connected apps meanwhile shows consent instead of a code. A failed
+lookup before that shows consent as well. This does not change
+silent sign-on, which the provider decides before the sign-in page.
 
 | Setting                     | Values and behavior                                                                                                        |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------- |

@@ -29,6 +29,39 @@ export class ChangedFlowIntentError extends Error {
   }
 }
 
+const SAFE_HOST = /^[a-z0-9-]+(\.[a-z0-9-]+)*(:\d+)?$/i;
+
+// The CSP form-action source for a redirect_uri, or undefined. A redirect_uri
+// that passes URI validation can still break CSP syntax (a wildcard host, or a
+// ";" that starts another directive), so only a strict source reaches the header.
+function formActionSource(redirectUri) {
+  let url;
+  try {
+    url = new URL(redirectUri);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol === "https:" || url.protocol === "http:")
+    return SAFE_HOST.test(url.host)
+      ? `${url.protocol}//${url.host}`
+      : undefined;
+  // A private-use scheme (RFC 8252: a reverse domain name, so it has a dot)
+  // names no host, so the whole scheme is the source.
+  return url.host === "" && url.protocol.includes(".")
+    ? url.protocol
+    : undefined;
+}
+
+// An OAuth flow ends at the client's redirect_uri, and the form-action policy
+// applies to that redirect after a form POST. Every page of an authorization
+// flow therefore allows the client's origin; a standalone flow does not.
+function clientFormPolicy(flow) {
+  const source = flow?.requestUri
+    ? formActionSource(flow.parameters?.redirect_uri)
+    : undefined;
+  return source ? { formOrigin: source } : {};
+}
+
 export function createBrowserFlow({
   db,
   config,
@@ -40,13 +73,13 @@ export function createBrowserFlow({
     primary: `${new URL(config.clientUrl).origin}/client-metadata.json`,
     secondary: `${new URL(config.clientUrl).origin}/client-metadata-secondary.json`,
   };
-  const pageForFlow = (res, title, body, flow, status = 200, policy = {}) =>
+  const pageForFlow = (res, title, body, flow, status = 200) =>
     page(
       res,
       title,
       body,
       status,
-      policy,
+      clientFormPolicy(flow),
       resolveBrand(flow?.clientId, brandClients),
     );
   const loadBrowser = async (req, res, rotate = false) => {
