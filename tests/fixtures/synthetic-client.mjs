@@ -249,11 +249,12 @@ export async function mountClient({ app, config, db }) {
   });
   const formFields = (browser, id) =>
     hidden("csrf", browser.csrf) + hidden("client", id);
-  const render = (res, browser, id, data = null) =>
+  const render = (res, browser, id, data = null, notice = "") =>
     page(
       res,
       data ? "Signed in" : "Hypercerts test client",
       `
+    ${notice ? `<p role="status">${escapeHtml(notice)}</p>` : ""}
     <p>Application: <strong>${escapeHtml(id)}</strong></p>
     ${
       data
@@ -286,14 +287,23 @@ export async function mountClient({ app, config, db }) {
       const browser = await readBrowser(req, res, true);
       const id = clientId(req, browser);
       const did = browser.subjects[id];
-      const data = did
-        ? await sessionData({
-            session: await clients[id].restore(did),
-            browser,
-            id,
-          })
-        : null;
-      render(res, browser, id, data);
+      if (!did) return render(res, browser, id);
+      try {
+        const session = await clients[id].restore(did);
+        render(res, browser, id, await sessionData({ session, browser, id }));
+      } catch {
+        // A revoked session (e.g. after a password change) can never be
+        // restored; forget it so the home page does not fail on every visit.
+        delete browser.subjects[id];
+        await db.set("client:browsers", browser.id, browser);
+        render(
+          res,
+          browser,
+          id,
+          null,
+          "Your previous session ended. Sign in again.",
+        );
+      }
     }),
   );
   router.get(
