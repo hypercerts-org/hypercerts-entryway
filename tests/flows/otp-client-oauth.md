@@ -30,8 +30,10 @@ metadata URL and requested scope. Google/GitHub are outside this flow.
    created account skips consent only when a trusted client's metadata opts in
    (`epds_skip_consent_on_signup`): the sandbox trusts the primary and secondary
    clients, the secondary and an extra untrusted client opt in, and the primary
-   does not. A returning account on the trusted opted-in client still sees
-   consent; the full decision table lives in `signup-consent-skip.test.mjs`.
+   does not. A returning account skips it only when the client already holds
+   every requested scope. A browser case in `browser.spec.mjs` covers the
+   returning-account skip; the full decision table lives in
+   `consent-skip.test.mjs`.
    An OAuth app may also start email-first sign-in with `login_hint=<email>` on
    the authorize redirect; a handle or DID hint from the pushed request wins,
    and an invalid email falls back to the sign-in page without sending mail.

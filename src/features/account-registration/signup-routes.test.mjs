@@ -61,8 +61,8 @@ function fixture({ existing, createError, handleDomain } = {}) {
       async getFlow() {
         return { flow, browser: {} };
       },
-      pageForFlow(_res, title, _body, _flow, status, policy) {
-        pages.push({ title, status, policy });
+      pageForFlow(_res, title, _body, _flow, status) {
+        pages.push({ title, status });
       },
       guarded: (handler) => handler,
       form() {},
@@ -106,7 +106,7 @@ test("a bare signup name gets the hosted handle domain; a full handle is kept", 
   );
 });
 
-test("a failed signup re-renders the form allowing the client's redirect origin as a form target", async () => {
+test("a failed signup re-renders the form with the failure status", async () => {
   const f = fixture({
     createError: Object.assign(new Error("Handle is taken"), { status: 409 }),
   });
@@ -114,11 +114,5 @@ test("a failed signup re-renders the form allowing the client's redirect origin 
   await f.submit();
 
   assert.deepEqual(f.authenticatedCalls, []);
-  assert.deepEqual(f.pages, [
-    {
-      title: "Create your account",
-      status: 409,
-      policy: { formOrigin: "https://client.example.test" },
-    },
-  ]);
+  assert.deepEqual(f.pages, [{ title: "Create your account", status: 409 }]);
 });

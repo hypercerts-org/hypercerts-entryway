@@ -296,6 +296,40 @@ test("existing device session reuses login across two real OAuth clients", async
   expect(outbox(alice.email).createdAt).toEqual(mailBefore);
 });
 
+test("a returning account that approved a client signs in with a code and skips consent", async ({
+  browser,
+}) => {
+  // alice approved the secondary client above. A browser that remembers nobody
+  // goes straight to the code step for her handle; the code page's form-action
+  // must allow the redirect to the client that follows a successful code.
+  const alice = identities[0];
+  const fresh = await browser.newContext({ ignoreHTTPSErrors: false });
+  try {
+    const hinted = await fresh.newPage();
+    const url = new URL("/client/login", config.clientUrl);
+    url.searchParams.set("identifier", alice.handle);
+    url.searchParams.set("client", "secondary");
+    const since = Date.now();
+    await hinted.goto(url.href);
+    await expect(
+      hinted.getByRole("heading", { name: "Check your email" }),
+    ).toBeVisible();
+    const html = await hinted.content();
+    expect(html).not.toContain(alice.email);
+    expect(html).not.toContain(alice.email.split("@")[0]);
+    const { code } = await waitForMailpitCode({
+      recipient: alice.email,
+      since,
+    });
+    await hinted.getByLabel("Sign-in code").fill(code);
+    await hinted.getByRole("button", { name: "Verify code" }).click();
+    await expect(hinted.getByTestId("signed-in-did")).toHaveText(alice.did);
+    expect(new URL(hinted.url()).origin).toBe(new URL(config.clientUrl).origin);
+  } finally {
+    await fresh.close();
+  }
+});
+
 test("multiple accounts can be selected without sharing entryway cookies with PDSs", async () => {
   await begin({ prompt: "select_account" });
   await expect(consent(identities[0].did)).toBeVisible();

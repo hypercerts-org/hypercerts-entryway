@@ -8,6 +8,7 @@ import { mountSignupRoutes } from "./features/account-registration/signup-routes
 import { createConsent } from "./features/oauth-authorization/consent.mjs";
 import { mountAuthorizationRoutes } from "./features/oauth-authorization/authorization-routes.mjs";
 import { authorizationRedirect } from "./features/oauth-authorization/redirect.mjs";
+import { accountEmailSchema } from "./accounts/input-schema.js";
 
 export async function createAuthentication({
   app,
@@ -87,6 +88,16 @@ export async function createAuthentication({
     authenticated,
     handleDomain: config.publicHandles ? undefined : config.handleDomains?.[0],
   });
+  // The account a handle or DID names, when it can be sent a code: active and
+  // with an email the code form would accept. The address stays out of the
+  // browser until the code page masks it.
+  const hintedAccount = async (hint) => {
+    const row = await accounts.get(hint);
+    return row?.status === "active" &&
+      accountEmailSchema.safeParse(row.email).success
+      ? { did: row.did, email: row.email }
+      : null;
+  };
   mountAuthorizationRoutes({
     app,
     db,
@@ -96,7 +107,7 @@ export async function createAuthentication({
     loginForm: forms.loginForm,
     consentForm,
     startEmailCode,
-    accountEmail: async (did) => (await accounts.storage.getByDid(did))?.email,
+    hintedAccount,
   });
   return {
     ...authentication,
