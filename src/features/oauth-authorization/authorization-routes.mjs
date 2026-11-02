@@ -30,6 +30,7 @@ export function mountAuthorizationRoutes({
   loginForm,
   consentForm,
   startEmailCode,
+  accountEmail,
 }) {
   const {
     newFlow,
@@ -261,6 +262,13 @@ export function mountAuthorizationRoutes({
         accountHint: did,
       });
       await db.delete("auth-flows", flow.id);
+      // The account is already chosen, so send its code without asking for the
+      // address. The page masks it: this browser never typed it.
+      const email = await accountEmail(did);
+      if (email)
+        return await startEmailCode(res, selectedFlow, browser, email, {
+          maskEmail: true,
+        });
       return pageForFlow(
         res,
         "Sign in to authorize",

@@ -96,6 +96,7 @@ export async function createAuthentication({
     loginForm: forms.loginForm,
     consentForm,
     startEmailCode,
+    accountEmail: async (did) => (await accounts.storage.getByDid(did))?.email,
   });
   return {
     ...authentication,
