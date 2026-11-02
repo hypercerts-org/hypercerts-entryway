@@ -8,6 +8,19 @@ import {
   flowBindsAnotherAccount,
 } from "./complete-authorization.mjs";
 import { matchesAuthorizationHint } from "../../accounts/rules.js";
+import { accountEmailSchema } from "../../accounts/input-schema.js";
+
+// PAR accepts only a handle or DID as login_hint, so email-first clients put
+// the email on this redirect URL instead. Only exactly one value that passes
+// the account email schema is used, and only its normalized form; anything
+// else is ignored so the raw query value is never reflected.
+function redirectEmailHint(params) {
+  const values = params.getAll("login_hint");
+  if (values.length !== 1) return null;
+  const parsed = accountEmailSchema.safeParse(values[0]);
+  return parsed.success ? parsed.data : null;
+}
+
 export function mountAuthorizationRoutes({
   app,
   db,
@@ -16,6 +29,7 @@ export function mountAuthorizationRoutes({
   flows,
   loginForm,
   consentForm,
+  startEmailCode,
 }) {
   const {
     newFlow,
@@ -106,6 +120,14 @@ export function mountAuthorizationRoutes({
         clientName: result.client.metadata.client_name,
         parameters: result.parameters,
       });
+      // A handle/DID hint from PAR is the binding account constraint; an email
+      // hint never overrides it and never selects or restricts an account.
+      const emailHint =
+        result.parameters.login_hint == null &&
+        result.parameters.prompt !== "none"
+          ? redirectEmailHint(params)
+          : null;
+      if (emailHint) return await startEmailCode(res, flow, browser, emailHint);
       authorizationPage(res, browser, flow, result);
     }),
   );

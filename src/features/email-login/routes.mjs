@@ -391,4 +391,7 @@ export function mountEmailLogin({
       res.redirect(303, "/login");
     }),
   );
+  // Lets authorization start the same rate-limited code send as the email
+  // form when a client supplies an email login_hint on the redirect URL.
+  return { startEmailCode: sendCode };
 }

@@ -55,7 +55,7 @@ export async function createAuthentication({
     accountAccess,
     clientRequestsSignupConsentSkip,
   });
-  mountEmailLogin({
+  const { startEmailCode } = mountEmailLogin({
     app,
     db,
     authentication,
@@ -95,6 +95,7 @@ export async function createAuthentication({
     flows,
     loginForm: forms.loginForm,
     consentForm,
+    startEmailCode,
   });
   return {
     ...authentication,

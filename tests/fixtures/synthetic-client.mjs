@@ -263,7 +263,7 @@ export async function mountClient({ app, config, db }) {
     <form method="post" action="/client/logout">${formFields(browser, id)}<button class="secondary">Sign out of application</button></form>`
         : ""
     }
-    <form method="get" action="/client/login"><label for="identifier">Handle, DID or authorization server</label><input id="identifier" name="identifier" value="${escapeHtml(config.issuer)}" required><label for="client">Application</label><select id="client" name="client"><option value="primary"${id === "primary" ? " selected" : ""}>Primary client</option><option value="secondary"${id === "secondary" ? " selected" : ""}>Second client</option></select><button>${data ? "Sign in again" : "Sign in"}</button></form>
+    <form method="get" action="/client/login"><label for="identifier">Handle, DID or authorization server</label><input id="identifier" name="identifier" value="${escapeHtml(config.issuer)}" required><label for="email">Email (optional, with an authorization server)</label><input id="email" name="email" type="email" autocomplete="email"><label for="client">Application</label><select id="client" name="client"><option value="primary"${id === "primary" ? " selected" : ""}>Primary client</option><option value="secondary"${id === "secondary" ? " selected" : ""}>Second client</option></select><button>${data ? "Sign in again" : "Sign in"}</button></form>
     <p><a href="${escapeHtml(config.issuer)}/account">Manage entryway account</a> · <a href="/client?client=${id === "primary" ? "secondary" : "primary"}">Open other application</a></p>
   `,
       200,
@@ -303,9 +303,12 @@ export async function mountClient({ app, config, db }) {
       const id = clientId(req, browser);
       const identifier = req.query.identifier ?? config.issuer;
       const scope = req.query.scope ?? DEFAULT_SCOPE;
+      const email = req.query.email || undefined;
       if (
         typeof identifier !== "string" ||
         identifier.length > 512 ||
+        (email !== undefined &&
+          (typeof email !== "string" || email.length > 254)) ||
         typeof scope !== "string" ||
         scope.length > 4096
       )
@@ -331,6 +334,9 @@ export async function mountClient({ app, config, db }) {
           scope,
           ...(prompt ? { prompt } : {}),
         });
+        // PAR rejects an email login_hint, so email-first sign-in carries it on
+        // the authorization redirect only.
+        if (email) url.searchParams.set("login_hint", email);
         res.redirect(303, url.href);
       } catch (error) {
         await db.delete("client:flows", appState);
