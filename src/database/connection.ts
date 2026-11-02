@@ -630,7 +630,7 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
       const stored =
         backend === "sqlite"
           ? sql`json_extract(${value}, ${`$.${field}`})`
-          : sql`((${value}::jsonb ->> ${field})::numeric)`;
+          : sql`(CASE WHEN jsonb_typeof(${value}::jsonb -> ${field}) = 'number' THEN (${value}::jsonb ->> ${field})::numeric END)`;
       await executor.remove(
         "key_value_state",
         and(
