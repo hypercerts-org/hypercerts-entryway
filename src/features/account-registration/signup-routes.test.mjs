@@ -9,8 +9,9 @@ const row = {
   email,
 };
 
-function fixture({ existing, createError } = {}) {
+function fixture({ existing, createError, handleDomain } = {}) {
   const handlers = new Map();
+  const created = [];
   const authenticatedCalls = [];
   const pages = [];
   const flow = {
@@ -35,7 +36,8 @@ function fixture({ existing, createError } = {}) {
       async pendingRegistration() {
         return null;
       },
-      async create() {
+      async create(input) {
+        created.push(input);
         if (createError) throw createError;
         return row;
       },
@@ -69,15 +71,14 @@ function fixture({ existing, createError } = {}) {
     async authenticated(_req, _res, _flow, _browser, account, options) {
       authenticatedCalls.push({ account, options });
     },
+    handleDomain,
   });
   return {
     authenticatedCalls,
+    created,
     pages,
-    submit: () =>
-      handlers.get("/auth/account")(
-        { body: { handle: "owner.example.test" } },
-        {},
-      ),
+    submit: (handle = "owner.example.test") =>
+      handlers.get("/auth/account")({ body: { handle } }, {}),
   };
 }
 
@@ -91,6 +92,18 @@ test("only a newly created account is marked as a new account for consent", asyn
   await returning.submit();
   assert.equal(returning.authenticatedCalls.length, 1);
   assert.notEqual(returning.authenticatedCalls[0].options.newAccount, true);
+});
+
+test("a bare signup name gets the hosted handle domain; a full handle is kept", async () => {
+  const f = fixture({ handleDomain: ".entryway.example.test" });
+
+  await f.submit(" Karma ");
+  await f.submit("other.elsewhere.test");
+
+  assert.deepEqual(
+    f.created.map((input) => input.handle),
+    ["karma.entryway.example.test", "other.elsewhere.test"],
+  );
 });
 
 test("a failed signup re-renders the form allowing the client's redirect origin as a form target", async () => {

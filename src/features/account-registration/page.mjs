@@ -69,7 +69,20 @@ export function createSignupForm({ db, config, accounts, fields }) {
       })
       .join("");
     const { intro, button } = signupState(recoveryRequired, retry);
-    return `<p>${intro}</p><form method="post" action="/auth/account">${fields(flow, browser)}<label for="handle">Handle</label><input id="handle" name="handle" placeholder="${escapeHtml(config.publicHandles?.[0] ?? "alice.entryway.test")}" value="${escapeHtml(initialHandle)}" ${retry || hintedHandle ? "readonly" : ""} ${config.publicHandles ? 'list="public-handles"' : ""} required>${suggestions}<small>${handleHelp}</small><label for="pdsId">Personal data server</label><select id="pdsId" name="pdsId" ${retry ? "disabled" : ""}>${pdsOptions}</select>${inviteInput}<button ${recoveryRequired ? "disabled" : ""}>${button}</button></form>`;
+    const locked = retry || Boolean(hintedHandle);
+    // An editable hosted handle takes only the name; the server appends this
+    // domain (see withHandleDomain in signup-routes.mjs).
+    const suffix =
+      !locked && !config.publicHandles && config.handleDomains?.[0]
+        ? `.${config.handleDomains[0].replace(/^\./, "")}`
+        : "";
+    const placeholder =
+      config.publicHandles?.[0] ?? (suffix ? "alice" : "alice.entryway.test");
+    const handleInput = `<input id="handle" name="handle" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(initialHandle)}" ${locked ? "readonly" : ""} ${config.publicHandles ? 'list="public-handles"' : ""} required>`;
+    const handleField = suffix
+      ? `<div style="display:flex;align-items:center;gap:.25rem">${handleInput}<span id="handle-suffix" style="white-space:nowrap">${escapeHtml(suffix)}</span></div>`
+      : handleInput;
+    return `<p>${intro}</p><form method="post" action="/auth/account">${fields(flow, browser)}<label for="handle">Handle</label>${handleField}${suggestions}<small>${suffix ? `Enter a name; ${escapeHtml(suffix)} is added for you.` : handleHelp}</small><label for="pdsId">Personal data server</label><select id="pdsId" name="pdsId" ${retry ? "disabled" : ""}>${pdsOptions}</select>${inviteInput}<button ${recoveryRequired ? "disabled" : ""}>${button}</button></form>`;
   };
   return signupForm;
 }
