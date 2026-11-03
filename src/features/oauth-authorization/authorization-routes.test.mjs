@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { OAuthProvider } from "@atproto/oauth-provider/provider";
 import { openTestDatabase } from "../../../tests/support/database-fixture.mjs";
 import { createBrowserFlow } from "../../../dist/src/http/browser-flow.mjs";
 import { mountAuthorizationRoutes } from "../../../dist/src/features/oauth-authorization/authorization-routes.mjs";
@@ -38,6 +39,14 @@ async function fixture(
       "account-1.example.test": hostedFirst,
     },
     hintLookupFails = false,
+    // Accounts that own each email, by normalized address.
+    emailAccounts = {},
+    emailLookupFails = false,
+    // The client's trust, and the scopes every remembered account has already
+    // approved for it.
+    client = { isConfidential: true, isTrusted: false },
+    approvedScopes,
+    revokedBeforeCompletion = false,
   } = {},
 ) {
   const db = await openTestDatabase();
@@ -66,7 +75,11 @@ async function fixture(
           handle: `account-${index + 1}.example.test`,
           email: accountEmails[did],
         },
-        authorizedClients: new Map(),
+        authorizedClients: new Map(
+          approvedScopes
+            ? [["client-id", { authorizedScopes: approvedScopes }]]
+            : [],
+        ),
         updatedAt:
           did === staleDid
             ? new Date(Date.now() - 8 * 24 * 60 * 60_000)
@@ -80,6 +93,9 @@ async function fixture(
   let authorizeCalls = 0;
   let lookup;
   const provider = {
+    // The real stock policy: these tests decide what Entryway passes to it,
+    // not what it answers.
+    checkConsentRequired: OAuthProvider.prototype.checkConsentRequired,
     deviceManager: {
       async load() {
         return browser;
@@ -98,7 +114,7 @@ async function fixture(
     clientManager: {
       async getClient() {
         await lookup?.hold();
-        return { clientId: "client-id" };
+        return { id: "client-id", ...client };
       },
     },
     accountManager: {
@@ -110,7 +126,9 @@ async function fixture(
         if (!session) throw new Error("Account not found");
         return {
           account: session.account,
-          authorizedClients: session.authorizedClients,
+          authorizedClients: revokedBeforeCompletion
+            ? new Map()
+            : session.authorizedClients,
         };
       },
       async listDeviceAccounts() {
@@ -162,6 +180,17 @@ async function fixture(
     ...(accountHint ? { accountHint } : {}),
   });
   await db.set("browser", browser.deviceId, { csrf, createdAt: new Date() });
+  const { authenticated, priorConsentSkip } = createConsent({
+    db,
+    provider,
+    stores: { account: async () => null },
+    flows,
+    accountAccess: {
+      async requireBoundAccount(_identity, did) {
+        return { did, status: statuses[did] ?? "active" };
+      },
+    },
+  });
   mountAuthorizationRoutes({
     app: {
       get(path, ...middleware) {
@@ -177,8 +206,8 @@ async function fixture(
     flows,
     loginForm: (flow, browser) =>
       `<form method="post" action="/auth/email">${flows.fields(flow, browser)}<label>Email address</label><input type="email"></form>`,
-    consentForm: (_flow, _browser, account) =>
-      `<form method="post" action="/auth/consent"><input name="did" value="${account.did}"></form>`,
+    consentForm: (consentFlow, _browser, account) =>
+      `<form method="post" action="/auth/consent"><input name="did" value="${account.did}"><input name="account-hint" value="${consentFlow.accountHint ?? ""}"></form>`,
     async startEmailCode(res, codeFlow, _browser, email, options) {
       emailCodes.push({
         flow: codeFlow.requestUri,
@@ -192,6 +221,11 @@ async function fixture(
       if (hintLookupFails) throw new Error("storage-private-marker");
       return hosted[hint] ?? null;
     },
+    listAccountsByEmail: async (email) => {
+      if (emailLookupFails) throw new Error("storage-private-marker");
+      return emailAccounts[email] ?? [];
+    },
+    priorConsentSkip,
   });
   const response = () => ({
     statusCode: 200,
@@ -213,17 +247,6 @@ async function fixture(
       this.statusCode = code;
       this.redirectUrl = url;
       return this;
-    },
-  });
-  const { authenticated } = createConsent({
-    db,
-    provider,
-    stores: { account: async () => null },
-    flows,
-    accountAccess: {
-      async requireBoundAccount(_identity, did) {
-        return { did, status: statuses[did] ?? "active" };
-      },
     },
   });
   return {
@@ -680,6 +703,131 @@ test("a failed hint lookup shows the sign-in page and logs only a safe code", as
 
   assert.deepEqual(f.emailCodes, []);
   assert.match(response.body, /action="\/auth\/email"/);
+  assert.equal(logged.length, 1);
+  assert.equal(JSON.parse(logged[0]).code, "RequestFailed");
+  assert.doesNotMatch(logged[0], /storage-private-marker/);
+});
+
+// An email hint skips the code only like the provider does for a handle hint:
+// one account and a fresh remembered session. The app's approval then decides
+// between signing in and consent.
+const emailHint = `&login_hint=${encodeURIComponent(" Owner@Example.Test ")}`;
+const ownerRow = {
+  did: hostedFirst.did,
+  status: "active",
+  email: "owner@example.test",
+};
+const secondOwnerRow = { ...ownerRow, did: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb" };
+const rememberedApprovedOwner = {
+  emailAccounts: { "owner@example.test": [ownerRow] },
+  approvedScopes: ["atproto"],
+};
+
+test("an email login_hint signs in the one remembered account that already approved the app without a code", async (t) => {
+  const f = await fixture(t, rememberedApprovedOwner);
+
+  const response = await f.startAuthorization(emailHint);
+
+  assert.equal(response.statusCode, 303);
+  assert.match(
+    response.redirectUrl,
+    /^https:\/\/client\.example\.test\/callback\?.*code=authorization-code/,
+  );
+  assert.match(response.redirectUrl, /state=original-state/);
+  assert.deepEqual(f.approved, [ownerRow.did]);
+  assert.deepEqual(f.emailCodes, []);
+});
+
+for (const [name, options] of [
+  [
+    "the email belongs to two accounts",
+    {
+      emailAccounts: { "owner@example.test": [ownerRow, secondOwnerRow] },
+    },
+  ],
+  [
+    "the account is not active",
+    {
+      emailAccounts: {
+        "owner@example.test": [{ ...ownerRow, status: "deactivated" }],
+      },
+    },
+  ],
+  [
+    "this browser remembers a different account",
+    { remembered: [secondOwnerRow.did] },
+  ],
+  ["its remembered session is stale", { staleDid: ownerRow.did }],
+  ...["login", "select_account"].map((prompt) => [
+    `the request has prompt=${prompt}`,
+    { prompt },
+  ]),
+]) {
+  test(`an email login_hint still sends a code when ${name}`, async (t) => {
+    const f = await fixture(t, { ...rememberedApprovedOwner, ...options });
+
+    const response = await f.startAuthorization(emailHint);
+
+    assert.equal(response.body, "<check-your-email>");
+    assert.deepEqual(
+      f.emailCodes.map(({ email }) => email),
+      ["owner@example.test"],
+    );
+    assert.deepEqual(f.approved, []);
+  });
+}
+
+// Stock PDS parity: a fresh remembered session that still needs consent goes
+// straight to consent for that account, without a password or a code.
+for (const [name, options] of [
+  ["the app was never approved", { approvedScopes: undefined }],
+  [
+    "the app asks for a scope not yet approved",
+    { approvedScopes: ["transition:generic"] },
+  ],
+  [
+    "the app is an untrusted public client",
+    {
+      client: { isConfidential: false, isTrusted: false },
+    },
+  ],
+  [
+    "the approval is revoked before the code is issued",
+    {
+      revokedBeforeCompletion: true,
+    },
+  ],
+  ["the request has prompt=consent", { prompt: "consent" }],
+]) {
+  test(`an email login_hint shows consent for the remembered account without a code when ${name}`, async (t) => {
+    const f = await fixture(t, { ...rememberedApprovedOwner, ...options });
+
+    const response = await f.startAuthorization(emailHint);
+
+    assert.equal(response.statusCode, 200);
+    assert.match(
+      response.body,
+      new RegExp(
+        `action="/auth/consent"><input name="did" value="${ownerRow.did}"><input name="account-hint" value="${ownerRow.did}">`,
+      ),
+    );
+    assert.deepEqual(f.emailCodes, []);
+    assert.deepEqual(f.approved, []);
+  });
+}
+
+test("a failed account lookup for an email login_hint sends the code and logs only a safe code", async (t) => {
+  const logged = [];
+  t.mock.method(console, "error", (line) => logged.push(line));
+  const f = await fixture(t, {
+    ...rememberedApprovedOwner,
+    emailLookupFails: true,
+  });
+
+  const response = await f.startAuthorization(emailHint);
+
+  assert.equal(response.body, "<check-your-email>");
+  assert.deepEqual(f.approved, []);
   assert.equal(logged.length, 1);
   assert.equal(JSON.parse(logged[0]).code, "RequestFailed");
   assert.doesNotMatch(logged[0], /storage-private-marker/);

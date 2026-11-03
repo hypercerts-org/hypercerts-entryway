@@ -22,10 +22,12 @@ metadata URL and requested scope. Google/GitHub are outside this flow.
    both the OAuth `login_hint` and selected-account hint must still match after
    restart. Client trust is the Entryway-wide `OAUTH_TRUSTED_CLIENTS` list.
    A newly created account skips consent only when a trusted client's
-   metadata opts in; a returning account skips it only when the client already
-   holds every requested scope. A browser case in `browser.spec.mjs` covers the
-   returning-account skip; the signup skip has no browser case yet, so its
-   decision table lives in `consent-skip.test.mjs`.
+   metadata opts in; a returning account that signs in with a code always sees
+   consent, even for a client it already approved. A browser case in
+   `browser.spec.mjs` covers that; the signup skip has no browser case yet, so its
+   decision table lives in `consent-skip.test.mjs`. The email `login_hint` sign-on
+   and consent without a code have no browser case either;
+   `authorization-routes.test.mjs` covers them.
 5. Use the resulting credentials for a real PDS write and refresh.
 6. Check denied/revoked paths in the accompanying lifecycle cases.
 

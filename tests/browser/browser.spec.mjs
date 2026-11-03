@@ -295,12 +295,31 @@ test("existing device session reuses login across two real OAuth clients", async
   expect(outbox(alice.email).createdAt).toEqual(mailBefore);
 });
 
-test("a returning account that approved a client signs in with a code and skips consent", async ({
+test("an email hint for a remembered account goes straight to consent for a new client without a code", async () => {
+  // This browser remembers bob from signup and the untrusted client has never
+  // been approved: like a stock PDS, Entryway selects the remembered session and
+  // shows consent instead of sending a code.
+  const bob = identities[1];
+  const mailBefore = outbox(bob.email).createdAt;
+  const url = new URL("/client/login", config.clientUrl);
+  url.searchParams.set("identifier", config.issuer);
+  url.searchParams.set("email", bob.email);
+  url.searchParams.set("client", "untrusted");
+  await page.goto(url.href);
+  await expect(
+    page.getByRole("heading", { name: "Authorize application" }),
+  ).toBeVisible();
+  await completeConsent(bob.did);
+  expect((await session("untrusted")).did).toBe(bob.did);
+  expect(outbox(bob.email).createdAt).toEqual(mailBefore);
+});
+
+test("a returning account that approved a client still sees consent after a code sign-in", async ({
   browser,
 }) => {
   // alice approved the secondary client above. A browser that remembers nobody
-  // goes straight to the code step for her handle; the code page's form-action
-  // must allow the redirect to the client that follows a successful code.
+  // goes straight to the code step for her handle, and then shows consent as a
+  // stock PDS does after sign-in; the consent form's redirect reaches the client.
   const alice = identities[0];
   const fresh = await browser.newContext({ ignoreHTTPSErrors: false });
   try {
@@ -322,6 +341,10 @@ test("a returning account that approved a client signs in with a code and skips 
     });
     await hinted.getByLabel("Sign-in code").fill(code);
     await hinted.getByRole("button", { name: "Verify code" }).click();
+    const approval = hinted.locator('form[action="/auth/consent"]').filter({
+      has: hinted.locator(`input[name="did"][value="${alice.did}"]`),
+    });
+    await approval.getByRole("button", { name: "Allow access" }).click();
     await expect(hinted.getByTestId("signed-in-did")).toHaveText(alice.did);
     expect(new URL(hinted.url()).origin).toBe(new URL(config.clientUrl).origin);
   } finally {
