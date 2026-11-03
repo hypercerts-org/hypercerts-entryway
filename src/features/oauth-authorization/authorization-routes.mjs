@@ -6,6 +6,7 @@ import { authorizationRedirect } from "./redirect.mjs";
 import {
   completeAuthorization,
   flowBindsAnotherAccount,
+  GrantNoLongerApprovedError,
 } from "./complete-authorization.mjs";
 import { matchesAuthorizationHint } from "../../accounts/rules.js";
 import { requestFailureEvent } from "../../logging/request-event.js";
@@ -42,6 +43,8 @@ export function mountAuthorizationRoutes({
   consentForm,
   startEmailCode,
   hintedAccount,
+  listAccountsByEmail,
+  priorConsentSkip,
 }) {
   const {
     newFlow,
@@ -109,6 +112,21 @@ export function mountAuthorizationRoutes({
       selectedFlow,
     );
   };
+  // Lookup failures log only a stable code and the operation ID.
+  const logHintLookupFailure = (res, error) => {
+    const { code, operationId } = requestFailureEvent(
+      500,
+      error,
+      res.locals?.operationId,
+    );
+    console.error(
+      JSON.stringify({
+        event: "login-hint.lookup-failed",
+        code,
+        operationId,
+      }),
+    );
+  };
   // A failed lookup is not a miss, but the page still lets the user sign in with
   // an email, so it must not fail the whole authorization. Only the lookup is
   // guarded: after sendCodeForAccount the flow has already been replaced.
@@ -116,19 +134,82 @@ export function mountAuthorizationRoutes({
     try {
       return await hintedAccount(hint);
     } catch (error) {
-      const { code, operationId } = requestFailureEvent(
-        500,
-        error,
-        res.locals?.operationId,
-      );
-      console.error(
-        JSON.stringify({
-          event: "login-hint.lookup-failed",
-          code,
-          operationId,
-        }),
-      );
+      logHintLookupFailure(res, error);
       return null;
+    }
+  };
+  // The one remembered, fresh session an email hint may use without a code:
+  // the email must belong to exactly one active account, and this browser must
+  // offer that account's session. Any failed lookup is a miss.
+  const findSessionForEmailHint = async (res, flow, result, email) => {
+    try {
+      const rows = await listAccountsByEmail(email);
+      if (rows.length !== 1 || rows[0].status !== "active") return null;
+      const session = offeredSessions(flow, result).find(
+        ({ account }) => account.did === rows[0].did,
+      );
+      return session && !session.loginRequired ? session : null;
+    } catch (error) {
+      logHintLookupFailure(res, error);
+      return null;
+    }
+  };
+  // The provider handles a handle or DID hint that matches one fresh remembered
+  // session without a code: it signs in when the app is already approved and
+  // otherwise shows consent for that account. An email hint gets the same for
+  // the one account the email names. prompt=consent (which the provider also
+  // stores for untrusted public apps) always shows consent; other prompts, and
+  // every miss or lookup failure, return false so the caller sends the code.
+  // Nothing here depends on, or reveals, more than the browser's own sessions.
+  const useRememberedSessionForEmailHint = async (
+    res,
+    browser,
+    flow,
+    result,
+    email,
+  ) => {
+    const { prompt } = result.parameters;
+    if (prompt != null && prompt !== "consent") return false;
+    const session = await findSessionForEmailHint(res, flow, result, email);
+    if (!session) return false;
+    if (await signInApprovedAccount(res, browser, flow, session.account.did))
+      return true;
+    const consentFlow = await newFlow(browser, {
+      requestUri: flow.requestUri,
+      clientId: flow.clientId,
+      clientName: flow.clientName,
+      parameters: result.parameters,
+      accountHint: session.account.did,
+    });
+    await db.delete("auth-flows", flow.id);
+    pageForFlow(
+      res,
+      "Authorize application",
+      consentForm(consentFlow, browser, session.account),
+      consentFlow,
+    );
+    return true;
+  };
+  // Issues the code without consent when the stock policy says this app
+  // already holds every requested scope. A grant revoked meanwhile is a miss.
+  const signInApprovedAccount = async (res, browser, flow, did) => {
+    const skip = await priorConsentSkip(flow, browser, did);
+    if (!skip) return false;
+    try {
+      await completeAuthorization({
+        db,
+        config,
+        provider,
+        refreshFlow: flows.refreshFlow,
+        res,
+        flow,
+        browser,
+        ...skip,
+      });
+      return true;
+    } catch (error) {
+      if (error instanceof GrantNoLongerApprovedError) return false;
+      throw error;
     }
   };
   // A handle or DID login_hint naming a hosted account that this browser does
@@ -207,7 +288,19 @@ export function mountAuthorizationRoutes({
         result.parameters.prompt !== "none"
           ? redirectEmailHint(params)
           : null;
-      if (emailHint) return await startEmailCode(res, flow, browser, emailHint);
+      if (emailHint) {
+        if (
+          await useRememberedSessionForEmailHint(
+            res,
+            browser,
+            flow,
+            result,
+            emailHint,
+          )
+        )
+          return;
+        return await startEmailCode(res, flow, browser, emailHint);
+      }
       if (await sendCodeForHintedAccount(res, browser, flow, result)) return;
       authorizationPage(res, browser, flow, result);
     }),

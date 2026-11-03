@@ -918,9 +918,9 @@ test("an unbound DID login_hint cannot turn verified email into a different sign
   );
 });
 
-// A returning account that already approved the client is redirected straight
-// to it from /auth/verify or /auth/select, and the submitting page's form-action
-// applies to that redirect. Which origins are emitted is tested at pageForFlow.
+// Any page of an authorization flow can end in a redirect to the client (for
+// example a signup consent skip), and the submitting page's form-action applies
+// to that redirect. Which origins are emitted is tested at pageForFlow.
 test("the code page allows the client's redirect origin as a form target only for an authorization flow", async (t) => {
   const authorization = await verificationFixture(t, "resend");
   const standalone = await verificationFixture(t, "resend", {

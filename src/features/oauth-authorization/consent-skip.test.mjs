@@ -240,61 +240,14 @@ test("a returning account the client was never approved for sees consent even fo
   assert.deepEqual(f.authorized, []);
 });
 
-test("a returning account skips consent when the client already holds every requested scope", async (t) => {
-  const f = await fixture(t, {
-    trusted: false,
-    confidential: true,
-    approvedScopes: requestedScopes,
-  });
-
-  const response = await f.complete();
-
-  assert.equal(response.statusCode, 303);
-  assert.match(response.redirectUrl, /code=authorization-code/);
-  assert.match(response.redirectUrl, /state=original-state/);
-  assert.deepEqual(f.authorized, [did]);
-  assert.deepEqual(f.grants, [{ clientId, authorizedScopes: requestedScopes }]);
-});
-
-test("a returning account skips consent for a trusted public client that already holds every requested scope", async (t) => {
-  const f = await fixture(t, {
-    trusted: true,
-    confidential: false,
-    approvedScopes: requestedScopes,
-  });
-
-  const response = await f.complete();
-
-  assert.equal(response.statusCode, 303);
-  assert.match(response.redirectUrl, /code=authorization-code/);
-  assert.deepEqual(f.authorized, [did]);
-});
-
+// Stock PDS parity: its authorization page always shows consent after sign-in,
+// so a code or chooser sign-in does too, even for an already approved client.
 for (const [name, options] of [
-  ["it asks for a scope not yet approved", { approvedScopes: ["atproto"] }],
-  [
-    // The stored prompt is deliberately not rewritten to consent here, so
-    // only Entryway's own client check can keep this on the consent page.
-    "the client is untrusted and public, even with every scope approved",
-    { trusted: false, confidential: false, approvedScopes: requestedScopes },
-  ],
-  [
-    "the request has prompt=consent",
-    { approvedScopes: requestedScopes, prompt: "consent" },
-  ],
-  [
-    "the device account lookup fails",
-    { approvedScopes: requestedScopes, failing: "device-account lookup" },
-  ],
-  [
-    // The skip decision read the grant outside any transaction; completion
-    // must decide again on the grant it reads before issuing the code.
-    "the grant is revoked after the skip decision and before completion",
-    { approvedScopes: requestedScopes, revokedBeforeCompletion: true },
-  ],
+  ["a confidential client", { trusted: false, confidential: true }],
+  ["a trusted public client", { trusted: true, confidential: false }],
 ]) {
-  test(`a returning account sees consent, not a code, when ${name}`, async (t) => {
-    const f = await fixture(t, options);
+  test(`a returning account sees consent after a code sign-in for ${name} that already holds every requested scope`, async (t) => {
+    const f = await fixture(t, { ...options, approvedScopes: requestedScopes });
 
     const response = await f.complete();
 

@@ -47,7 +47,7 @@ export async function createAuthentication({
     accounts,
     fields: flows.fields,
   });
-  const { consentForm, authenticated } = createConsent({
+  const { consentForm, authenticated, priorConsentSkip } = createConsent({
     db,
     config,
     provider,
@@ -108,6 +108,8 @@ export async function createAuthentication({
     consentForm,
     startEmailCode,
     hintedAccount,
+    listAccountsByEmail: (email) => accounts.storage.listByEmail(email),
+    priorConsentSkip,
   });
   return {
     ...authentication,

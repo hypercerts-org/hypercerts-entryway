@@ -20,9 +20,9 @@ metadata URL and requested scope. Google/GitHub are outside this flow.
    picker.
 4. Complete the existing consent flow when required and assert the returned
    identity equals the intended DID and the original OAuth request is retained.
-   A stale remembered device (older than seven days) lists its account as
-   "Sign in with an email code" instead of one-click consent. Choosing it sends
-   the code to the account's own email without asking for it; the page shows the
+   A stale remembered device (older than seven days) lists its account as "Sign
+   in with an email code" instead of one-click consent. Choosing it sends the
+   code to the account's own email without asking for it; the page shows the
    address masked and neither the address nor its local part is in the HTML.
    With a shared email the chooser stays, limited to the selected DID. Both the
    OAuth `login_hint` and selected-account hint must still match after restart.
@@ -30,16 +30,18 @@ metadata URL and requested scope. Google/GitHub are outside this flow.
    created account skips consent only when a trusted client's metadata opts in
    (`epds_skip_consent_on_signup`): the sandbox trusts the primary and secondary
    clients, the secondary and an extra untrusted client opt in, and the primary
-   does not. A returning account skips it only when the client already holds
-   every requested scope. A browser case in `browser.spec.mjs` covers the
-   returning-account skip; the full decision table lives in
-   `consent-skip.test.mjs`.
-   An OAuth app may also start email-first sign-in with `login_hint=<email>` on
-   the authorize redirect; a handle or DID hint from the pushed request wins,
-   and an invalid email falls back to the sign-in page without sending mail.
-   `prompt=none` signs a remembered, approved account in silently, returns
-   `consent_required` for a client that was never approved and `login_required`
-   without a hint, and is refused for an untrusted public client.
+   does not. A returning account that signs in with a code always sees consent,
+   even for a client it already approved. A browser case in `browser.spec.mjs`
+   covers that; the signup skip has no browser case yet, so its decision table
+   lives in `consent-skip.test.mjs`. The email `login_hint` sign-on and consent
+   without a code have no browser case either; `authorization-routes.test.mjs`
+   covers them. An OAuth app may also start email-first sign-in with
+   `login_hint=<email>` on the authorize redirect; a handle or DID hint from the
+   pushed request wins, and an invalid email falls back to the sign-in page
+   without sending mail. `prompt=none` signs a remembered, approved account in
+   silently, returns `consent_required` for a client that was never approved and
+   `login_required` without a hint, and is refused for an untrusted public
+   client.
 5. Use the resulting credentials for a real PDS write and refresh.
 6. Check denied/revoked paths in the accompanying lifecycle cases.
 

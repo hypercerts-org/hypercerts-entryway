@@ -56,8 +56,8 @@ export function createConsent({
         client.isTrusted === true &&
         (await clientRequestsSignupConsentSkip(flow.clientId)) === true,
     );
-  // A returning account skips consent when the stock provider policy says this
-  // client already holds every requested scope for it. That policy also keeps
+  // The email hint's sign-on without a code skips consent when the stock
+  // provider policy says this client already holds every requested scope. That policy also keeps
   // prompt=consent and new scopes on the consent page. An untrusted public
   // client never skips: the request manager already stores prompt=consent for
   // it, but Entryway does not rely on that rewrite staying in the provider.
@@ -66,6 +66,8 @@ export function createConsent({
     !provider.checkConsentRequired(request.parameters, grant);
   // The grant read here may be revoked before completeAuthorization commits, so
   // completion reruns the same policy on the grant it reads in its transaction.
+  // A sign-in that showed Entryway's own pages (code, chooser) always shows
+  // consent instead, as a stock PDS does after its sign-in page.
   const priorConsentSkip = async (flow, browser, did) => {
     const skip = await consentSkip(flow, browser, did, (found) =>
       priorGrantApproves(
@@ -161,12 +163,13 @@ export function createConsent({
         303,
         `/account?did=${encodeURIComponent(authorized.account.did)}`,
       );
-    const findSkip = newAccount ? signupConsentSkip : priorConsentSkip;
-    const skip = await findSkip(
-      authorized.current,
-      browser,
-      authorized.account.did,
-    );
+    const skip = newAccount
+      ? await signupConsentSkip(
+          authorized.current,
+          browser,
+          authorized.account.did,
+        )
+      : null;
     if (skip) {
       try {
         return await completeAuthorization({
@@ -194,5 +197,5 @@ export function createConsent({
       authorized.current,
     );
   };
-  return { consentForm, authenticated };
+  return { consentForm, authenticated, priorConsentSkip };
 }
