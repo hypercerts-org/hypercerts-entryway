@@ -57,12 +57,22 @@ export function refuseOAuthAccountMethod(method, permissions) {
       "Forbidden",
       "Use the account manager interface to update email address associated with an account",
     );
+  // A deactivated account cannot complete OAuth sign-in, so an app could never
+  // hold a usable credential for reactivation.
+  if (method === "activateAccount")
+    return new HttpError(
+      403,
+      "Forbidden",
+      "Account reactivation is not available with OAuth credentials. Sign in to your account management page to reactivate.",
+    );
   try {
     if (method === "updateHandle")
       permissions.assertIdentity({ attr: "handle" });
     else if (plcMethods.has(method)) permissions.assertIdentity({ attr: "*" });
     else if (["requestEmailConfirmation", "confirmEmail"].includes(method))
       permissions.assertAccount({ attr: "email", action: "manage" });
+    else if (method === "deactivateAccount")
+      permissions.assertAccount({ attr: "status", action: "manage" });
     else
       return new HttpError(
         403,
