@@ -16,6 +16,7 @@ export default defineConfig({
         "browser-oauth.spec.mjs",
         "oauth-lifecycle.spec.mjs",
         "account-chooser.spec.mjs",
+        "consent-map.spec.mjs",
       ],
   fullyParallel: false,
   workers: 1,
