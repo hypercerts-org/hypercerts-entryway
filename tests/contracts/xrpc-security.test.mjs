@@ -404,8 +404,6 @@ test("OAuth account refusals match the stock PDS error names and messages", () =
     });
   for (const method of [
     "requestAccountDelete",
-    "deactivateAccount",
-    "activateAccount",
     "createAppPassword",
     "revokeAppPassword",
   ])
@@ -415,6 +413,16 @@ test("OAuth account refusals match the stock PDS error names and messages", () =
       message: "OAuth credentials are not supported for this endpoint",
     });
 
+  assert.deepEqual(
+    refusal("activateAccount", granted("account:status?action=manage")),
+    {
+      status: 403,
+      error: "Forbidden",
+      message:
+        "Account reactivation is not available with OAuth credentials. Sign in to your account management page to reactivate.",
+    },
+  );
+
   // A missing permission names the scope the app must request.
   assert.deepEqual(refusal("updateHandle"), {
     status: 403,
@@ -423,6 +431,11 @@ test("OAuth account refusals match the stock PDS error names and messages", () =
   });
   assert.equal(refusal("signPlcOperation").error, "ScopeMissingError");
   assert.equal(refusal("confirmEmail").error, "ScopeMissingError");
+  assert.deepEqual(refusal("deactivateAccount"), {
+    status: 403,
+    error: "ScopeMissingError",
+    message: 'Missing required scope "account:status?action=manage"',
+  });
 
   // Granted permissions and always-allowed methods pass.
   assert.equal(refusal("getSession"), null);
@@ -430,6 +443,10 @@ test("OAuth account refusals match the stock PDS error names and messages", () =
   assert.equal(refusal("signPlcOperation", granted("identity:*")), null);
   assert.equal(
     refusal("confirmEmail", granted("account:email?action=manage")),
+    null,
+  );
+  assert.equal(
+    refusal("deactivateAccount", granted("account:status?action=manage")),
     null,
   );
 });
