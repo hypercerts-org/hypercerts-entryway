@@ -30,6 +30,73 @@ There is an active-account window before the separate deactivation. Publication
 can also succeed before account creation finishes. Treat both as recoverable
 failure boundaries, not as atomic provisioning.
 
+### Accepted migration sequence
+
+This diagram shows the intended successful path, not implemented behavior. The
+numbered stages match the overview above; recovery rules follow later in this guide.
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'background': '#FFFFFF', 'primaryColor': '#DBEAFE', 'primaryTextColor': '#172033', 'primaryBorderColor': '#475569', 'lineColor': '#334155', 'textColor': '#172033', 'actorBkg': '#F1F5F9', 'actorBorder': '#475569', 'actorTextColor': '#172033', 'actorLineColor': '#475569', 'signalColor': '#334155', 'signalTextColor': '#172033', 'labelBoxBkgColor': '#EDE9FE', 'labelBoxBorderColor': '#475569', 'labelTextColor': '#172033', 'loopTextColor': '#172033', 'noteBkgColor': '#FFEDD5', 'noteBorderColor': '#9A3412', 'noteTextColor': '#172033'}}}%%
+sequenceDiagram
+    box rgb(219, 234, 254) Clients
+        participant Browser
+        participant Tool as Migration tool
+    end
+    box rgb(237, 233, 254) Admission and policy
+        participant Entryway
+    end
+    box rgb(220, 252, 231) Data and hosting
+        participant Source as Source PDS
+        participant Destination as Destination PDS
+    end
+    box rgb(255, 237, 213) Identity authority
+        participant PLC as PLC directory
+    end
+
+    Browser->>Entryway: 1. Verify email with OTP and prepare arrival
+    Entryway->>Destination: Reserve repository signing key
+    Entryway-->>Browser: Arrival code and public preparation facts
+    Browser->>Tool: Explicit user handoff of arrival code
+
+    Tool->>Source: 2. Authenticate and authorize authority-only handoff
+    Source-->>Tool: Signed handoff and submit-scoped service JWT
+    Tool->>Entryway: Submit handoff with JWT and arrival code
+    Entryway->>PLC: Publish validated source-signed handoff
+    PLC-->>Entryway: Observe canonical handoff
+    Entryway-->>Tool: Handoff confirmed
+    Note over Source,PLC: Source endpoint and repository key remain unchanged
+
+    Tool->>Source: Obtain fresh createAccount-scoped service JWT
+    Source-->>Tool: Creation authorization
+    Tool->>Entryway: 3. Create account with arrival code and admission fields
+    Entryway->>Destination: Create with Entryway-signed destination move
+    Destination->>PLC: Publish destination move
+    Note over Destination,PLC: Identity cutover happens BEFORE data import
+    Destination-->>Entryway: Account created ACTIVE
+    Note over Entryway,Destination: Active-account window until separate deactivation
+
+    Entryway->>Destination: 4. Deactivate and observe outcome
+    Destination-->>Entryway: Deactivated
+    Entryway->>Entryway: Atomically bind user and migration-pending account
+    Entryway-->>Tool: Tracked access and refresh credentials
+
+    Tool->>Source: 5. Export repository and blobs from pinned source
+    Source-->>Tool: Repository and blobs
+    Tool->>Destination: Import directly using migration credentials
+    Destination-->>Tool: Transfer status
+    Note over Tool,Destination: Catch up source changes; Entryway does not relay data
+
+    Tool->>Entryway: 6. Request guarded activation
+    Entryway->>Entryway: Verify canonical identity, binding and backend readiness
+    Entryway->>Entryway: Verify final repository integrity and all missing-blob pages
+    Note over Entryway,Destination: Public integrity evidence mechanism still needs implementation
+    Entryway->>Destination: Activate only after all readiness checks pass
+    Destination-->>Entryway: Observe active state
+    Entryway->>Entryway: Atomically complete activation checkpoint
+    Entryway-->>Tool: Destination ready
+    Tool->>Source: Deactivate source; do not delete
+```
+
 ### Who owns each part?
 
 | Component | Responsibility |
@@ -275,17 +342,6 @@ Existing reservation, ownership, binding, signing and session machinery provides
 building blocks, not this public flow. Implement incoming authorization and
 publication, unique individual-arrival email checks, earlier binding, guarded
 activation and client routing. Keep synthetic migration as a separate fixture.
-
-### Source evidence and compatibility limits
-
-| Inspected source | Revision | Relevant finding |
-| --- | --- | --- |
-| Stock PDS 0.5.36 | `ee49be8109bc2f91b112fdbc1e46747b05411f7f` | Entryway provisioning publishes the destination operation and creates active |
-| Rust Entryway | `d95d4993bba24fbf18d7851c24b3466258ae6e63` | Inactive-first provisioning relies on its Rust PDS arrival extension, which is not adopted |
-| PDS MOOver | `18d942d41a4ef0a1e039b4396760e9bb35324a3b` | Normal flow creates first and signs one late cutover; separate password login and single-origin pinning need Entryway-aware integration |
-
-These observations and design approval do not establish a passing runtime result.
-Record tool versions for reproducibility, not as product prerequisites.
 
 ## Related documentation
 
