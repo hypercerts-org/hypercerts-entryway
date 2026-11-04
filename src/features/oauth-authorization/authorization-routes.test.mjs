@@ -5,6 +5,7 @@ import { openTestDatabase } from "../../../tests/support/database-fixture.mjs";
 import { createBrowserFlow } from "../../../dist/src/http/browser-flow.mjs";
 import { mountAuthorizationRoutes } from "../../../dist/src/features/oauth-authorization/authorization-routes.mjs";
 import { createConsent } from "../../../dist/src/features/oauth-authorization/consent.mjs";
+import { fakeApp, fakeResponse } from "../../../tests/support/fake-http.mjs";
 
 const verifiedEmail = "owner@example.test";
 const hostedFirst = {
@@ -192,14 +193,7 @@ async function fixture(
     },
   });
   mountAuthorizationRoutes({
-    app: {
-      get(path, ...middleware) {
-        handlers.set(path, middleware.at(-1));
-      },
-      post(path, ...middleware) {
-        handlers.set(path, middleware.at(-1));
-      },
-    },
+    app: fakeApp(handlers),
     db,
     config,
     provider,
@@ -227,28 +221,7 @@ async function fixture(
     },
     priorConsentSkip,
   });
-  const response = () => ({
-    statusCode: 200,
-    set() {
-      return this;
-    },
-    status(code) {
-      this.statusCode = code;
-      return this;
-    },
-    type() {
-      return this;
-    },
-    send(body) {
-      this.body = body;
-      return this;
-    },
-    redirect(code, url) {
-      this.statusCode = code;
-      this.redirectUrl = url;
-      return this;
-    },
-  });
+  const response = fakeResponse;
   return {
     db,
     flow,

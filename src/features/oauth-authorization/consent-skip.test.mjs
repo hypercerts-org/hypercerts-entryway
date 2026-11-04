@@ -5,6 +5,7 @@ import { openTestDatabase } from "../../../tests/support/database-fixture.mjs";
 import { createBrowserFlow } from "../../../dist/src/http/browser-flow.mjs";
 import { createConsent } from "../../../dist/src/features/oauth-authorization/consent.mjs";
 import { createSignupConsentSkipReader } from "../../../dist/src/features/oauth-authorization/provider.mjs";
+import { fakeResponse } from "../../../tests/support/fake-http.mjs";
 
 const did = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
 const clientId = "https://client.example.test/client-metadata.json";
@@ -138,28 +139,7 @@ async function fixture(
       return failed;
     },
     async complete(options) {
-      const res = {
-        statusCode: 200,
-        set() {
-          return this;
-        },
-        status(code) {
-          this.statusCode = code;
-          return this;
-        },
-        type() {
-          return this;
-        },
-        send(body) {
-          this.body = body;
-          return this;
-        },
-        redirect(code, url) {
-          this.statusCode = code;
-          this.redirectUrl = url;
-          return this;
-        },
-      };
+      const res = fakeResponse();
       await authenticated(
         {},
         res,

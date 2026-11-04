@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mountSignupRoutes } from "../../../dist/src/features/account-registration/signup-routes.mjs";
+import { fakeApp } from "../../../tests/support/fake-http.mjs";
 
 const email = "owner@example.test";
 const row = {
@@ -24,11 +25,7 @@ function fixture({ existing, createError, handleDomain, loginHint } = {}) {
     },
   };
   mountSignupRoutes({
-    app: {
-      post(path, ...middleware) {
-        handlers.set(path, middleware.at(-1));
-      },
-    },
+    app: fakeApp(handlers),
     db: {},
     accounts: {
       storage: {
