@@ -7,18 +7,14 @@ import { createBrowserFlow } from "../../../dist/src/http/browser-flow.mjs";
 import { createConsent } from "../../../dist/src/features/oauth-authorization/consent.mjs";
 import { createLoginForms } from "../../../dist/src/features/email-login/page.mjs";
 import { mountEmailLogin } from "../../../dist/src/features/email-login/routes.mjs";
+import { fakeApp, fakeResponse } from "../../../tests/support/fake-http.mjs";
 
 async function fixture(t, { realForms = false } = {}) {
   const db = await openTestDatabase();
   t.after(() => db.close());
   const handlers = new Map();
   let sent = 0;
-  const app = {
-    get() {},
-    post(path, ...middleware) {
-      handlers.set(path, middleware.at(-1));
-    },
-  };
+  const app = fakeApp(handlers);
   const browser = { deviceId: "test-browser" };
   const save = (flow) => db.set("auth-flows", flow.id, flow);
   const flows = {
@@ -471,12 +467,7 @@ async function verificationFixture(
     createdAt: new Date(),
   });
   mountEmailLogin({
-    app: {
-      get() {},
-      post(path, ...middleware) {
-        handlers.set(path, middleware.at(-1));
-      },
-    },
+    app: fakeApp(handlers),
     db,
     flows,
     authenticated,
@@ -542,29 +533,7 @@ async function verificationFixture(
       boundRows = boundRows.filter((account) => account.did !== did);
     },
     async request(path, body) {
-      const res = {
-        statusCode: 200,
-        headers: {},
-        set(headers) {
-          Object.assign(this.headers, headers);
-          return this;
-        },
-        status(code) {
-          this.statusCode = code;
-          return this;
-        },
-        type() {
-          return this;
-        },
-        send(body) {
-          this.body = body;
-          return this;
-        },
-        redirect(code, url) {
-          this.statusCode = code;
-          this.redirectUrl = url;
-        },
-      };
+      const res = fakeResponse();
       await handlers.get(path)(
         {
           headers: { origin: "https://entryway.example.test" },
