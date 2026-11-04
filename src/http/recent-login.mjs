@@ -1,6 +1,6 @@
 import { page, escapeHtml as esc } from "../ui/html.mjs";
 import { hidden } from "../ui/forms.mjs";
-import { accountUrl } from "../ui/account-forms.mjs";
+import { accountUrl, settingsLink } from "../ui/account-forms.mjs";
 
 // Every action needs a recent session unless it is listed here, so a new
 // action is protected until someone decides otherwise. Keep the reason with it.
@@ -93,7 +93,7 @@ export const endedPage = (
   page(
     res,
     title,
-    `<p role="alert">${esc(message)}</p><p><a href="${esc(accountUrl(ctx.account.did))}">Return to account settings</a></p>${signIn ? '<p class="muted">You can also <a href="/login">sign in again</a>.</p>' : ""}`,
+    `<p role="alert">${esc(message)}</p><p>${settingsLink(ctx.account.did)}</p>${signIn ? '<p class="muted">You can also <a href="/login">sign in again</a>.</p>' : ""}`,
     status,
   );
 

@@ -1,10 +1,12 @@
 import { page } from "../../ui/html.mjs";
 import {
-  accountUrl,
+  codeField,
   field,
   hidden,
   nextStep,
+  settingsLink,
 } from "../../ui/account-forms.mjs";
+import { newEmailConfirmFields } from "./page.mjs";
 
 export function createAccountSettingsActions({
   security,
@@ -33,12 +35,7 @@ export function createAccountSettingsActions({
         contents:
           hidden("email", value("email")) +
           hidden("challengeId", issued.challengeId ?? "") +
-          field(
-            "token",
-            "Recovery email verification code",
-            "text",
-            'autocomplete="one-time-code" maxlength="256"',
-          ),
+          codeField("Recovery email verification code"),
         button: "Verify recovery email",
         message: "Enter the verification code sent to your recovery email.",
         accountContext,
@@ -71,12 +68,7 @@ export function createAccountSettingsActions({
         action: "email-update",
         contents:
           hidden("challengeId", issued.challengeId ?? "") +
-          field(
-            "token",
-            "Current email verification code",
-            "text",
-            'autocomplete="one-time-code" maxlength="256"',
-          ) +
+          codeField("Current email verification code") +
           field("email", "New primary email", "email", 'maxlength="320"'),
         button: "Verify current email and continue",
         message: "A verification code was sent to your current primary email.",
@@ -101,15 +93,7 @@ export function createAccountSettingsActions({
         title: "Verify new email",
         csrf: browser.csrf,
         action: "email-confirm",
-        contents:
-          hidden("challengeId", issued.challengeId ?? "") +
-          hidden("email", value("email")) +
-          field(
-            "token",
-            "New email verification code",
-            "text",
-            'autocomplete="one-time-code" maxlength="256"',
-          ),
+        contents: newEmailConfirmFields(issued.challengeId, value("email")),
         button: "Confirm new email",
         message:
           "Verify the code sent to your new primary email to complete the change.",
@@ -144,7 +128,7 @@ export function createAccountSettingsActions({
       return page(
         res,
         "Account password updated",
-        `<p>Your password was updated. Existing sessions and app passwords were revoked.</p><a href="/login">Sign in again</a><p><a href="${accountContext?.did ? accountUrl(accountContext.did) : "/account"}">Return to account settings</a></p>`,
+        `<p>Your password was updated. Existing sessions and app passwords were revoked.</p><a href="/login">Sign in again</a><p>${settingsLink(accountContext?.did)}</p>`,
       );
     },
     "password-remove": async ({ res, principal, accountContext }) => {
@@ -154,7 +138,7 @@ export function createAccountSettingsActions({
       return page(
         res,
         "Account password removed",
-        `<p>Email sign-in remains available. Existing sessions and app passwords were revoked.</p><a href="/login">Sign in again</a><p><a href="${accountContext?.did ? accountUrl(accountContext.did) : "/account"}">Return to account settings</a></p>`,
+        `<p>Email sign-in remains available. Existing sessions and app passwords were revoked.</p><a href="/login">Sign in again</a><p>${settingsLink(accountContext?.did)}</p>`,
       );
     },
     status: async ({ account, value }) => {

@@ -1,10 +1,10 @@
 import { page, escapeHtml as esc } from "../../ui/html.mjs";
 import {
-  accountUrl,
-  field,
+  codeField,
   form,
   hidden,
   nextStep,
+  settingsLink,
 } from "../../ui/account-forms.mjs";
 import { HttpError } from "../../http/http-error.mjs";
 
@@ -50,12 +50,7 @@ export function createMigrationActions({
           contents:
             hidden("pdsId", target.id) +
             hidden("challengeId", issued.challengeId ?? "") +
-            field(
-              "token",
-              "Migration code",
-              "text",
-              'autocomplete="one-time-code" maxlength="256"',
-            ),
+            codeField("Migration code"),
           button: "Move to destination data server",
           message: `A migration code was sent to your primary email. Confirm to move your repository and blobs to ${target.url}. Writes will pause and existing sessions and app passwords will end.`,
           accountContext,
@@ -87,7 +82,7 @@ export function createMigrationActions({
         return page(
           res,
           "Data server migration is pending",
-          `<p role="alert">${required ? "An earlier server request has an uncertain outcome. Contact the service operator; retrying alone cannot resolve it." : "Your saved migration is unfinished. Continue it after the operator authorizes any required recovery."}</p><p>Your DID <code>${esc(account.did)}</code> and handle <strong>${esc(account.handle)}</strong> are retained. The saved destination is ${esc(savedTarget?.url ?? saved.targetPdsId)}.</p>${nextAction}<p><a href="${accountUrl(account.did)}">Return to account settings</a></p>`,
+          `<p role="alert">${required ? "An earlier server request has an uncertain outcome. Contact the service operator; retrying alone cannot resolve it." : "Your saved migration is unfinished. Continue it after the operator authorizes any required recovery."}</p><p>Your DID <code>${esc(account.did)}</code> and handle <strong>${esc(account.handle)}</strong> are retained. The saved destination is ${esc(savedTarget?.url ?? saved.targetPdsId)}.</p>${nextAction}<p>${settingsLink(account.did)}</p>`,
           409,
         );
       }
