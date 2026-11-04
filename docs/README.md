@@ -13,6 +13,7 @@ links repeatable checks and the maintained project acceptance inventory.
 | [Terminology](glossary.md)                                | Shared vocabulary and protocol references                                                                             |
 | [Implementation assessment](implementation-assessment.md) | Source-grounded database, coordination and resilience gaps                                                            |
 | [Data model and custody](data-custody.md)                 | DID-based account model, provider boundaries, key custody, transfer cases and observed test migration order           |
+| [Public incoming migration](incoming-migration.md)        | Accepted client-driven arrival, PLC handoff, early cutover, credentials and recovery design; not yet qualification evidence |
 | [Reuse assessment](reuse-assessment.md)                   | Reusable code, required implementation and investigation findings                                                     |
 | [Testing](testing.md)                                     | Local Atmosphere in a Box commands, repeatable flows and evidence limits                                              |
 | [Database configuration](database.md)                     | Drizzle adapters, deployment selection, transactions and single-node profile checks                                   |
