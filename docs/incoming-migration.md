@@ -84,7 +84,7 @@ sequenceDiagram
     Source-->>Tool: Repository and blobs
     Tool->>Destination: Import directly using migration credentials
     Destination-->>Tool: Transfer status
-    Note over Tool,Destination: Catch up source changes; Entryway does not relay data
+    Note over Tool,Destination: Catch up source changes. Entryway does not relay data
 
     Tool->>Entryway: 6. Request guarded activation
     Entryway->>Entryway: Verify canonical identity, binding and backend readiness
@@ -94,7 +94,7 @@ sequenceDiagram
     Destination-->>Entryway: Observe active state
     Entryway->>Entryway: Atomically complete activation checkpoint
     Entryway-->>Tool: Destination ready
-    Tool->>Source: Deactivate source; do not delete
+    Tool->>Source: Deactivate source. Do not delete
 ```
 
 ### Who owns each part?
