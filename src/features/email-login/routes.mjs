@@ -1,15 +1,13 @@
 import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { accountEmailSchema } from "../../accounts/input-schema.js";
 import { ChangedFlowIntentError } from "../../http/browser-flow.mjs";
-import { matchesAuthorizationHint } from "../../accounts/rules.js";
+import {
+  flowLoginHints as loginHints,
+  matchesFlowHints,
+} from "../../accounts/rules.js";
 import { escapeHtml, page } from "../../ui/html.mjs";
 const RESEND_COOLDOWN = 5_000;
-const loginHints = (flow) =>
-  [flow.accountHint, flow.parameters?.login_hint].filter(
-    (hint) => hint != null,
-  );
-const matchesLoginHint = (flow, account) =>
-  matchesAuthorizationHint(account, ...loginHints(flow));
+const matchesLoginHint = (flow, account) => matchesFlowHints(account, flow);
 const linkedAccounts = (resolution) => {
   if (resolution?.kind === "single") return [resolution.account];
   if (resolution?.kind === "selection-required") return resolution.accounts;

@@ -9,7 +9,7 @@ const row = {
   email,
 };
 
-function fixture({ existing, createError, handleDomain } = {}) {
+function fixture({ existing, createError, handleDomain, loginHint } = {}) {
   const handlers = new Map();
   const created = [];
   const authenticatedCalls = [];
@@ -18,7 +18,10 @@ function fixture({ existing, createError, handleDomain } = {}) {
     id: "flow",
     requestUri: "request-uri",
     authEmail: email,
-    parameters: { redirect_uri: "https://client.example.test/callback" },
+    parameters: {
+      redirect_uri: "https://client.example.test/callback",
+      login_hint: loginHint,
+    },
   };
   mountSignupRoutes({
     app: {
@@ -115,4 +118,18 @@ test("a failed signup re-renders the form with the failure status", async () => 
 
   assert.deepEqual(f.authenticatedCalls, []);
   assert.deepEqual(f.pages, [{ title: "Create your account", status: 409 }]);
+});
+
+test("a signup for a requested handle or DID can only create that account", async () => {
+  const sameHandle = fixture({ loginHint: "Owner.Example.Test" });
+  await sameHandle.submit();
+  assert.equal(sameHandle.created.length, 1);
+
+  const otherHandle = fixture({ loginHint: "someone.example.test" });
+  await assert.rejects(otherHandle.submit(), { status: 403 });
+  assert.deepEqual(otherHandle.created, []);
+
+  const otherDid = fixture({ loginHint: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb" });
+  await assert.rejects(otherDid.submit(), { status: 403 });
+  assert.deepEqual(otherDid.created, []);
 });

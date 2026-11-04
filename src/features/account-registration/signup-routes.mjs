@@ -1,5 +1,6 @@
 import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { HttpError } from "../../http/http-error.mjs";
+import { matchesFlowHints } from "../../accounts/rules.js";
 import { escapeHtml } from "../../ui/html.mjs";
 import { registrationAccountForEmail } from "./create-account.js";
 async function registrationInput({
@@ -51,16 +52,6 @@ function matchesRegistrationOwner(owner, session, email) {
     owner.email === email
   );
 }
-
-/** A signup started for a requested DID or handle may only create that account. */
-const signupMatchesHints = (flow, existing, input) =>
-  [flow.accountHint, flow.parameters?.login_hint]
-    .filter((hint) => hint != null)
-    .every((hint) => {
-      if (typeof hint !== "string") return false;
-      if (hint.startsWith("did:")) return existing?.did === hint;
-      return input.handle === hint.toLowerCase();
-    });
 
 function assertRegistrationAcquirable(existing, savedIntent, ownerMatches) {
   if (existing && existing.status !== "provisioning")
@@ -142,7 +133,8 @@ export function mountSignupRoutes({
         registrationIdentity,
         handleDomain,
       });
-      if (!signupMatchesHints(flow, existing, input))
+      // A signup started for a requested DID or handle may only create that account.
+      if (!matchesFlowHints({ did: existing?.did, handle: input.handle }, flow))
         throw new HttpError(
           403,
           "AccountMismatch",
