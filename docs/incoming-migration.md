@@ -1,39 +1,77 @@
-# Implement public incoming account migration
+# How incoming account migration works
 
 **Status:** accepted design, November 4, 2026; not yet implemented or qualified.
 
-Use this guide when implementing Entryway admission, integrating a migration tool,
-or reviewing the security and recovery behavior of an incoming migration. It
-covers one user moving an existing DID from an external PDS to an unchanged PDS
-already configured behind Entryway. It is not an operator runbook.
+Incoming migration moves an existing account from an external PDS to a PDS behind
+Entryway. The account keeps its DID and data. Its hosting endpoint, repository
+signing key and destination login binding change. The behavior described below is
+the accepted design identified above.
 
-The DID and user data remain the same. The hosting PDS, repository signing key and
-login binding change. The destination email must be unique within Entryway, but
-may differ from the source email.
+## Why Entryway migration differs from standalone PDS migration
 
-## Understand the required sequence
+With a standalone destination PDS, the usual sequence is to create a deactivated
+account, transfer its repository and blobs, then update the DID's PLC record to
+point to the destination. Data can arrive before the public identity changes.
 
-1. **Prepare:** verify the destination email in the browser and reserve an arrival.
-2. **Authorize:** have the source sign an authority-only PLC handoff; Entryway
-   publishes and observes it.
-3. **Create:** Entryway signs the destination move and asks the selected PDS to
-   create the account. The PDS publishes the move and creates the account active.
-4. **Pause and bind:** Entryway separately deactivates the destination, establishes
-   its login binding, and issues migration credentials.
-5. **Transfer:** the client imports the repository and blobs directly into the PDS.
-6. **Complete:** verify data and identity, activate the destination, and have the
-   client deactivate the source.
+A reference PDS configured behind Entryway has a different account-creation
+contract. It accepts a PLC operation signed by its configured Entryway rotation
+key, checks the destination endpoint and reserved repository key, and publishes
+that operation as part of creating an active account. This contract ties account
+creation to identity cutover rather than allowing cutover to wait until after import.
 
-**Identity cutover happens before data import.** The stock Entryway-configured PDS
-cannot create this account atomically inactive while deferring PLC publication.
-There is an active-account window before the separate deactivation. Publication
-can also succeed before account creation finishes. Treat both as recoverable
-failure boundaries, not as atomic provisioning.
+For an external DID, Entryway does not initially have the authority needed to sign
+that operation. Migration therefore uses two PLC updates:
 
-### Accepted migration sequence
+1. **Authority handoff:** the source signs an operation adding Entryway rotation
+   authority while retaining the source endpoint, repository verification key and
+   aliases. The account is still hosted at the source.
+2. **Destination move:** Entryway signs the operation naming the selected PDS and
+   its reserved repository key. The destination PDS publishes it during creation.
 
-This diagram shows the intended successful path, not implemented behavior. The
-numbered stages match the overview above; recovery rules follow later in this guide.
+Entryway then deactivates the newly created destination account for data transfer.
+This preserves the unchanged PDS contract, but means identity cutover happens
+before import and there is an active-account window before deactivation. Publication
+can also succeed even if the remainder of account creation fails.
+
+Alongside this identity transition, Entryway establishes the destination login
+binding and selects the hosting PDS. Destination email verification establishes
+who can use that login; source authorization establishes who can move the DID.
+Neither proof replaces the other.
+
+The protocol accounts for four considerations:
+
+- **Identity and custody:** the DID stays the same. Source authorization, destination
+  email proof, invitation eligibility and arrival authorization are separate. The
+  repository key, Entryway rotation key and recovery keys retain distinct roles.
+- **Availability:** identity cutover precedes data import. The destination is briefly
+  active before deactivation, so provisioning is not an atomic inactive operation.
+- **Data integrity:** the client retains the original source endpoint after cutover,
+  transfers a consistent repository snapshot and blobs, and catches up source changes.
+  Destination activation depends on verified completeness, not identity cutover alone.
+- **Recovery:** PLC publication, backend creation and local binding are separate
+  writes. Durable operation state preserves ownership and progress when responses
+  are lost or only part of the sequence succeeds.
+
+The destination email is unique within Entryway and may differ from the source
+email. This individual-arrival flow is distinct from whole-PDS adoption, which may
+preserve existing shared-email associations, and from internal fleet moves.
+
+## Migration lifecycle
+
+The following stages describe observable account state, not database status values.
+
+| Stage | Identity and hosting | Destination access |
+| --- | --- | --- |
+| 1. Arrival prepared | DID still points to the source; destination email, handle and repository key are reserved | Arrival authorization only; no account binding yet |
+| 2. Authority handed off | Source hosting remains unchanged; Entryway has authorized rotation authority | Destination creation is eligible after canonical PLC observation |
+| 3. Destination created | PLC points to the destination with its repository key | Backend account is initially active |
+| 4. Destination paused and bound | Destination is deactivated; verified user and DID are bound locally | Migration credentials allow transfer while ordinary Entryway access is restricted |
+| 5. Data transferred | Repository and blobs are copied and source changes caught up | Account remains migration-pending until readiness checks pass |
+| 6. Destination activated | Identity, binding and data checks pass; destination is active | Normal destination access becomes available; the client deactivates the source |
+
+### Sequence diagram
+
+The numbered stages match the overview above. Recovery behavior is described below.
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {'background': '#FFFFFF', 'primaryColor': '#DBEAFE', 'primaryTextColor': '#172033', 'primaryBorderColor': '#475569', 'lineColor': '#334155', 'textColor': '#172033', 'actorBkg': '#F1F5F9', 'actorBorder': '#475569', 'actorTextColor': '#172033', 'actorLineColor': '#475569', 'signalColor': '#334155', 'signalTextColor': '#172033', 'labelBoxBkgColor': '#EDE9FE', 'labelBoxBorderColor': '#475569', 'labelTextColor': '#172033', 'loopTextColor': '#172033', 'noteBkgColor': '#FFEDD5', 'noteBorderColor': '#9A3412', 'noteTextColor': '#172033'}}}%%
@@ -84,12 +122,12 @@ sequenceDiagram
     Source-->>Tool: Repository and blobs
     Tool->>Destination: Import directly using migration credentials
     Destination-->>Tool: Transfer status
-    Note over Tool,Destination: Catch up source changes. Entryway does not relay data
+    Note over Tool,Destination: Catch up source changes using pinned PDS endpoints
 
     Tool->>Entryway: 6. Request guarded activation
     Entryway->>Entryway: Verify canonical identity, binding and backend readiness
     Entryway->>Entryway: Verify final repository integrity and all missing-blob pages
-    Note over Entryway,Destination: Public integrity evidence mechanism still needs implementation
+    Note over Entryway,Destination: Identity cutover alone does not establish data completeness
     Entryway->>Destination: Activate only after all readiness checks pass
     Destination-->>Entryway: Observe active state
     Entryway->>Entryway: Atomically complete activation checkpoint
@@ -97,7 +135,7 @@ sequenceDiagram
     Tool->>Source: Deactivate source. Do not delete
 ```
 
-### Who owns each part?
+### Participants
 
 | Component | Responsibility |
 | --- | --- |
@@ -107,16 +145,11 @@ sequenceDiagram
 | Source PDS | Authenticate the source account, authorize PLC signing and serve source data |
 | Destination PDS | Store repository and blobs; keep its private repository signing key; apply supported lifecycle operations |
 
-Entryway is not a managed transfer service and does not proxy ordinary application
-writes. Whole-PDS adoption, internal fleet moves and outward-migration
-qualification are separate operations. Whole-PDS adoption may preserve established
-shared-email associations; individual arrivals may not create them.
+The migration tool follows an Entryway-specific journey through public APIs and
+unchanged PDS contracts. Compatibility depends on support for this sequence, not
+on a particular tool name or version.
 
-Tools may implement an Entryway-specific public journey. PDS patches, private
-fixture APIs, operator database edits and hidden recovery keys remain prohibited.
-No particular tool is mandatory or presumed compatible.
-
-## Keep admission proofs separate
+## Admission proofs and credentials
 
 | Proof or credential | Establishes | Does not establish |
 | --- | --- | --- |
@@ -127,58 +160,54 @@ No particular tool is mandatory or presumed compatible.
 | Source PLC confirmation and signature | Authorization for the exact PLC handoff | Permission for every endpoint |
 | Destination access/refresh credentials | Access to the admitted migration | Completion or ordinary active-account access |
 
-### Apply invitation policy independently
+### Invitation policy
 
 `inviteCode` remains optional in the public `createAccount` schema.
 
-- When Entryway requires invitations, reject a missing code with
-  `InvalidInviteCode` and a message requiring the code.
-- When invitations are optional, permit omission.
-- Validate a supplied code in either configuration.
-- Do not consume another invitation when retrying the same accepted creation.
+When Entryway requires invitations, a missing code produces `InvalidInviteCode`
+with a message requiring the code. When invitations are optional, omission is
+allowed. A supplied code is validated in either configuration. Retrying the same
+accepted creation does not consume another invitation.
 
-### Issue arrival authorization through the browser
+### Arrival authorization
 
-Require fresh destination OTP proof and CSRF protection during preparation. Issue
-an unpredictable arrival code bound to the incoming DID, saved verified user and
-destination reservation. Store only its hash. Exclude the code from logs and URLs.
-The user hands it to the tool explicitly; tools do not export browser cookies.
+Preparation requires fresh destination OTP proof and CSRF protection. The resulting
+arrival code is unpredictable and bound to the incoming DID, saved verified user
+and destination reservation. Only its hash is stored; the code is excluded from
+logs and URLs. The user hands it to the tool explicitly, without exporting browser
+cookies.
 
 A dedicated preparation interface and an `Entryway-Arrival-Code` header are the
 proposed wire surface. They are Entryway-specific extensions, not existing AT
-Protocol methods or implemented endpoints. Keep standard XRPC bodies intact and
-document the extension for tool authors.
+Protocol methods or implemented endpoints. Standard XRPC bodies remain unchanged.
 
-## Implement the migration stages
+## Protocol flow
 
-### 1. Prepare the arrival
+### 1. Arrival preparation
 
-**Input:** verified destination user, incoming DID and requested handle.
+The user verifies the destination email, supplies the incoming DID and requested
+handle, and confirms the migration. Entryway checks email uniqueness and atomically
+records the verified user ID, email/handle reservations, selected PDS, source PLC
+head and key facts, approved custody configuration and operation ID.
 
-1. Confirm the intended migration and enforce unique destination-email admission.
-2. Atomically record the saved verified user ID, email/handle reservations, selected
-   PDS, source PLC head and key facts, approved custody configuration and operation ID.
-3. Reserve a repository signing key on the selected PDS through its existing
-   contract. Journal allocation and recovery state before dispatch.
-4. Return arrival authorization and public preparation facts: Entryway service
-   DID, explicit source/destination endpoints, expected PLC predecessor and the
-   authority-only handoff configuration.
+Entryway journals the allocation obligation before reserving a repository signing
+key on the selected PDS through its existing contract. The preparation response
+contains arrival authorization, the Entryway service DID, explicit source and
+destination endpoints, the expected PLC predecessor and public handoff configuration.
 
-**Invariant:** entering a DID does not establish a binding. A conflicting
-reservation cannot grant ownership or substitute for source proof. Bound
-reservation abuse through admission rate limits.
+A supplied DID or reservation does not establish account ownership. Source proof
+is required separately, and admission rate limits bound reservation abuse.
 
-### 2. Publish the source-authorized handoff
+### 2. Source-authorized authority handoff
 
-**Prerequisite:** the tool authenticates to the source and obtains its public PLC
-confirmation and signature through `requestPlcOperationSignature` and
-`signPlcOperation`.
+The tool authenticates to the source and obtains its public PLC confirmation and
+signature through `requestPlcOperationSignature` and `signPlcOperation`.
 
-The signed handoff must retain source hosting, repository verification keys and
-aliases while adding the required Entryway rotation authority. Validate the exact
-ordered key list against custody policy and protocol limits. Do not silently
-truncate a full list or discard recovery authority. User recovery, operator offline
-recovery, hot Entryway authority and the repository key remain distinct roles.
+The signed handoff retains source hosting, repository verification keys and aliases
+while adding the required Entryway rotation authority. Entryway validates the exact
+ordered key list against custody policy and protocol limits; a full list is not
+silently truncated and recovery authority is not discarded. User recovery, operator
+offline recovery, hot Entryway authority and the repository key remain distinct roles.
 
 The tool obtains source service authentication with Entryway as audience and
 `com.atproto.identity.submitPlcOperation` as the method, then sends:
@@ -193,52 +222,51 @@ Content-Type: application/json
 The request body is the standard object with an `operation` property containing
 the actual source-signed PLC operation object. It is not an encoded string.
 
-Entryway must:
+Entryway independently verifies the source credential and destination arrival
+ownership, then validates the operation signature, expected predecessor and exact
+handoff facts. It persists the signed operation, CID, replay binding and publication
+obligation before submitting directly to the configured PLC directory.
 
-1. Independently verify the source credential and destination arrival ownership.
-2. Validate the operation signature, expected predecessor and exact handoff facts.
-3. Persist the signed operation, CID, replay binding and publication obligation.
-4. Submit directly to the configured PLC directory.
-5. Observe the canonical handoff before allowing destination creation.
+Destination creation becomes eligible only after Entryway observes the canonical
+handoff. The destination PDS's submission handler is constrained to destination
+identity facts, so this authority-only handoff goes to the directory instead.
+Incoming authorization is separate from hosted-account authorization and does not
+require an existing local account.
 
-Do not forward this handoff to the target PDS's destination-constrained submission
-handler. Do not require an already-hosted account to authorize an incoming arrival;
-keep existing hosted-account authorization separate.
-
-**Retry rule:** reconcile an exact already-applied operation. A changed request or
+An exact already-applied operation is reconciled on retry. A changed request or
 PLC head cannot silently replace the accepted operation. Signing or sending an
 HTTP request is not evidence of publication.
 
-### 3. Create the destination and establish migration access
+### 3. Destination creation and identity cutover
 
-**Prerequisite:** the canonical handoff is observed. It still retains the source
-repository key, allowing fresh source authentication before final cutover.
+The observed canonical handoff still retains the source repository key, allowing
+fresh source authentication before final cutover.
 
 The tool obtains a new service JWT scoped to `com.atproto.server.createAccount`
 and calls Entryway with the standard DID/email/handle fields, operator invite code
 when applicable, and arrival-code header. A submit-scoped JWT cannot authorize
 creation.
 
-Entryway must:
+Entryway matches the supplied facts to the saved arrival and applies invitation
+policy before backend creation. It signs and journals the destination PLC operation
+with the reserved repository key, target endpoint and approved destination custody.
+The selected PDS receives that operation in its stock creation request, publishes
+the identity move and creates the account active.
 
-1. Match all supplied facts to the saved arrival and enforce invitation policy.
-2. Sign and journal the destination PLC operation with the reserved repository key,
-   target endpoint and approved destination custody.
-3. Invoke stock PDS creation with that operation. This publishes cutover and creates
-   the account active.
-4. Separately deactivate the destination through the existing lifecycle hook and
-   observe the result.
-5. Atomically commit the local account, saved verified-user binding, email authority,
-   placement and migration-pending checkpoint.
-6. Issue tracked access/refresh credentials in the standard creation response.
+### 4. Deactivation, binding and migration access
 
-Do not report successful creation before usable backend storage and credentials
-exist. Binding before transfer is intentional: the client needs credentials to
-import. **Bound and migration-pending does not mean active.** Preserve ordinary
-access restrictions until completion; existing signup activation semantics need
-not change.
+Entryway separately deactivates the destination through the existing lifecycle
+hook and observes the result. After confirmed provisioning and deactivation, it
+atomically commits the local account, saved verified-user binding, email authority,
+placement and migration-pending checkpoint. The standard creation response then
+supplies tracked access/refresh credentials.
 
-### 4. Transfer data directly between client and PDSs
+Successful creation means usable backend storage and credentials exist. Binding
+precedes transfer because the client needs credentials to import data.
+**Bound and migration-pending does not mean active:** ordinary access remains
+restricted until completion. Ordinary signup activation semantics are unchanged.
+
+### 5. Repository and blob transfer
 
 The tool uses creation-response credentials rather than requiring a new destination
 password. Entryway refreshes and recovers the tracked credentials. Access JWTs use
@@ -250,20 +278,22 @@ the backend audience and scopes understood by stock PDS, not an invented scope.
 | Repository imports, blob uploads and transfer status | Explicit selected destination PDS |
 | Admission, credential recovery and guarded activation | Entryway |
 
-Pin both data endpoints. DID resolution now points at the destination and must
-not redirect source exports there.
+Both data endpoints remain pinned for the transfer. DID resolution now points at
+the destination; retaining the original source endpoint keeps source exports
+addressed to the correct PDS.
 
 The client maintains a consistent source snapshot and catches up changes as
 necessary. Application preferences may use their own public endpoints; they do
-not prove repository completeness. Do not assume private fixture freezing or
-source signing credentials are available.
+not prove repository completeness. The flow relies on public transfer endpoints,
+not private fixture freezing or access to source signing credentials.
 
 Backend deactivation and Entryway's pending-state guards restrict ordinary use.
-Entryway must block ordinary OAuth authorization, account management and unguarded
-activation while pending. This is not a universal method-restricted backend token:
-qualify every reachable stock endpoint's permissions.
+Pending accounts are blocked from ordinary Entryway OAuth authorization, account
+management and unguarded activation. Backend access JWTs still use stock PDS
+permissions rather than a universal migration-only method restriction; the exact
+permissions of reachable backend endpoints remain an interoperability consideration.
 
-### 5. Verify readiness and complete activation
+### 6. Readiness checks and activation
 
 Before activation, Entryway independently verifies:
 
@@ -273,57 +303,59 @@ Before activation, Entryway independently verifies:
 - Every page of missing-blob results.
 
 Counts, a client completion boolean, or zero missing blobs on an empty destination
-are insufficient evidence. Accept valid empty and blob-free source repositories
-when integrity checks agree. The public source/destination evidence mechanism
-still needs implementation and tests; synthetic snapshot assertions do not prove it.
+are insufficient evidence. Valid empty and blob-free source repositories are
+accepted when integrity checks agree. The exact public source/destination evidence
+mechanism remains unresolved; synthetic snapshot assertions do not establish it.
 
-Journal activation, invoke the lifecycle hook, observe the outcome, and atomically
-complete local activation with its checkpoint. Every activation path for a pending
-arrival must use this gate. Do not copy Rust's identity-only automatic activation:
-our cutover precedes data import.
+All activation paths for pending arrivals share this readiness gate. Entryway
+journals activation, invokes the lifecycle hook, observes the outcome and atomically
+completes local activation with its checkpoint. Identity-only activation is
+insufficient because cutover precedes data import.
 
 The client deactivates the source after the destination is ready. Source deletion
-is separate and is not scheduled automatically. Independently qualify post-move
-login, OAuth, refresh and direct PDS use.
+is separate and is not scheduled automatically. Post-move login, OAuth, refresh
+and direct PDS access remain part of independent interoperability qualification.
 
-## Recover without changing ownership
+## Recovery and operation ownership
 
-Retain one active operation per DID and preserve completed history. Use stable
-operation IDs, exact request facts, conditional transitions and database-backed
-ownership on both database profiles. Reject stale-worker completion. Lease expiry
-does not prove that an earlier remote write can no longer apply.
+Each DID has at most one active migration operation, with completed history
+preserved. Stable operation IDs, exact request facts, conditional transitions and
+database-backed ownership apply on both database profiles. A stale worker cannot
+complete a newer operation. Lease expiry does not prove that an earlier remote
+write can no longer apply.
 
-### Distinguish retries from credential replay
+### Retries and credential replay
 
-Repeated delivery of an accepted operation must not create another account,
-consume another invitation or replace a signed operation. Reject credential reuse
-for different facts. Atomically associate replay acceptance with the arrival and
-operation; do not spend a credential before recording recoverable admission.
+Repeated delivery of an accepted operation does not create another account,
+consume another invitation or replace a signed operation. Credential reuse for
+different facts is rejected. Replay acceptance is associated atomically with the
+arrival and operation, leaving recoverable admission state when a credential is
+consumed.
 
-### Renew access to the same arrival
+### Credential renewal
 
 Arrival codes last **24 hours** and are renewable after fresh destination OTP.
 Credential expiry does not destroy progress or end custody obligations.
 
 Recovery uses the saved verified user binding, not an email match alone. It may
 issue replacement migration credentials only for the same DID and destination.
-After cutover, do not require a source-key JWT: that key is no longer the current
-repository verification key. Never replay provisioning just to recover a lost
-credential response.
+After cutover, recovery no longer requires a source-key JWT because that key is no
+longer the current repository verification key. Replacement credentials recover a
+lost response without repeating account provisioning.
 
-### Cancel only when no remote obligation remains
+### Cancellation
 
-This scope introduces no automatic destructive abandonment cleanup. Before handoff
-dispatch, cancellation may release reservations only after checking for remote
-obligations and changed PLC state. Once publication is possible, observed or
-uncertain, retain the arrival and reservations for reconciliation.
+Abandoned arrivals are not automatically deleted. Before handoff dispatch,
+cancellation can release reservations only after checking for remote obligations
+and changed PLC state. Once publication is possible, observed or uncertain, the
+arrival and reservations remain available for reconciliation.
 
 Deleting local state cannot remove published Entryway authority. Reversal requires
-an authorized PLC operation; it is not an expiry side effect. Follow
-[shared-operation recovery](shared-operations.md) before retrying mutations or
-releasing conflicting work.
+an authorized PLC operation; it is not an expiry side effect. The
+[shared-operation recovery rules](shared-operations.md) govern mutation retries
+and release of conflicting work.
 
-### Cover these failure boundaries
+### Partial completion and uncertain outcomes
 
 - Source confirmation expires or is consumed before the signature response arrives.
 - PLC publication succeeds but its response is lost, or the canonical head changes.
@@ -333,15 +365,8 @@ releasing conflicting work.
 - Imports are partial, source content changes, or blobs are unavailable.
 - Activation applies but its acknowledgement is lost.
 
-Retain public custody evidence and safe operation identifiers. Never include OTPs,
-arrival codes, bearer tokens or private keys in reports.
-
-## Know what remains unimplemented
-
-Existing reservation, ownership, binding, signing and session machinery provides
-building blocks, not this public flow. Implement incoming authorization and
-publication, unique individual-arrival email checks, earlier binding, guarded
-activation and client routing. Keep synthetic migration as a separate fixture.
+Recovery records retain public custody evidence and safe operation identifiers.
+Reports exclude OTPs, arrival codes, bearer tokens and private keys.
 
 ## Related documentation
 
