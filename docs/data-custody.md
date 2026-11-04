@@ -48,8 +48,8 @@ Better Auth user binding multiple DIDs; Better Auth email itself remains unique.
 Ordinary account changes do not add a primary claim to an email already claimed
 by another DID. Existing migration/import adapters still permit sharing; the
 accepted design restricts that exception to whole-PDS association import, not
-individual incoming arrivals. The
-resolver returns `selection-required` for multiple established bindings, but the
+individual incoming arrivals. The resolver returns `selection-required` for
+multiple established bindings, but the
 interactive chooser and joining-PDS association import are not implemented. No
 DID is selected or bound from an email match alone.
 
