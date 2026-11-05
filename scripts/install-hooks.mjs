@@ -15,12 +15,31 @@ export GIT_OPTIONAL_LOCKS
 exec "$lefthook" run entryway-checks --no-auto-install "$@"
 `;
 
+const gitEnv = { ...process.env };
+for (const name of [
+  "GIT_CONFIG",
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_COMMON_DIR",
+  "GIT_INDEX_FILE",
+  "GIT_IMPLICIT_WORK_TREE",
+  "GIT_PREFIX",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_GRAFT_FILE",
+  "GIT_SHALLOW_FILE",
+  "GIT_NO_REPLACE_OBJECTS",
+  "GIT_REPLACE_REF_BASE",
+])
+  delete gitEnv[name];
+
 try {
   const configured = spawnSync(
     "git",
     ["config", "--get-all", "core.hooksPath"],
     {
       encoding: "utf8",
+      env: gitEnv,
     },
   );
   if (configured.status === 0) {
@@ -33,6 +52,7 @@ try {
   const hook = resolve(
     execFileSync("git", ["rev-parse", "--git-path", "hooks/pre-commit"], {
       encoding: "utf8",
+      env: gitEnv,
     }).trim(),
   );
   let existing;

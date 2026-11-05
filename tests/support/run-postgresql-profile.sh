@@ -28,18 +28,20 @@ probe() {
   local phase="$1"
   echo "PostgreSQL profile: $phase"
   local result=0
-  compose run --rm --no-deps test node tests/support/postgresql-profile.mjs "$phase" 2>&1 | tee "$ACCEPTANCE_REPORT_DIR/$phase.log" | python3 "$root/scripts/ci-summary.py" || result=$?
+  local tee_options=()
+  if [[ "$phase" == restart || "$phase" == restore ]]; then tee_options=(-a); fi
+  compose run --rm --no-deps test node tests/support/postgresql-profile.mjs "$phase" 2>&1 | tee "${tee_options[@]}" "$ACCEPTANCE_REPORT_DIR/$phase.log" | python3 "$root/scripts/ci-summary.py" || result=$?
   printf 'profile=postgresql phase=%s status=finished exit=%s\n' "$phase" "$result"
   return "$result"
 }
 probe login
 compose restart entryway 2>&1 | tee "$ACCEPTANCE_REPORT_DIR/restart.log"
-compose up -d --wait entryway 2>&1 | tee "$ACCEPTANCE_REPORT_DIR/restart.log"
+compose up -d --wait entryway 2>&1 | tee -a "$ACCEPTANCE_REPORT_DIR/restart.log"
 probe restart
 compose stop entryway 2>&1 | tee "$ACCEPTANCE_REPORT_DIR/restore.log"
 # Dump and restore execute inside the owned PostgreSQL container. No secret or
 # database bytes cross into host reports, and the original database is retained.
-compose exec -T entryway-postgres sh -ec 'pg_dump -U authority_owner -Fc -f /backup/authority.dump account_authority; createdb -U authority_owner account_authority_restored; pg_restore -U authority_owner --exit-on-error -d account_authority_restored /backup/authority.dump' 2>&1 | tee "$ACCEPTANCE_REPORT_DIR/restore.log"
+compose exec -T entryway-postgres sh -ec 'pg_dump -U authority_owner -Fc -f /backup/authority.dump account_authority; createdb -U authority_owner account_authority_restored; pg_restore -U authority_owner --exit-on-error -d account_authority_restored /backup/authority.dump' 2>&1 | tee -a "$ACCEPTANCE_REPORT_DIR/restore.log"
 export DATABASE_URL=postgresql://authority_owner@entryway-postgres/account_authority_restored
-compose up -d --force-recreate --wait entryway 2>&1 | tee "$ACCEPTANCE_REPORT_DIR/restore.log"
+compose up -d --force-recreate --wait entryway 2>&1 | tee -a "$ACCEPTANCE_REPORT_DIR/restore.log"
 probe restore

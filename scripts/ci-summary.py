@@ -1,5 +1,6 @@
 """Contributors: publish test identities and fixed diagnostics, never runtime payloads."""
 from pathlib import Path
+import os
 import re
 import sys
 
@@ -8,10 +9,12 @@ import sys
 root = Path(__file__).resolve().parents[1]
 titles = set()
 for directory in (root / "tests", root / "src"):
-    for path in directory.rglob("*.mjs"):
-        if any(part in {".runtime", "artifacts", "node_modules"} for part in path.parts):
-            continue
-        titles.update(match[1] for match in re.findall(r'\b(?:test|it|describe)\(\s*(["\'])([^\n]*?)\1', path.read_text()))
+    for current, directories, files in os.walk(directory):
+        directories[:] = [name for name in directories if name not in {".runtime", "artifacts", "node_modules"}]
+        for name in files:
+            if name.endswith(".mjs"):
+                path = Path(current) / name
+                titles.update(match[1] for match in re.findall(r'\b(?:test|it|describe)\(\s*(["\'])([^\n]*?)\1', path.read_text()))
 summary = re.compile(r"^(?:(?:#|ℹ) (?:tests|suites|pass|fail|cancelled|skipped|todo|duration_ms) [0-9.]+|[0-9]+ (?:passed|failed|skipped)(?: \([0-9.ms]+\))?)$")
 diagnostics = {
     "unknown flag:": ("CLI_USAGE_ERROR", "Command rejected an unsupported flag; inspect the private phase log"),

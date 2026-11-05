@@ -16,12 +16,13 @@ import { test } from "node:test";
 const root = resolve(import.meta.dirname, "../..");
 const installer = join(root, "scripts/install-hooks.mjs");
 
-function run(cwd, command, args) {
+function run(cwd, command, args, environment = {}) {
   return spawnSync(command, args, {
     cwd,
     encoding: "utf8",
     env: {
       ...process.env,
+      ...environment,
       CI: "",
       LEFTHOOK: "1",
       PATH: process.env.PATH.split(":")
@@ -161,6 +162,48 @@ test("missing hook dependencies fail without changing staged or working bytes", 
     );
     assert.deepEqual(snapshot(dir), before, missing);
   }
+});
+
+test("installer ignores foreign repository environment while preserving configuration protections", (t) => {
+  const dir = fixture(t);
+  const foreign = fixture(t);
+  execFileSync("git", ["add", "src/example.mjs"], { cwd: foreign });
+  const foreignHook = join(foreign, ".git/hooks/pre-commit");
+  writeFileSync(foreignHook, "foreign hook\n");
+  const paths = [
+    foreignHook,
+    join(foreign, ".git/config"),
+    join(foreign, ".git/index"),
+  ];
+  const before = paths.map((path) => readFileSync(path));
+  const environment = {
+    GIT_DIR: join(foreign, ".git"),
+    GIT_WORK_TREE: foreign,
+    GIT_COMMON_DIR: join(foreign, ".git"),
+    GIT_INDEX_FILE: join(foreign, ".git/index"),
+  };
+  const result = run(dir, process.execPath, [installer], environment);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(
+    readFileSync(join(dir, ".git/hooks/pre-commit"), "utf8"),
+    /Entryway managed/,
+  );
+  assert.deepEqual(
+    paths.map((path) => readFileSync(path)),
+    before,
+  );
+  const globalConfig = join(dir, "global-config");
+  writeFileSync(globalConfig, "[core]\n\thooksPath = custom-hooks\n");
+  const refused = run(dir, process.execPath, [installer], {
+    ...environment,
+    GIT_CONFIG_GLOBAL: globalConfig,
+  });
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stderr, /core.hooksPath is configured/);
+  assert.deepEqual(
+    paths.map((path) => readFileSync(path)),
+    before,
+  );
 });
 
 test("installer refuses custom hooks and core.hooksPath without changes", (t) => {

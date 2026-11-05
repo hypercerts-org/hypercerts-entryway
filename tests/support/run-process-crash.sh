@@ -55,7 +55,7 @@ for mode in before-pds after-pds; do
   compose stop --timeout 10 pds1 2>&1 | tee "$artifacts/crash-$mode-pds-drain.log" | python3 "$root/scripts/ci-summary.py"
   upstream_id=$(compose ps -a -q pds1)
   [[ $(docker --context "$DOCKER_CONTEXT" inspect --format '{{.State.Running}}' "$upstream_id") == false ]]
-  compose start pds1 2>&1 | tee "$artifacts/crash-$mode-pds-drain.log" | python3 "$root/scripts/ci-summary.py"
+  compose start pds1 2>&1 | tee -a "$artifacts/crash-$mode-pds-drain.log" | python3 "$root/scripts/ci-summary.py"
   compose exec -T pds1 node --input-type=module -e 'for(let i=0;i<120;i++){try{if((await fetch("http://localhost:3000/xrpc/_health")).ok)process.exit(0)}catch{};await new Promise(r=>setTimeout(r,250))};process.exit(1)'
   compose start entryway >/dev/null
   health

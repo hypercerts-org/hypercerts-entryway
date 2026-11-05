@@ -133,6 +133,54 @@ esac
             self.assertTrue(lines[start + 2].startswith(f"run {browser} browser "))
         self.assertNotIn("start --wait", text)
 
+    def test_summary_prunes_excluded_directories(self):
+        source = Path(__file__).resolve().parents[2]
+        shutil.copy(source / "scripts/ci-summary.py", self.root / "scripts/ci-summary.py")
+        for directory in ["tests/visible", "tests/.runtime", "src/artifacts", "src/node_modules"]:
+            path = self.root / directory
+            path.mkdir(parents=True, exist_ok=True)
+            (path / "example.mjs").write_text(f'test("{path.name} title", () => {{}});')
+        wrapper = '''import os, runpy, sys
+original = os.scandir
+def scan(path):
+    print(f"scanned={path}", file=sys.stderr)
+    return original(path)
+os.scandir = scan
+runpy.run_path(sys.argv[1], run_name="__main__")
+'''
+        result = subprocess.run(["python3", "-c", wrapper, str(self.root / "scripts/ci-summary.py")],
+                                input="✔ visible title\n✔ .runtime title\n✔ artifacts title\n✔ node_modules title\n",
+                                capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout, "test=visible title status=passed\n")
+        for directory in ["tests/.runtime", "src/artifacts", "src/node_modules"]:
+            self.assertNotIn(f"scanned={self.root / directory}", result.stderr)
+
+    def test_repeated_phase_logs_keep_mock_command_output(self):
+        source = Path(__file__).resolve().parents[2]
+        profile = (source / "tests/support/run-postgresql-profile.sh").read_text()
+        probe = profile.split("probe() {", 1)[1].split("\n}", 1)[0]
+        commands = [line for line in profile.splitlines()
+                    if line.startswith("compose ") and ('/restart.log' in line or '/restore.log' in line)]
+        crash = (source / "tests/support/run-process-crash.sh").read_text()
+        commands += [line.strip() for line in crash.splitlines() if 'tee ' in line and 'pds-drain.log' in line]
+        shutil.copy(source / "scripts/ci-summary.py", self.root / "scripts/ci-summary.py")
+        script = '''set -euo pipefail
+root="$1"; ACCEPTANCE_REPORT_DIR="$root"; artifacts="$root"; mode=example
+compose() { printf 'mock %s\\n' "$*"; }
+probe() {\n''' + probe + '\n}\n' + '\n'.join(commands[:2]) + '\nprobe restart\n' + '\n'.join(commands[2:]) + '\nprobe restore\n'
+        result = subprocess.run(["bash", "-c", script, "phase-test", str(self.root)],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        restart = (self.root / "restart.log").read_text()
+        restore = (self.root / "restore.log").read_text()
+        drain = (self.root / "crash-example-pds-drain.log").read_text()
+        for marker in ["restart entryway", "up -d --wait entryway", "postgresql-profile.mjs restart"]:
+            self.assertIn(marker, restart)
+        for marker in ["stop entryway", "pg_dump", "force-recreate", "postgresql-profile.mjs restore"]:
+            self.assertIn(marker, restore)
+        for marker in ["stop --timeout 10 pds1", "start pds1"]:
+            self.assertIn(marker, drain)
+
     def test_unknown_flag_diagnostic_redacts_payload(self):
         source = Path(__file__).resolve().parents[2]
         result = subprocess.run(["python3", str(source / "scripts/ci-summary.py")],
