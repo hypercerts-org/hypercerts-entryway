@@ -113,7 +113,7 @@ unset PROFILE_TRIGGER_MS
 container=$(compose ps -aq entryway)
 docker --context "$DOCKER_CONTEXT" inspect --format '{{json .State}}' "$container" > "$ACCEPTANCE_REPORT_DIR/graceful-state.json"
 if [[ "$ENTRYWAY_PROFILE_NODE_COUNT" == 2 ]]; then run graceful-survivor browser survivor graceful-survivor entryway-replica; fi
-run graceful-rejoin timeout 30s docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" start --wait entryway
+run graceful-rejoin timeout 30s docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" start entryway
 run readiness-rejoin probe ready readiness-rejoin.json
 run rejoin browser rejoin rejoin entryway
 export PROFILE_TRIGGER_MS=$(date +%s%3N)
@@ -123,7 +123,8 @@ docker --context "$DOCKER_CONTEXT" inspect --format '{{json .State}}' "$containe
 run kill-ingress probe node-loss kill-ingress.json
 unset PROFILE_TRIGGER_MS
 if [[ "$ENTRYWAY_PROFILE_NODE_COUNT" == 2 ]]; then run kill-survivor browser survivor kill-survivor entryway-replica; fi
-run kill-rejoin timeout 30s docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" start --wait entryway
+run kill-rejoin timeout 30s docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" start entryway
+run readiness-kill-rejoin probe ready readiness-kill-rejoin.json
 run kill-rejoin-browser browser rejoin kill-rejoin entryway
 wait_marker() {
   local name=$1 deadline=$((SECONDS + 30))

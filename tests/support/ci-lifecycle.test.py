@@ -118,6 +118,30 @@ esac
         self.assertNotIn("secret-token", result.stdout)
         self.assertNotIn("123456", result.stdout)
 
+    def test_restart_commands_use_explicit_readiness(self):
+        source = Path(__file__).resolve().parents[2]
+        text = (source / "tests/support/run-resilience-profile.sh").read_text()
+        for restart, readiness, browser in [
+            ("graceful-rejoin", "readiness-rejoin", "rejoin"),
+            ("kill-rejoin", "readiness-kill-rejoin", "kill-rejoin-browser"),
+        ]:
+            lines = text.splitlines()
+            start = next(index for index, line in enumerate(lines) if line.startswith(f"run {restart} "))
+            self.assertTrue(lines[start].endswith(" start entryway"))
+            self.assertIn("timeout 30s docker ", lines[start])
+            self.assertEqual(lines[start + 1], f"run {readiness} probe ready {readiness}.json")
+            self.assertTrue(lines[start + 2].startswith(f"run {browser} browser "))
+        self.assertNotIn("start --wait", text)
+
+    def test_unknown_flag_diagnostic_redacts_payload(self):
+        source = Path(__file__).resolve().parents[2]
+        result = subprocess.run(["python3", str(source / "scripts/ci-summary.py")],
+                                input="unknown flag: --secret-token OTP 123456\n",
+                                capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout, "code=CLI_USAGE_ERROR context=Command rejected an unsupported flag; inspect the private phase log\n")
+        self.assertNotIn("secret-token", result.stdout)
+        self.assertNotIn("123456", result.stdout)
+
     def test_pretest_docker_failure_keeps_phase_and_exit(self):
         source = Path(__file__).resolve().parents[2]
         shutil.copy(source / "tests/local.sh", self.root / "tests/local.sh")

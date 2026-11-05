@@ -14,6 +14,7 @@ for directory in (root / "tests", root / "src"):
         titles.update(match[1] for match in re.findall(r'\b(?:test|it|describe)\(\s*(["\'])([^\n]*?)\1', path.read_text()))
 summary = re.compile(r"^(?:(?:#|ℹ) (?:tests|suites|pass|fail|cancelled|skipped|todo|duration_ms) [0-9.]+|[0-9]+ (?:passed|failed|skipped)(?: \([0-9.ms]+\))?)$")
 diagnostics = {
+    "unknown flag:": ("CLI_USAGE_ERROR", "Command rejected an unsupported flag; inspect the private phase log"),
     "Cannot connect to the Docker daemon": ("DOCKER_UNAVAILABLE", "Docker daemon connection failed; check the selected context"),
     "Error response from daemon": ("DOCKER_OPERATION_FAILED", "Docker rejected the operation; inspect the private phase log"),
     "no such service": ("DOCKER_SERVICE_MISSING", "Compose service is missing from the generated configuration"),
