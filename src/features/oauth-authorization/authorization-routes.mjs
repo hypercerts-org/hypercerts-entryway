@@ -13,6 +13,7 @@ export function mountAuthorizationRoutes({
   const {
     newFlow,
     getFlow,
+    refreshFlow,
     loadBrowser,
     checkCsrf,
     pageForFlow,
@@ -158,6 +159,9 @@ export function mountAuthorizationRoutes({
       if (req.body.decision !== "approve")
         throw new InvalidRequestError("Choose whether to allow access");
       const did = String(req.body.did ?? "");
+      const bindsAnotherAccount = (current) =>
+        ((current.authEmail || current.authDid) && current.authDid !== did) ||
+        (request.parameters.prompt === "login" && current.authDid !== did);
       const session = await provider.accountManager.getDeviceAccount(
         browser.deviceId,
         did,
@@ -165,10 +169,19 @@ export function mountAuthorizationRoutes({
       if (
         !session ||
         provider.checkLoginRequired(session) ||
-        (request.parameters.prompt === "login" && flow.authDid !== did)
+        bindsAnotherAccount(flow)
       )
         throw new InvalidRequestError("Sign in to this account first");
       const client = await provider.clientManager.getClient(flow.clientId);
+      // The lookups above yield, so /auth/select may have bound another account
+      // since this flow was read. Re-read and delete it in one transaction: either
+      // the approved DID is still the bound one and this request owns the flow,
+      // or the approval fails. Later writers fail because the flow is gone.
+      await db.transact(async () => {
+        if (bindsAnotherAccount(await refreshFlow(flow, browser)))
+          throw new InvalidRequestError("Sign in to this account first");
+        await db.delete("auth-flows", flow.id);
+      });
       const code = await provider.requestManager.setAuthorized(
         flow.requestUri,
         client,
@@ -188,7 +201,6 @@ export function mountAuthorizationRoutes({
           authorizedScopes: [...granted],
         },
       );
-      await db.delete("auth-flows", flow.id);
       authorizationRedirect(res, config.issuer, request.parameters, { code });
     }),
   );

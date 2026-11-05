@@ -7,8 +7,12 @@ execute cases serially. Entry point: `./tests/local.sh browser`.
 and OAuth clients/grants created within the scenario.
 
 **Assertions:** account settings refer to the expected DID; verification gates
-protect sensitive changes; account selection does not bind the wrong identity;
-logout/session revocation, forgetting a device-account membership and revoking
+protect sensitive changes; account selection does not bind the wrong identity.
+For a verified identity with multiple bindings, `/account` requires an explicit
+DID choice; every action and proof stays pinned to that DID. Reject duplicate,
+conflicting, foreign and revoked selectors without falling back to
+a sibling. Open two selected-DID tabs and verify their actions remain isolated.
+Logout/session revocation, forgetting a device-account membership and revoking
 an application grant have distinct effects.
 
 Inspect `account-console.spec.mjs`, `account-security.test.mjs`,

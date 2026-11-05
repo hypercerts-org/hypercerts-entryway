@@ -9,10 +9,12 @@ export default defineConfig({
     : [
         "browser.spec.mjs",
         "account-console.spec.mjs",
+        "account-console-multi-binding.spec.mjs",
         "migration-console.spec.mjs",
         "experience-browser.spec.mjs",
         "browser-oauth.spec.mjs",
         "oauth-lifecycle.spec.mjs",
+        "account-chooser.spec.mjs",
       ],
   fullyParallel: false,
   workers: 1,

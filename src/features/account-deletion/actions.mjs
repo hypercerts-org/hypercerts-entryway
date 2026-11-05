@@ -4,7 +4,15 @@ import { HttpError } from "../../http/http-error.mjs";
 
 export function createDeletionActions({ security, console }) {
   return {
-    delete: async ({ res, account, browser, principal, value, token }) => {
+    delete: async ({
+      res,
+      account,
+      browser,
+      principal,
+      accountContext,
+      value,
+      token,
+    }) => {
       console.needed();
 
       if (value("confirm") !== account.handle)
@@ -15,12 +23,12 @@ export function createDeletionActions({ security, console }) {
         );
       const issued = await security.requestAccountDeleteForBrowser(principal);
       const state = await security.summary(principal);
-      return nextStep(
-        res,
-        "Confirm account deletion",
-        browser.csrf,
-        "delete-confirm",
-        hidden("confirm", account.handle) +
+      return nextStep(res, {
+        title: "Confirm account deletion",
+        csrf: browser.csrf,
+        action: "delete-confirm",
+        contents:
+          hidden("confirm", account.handle) +
           hidden("challengeId", issued.challengeId ?? "") +
           field(
             "token",
@@ -36,9 +44,11 @@ export function createDeletionActions({ security, console }) {
                 'autocomplete="current-password" maxlength="256"',
               )
             : ""),
-        "Permanently delete account",
-        "A deletion code was sent to your primary email. This deletes your repository and blobs.",
-      );
+        button: "Permanently delete account",
+        message:
+          "A deletion code was sent to your primary email. This deletes your repository and blobs.",
+        accountContext,
+      });
     },
     "delete-confirm": async ({ req, res, account, value, token }) => {
       console.needed();
