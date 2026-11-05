@@ -6,6 +6,19 @@ import { loadConfig } from "../../dist/src/config.mjs";
 import { openDatabase } from "../../dist/src/database/connection.js";
 import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
 import { candidateIdentity } from "../support/candidate-identity.mjs";
+import {
+  createRealAccount,
+  createSharedEmailPair,
+} from "./support/email-chooser-fixture.mjs";
+import {
+  assertOAuthSubjectAndWrite,
+  beginAuthorization,
+  consentForm,
+  finishConsent,
+  requestVisibleCode,
+  selectionForm,
+  verifyVisibleCode,
+} from "./support/oauth-client.mjs";
 const config = await loadConfig();
 const stage = process.env.PROFILE_STAGE;
 const label = process.env.PROFILE_LABEL ?? stage;
@@ -259,7 +272,21 @@ async function rawGrant(db, dpopJwk, parameters, node) {
   throw Error("DPoP negotiation failed");
 }
 
+/** Boot ID per node from the ingress; every node ready, `count` distinct processes. */
+async function nodeInstanceIds() {
+  const topology = await (
+    await fetch(`${config.issuer}/__profile/nodes`)
+  ).json();
+  expect(topology.nodes.length).toBe(count);
+  expect(topology.nodes.every((node) => node.ready)).toBe(true);
+  expect(new Set(topology.nodes.map((node) => node.instanceId)).size).toBe(
+    count,
+  );
+  return new Map(topology.nodes.map((node) => [node.node, node.instanceId]));
+}
+
 test(`fresh deployment profile ${stage}`, async ({ browser }) => {
+  test.skip(stage === "cross-node-signin", "Has its own test below");
   await mkdir("/profile", { recursive: true, mode: 0o700 });
   const db =
     stage === "database-refusal" ? null : await openDatabase(configuration);
@@ -279,14 +306,7 @@ test(`fresh deployment profile ${stage}`, async ({ browser }) => {
   const page = await context.newPage();
   try {
     if (stage === "journey") {
-      const topology = await (
-        await fetch(`${config.issuer}/__profile/nodes`)
-      ).json();
-      expect(topology.nodes.length).toBe(count);
-      expect(topology.nodes.every((node) => node.ready)).toBe(true);
-      expect(new Set(topology.nodes.map((node) => node.instanceId)).size).toBe(
-        count,
-      );
+      const ids = await nodeInstanceIds();
       const metadata = await Promise.all(
         nodes.map(async (node) => {
           const response = await fetch(
@@ -413,12 +433,9 @@ test(`fresh deployment profile ${stage}`, async ({ browser }) => {
       await authorize(page, identity);
       await context.storageState({ path: "/profile/browser.json" });
       await writeRecord(page, identity, "Profile write after replay isolation");
-      const actual = new Map(
-        topology.nodes.map((node) => [node.node, node.instanceId]),
-      );
       expect(
         observed.every(
-          (receipt) => receipt.instanceId === actual.get(receipt.expectedNode),
+          (receipt) => receipt.instanceId === ids.get(receipt.expectedNode),
         ),
       ).toBe(true);
     } else if (stage === "survivor" || stage === "rejoin") {
@@ -565,6 +582,162 @@ test(`fresh deployment profile ${stage}`, async ({ browser }) => {
     throw error;
   } finally {
     await db?.close();
+    await context.close();
+  }
+});
+
+const issuerOrigin = new URL(config.issuer).origin;
+const clientOrigin = new URL(config.clientUrl).origin;
+const steps = [];
+
+/**
+ * Run one browser step on `node`. Every Entryway page response it produces must
+ * carry that node's boot ID, so a step served elsewhere fails instead of
+ * quietly proving nothing.
+ */
+async function onNode(page, ids, node, step, action) {
+  await page.context().setExtraHTTPHeaders(select(node));
+  const responses = [];
+  const collect = (response) => {
+    const { origin } = new URL(response.url());
+    if (
+      response.request().resourceType() === "document" &&
+      [issuerOrigin, clientOrigin].includes(origin)
+    )
+      responses.push(response);
+  };
+  page.on("response", collect);
+  try {
+    await action();
+  } finally {
+    page.off("response", collect);
+  }
+  expect(
+    responses.length,
+    `${step}: no Entryway page response`,
+  ).toBeGreaterThan(0);
+  for (const response of responses) {
+    const instanceId = response.headers()["x-entryway-instance"];
+    expect(instanceId, `${step}: ${new URL(response.url()).pathname}`).toBe(
+      ids.get(node),
+    );
+    observed.push({
+      phase: stage,
+      path: new URL(response.url()).pathname,
+      expectedNode: node,
+      instanceId,
+      status: response.status(),
+    });
+  }
+  steps.push({
+    step,
+    node,
+    instanceId: ids.get(node),
+    responses: responses.length,
+  });
+}
+
+// TECH-683: OTP, account choice and consent for one OAuth sign-in span both
+// nodes. Entryway keeps no per-process state between them; PostgreSQL carries it.
+test(`cross-node OAuth sign-in ${stage}`, async ({ browser }) => {
+  test.skip(stage !== "cross-node-signin", "Runs in its own profile stage");
+  // A one-node profile cannot cross nodes, so it must fail rather than pass.
+  expect(count).toBe(2);
+  const [nodeA, nodeB] = nodes;
+  const ids = await nodeInstanceIds();
+  expect([...ids.keys()]).toEqual(nodes);
+  const runId = Date.now().toString(36);
+  const shared = await createSharedEmailPair(browser, {
+    prefix: "xn",
+    runId,
+    database: configuration,
+  });
+  // A real account whose email differs: bound to a different verified identity.
+  const outsider = await createRealAccount(browser, {
+    email: `xn-${runId}-outsider@example.test`,
+    handle: `xn-${runId}-x.entryway.atmosbox.test`,
+    pdsId: "pds1",
+  });
+  // The second account is on the other PDS, so a wrong subject or audience
+  // cannot pass by defaulting to the first.
+  const chosen = shared.second;
+  const context = await browser.newContext({ ignoreHTTPSErrors: false });
+  const page = await context.newPage();
+  try {
+    let message;
+    await onNode(page, ids, nodeA, "authorize and request code", async () => {
+      await beginAuthorization(page, { prompt: "consent" });
+      await expect(page.getByLabel("Email address")).toBeVisible();
+      message = await requestVisibleCode(page, shared.email);
+    });
+    await onNode(page, ids, nodeB, "verify code", async () => {
+      await verifyVisibleCode(page, message.code);
+      await expect(
+        page.getByRole("heading", { name: "Choose an account" }),
+      ).toBeVisible();
+    });
+    await expect(page.locator('form[action="/auth/select"]')).toHaveCount(2);
+    for (const account of [shared.first, shared.second])
+      await expect(selectionForm(page, account.did)).toHaveCount(1);
+    await expect(selectionForm(page, outsider.did)).toHaveCount(0);
+
+    // A DID bound to another email is refused on both nodes, with the real
+    // hidden fields of this chooser, and does not spoil the pending choice.
+    const form = selectionForm(page, chosen.did);
+    const submitted = await form.evaluate((element) =>
+      Object.fromEntries(new FormData(element).entries()),
+    );
+    for (const node of nodes) {
+      const refused = await page.request.post(`${config.issuer}/auth/select`, {
+        maxRedirects: 0,
+        headers: { origin: config.issuer, ...select(node) },
+        form: { ...submitted, did: outsider.did },
+      });
+      expect(refused.status()).toBe(400);
+      expect(refused.headers()["x-entryway-instance"]).toBe(ids.get(node));
+      expect(await refused.text()).toContain(
+        "not linked to this verified identity",
+      );
+    }
+
+    await onNode(page, ids, nodeA, "choose account", async () => {
+      await form.getByRole("button").click();
+      await expect(consentForm(page, chosen.did)).toBeVisible();
+      await expect(consentForm(page, shared.first.did)).toHaveCount(0);
+    });
+    await onNode(page, ids, nodeB, "approve consent", () =>
+      finishConsent(page, chosen.did),
+    );
+    // The client session began on node B; read and write it through node A.
+    const { session, write } = await assertOAuthSubjectAndWrite(page, chosen, {
+      text: `Cross-node sign-in write ${runId}`,
+      headers: select(nodeA),
+    });
+    for (const response of [session, write])
+      expect(response.headers()["x-entryway-instance"]).toBe(ids.get(nodeA));
+
+    await marker(`profile-${label}.json`, {
+      status: "passed",
+      stage,
+      backend: config.database.backend,
+      deploymentMode: process.env.DEPLOYMENT_MODE,
+      nodeCount: count,
+      steps,
+      observed,
+      identity: candidateIdentity(),
+    });
+  } catch (error) {
+    await marker(`profile-${label}-failure-context.json`, {
+      stage,
+      steps: steps.map(({ step, node }) => ({ step, node })),
+      path: new URL(page.url()).pathname,
+      heading: await page
+        .locator("h1")
+        .allTextContents()
+        .catch(() => []),
+    }).catch(() => {});
+    throw error;
+  } finally {
     await context.close();
   }
 });

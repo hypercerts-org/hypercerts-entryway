@@ -51,7 +51,10 @@ export async function createRealAccount(browser, account) {
  * Two real accounts on different PDSs that share `email` the way migration or
  * import shares it. Handles stay within the 18-character label limit.
  */
-export async function createSharedEmailPair(browser, { prefix, runId }) {
+export async function createSharedEmailPair(
+  browser,
+  { prefix, runId, database },
+) {
   const email = `${prefix}-${runId}-shared@example.test`;
   const first = {
     email,
@@ -65,17 +68,29 @@ export async function createSharedEmailPair(browser, { prefix, runId }) {
   };
   await createRealAccount(browser, first);
   await createRealAccount(browser, second);
-  await bindAccountsToSharedEmail({ first, second, email, databasePath });
+  await bindAccountsToSharedEmail({
+    first,
+    second,
+    email,
+    databasePath,
+    database,
+  });
   return { email, first, second };
 }
 
+/**
+ * `database` selects a non-default authority database, such as the PostgreSQL
+ * one a deployment profile shares between nodes. It defaults to the sandbox's
+ * SQLite file at `databasePath`.
+ */
 export async function bindAccountsToSharedEmail({
   first,
   second,
   email,
   databasePath,
+  database = { backend: "sqlite", path: databasePath },
 }) {
-  const db = await openDatabase({ backend: "sqlite", path: databasePath });
+  const db = await openDatabase(database);
   try {
     const accounts = await createAccounts({ db, config });
     // Ordinary email changes reject an occupied primary email, so share it the
