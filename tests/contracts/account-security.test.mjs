@@ -222,7 +222,10 @@ test("login validation requires repair for an email-matched account without a bi
     purpose: "primary",
   });
 
-  await createAccountAuthority({ db: f.db, accounts: f.accounts }).initializeClaims();
+  await createAccountAuthority({
+    db: f.db,
+    accounts: f.accounts,
+  }).initializeClaims();
   assert.equal(await f.accounts.storage.getVerifiedBinding(f.alice.did), null);
 });
 
@@ -484,7 +487,10 @@ test("email update requires both proofs, rebinds identity, and revokes DID crede
     "get",
   );
   assert.equal(previousUser.email, f.alice.email);
-  assert.equal(previousUser.emailVerified, f.db.backend === "sqlite" ? 1 : true);
+  assert.equal(
+    previousUser.emailVerified,
+    f.db.backend === "sqlite" ? 1 : true,
+  );
   const newBinding = await f.accounts.storage.getVerifiedBinding(f.alice.did);
   assert.notEqual(newBinding.userId, f.login.user.id);
   const user = await query(
@@ -680,7 +686,10 @@ test("ordinary email change rejects another DID's normalized primary email and k
     { error: "EmailNotAvailable" },
   );
 
-  assert.deepEqual(await f.db.get("outbox", f.bob.email), destinationMailBefore);
+  assert.deepEqual(
+    await f.db.get("outbox", f.bob.email),
+    destinationMailBefore,
+  );
   assert.equal(await f.db.get("security:pending-email", f.alice.did), null);
   assert.equal(
     (await f.db.get("security:challenges", currentEmailToken.split(".")[0]))
@@ -689,7 +698,8 @@ test("ordinary email change rejects another DID's normalized primary email and k
   );
   assert.equal(
     (await f.db.list("security:challenges")).some(
-      ({ value }) => value.email === f.bob.email && value.purpose === "email-new",
+      ({ value }) =>
+        value.email === f.bob.email && value.purpose === "email-new",
     ),
     false,
   );
@@ -766,10 +776,14 @@ test("ordinary email change rejects another DID's primary even when a migration 
     bobBindingBefore,
   );
   assert.equal((await f.security.summary(f.actor)).pendingEmail, null);
-  assert.deepEqual(await f.db.get("outbox", f.bob.email), destinationMailBefore);
+  assert.deepEqual(
+    await f.db.get("outbox", f.bob.email),
+    destinationMailBefore,
+  );
   assert.equal(
     (await f.db.list("security:challenges")).some(
-      ({ value }) => value.email === f.bob.email && value.purpose === "email-new",
+      ({ value }) =>
+        value.email === f.bob.email && value.purpose === "email-new",
     ),
     false,
   );
@@ -865,7 +879,10 @@ test("admin email repair rejects another DID's normalized primary without changi
     await f.accounts.storage.getVerifiedBinding(f.bob.did),
     bobBindingBefore,
   );
-  assert.deepEqual(await f.db.get("outbox", f.bob.email), destinationMailBefore);
+  assert.deepEqual(
+    await f.db.get("outbox", f.bob.email),
+    destinationMailBefore,
+  );
   assert.ok(
     await f.oauth.requireSession({ headers: { cookie: destination.cookie } }),
   );
@@ -1015,7 +1032,11 @@ test("browser recovery selectors mask unknown and ineligible emails without proo
   const ineligible = await f.security.requestRecoveryForBrowser({
     email: f.bob.email,
   });
-  const selectors = [eligible.challengeId, unknown.challengeId, ineligible.challengeId];
+  const selectors = [
+    eligible.challengeId,
+    unknown.challengeId,
+    ineligible.challengeId,
+  ];
   for (const selector of selectors)
     assert.match(selector, /^[A-Za-z0-9_-]{24}$/);
   assert.equal(new Set(selectors).size, selectors.length);
@@ -1024,7 +1045,10 @@ test("browser recovery selectors mask unknown and ineligible emails without proo
     await f.security.requestRecovery({ email: "missing-recovery@example.com" }),
     {},
   );
-  assert.deepEqual(await f.security.requestRecovery({ email: f.bob.email }), {});
+  assert.deepEqual(
+    await f.security.requestRecovery({ email: f.bob.email }),
+    {},
+  );
   const eligibleChallenge = await f.db.get(
     "security:challenges",
     eligible.challengeId,
@@ -1080,8 +1104,7 @@ test("backup recovery verifies replacement email, retains DID and removes compro
   assert.equal(
     (await f.db.list("security:challenges")).some(
       ({ value }) =>
-        value.email === f.bob.email &&
-        value.purpose === "recovery-new-email",
+        value.email === f.bob.email && value.purpose === "recovery-new-email",
     ),
     false,
   );
@@ -1238,10 +1261,9 @@ test("admin repair leaves the DID unbound and requires repair after email-only l
   });
   assert.equal(response.status, 200);
   assert.notEqual(response.principal.userId, f.login.user.id);
-  assert.deepEqual(
-    await f.security.assertLoginEmail(response.principal),
-    { kind: "account-requires-repair" },
-  );
+  assert.deepEqual(await f.security.assertLoginEmail(response.principal), {
+    kind: "account-requires-repair",
+  });
   assert.equal((await f.accounts.get(f.alice.did)).emailVerified, false);
   assert.equal(await f.accounts.storage.getVerifiedBinding(f.alice.did), null);
 });

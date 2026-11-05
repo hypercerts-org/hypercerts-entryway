@@ -6,8 +6,8 @@
 # Copy into the consumer repository as .tangled/workflows/e2e.yml.
 # Replace ./test/e2e.sh with the consumer project's command.
 when:
-  - event: ['push', 'pull_request', 'manual']
-    branch: ['main']
+  - event: ["push", "pull_request", "manual"]
+    branch: ["main"]
 
 engine: microvm
 image: nixos

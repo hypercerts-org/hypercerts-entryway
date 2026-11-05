@@ -202,7 +202,7 @@ export function mountEmailLogin({
           return pageForFlow(
             res,
             "Account selection required",
-            "<p role=\"alert\">This verified identity is linked to multiple accounts. Account selection is not available yet.</p>",
+            '<p role="alert">This verified identity is linked to multiple accounts. Account selection is not available yet.</p>',
             flow,
             409,
           );
