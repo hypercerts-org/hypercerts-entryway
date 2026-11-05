@@ -94,7 +94,7 @@ test("handle and account status changes serialize so stale snapshots cannot rest
   assert.equal(current.status, "deactivated");
 });
 test("a new handle operation cannot overwrite an unresolved previous callback", async (t) => {
-  const { accounts, db, recover } = await fixture(t, ({ method }) =>
+  const { accounts, db } = await fixture(t, ({ method }) =>
     method === "com.atproto.admin.updateAccountHandle"
       ? { status: 503, body: { error: "Unavailable" } }
       : undefined,
@@ -118,7 +118,7 @@ test("a new handle operation cannot overwrite an unresolved previous callback", 
 });
 
 test("PDS-incompatible handle updates fail before PLC publication", async (t) => {
-  const { accounts, db, recover } = await fixture(t);
+  const { accounts, db } = await fixture(t);
   const account = await accounts.create(alice);
   let plcWrites = 0;
   accounts.plcClient.sendOperation = async () => {

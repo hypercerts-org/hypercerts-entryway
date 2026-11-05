@@ -40,6 +40,7 @@ test("createAccount rejects JSON email coercion before signup, invite or provisi
     },
     authenticatedRoute() {},
   });
+  // eslint-disable-next-line no-unused-vars -- Express requires four-argument error middleware.
   app.use((error, _req, res, _next) => {
     res.status(error.status ?? 500).json({ error: error.error });
   });

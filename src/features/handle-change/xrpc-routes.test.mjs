@@ -20,6 +20,7 @@ test("resolveHandle forwards a rejected reader through Express and serves the ne
     },
   });
   let forwarded;
+  // eslint-disable-next-line no-unused-vars -- Express requires four-argument error middleware.
   app.use((error, _req, res, _next) => {
     forwarded = error;
     const event = requestFailureEvent(500, error, "route-regression");

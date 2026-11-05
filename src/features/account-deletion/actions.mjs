@@ -4,7 +4,7 @@ import { HttpError } from "../../http/http-error.mjs";
 
 export function createDeletionActions({ security, console }) {
   return {
-    delete: async ({ res, account, browser, principal, value, token }) => {
+    delete: async ({ res, account, browser, principal, value }) => {
       console.needed();
 
       if (value("confirm") !== account.handle)

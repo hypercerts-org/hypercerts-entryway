@@ -16,7 +16,6 @@ export function mountEmailLogin({
   forgetBrowserAccounts,
 }) {
   const {
-    fields,
     save,
     newFlow,
     getFlow,

@@ -1,7 +1,7 @@
 import { fail } from "../../accounts/security-primitives.mjs";
 
 export function createMigrationProof({ proofs, config }) {
-  const { account, principal, issue, consume } = proofs;
+  const { principal, issue, consume } = proofs;
   const requestMigrationProof = async (
     actor,
     { pdsId },

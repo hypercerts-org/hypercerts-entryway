@@ -288,6 +288,50 @@ test(
   },
 );
 
+test("resending replaces same-timestamp sign-in proofs without invalidating other emails", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  const db = await openDatabase(await testDatabaseConfiguration());
+  t.after(() => db.close());
+  const mail = createMailFeature({
+    outbox: createMailOutbox(db),
+    transport: { async deliver() {} },
+  });
+  const authentication = await createBetterAuthAuthentication({
+    db,
+    config: {
+      issuer: "https://entryway.example.test",
+      betterAuthSecret: "contract-only-authentication-secret-long-enough",
+    },
+    mail,
+  });
+  const email = "replacement@example.test";
+  const otherEmail = "other@example.test";
+  await authentication.sendSignInCode(email);
+  const old = (await db.get("outbox", email)).otp;
+  await authentication.sendSignInCode(otherEmail);
+  const other = (await db.get("outbox", otherEmail)).otp;
+  const wrong = (old[0] === "0" ? "1" : "0") + old.slice(1);
+  assert.equal(
+    (await authentication.verifySignInCode({ email, otp: wrong })).ok,
+    false,
+  );
+  await authentication.sendSignInCode(email);
+  const current = (await db.get("outbox", email)).otp;
+  assert.equal(
+    (await authentication.verifySignInCode({ email, otp: old })).ok,
+    false,
+  );
+  assert.equal(
+    (await authentication.verifySignInCode({ email, otp: current })).ok,
+    true,
+  );
+  assert.equal(
+    (await authentication.verifySignInCode({ email: otherEmail, otp: other }))
+      .ok,
+    true,
+  );
+});
+
 test("independent authentication instances order wrong guesses with replacement and commit all five attempts", async (t) => {
   const db = await openDatabase(await testDatabaseConfiguration());
   t.after(() => db.close());

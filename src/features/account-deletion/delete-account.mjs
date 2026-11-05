@@ -1,5 +1,3 @@
-import { HttpError } from "../../http/http-error.mjs";
-
 export function createDeletion({
   db,
   get,

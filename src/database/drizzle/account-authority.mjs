@@ -1,5 +1,5 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { and, asc, eq, gt, ne, sql } from "drizzle-orm";
+import { and, asc, eq, gt, ne } from "drizzle-orm";
 import { HttpError } from "../../http/http-error.mjs";
 import { normalizeEmail } from "../../accounts/rules.js";
 const fail = (status, error, message) => new HttpError(status, error, message);

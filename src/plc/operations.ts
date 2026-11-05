@@ -64,7 +64,6 @@ function inputRecord(value: unknown): Record<string, unknown> {
 export function createPlcOperations({
   db,
   custody,
-  config,
   accounts,
   sendCode,
   consumeCode,

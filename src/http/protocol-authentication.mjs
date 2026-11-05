@@ -45,10 +45,6 @@ export async function createProtocolRouting({
   accountAccess,
   oauth,
   legacy,
-  security,
-  protocolOperations,
-  migration,
-  reconcile,
 }) {
   const fullLegacy = new Set([
     "createAppPassword",

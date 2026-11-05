@@ -190,6 +190,7 @@ export async function createApp({ config, db, mail, lifecycle }) {
   app.use((_req, res) =>
     res.status(404).json({ error: "NotFound", message: "Unknown endpoint" }),
   );
+  // eslint-disable-next-line no-unused-vars -- Express requires four-argument error middleware.
   app.use((error, req, res, _next) => {
     // Avoid logging requests, credentials, codes, email addresses, or token bodies.
     const status = Number(error.status ?? error.statusCode ?? 500);

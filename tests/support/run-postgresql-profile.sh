@@ -10,6 +10,9 @@ export ACCEPTANCE_REPORT_DIR="$parent_artifacts/postgresql-profile-$run"
 export DATABASE_BACKEND=postgresql DEPLOYMENT_MODE=single-node
 export DATABASE_URL=postgresql://authority_owner@entryway-postgres/account_authority
 mkdir -p "$ACCEPTANCE_REPORT_DIR"
+if [[ -n "${CI_OWNERSHIP_MANIFEST:-}" ]]; then
+  python3 "$root/scripts/ci-ownership.py" register "$CI_OWNERSHIP_MANIFEST" "$SANDBOX_CHECKOUT" "$SANDBOX_PROJECT"
+fi
 source "$root/tests/support/rootless-docker.sh"
 printf '%s\n' "$SANDBOX_CHECKOUT" "$SANDBOX_PROJECT" "$ACCEPTANCE_REPORT_DIR" > "$ACCEPTANCE_REPORT_DIR/sandbox-identity.txt"
 compose() { docker --context rootless compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" "$@"; }

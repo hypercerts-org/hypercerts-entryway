@@ -199,7 +199,7 @@ export const migration_workflow = table(
     version: integer("version").notNull(),
     value: text("value").notNull(),
   },
-  (t) => [],
+  () => [],
 );
 export const migration_checkpoint = table(
   "migration_checkpoint",
@@ -229,7 +229,7 @@ export const migration_snapshot_manifest = table(
       .references(() => migration_workflow.id),
     manifest: text("manifest").notNull(),
   },
-  (t) => [],
+  () => [],
 );
 export const migration_custody_inventory = table(
   "migration_custody_inventory",
@@ -238,7 +238,7 @@ export const migration_custody_inventory = table(
     value: text("value").notNull(),
     updated_at: text("updated_at").notNull(),
   },
-  (t) => [],
+  () => [],
 );
 // Immutable unsigned facts are separate from release-authorization events.
 export const custody_operations = table(
@@ -259,7 +259,7 @@ export const custody_observations = table(
     directory: text("directory").notNull(),
     value: text("value").notNull(),
   },
-  (t) => [],
+  () => [],
 );
 export const custody_history = table(
   "custody_history",

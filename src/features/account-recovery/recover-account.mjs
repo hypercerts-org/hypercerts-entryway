@@ -2,7 +2,6 @@ import { randomBytes } from "node:crypto";
 import { fail, normalizeEmail } from "../../accounts/security-primitives.mjs";
 
 export function createAccountRecovery({
-  db,
   proofs,
   authority,
   accounts,

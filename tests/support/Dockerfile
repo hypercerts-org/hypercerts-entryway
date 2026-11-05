@@ -3,6 +3,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
+FROM dependencies AS ci
+COPY scripts/lint/package.json scripts/lint/package-lock.json ./scripts/lint/
+RUN npm ci --prefix scripts/lint
+COPY . .
+CMD ["node", "scripts/ci-verify.mjs"]
 FROM dependencies AS changesets
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 FROM node:24-bookworm-slim

@@ -1,6 +1,6 @@
 import { field, form, section } from "../../ui/account-forms.mjs";
 
-export function renderLifecyclePanel({ csrf, a, statusForm }) {
+export function renderLifecyclePanel({ csrf, statusForm }) {
   const lifecycle = section(
     "lifecycle",
     "Account lifecycle",

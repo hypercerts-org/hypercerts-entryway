@@ -27,7 +27,7 @@ test("deletion retries a failed callback and completes when the retry succeeds",
 });
 
 test("deletion keeps an authorization failure pending", async (t) => {
-  const { accounts, db, recover } = await fixture(t, ({ method }) => {
+  const { accounts, db } = await fixture(t, ({ method }) => {
     if (method === "com.atproto.admin.deleteAccount")
       return { status: 401, body: { error: "AuthenticationRequired" } };
   });

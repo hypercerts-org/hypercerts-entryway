@@ -48,6 +48,7 @@ test("operator recovery requires Entryway authorization and exact nonreplayable 
     config: { adminPassword: "entryway-recovery-test" },
     ownership,
   });
+  // eslint-disable-next-line no-unused-vars -- Express requires four-argument error middleware.
   app.use((error, _req, res, _next) =>
     res.status(error.status ?? 500).json({ error: error.code ?? error.error }),
   );

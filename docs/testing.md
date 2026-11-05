@@ -155,6 +155,62 @@ configuration in public reports. Historical spike reports establish provenance o
 Keep design rationale in the existing domain guides and operator-facing release
 notes in [Changesets](../RELEASING.md), not routine test or scanner output.
 
+## Development: automated CI checks
+
+Contributors can reproduce each CI job from the repository root:
+
+```sh
+bash scripts/ci.sh checks
+bash scripts/ci.sh integration
+bash scripts/ci.sh databases
+bash scripts/ci.sh profiles
+```
+
+`checks` builds the managed tooling image, then runs formatting, ESLint, syntax,
+TypeScript, architecture, generated-schema consistency, build, unit and lifecycle
+fixture gates without runtime network access. ESLint has an isolated dependency
+lock under `scripts/lint`: its supported TypeScript parser does not replace the
+application's TypeScript 7 compiler or the architecture checker's TypeScript 6 alias.
+Compiler commands select the application compiler explicitly. To update tooling
+locks, use the managed `tooling` service in `tests/atmosphere/ci-tooling.yaml` with
+`SOURCE_CHECKOUT` and `ACCEPTANCE_REPORT_DIR` set to absolute owned paths; installation
+requires registry egress and is separate from offline checks.
+
+`integration` runs the existing `all` sequence in a fresh owned checkout: browser
+before contracts, resilience last, and the existing explicit moderation-gap
+assertion unchanged. `databases` runs both contract dialects and the fresh
+PostgreSQL login/restart/restore child profile. `profiles` runs all three deployment
+profiles and their aggregate receipt assertions. These are test gates, not claims
+that the pending public migration or moderation requirements are complete.
+
+Each invocation records its unique project and checkout before provisioning in
+`tests/artifacts/ci-<mode>-<run>/ownership.json`. Child profiles register there too.
+Set `CI_OWNERSHIP_MANIFEST` to an absolute, unused path to select a deterministic
+receipt location. Success, failure and handled signals trigger project-scoped
+volume cleanup; a failed suite retains its original status even if cleanup fails.
+An otherwise successful suite fails when cleanup fails. Retained runtime checkouts
+and private reports are not uploaded. To retry cleanup, pass the same manifest:
+
+```sh
+CI_OWNERSHIP_MANIFEST=/absolute/path/to/ownership.json bash scripts/ci.sh cleanup
+```
+
+Cleanup validates checkout boundaries and any generated manifest's project identity
+before acting. It enables all Compose profiles for the recorded project and checks
+for remaining project-labelled containers, networks and volumes. Cleanup fails if
+resources remain or the absence check fails. It is repeatable and never prunes the
+daemon. Identity mismatches need manual inspection; do not edit a manifest to target
+someone else's project.
+The workflow always retries scoped cleanup and publishes only numeric lifecycle
+status, never raw logs, configuration, tokens or browser captures. Review local
+private gate logs under the receipt's `reports/ci-checks` directory for failures.
+
+The GitHub workflow runs on pull requests to main, main pushes, merge-queue events
+and manual dispatch, using the PR head or event SHA. Every mode has an independent
+job, timeout, rootless daemon check and owned manifest. Local lifecycle fixture
+tests use fake subprocesses inside the managed image; they prove failure handling
+and identity refusal, not live Docker provisioning or hosted-runner compatibility.
+
 ## Feature tests and operational evidence
 
 Contract discovery executes both `tests/contracts/*.test.mjs` and recursively

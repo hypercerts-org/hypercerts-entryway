@@ -8,7 +8,7 @@ export function createAccountSettingsActions({
   console,
 }) {
   return {
-    "backup-request": async ({ res, browser, principal, value, token }) => {
+    "backup-request": async ({ res, browser, principal, value }) => {
       console.needed();
 
       const issued = await security.requestBackupEmailForBrowser(principal, {
@@ -42,7 +42,7 @@ export function createAccountSettingsActions({
       console.needed();
       await security.removeBackupEmail(principal, { email: value("email") });
     },
-    "email-request": async ({ res, browser, principal, token }) => {
+    "email-request": async ({ res, browser, principal }) => {
       console.needed();
 
       const issued = await security.requestEmailUpdateForBrowser(principal);

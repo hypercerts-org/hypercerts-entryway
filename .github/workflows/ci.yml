@@ -1,0 +1,74 @@
+name: CI
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    name: ${{ matrix.mode }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [checks, integration, databases, profiles]
+    env:
+      CI_OWNERSHIP_MANIFEST: ${{ github.workspace }}/tests/artifacts/ci-${{ matrix.mode }}-${{ github.run_id }}-${{ github.run_attempt }}/ownership.json
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: 2.8.3
+      - name: Set up and verify rootless Docker
+        run: |
+          set -euo pipefail
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          bootstrap_log="$(mktemp "${RUNNER_TEMP}/rootless-bootstrap.XXXXXX")"
+          daemon_log="$(mktemp "${RUNNER_TEMP}/rootless-daemon.XXXXXX")"
+          if ! dockerd-rootless-setuptool.sh install --force >"$bootstrap_log" 2>&1; then
+            echo 'Rootless Docker setup failed; private bootstrap log retained on runner.' >&2
+            exit 1
+          fi
+          if ! systemctl --user is-active --quiet docker.service 2>/dev/null; then
+            nohup dockerd-rootless.sh >"$daemon_log" 2>&1 </dev/null &
+          fi
+          ready=false
+          for attempt in {1..60}; do
+            if source tests/support/rootless-docker.sh 2>/dev/null && docker --context rootless compose version >/dev/null 2>&1; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$ready" != true ]]; then
+            echo 'Rootless Docker or Compose did not become ready; private logs retained on runner.' >&2
+            exit 1
+          fi
+          echo 'Verified rootless Docker and Compose readiness.'
+          deno --version
+      - name: Run shared CI entrypoint
+        run: bash scripts/ci.sh "${{ matrix.mode }}"
+      - name: Clean only recorded projects
+        if: always()
+        run: bash scripts/ci.sh cleanup
+      - name: Publish safe status only
+        if: always()
+        shell: bash
+        run: |
+          summary="$(dirname "$CI_OWNERSHIP_MANIFEST")/summary.txt"
+          if test -f "$summary"; then
+            cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'No suite completion receipt; inspect the failed setup or lifecycle step.' >> "$GITHUB_STEP_SUMMARY"
+          fi

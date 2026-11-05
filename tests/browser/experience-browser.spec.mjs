@@ -27,7 +27,6 @@ const readMail = (email) => {
   return row ? JSON.parse(row.value) : null;
 };
 const runId = Date.now().toString(36);
-const origin = new URL(config.issuer).origin;
 
 function updateFlow(flowId, update) {
   const row = fixtureDb

@@ -105,7 +105,9 @@ async function report(patch) {
   let old = {};
   try {
     old = JSON.parse(await readFile(reportPath, "utf8"));
-  } catch {}
+  } catch {
+    // A missing earlier report starts a new receipt.
+  }
   await writeFile(
     reportPath,
     JSON.stringify(

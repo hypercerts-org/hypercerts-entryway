@@ -23,6 +23,9 @@ if [[ "$exercise_mode" != --exercise ]]; then
 else
   : "${SANDBOX_CHECKOUT:?}" "${SANDBOX_PROJECT:?}" "${ACCEPTANCE_REPORT_DIR:?}"
 fi
+if [[ -n "${CI_OWNERSHIP_MANIFEST:-}" ]]; then
+  python3 "$root/scripts/ci-ownership.py" register "$CI_OWNERSHIP_MANIFEST" "$SANDBOX_CHECKOUT" "$SANDBOX_PROJECT"
+fi
 source "$root/tests/support/rootless-docker.sh"
 compose() { docker --context rootless compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" "$@"; }
 run() {
