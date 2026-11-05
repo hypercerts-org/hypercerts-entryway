@@ -11,12 +11,17 @@ def main():
     manifest = Path(manifest_name).resolve()
     root = Path(__file__).resolve().parents[1]
     runtime = root / "tests/.runtime"
+    context = os.environ.get("ENTRYWAY_DOCKER_CONTEXT", "rootless")
+    if context not in ("rootless", "default"):
+        raise ValueError("Unsupported Docker context")
     if action == "init":
         manifest.parent.mkdir(parents=True, exist_ok=True)
         with manifest.open("x") as stream:
-            json.dump({"root": str(root), "projects": []}, stream)
+            json.dump({"root": str(root), "context": context, "projects": []}, stream)
         return
     record = json.loads(manifest.read_text())
+    if record["context"] != context:
+        raise ValueError("CI Docker context identity mismatch")
     if record["root"] != str(root):
         raise ValueError("CI checkout identity mismatch")
     if action == "register":
@@ -44,12 +49,14 @@ def main():
         temporary.write_text(json.dumps(record, indent=2) + "\n")
         os.replace(temporary, manifest)
         return
+    subprocess.run(["bash", "-c", 'source "$1"', "docker-preflight",
+                    str(root / "tests/support/rootless-docker.sh")], check=True)
     failed = False
     for item in reversed(record["projects"]):
         compose = Path(item["checkout"]) / "compose.yaml"
         if compose.exists():
             result = subprocess.run([
-                "docker", "--context", "rootless", "compose", "--project-name",
+                "docker", "--context", context, "compose", "--project-name",
                 item["project"], "-f", str(compose), "down", "--volumes", "--remove-orphans",
             ], check=False, env={**os.environ, "SOURCE_CHECKOUT": str(root),
                                   "SANDBOX_PROJECT": item["project"],
@@ -58,7 +65,7 @@ def main():
             failed |= result.returncode != 0
         for resource, arguments in [("container", ["--all"]), ("network", []), ("volume", [])]:
             result = subprocess.run([
-                "docker", "--context", "rootless", resource, "ls", *arguments,
+                "docker", "--context", context, resource, "ls", *arguments,
                 "--quiet", "--filter", f"label=com.docker.compose.project={item['project']}",
             ], check=False, capture_output=True, text=True)
             if result.returncode != 0 or result.stdout.strip():

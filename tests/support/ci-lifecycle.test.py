@@ -1,12 +1,10 @@
-"""Contributors: exercise the CI lifecycle in a container without a Docker socket."""
+"""Contributors: verify owned cleanup and Docker selection without a daemon."""
 import json
 import os
 from pathlib import Path
 import shutil
-import signal
 import subprocess
 import tempfile
-import time
 import unittest
 
 
@@ -15,100 +13,138 @@ class LifecycleTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        for directory in ["scripts", "tests/support", "tests/.runtime", "bin"]:
+        for directory in ["scripts", "tests/support", "tests/.runtime/parent", "bin"]:
             (self.root / directory).mkdir(parents=True)
         source = Path(__file__).resolve().parents[2]
-        for name in ["ci.sh", "ci-ownership.py"]:
-            shutil.copy(source / "scripts" / name, self.root / "scripts" / name)
-        (self.root / "tests/support/rootless-docker.sh").write_text("true\n")
-        local = self.root / "tests/local.sh"
-        local.write_text('''#!/bin/bash
-set -eu
-mkdir -p "$SANDBOX_CHECKOUT/state"
-printf '{"project":"%s"}' "$SANDBOX_PROJECT" > "$SANDBOX_CHECKOUT/state/manifest.json"
-printf 'services: {}' > "$SANDBOX_CHECKOUT/compose.yaml"
-case "${FIXTURE_RESULT:-success}" in
-  failure) exit 17 ;;
-  partial) rm "$SANDBOX_CHECKOUT/state/manifest.json"; exit 18 ;;
-  mismatch) echo '{"project":"someone-else"}' > "$SANDBOX_CHECKOUT/state/manifest.json" ;;
-  term) kill -TERM "$PPID" ;;
-esac
-''')
-        local.chmod(0o755)
+        shutil.copy(source / "scripts/ci-ownership.py", self.root / "scripts/ci-ownership.py")
+        shutil.copy(source / "tests/support/rootless-docker.sh", self.root / "tests/support/rootless-docker.sh")
         docker = self.root / "bin/docker"
         docker.write_text('''#!/bin/bash
 printf '%s | profiles=%s\\n' "$*" "${COMPOSE_PROFILES:-}" >> "$CALLS"
-if [[ "$*" == *' compose '* ]]; then
-  exit "${CLEANUP_EXIT:-0}"
-fi
-if [[ "${LEAK_RESOURCE:-}" != '' && "$*" == *" $LEAK_RESOURCE ls "* ]]; then
-  echo leaked-resource
-fi
-exit "${INSPECT_EXIT:-0}"
+case "$*" in
+  *' context inspect '*) echo "${ENDPOINT:-unix:///run/user/1000/docker.sock}" ;;
+  *' info '*) echo "${SECURITY:-[\"name=rootless\"]}" ;;
+  *' compose '*) exit "${CLEANUP_EXIT:-0}" ;;
+  *) if [[ -n "${LEAK_RESOURCE:-}" && "$*" == *" $LEAK_RESOURCE ls "* ]]; then echo leaked; fi; exit "${INSPECT_EXIT:-0}" ;;
+esac
 ''')
         docker.chmod(0o755)
         self.manifest = self.root / "reports/ownership.json"
         self.calls = self.root / "calls"
         self.env = {**os.environ, "PATH": f"{self.root / 'bin'}:{os.environ['PATH']}",
-                    "CI_OWNERSHIP_MANIFEST": str(self.manifest), "CALLS": str(self.calls)}
+                    "ENTRYWAY_DOCKER_CONTEXT": "rootless", "CALLS": str(self.calls)}
+        self.checkout = self.root / "tests/.runtime/parent"
+        self.assertEqual(self.ownership("init").returncode, 0)
+        self.assertEqual(self.ownership("register", str(self.checkout), "hypercerts-entryway-parent").returncode, 0)
+        (self.checkout / "compose.yaml").write_text("services: {}")
 
-    def run_mode(self, mode="integration", **environment):
-        return subprocess.run(["bash", str(self.root / "scripts/ci.sh"), mode],
+    def ownership(self, action, *arguments, **environment):
+        return subprocess.run(["python3", str(self.root / "scripts/ci-ownership.py"), action,
+                               str(self.manifest), *arguments], env={**self.env, **environment},
+                              capture_output=True, text=True, timeout=15)
+
+    def guard(self, **environment):
+        return subprocess.run(["bash", "-c", 'source "$1" && test -z "${DOCKER_HOST:-}"',
+                               "guard", str(self.root / "tests/support/rootless-docker.sh")],
                               env={**self.env, **environment}, capture_output=True, timeout=15)
 
-    def test_success_and_repeated_cleanup(self):
-        self.assertEqual(self.run_mode(COMPOSE_PROFILES="unrelated").returncode, 0)
-        self.assertEqual(self.run_mode("cleanup", COMPOSE_PROFILES="unrelated").returncode, 0)
-        calls = self.calls.read_text().splitlines()
-        self.assertEqual(len(calls), 8)
-        self.assertEqual(calls[:4], calls[4:])
-        self.assertIn("down --volumes --remove-orphans | profiles=*", calls[0])
-        project = json.loads(self.manifest.read_text())["projects"][0]
-        self.assertIn(f"--project-name {project['project']} -f {project['checkout']}/compose.yaml", calls[0])
-        for call in calls[1:4]:
-            self.assertIn(f"label=com.docker.compose.project={project['project']}", call)
+    def test_repeated_scoped_cleanup(self):
+        for _ in range(2):
+            self.assertEqual(self.ownership("cleanup", COMPOSE_PROFILES="unrelated").returncode, 0)
+        calls = self.calls.read_text()
+        self.assertEqual(calls.count("down --volumes --remove-orphans | profiles=*"), 2)
+        self.assertIn("label=com.docker.compose.project=hypercerts-entryway-parent", calls)
+        self.assertNotIn("prune", calls)
 
-    def test_failure_preserved_even_when_cleanup_fails(self):
-        self.assertEqual(self.run_mode(FIXTURE_RESULT="failure", CLEANUP_EXIT="7").returncode, 17)
-        self.assertTrue(self.calls.exists())
+    def test_cleanup_and_inspection_failures(self):
+        for environment in [{"CLEANUP_EXIT": "7"}, {"INSPECT_EXIT": "9"},
+                            *({"LEAK_RESOURCE": resource} for resource in ("container", "network", "volume"))]:
+            self.assertNotEqual(self.ownership("cleanup", **environment).returncode, 0)
 
-    def test_cleanup_failure_fails_successful_run(self):
-        self.assertEqual(self.run_mode(CLEANUP_EXIT="7").returncode, 1)
+    def test_partial_child_registered_before_provision(self):
+        self.assertEqual(self.ownership("register", str(self.root / "tests/.runtime/child"),
+                                        "hypercerts-entryway-child").returncode, 0)
+        self.assertEqual(self.ownership("cleanup").returncode, 0)
+        self.assertIn("label=com.docker.compose.project=hypercerts-entryway-child", self.calls.read_text())
 
-    def test_leaked_resources_fail_cleanup(self):
-        self.assertEqual(self.run_mode().returncode, 0)
-        for resource in ("container", "network", "volume"):
-            with self.subTest(resource=resource):
-                self.assertNotEqual(self.run_mode("cleanup", LEAK_RESOURCE=resource).returncode, 0)
-
-    def test_inspection_failure_fails_cleanup(self):
-        self.assertEqual(self.run_mode(INSPECT_EXIT="9").returncode, 1)
-
-    def test_partial_provision(self):
-        self.assertEqual(self.run_mode(FIXTURE_RESULT="partial").returncode, 18)
-        self.assertTrue(self.calls.exists())
-
-    def test_term_cleans(self):
-        self.assertEqual(self.run_mode(FIXTURE_RESULT="term").returncode, 143)
-        self.assertTrue(self.calls.exists())
-
-    def test_mismatch_refuses_cleanup(self):
-        self.assertNotEqual(self.run_mode(FIXTURE_RESULT="mismatch").returncode, 0)
+    def test_foreign_project_refused_before_docker(self):
+        (self.checkout / "state").mkdir()
+        (self.checkout / "state/manifest.json").write_text('{"project":"someone-else"}')
+        self.assertNotEqual(self.ownership("cleanup").returncode, 0)
         self.assertFalse(self.calls.exists())
 
-    def test_unknown_mode_has_no_side_effects(self):
-        self.assertEqual(self.run_mode("unknown").returncode, 2)
-        self.assertFalse(self.manifest.exists())
+    def test_outside_checkout_refused(self):
+        self.assertNotEqual(self.ownership("register", str(self.root / "foreign"),
+                                           "hypercerts-entryway-child").returncode, 0)
 
-    def test_child_registration_before_provision(self):
-        self.assertEqual(self.run_mode().returncode, 0)
-        child = self.root / "tests/.runtime/child"
-        result = subprocess.run(["python3", str(self.root / "scripts/ci-ownership.py"),
-                                 "register", str(self.manifest), str(child),
-                                 "hypercerts-entryway-child"], capture_output=True)
-        self.assertEqual(result.returncode, 0)
-        self.assertEqual(len(json.loads(self.manifest.read_text())["projects"]), 2)
-        self.assertEqual(self.run_mode("cleanup").returncode, 0)
+    def test_context_mismatch_refused(self):
+        self.assertNotEqual(self.ownership("cleanup", ENTRYWAY_DOCKER_CONTEXT="default").returncode, 0)
+        self.assertFalse(self.calls.exists())
+
+    def test_rootless_guard_ignores_docker_host(self):
+        self.assertEqual(self.guard(DOCKER_HOST="tcp://foreign:2375").returncode, 0)
+        self.assertNotEqual(self.guard(ENDPOINT="unix:///var/run/docker.sock").returncode, 0)
+        self.assertNotEqual(self.guard(SECURITY='["name=seccomp"]').returncode, 0)
+
+    def test_explicit_default_guard(self):
+        self.assertEqual(self.guard(ENTRYWAY_DOCKER_CONTEXT="default",
+                                    ENDPOINT="unix:///var/run/docker.sock", SECURITY='["name=seccomp"]').returncode, 0)
+        self.assertNotEqual(self.guard(ENTRYWAY_DOCKER_CONTEXT="default").returncode, 0)
+        self.assertNotEqual(self.guard(ENTRYWAY_DOCKER_CONTEXT="foreign").returncode, 0)
+
+    def test_live_controller_shell_syntax(self):
+        source = Path(__file__).resolve().parents[2]
+        for script in [source / "tests/local.sh", *sorted((source / "tests/support").glob("*.sh"))]:
+            with self.subTest(script=script.name):
+                result = subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_summary_does_not_publish_payloads(self):
+        source = Path(__file__).resolve().parents[2]
+        result = subprocess.run(["python3", str(source / "scripts/ci-summary.py")],
+                                input='OTP 123456\naccess_token=private\nℹ pass 12\n  3 passed (1.2s)\nassertion payload\n',
+                                capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout, 'ℹ pass 12\n3 passed (1.2s)\n')
+
+    def test_named_failure_and_docker_context_without_payloads(self):
+        source = Path(__file__).resolve().parents[2]
+        title = "email OTP onboarding, invalid code, replay, real PDS1 write and OAuth refresh"
+        result = subprocess.run(["python3", str(source / "scripts/ci-summary.py")],
+                                input=f'✖ {title} (12ms)\nError response from daemon: secret-token\nERR_ASSERTION: OTP 123456\n',
+                                capture_output=True, text=True, check=True)
+        self.assertIn(f"test={title} status=failed", result.stdout)
+        self.assertIn("code=DOCKER_OPERATION_FAILED", result.stdout)
+        self.assertIn("code=ASSERTION_FAILED", result.stdout)
+        self.assertNotIn("secret-token", result.stdout)
+        self.assertNotIn("123456", result.stdout)
+
+    def test_pretest_docker_failure_keeps_phase_and_exit(self):
+        source = Path(__file__).resolve().parents[2]
+        shutil.copy(source / "tests/local.sh", self.root / "tests/local.sh")
+        result = subprocess.run(["bash", str(self.root / "tests/local.sh"), "browser"],
+                                env={**self.env, "SANDBOX_CHECKOUT": str(self.checkout),
+                                     "ACCEPTANCE_REPORT_DIR": str(self.root / "reports"),
+                                     "ENDPOINT": "unix:///wrong.sock"},
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("phase=browser status=started", result.stdout)
+        self.assertIn("phase=browser status=finished exit=1", result.stdout)
+
+    def test_nested_controller_is_not_filtered_twice(self):
+        source = Path(__file__).resolve().parents[2]
+        text = (source / "tests/support/run-resilience-profile.sh").read_text()
+        self.assertIn('|| "$label" == exercise', text)
+        self.assertIn('profile=%s phase=%s status=finished exit=%s', text)
+        run_function = text.split('run() {', 1)[1].split('\ncleanup()', 1)[0]
+        result = subprocess.run(['bash', '-c',
+                                 'set -o pipefail; profile=sqlite-single-node; '
+                                 'ACCEPTANCE_REPORT_DIR="$1"; PROFILE_EXERCISE_TRIGGER_MS=$(date +%s%3N); '
+                                 'run() {' + run_function + '\n'
+                                 'run exercise bash -c "echo phase=journey status=started; exit 7"',
+                                 'nested-test', str(self.root)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 7)
+        self.assertIn('phase=journey status=started', result.stdout)
+        self.assertIn('phase=exercise status=finished exit=7', result.stdout)
 
 
 if __name__ == "__main__":

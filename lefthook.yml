@@ -1,0 +1,9 @@
+assert_lefthook_installed: true
+no_auto_install: true
+pre-commit: &native-checks
+  jobs:
+    - name: format
+      run: npm run format:check
+    - name: lint
+      run: npm run lint
+entryway-checks: *native-checks

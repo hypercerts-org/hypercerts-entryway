@@ -1,11 +1,13 @@
-# Testing in Atmosphere in a Box
+# Testing Entryway
 
 ## Boundaries and prerequisites
 
 Use Docker Compose v2, Node.js 24, Deno 2.8.3, Python 3, Git, Bash and `flock` on
-the host. Node/Python are orchestration prerequisites. All application dependency
-installation, builds, execution and tests belong in sandbox containers, using
-Node 24 and Playwright 1.58.2.
+the host for live integration tests. Contributors run dependency installs, format,
+lint, syntax, typecheck, build, unit, schema and architecture checks natively with
+Node 24. Only live integration/E2E requiring PDS, Entryway or other services uses
+AiaB containers, with Playwright 1.58.2. Do not start live application servers on
+the host. Native check commands appear in the development section below.
 
 `tests/atmosphere/` owns installation scripts, stack templates, examples and
 provenance. It prepares a disposable Atmosphere in a Box checkout pinned to
@@ -157,59 +159,89 @@ notes in [Changesets](../RELEASING.md), not routine test or scanner output.
 
 ## Development: automated CI checks
 
-Contributors can reproduce each CI job from the repository root:
+Contributors maintain the actual job commands in `.github/workflows/ci.yml`.
+Formatting, lint, syntax, types, architecture, schema, build, unit and lifecycle
+checks each have a visible step. Integration runs browser before contracts,
+then migration, the declared moderation-gap assertion, recovery/crash/authority
+checks and resilience last. Database dialects and the PostgreSQL application
+profile are separate steps. Each deployment profile has its own step followed
+by the aggregate receipt assertion. These gates do not close the pending public
+migration or moderation requirements.
+
+Contributors reproduce basic checks directly from the repository root:
 
 ```sh
-bash scripts/ci.sh checks
-bash scripts/ci.sh integration
-bash scripts/ci.sh databases
-bash scripts/ci.sh profiles
+CI=1 npm ci
+npm ci --prefix scripts/lint
+npm run hooks:install
+npm run test:hooks
+npm run format:check
+npm run lint
+npm run check
+npm run typecheck
+npm run check:architecture
+npm run test:architecture
+npm run schema:check
+npm run build
+npm run test:unit
+npm run test:ci-lifecycle
 ```
 
-`checks` builds the managed tooling image, then runs formatting, ESLint, syntax,
-TypeScript, architecture, generated-schema consistency, build, unit and lifecycle
-fixture gates without runtime network access. ESLint has an isolated dependency
-lock under `scripts/lint`: its supported TypeScript parser does not replace the
-application's TypeScript 7 compiler or the architecture checker's TypeScript 6 alias.
-Compiler commands select the application compiler explicitly. To update tooling
-locks, use the managed `tooling` service in `tests/atmosphere/ci-tooling.yaml` with
-`SOURCE_CHECKOUT` and `ACCEPTANCE_REPORT_DIR` set to absolute owned paths; installation
-requires registry egress and is separate from offline checks.
+ESLint dependencies remain isolated under `scripts/lint`; these checks need no
+AiaB or Docker daemon. For npm installation, `CI=1` suppresses Lefthook 2.2.2's
+upstream automatic postinstall hook installation. Ensure `LEFTHOOK` is unset for
+that command. Do not run a plain root `npm install` or `npm ci`: upstream may
+rename an existing hook. For dependency updates use `CI=1 npm install` instead.
 
-`integration` runs the existing `all` sequence in a fresh owned checkout: browser
-before contracts, resilience last, and the existing explicit moderation-gap
-assertion unchanged. `databases` runs both contract dialects and the fresh
-PostgreSQL login/restart/restore child profile. `profiles` runs all three deployment
-profiles and their aggregate receipt assertions. These are test gates, not claims
-that the pending public migration or moderation requirements are complete.
+`npm run hooks:install` installs the Entryway pre-commit launcher explicitly.
+It refuses an existing custom pre-commit hook or any configured `core.hooksPath`;
+resolve the conflict manually, preserving any hook you need, then retry. It never
+chains or renames hooks. Re-running it with the unchanged Entryway launcher is
+safe. The launcher fails if the local Lefthook binary is missing. It invokes the
+shared `entryway-checks` Lefthook jobs rather than the special `pre-commit` runner,
+which otherwise hides partially staged changes with a stash. Both jobs inspect
+the working tree, not the staged snapshot: unstaged edits can cause a failure
+or mask a staged problem. They do not fix, stage or stash files. CI remains the
+authoritative check of committed content.
 
-Each invocation records its unique project and checkout before provisioning in
-`tests/artifacts/ci-<mode>-<run>/ownership.json`. Child profiles register there too.
-Set `CI_OWNERSHIP_MANIFEST` to an absolute, unused path to select a deterministic
-receipt location. Success, failure and handled signals trigger project-scoped
-volume cleanup; a failed suite retains its original status even if cleanup fails.
-An otherwise successful suite fails when cleanup fails. Retained runtime checkouts
-and private reports are not uploaded. To retry cleanup, pass the same manifest:
+For live jobs, select unique owned runtime and report directories before running
+the individual `tests/local.sh` commands shown in the workflow:
 
 ```sh
-CI_OWNERSHIP_MANIFEST=/absolute/path/to/ownership.json bash scripts/ci.sh cleanup
+export SOURCE_CHECKOUT="$PWD"
+export SANDBOX_PROJECT="hypercerts-entryway-ci-local-$(date +%s)-$$"
+export SANDBOX_CHECKOUT="$PWD/tests/.runtime/$SANDBOX_PROJECT"
+export ACCEPTANCE_REPORT_DIR="$PWD/tests/artifacts/$SANDBOX_PROJECT/reports"
+export CI_OWNERSHIP_MANIFEST="$PWD/tests/artifacts/$SANDBOX_PROJECT/ownership.json"
+source tests/support/rootless-docker.sh
+python3 scripts/ci-ownership.py init "$CI_OWNERSHIP_MANIFEST"
+python3 scripts/ci-ownership.py register "$CI_OWNERSHIP_MANIFEST" "$SANDBOX_CHECKOUT" "$SANDBOX_PROJECT"
+bash tests/local.sh prepare
+bash tests/local.sh up
+# Run the desired live gates, then always clean up, including after failure:
+python3 scripts/ci-ownership.py cleanup "$CI_OWNERSHIP_MANIFEST"
 ```
 
-Cleanup validates checkout boundaries and any generated manifest's project identity
-before acting. It enables all Compose profiles for the recorded project and checks
-for remaining project-labelled containers, networks and volumes. Cleanup fails if
-resources remain or the absence check fails. It is repeatable and never prunes the
-daemon. Identity mismatches need manual inspection; do not edit a manifest to target
-someone else's project.
-The workflow always retries scoped cleanup and publishes only numeric lifecycle
-status, never raw logs, configuration, tokens or browser captures. Review local
-private gate logs under the receipt's `reports/ci-checks` directory for failures.
+Every live job registers its project before provisioning. Child profiles register in
+the same manifest; the `always()` cleanup step validates all identities, enables
+all Compose profiles and checks for remaining project-labelled resources. It
+never prunes the daemon. Failed gates remain failed even when cleanup succeeds;
+cleanup failure also fails the job. Retry with the same manifest and context.
 
-The GitHub workflow runs on pull requests to main, main pushes, merge-queue events
-and manual dispatch, using the PR head or event SHA. Every mode has an independent
-job, timeout, rootless daemon check and owned manifest. Local lifecycle fixture
-tests use fake subprocesses inside the managed image; they prove failure handling
-and identity refusal, not live Docker provisioning or hosted-runner compatibility.
+GitHub-hosted jobs explicitly select `ENTRYWAY_DOCKER_CONTEXT=default`, using the
+runner's standard Docker daemon; no rootless installation is needed. Local runs
+default to rootless. Both paths validate the endpoint before use, unset
+`DOCKER_HOST`, record the selection and refuse a changed cleanup context. Checkout
+uses the event's default revision, including the PR merge ref and merge queue.
+Actions are pinned, permissions read-only and jobs bounded by timeouts.
+
+Commands and gate results remain visible. Runtime diagnostic payloads and access
+JSON stay private. Controllers publish phase names and exit status; the summary
+filter publishes repository-declared literal test names, counts and fixed diagnostic
+codes for Docker, assertion and timeout failures, never assertion values. Nested
+profile controllers are not filtered a second time. Raw reports are never uploaded. Inspect
+private reports locally for detailed failures. Lifecycle fixtures use fake Docker
+natively; they do not establish hosted-runner compatibility.
 
 ## Feature tests and operational evidence
 
@@ -217,7 +249,7 @@ Contract discovery executes both `tests/contracts/*.test.mjs` and recursively
 co-located `src/features/**/*.test.mjs`, once and sorted, with a shared JUnit report.
 Run browser before contracts in a fresh project: real contracts require the
 verified account created by the browser journey. Pure diagnostic unit runs use
-`npm run test:unit` inside the managed test container and do not need that fixture.
+`npm run test:unit` natively and do not need that fixture.
 Browser email-proof tests must obtain the recipient's visible code from Mailpit
 message content; reading the database outbox's full token hides missing challenge
 context. Verify the hidden selector is retained and that wrong codes or selectors
@@ -226,8 +258,8 @@ are rejected. Better Auth sign-in OTP remains a separate flow.
 The application images are project-scoped. Source changes require rebuilding the
 selected runtime/test/browser images; test results from an older image cannot
 validate current files. AiaB runtime networks intentionally have no registry
-egress. Lockfile generation uses an isolated managed tooling service with egress
-and no runtime secrets/volumes; it is not performed in the application runtime.
+egress. Lockfile updates and dependency installs run natively with registry access,
+not in the application runtime.
 
 Operational controllers validate the selected manifest/project, share the
 consumer migration lock, use bounded waits and restore only owned services and
@@ -267,11 +299,10 @@ processes. [Deployment profiles](deployment-profiles.md) exercise readiness/drai
 and actual application replicas. The [credential-lifetime defect](implementation-assessment.md#known-limits)
 remains unfixed; passing suites do not erase its earlier failure.
 
-Repository lifecycle entrypoints explicitly select `DOCKER_CONTEXT=rootless`, unset
-`DOCKER_HOST` and verify the rootless endpoint/security option before acting. There
-is no default-daemon fallback, including cleanup. The receipt records the selected
-context, endpoint and security options. A historical result without that
-provenance must not be presented as rootless acceptance.
+Repository lifecycle entrypoints default to rootless Docker locally. The explicit
+hosted exception and context validation are described in the development section
+above. Historical results without context provenance do not establish rootless
+acceptance.
 
 The revised real process-crash drill uses the unchanged 120-second operation lease,
 a 150-second bounded approval wait, a 360-second browser-case deadline and a

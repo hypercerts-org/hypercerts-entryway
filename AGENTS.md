@@ -88,14 +88,18 @@ Read applicable tests/plans and tests/flows before changing behavior.
 
 ## Runtime and validation
 
-All dependency installation, builds, application execution and tests run through
-Atmosphere in a Box. Host work is source editing, read-only inspection, Git and
-sandbox lifecycle orchestration, including disposable tooling checkout. Follow `docs/testing.md`; do not run host npm
-installs, builds or tests. Use a pinned disposable Atmosphere in a Box checkout and repository-owned stack
-templates, following the sibling ePDS harness boundary. Keep installation and
-runtime phases explicit. Obtain connection information through `sandbox access
---json`; reports must exclude generated secrets. Use Mailpit for sandbox delivery. Keep TLS verification
-on and isolate sandbox projects and state. Do not stop another worker's sandbox.
+Contributors run dependency installation, formatting, lint, syntax, type checks,
+builds, unit tests, schema and architecture checks natively with Node.js 24.
+Live integration and E2E tests needing PDS, Entryway or other services run through
+Atmosphere in a Box; do not start live application servers on the host.
+Follow `docs/testing.md`. Use a pinned disposable Atmosphere in a Box checkout
+and repository-owned stack templates. Keep installation and runtime phases explicit.
+Obtain connection information through `sandbox access --json`; reports must exclude
+generated secrets. Use Mailpit for sandbox delivery, keep TLS verification on,
+and isolate projects and state. Do not stop another worker's sandbox. Local live
+lifecycle commands default to rootless Docker; GitHub-hosted CI uses the standard
+`default` Docker context with endpoint validation. Keep commands and safe progress
+visible in individual workflow steps.
 
 Run tests when the task requests implementation verification or testing. Report
 what ran, the exact result, and what remains unrun. A historical spike report or

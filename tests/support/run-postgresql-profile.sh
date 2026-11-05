@@ -15,27 +15,31 @@ if [[ -n "${CI_OWNERSHIP_MANIFEST:-}" ]]; then
 fi
 source "$root/tests/support/rootless-docker.sh"
 printf '%s\n' "$SANDBOX_CHECKOUT" "$SANDBOX_PROJECT" "$ACCEPTANCE_REPORT_DIR" > "$ACCEPTANCE_REPORT_DIR/sandbox-identity.txt"
-compose() { docker --context rootless compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" "$@"; }
+compose() { docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" "$@"; }
 cleanup() {
   status=$?
   printf '%s\n' "$status" > "$ACCEPTANCE_REPORT_DIR/profile.exit"
   if (( status == 0 )); then compose down --volumes --remove-orphans; else echo "Preserved owned PostgreSQL profile $SANDBOX_PROJECT" >&2; fi
 }
 trap cleanup EXIT
-"$root/tests/local.sh" prepare > "$ACCEPTANCE_REPORT_DIR/prepare.log" 2>&1
-"$root/tests/local.sh" up > "$ACCEPTANCE_REPORT_DIR/up.log" 2>&1
+"$root/tests/local.sh" prepare 2>&1 | tee "$ACCEPTANCE_REPORT_DIR/prepare.log"
+"$root/tests/local.sh" up 2>&1 | tee "$ACCEPTANCE_REPORT_DIR/up.log"
 probe() {
   local phase="$1"
-  compose run --rm --no-deps test node tests/support/postgresql-profile.mjs "$phase" > "$ACCEPTANCE_REPORT_DIR/$phase.log" 2>&1
+  echo "PostgreSQL profile: $phase"
+  local result=0
+  compose run --rm --no-deps test node tests/support/postgresql-profile.mjs "$phase" 2>&1 | tee "$ACCEPTANCE_REPORT_DIR/$phase.log" | python3 "$root/scripts/ci-summary.py" || result=$?
+  printf 'profile=postgresql phase=%s status=finished exit=%s\n' "$phase" "$result"
+  return "$result"
 }
 probe login
-compose restart entryway > "$ACCEPTANCE_REPORT_DIR/restart.log" 2>&1
-compose up -d --wait entryway >> "$ACCEPTANCE_REPORT_DIR/restart.log" 2>&1
+compose restart entryway 2>&1 | tee "$ACCEPTANCE_REPORT_DIR/restart.log"
+compose up -d --wait entryway 2>&1 | tee "$ACCEPTANCE_REPORT_DIR/restart.log"
 probe restart
-compose stop entryway > "$ACCEPTANCE_REPORT_DIR/restore.log" 2>&1
+compose stop entryway 2>&1 | tee "$ACCEPTANCE_REPORT_DIR/restore.log"
 # Dump and restore execute inside the owned PostgreSQL container. No secret or
 # database bytes cross into host reports, and the original database is retained.
-compose exec -T entryway-postgres sh -ec 'pg_dump -U authority_owner -Fc -f /backup/authority.dump account_authority; createdb -U authority_owner account_authority_restored; pg_restore -U authority_owner --exit-on-error -d account_authority_restored /backup/authority.dump' >> "$ACCEPTANCE_REPORT_DIR/restore.log" 2>&1
+compose exec -T entryway-postgres sh -ec 'pg_dump -U authority_owner -Fc -f /backup/authority.dump account_authority; createdb -U authority_owner account_authority_restored; pg_restore -U authority_owner --exit-on-error -d account_authority_restored /backup/authority.dump' 2>&1 | tee "$ACCEPTANCE_REPORT_DIR/restore.log"
 export DATABASE_URL=postgresql://authority_owner@entryway-postgres/account_authority_restored
-compose up -d --force-recreate --wait entryway >> "$ACCEPTANCE_REPORT_DIR/restore.log" 2>&1
+compose up -d --force-recreate --wait entryway 2>&1 | tee "$ACCEPTANCE_REPORT_DIR/restore.log"
 probe restore

@@ -11,8 +11,15 @@ mkdir -p "$sandbox"
 cd "$sandbox"
 command=${1:-help}
 mkdir -p "$artifacts"
+# Phase identity comes from the controller, never from a command or request body.
+case "$command" in
+  fresh|prepare|up|contracts|database-contracts|database-dialects|resilience-profiles|database-profile|browser|migration|migration-resume|resilience|reverify|interop-profile|plc-recovery|process-crash|managed-recovery|authority-drills|all|down|status|help) ;;
+  *) echo 'code=UNKNOWN_PHASE'; exit 2 ;;
+esac
+printf 'phase=%s status=started\n' "$command"
+trap 'result=$?; printf "phase=%s status=finished exit=%s\n" "$command" "$result"' EXIT
 source "$root/tests/support/rootless-docker.sh"
-compose() { docker --context rootless compose --project-name "$project" -f "$sandbox/compose.yaml" "$@"; }
+compose() { docker --context "$DOCKER_CONTEXT" compose --project-name "$project" -f "$sandbox/compose.yaml" "$@"; }
 guard_project() {
   node --input-type=module - "$sandbox/state/manifest.json" "$project" <<'JS'
 import { readFileSync } from 'node:fs'
@@ -26,7 +33,7 @@ require_state() {
   guard_project
 }
 browser() { compose run --rm --no-deps browser npx --no-install playwright test --config tests/playwright.config.mjs "$@"; }
-external_browser() { compose run --rm --no-deps -e "EXTERNAL_PHASE=$1" browser npx --no-install playwright test --config tests/external.playwright.config.mjs; }
+external_browser() { compose run --rm --no-deps -e "EXTERNAL_PHASE=$1" browser npx --no-install playwright test --config tests/external.playwright.config.mjs 2>&1 | tee "$artifacts/external-browser-$1.log" | python3 "$root/scripts/ci-summary.py"; }
 migration_command() { compose exec -T entryway node tests/support/external-migration.mjs "$@"; }
 case "$command" in
   fresh)
@@ -40,7 +47,7 @@ case "$command" in
         echo "Preserved project $SANDBOX_PROJECT at $temp" >&2
       else
         if test -f "$SANDBOX_CHECKOUT/compose.yaml"; then
-          if ! docker --context rootless compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" down --volumes --remove-orphans; then
+          if ! docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" down --volumes --remove-orphans; then
             echo "Scoped cleanup failed; preserved $temp for project $SANDBOX_PROJECT" >&2
             (( result != 0 )) || result=1
             echo "Run exit: $result; reports: $ACCEPTANCE_REPORT_DIR"
@@ -82,19 +89,19 @@ case "$command" in
     ;;
   contracts)
     require_state
-    compose run --rm --no-deps test node tests/support/run-contracts.mjs
+    compose run --rm --no-deps test node tests/support/run-contracts.mjs 2>&1 | tee "$artifacts/contracts.log" | python3 "$root/scripts/ci-summary.py"
     ;;
-  database-contracts)
+  database-contracts|database-dialects)
     require_state
     compose up -d --wait entryway-postgres
     for backend in sqlite postgresql; do
       result=0
-      compose run --rm --no-deps -e "CONTRACT_DATABASE_BACKEND=$backend" -e CONTRACT_DATABASE_URL=postgresql://authority_owner@entryway-postgres/account_authority test node tests/support/run-database-contracts.mjs > "$artifacts/database-$backend.log" 2>&1 || result=$?
+      compose run --rm --no-deps -e "CONTRACT_DATABASE_BACKEND=$backend" -e CONTRACT_DATABASE_URL=postgresql://authority_owner@entryway-postgres/account_authority test node tests/support/run-database-contracts.mjs 2>&1 | tee "$artifacts/database-$backend.log" | python3 "$root/scripts/ci-summary.py" || result=$?
       printf '%s\n' "$result" > "$artifacts/database-$backend.exit"
-      cat "$artifacts/database-$backend.log"
+      echo "Database $backend: exit $result"
       (( result == 0 )) || exit "$result"
     done
-    bash "$root/tests/support/run-postgresql-profile.sh"
+    if [[ "$command" == database-contracts ]]; then bash "$root/tests/support/run-postgresql-profile.sh"; fi
     ;;
   resilience-profiles)
     bash "$root/tests/support/run-resilience-profiles.sh"
@@ -104,7 +111,7 @@ case "$command" in
     ;;
   browser)
     require_state
-    browser
+    browser 2>&1 | tee "$artifacts/browser.log" | python3 "$root/scripts/ci-summary.py"
     ;;
   migration)
     require_state
