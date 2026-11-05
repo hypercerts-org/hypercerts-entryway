@@ -15,8 +15,9 @@ import {
   query,
 } from "../support/database-fixture.mjs";
 import { openDatabase } from "../../dist/src/database/connection.js";
+import { createOAuthStores } from "../../dist/src/database/drizzle/oauth-stores.mjs";
 
-async function fixture(t) {
+async function fixture(t, { oauth = {} } = {}) {
   const databaseConfiguration = await testDatabaseConfiguration();
   const db = await openDatabase(databaseConfiguration);
   t.after(async () => await db.close());
@@ -70,8 +71,12 @@ async function fixture(t) {
   const ownership = createOperationOwnership({
     store: createOperationOwnershipStore(db),
   });
+  const statusChanges = [];
   const accounts = {
     ownership,
+    async setStatus(did, status) {
+      statusChanges.push({ did, status });
+    },
     serialized: (did, operation, intent) =>
       ownership.accountStep(did, intent, operation),
     get(id) {
@@ -96,6 +101,7 @@ async function fixture(t) {
   );
   const adminCalls = [];
   const security = {
+    async revokeAccount() {},
     adminUpdatePassword(actor, body) {
       adminCalls.push({ actor, body });
       return {};
@@ -112,7 +118,7 @@ async function fixture(t) {
     accounts,
     legacy,
     security,
-    oauth: {},
+    oauth,
     protocolOperations: {},
   });
   const invoke = (name, { method = "post", body, authorization } = {}) =>
@@ -155,6 +161,7 @@ async function fixture(t) {
     invoke,
     service,
     adminCalls,
+    statusChanges,
   };
 }
 
@@ -449,4 +456,63 @@ test("OAuth account refusals match the stock PDS error names and messages", () =
     refusal("deactivateAccount", granted("account:status?action=manage")),
     null,
   );
+});
+
+// Only signature, audience and expiry come from the provider here; the stored
+// token rows are real, so revocation goes through the production store.
+async function oauthFixture(t) {
+  let payload;
+  const oauth = {
+    provider: {
+      nextDpopNonce: () => "nonce",
+      authenticateRequest: async () => payload,
+    },
+  };
+  const f = await fixture(t, { oauth });
+  oauth.stores = createOAuthStores(f.db, f.accounts, f.config);
+  const token = async (jti, did = f.alice.did) => {
+    await oauth.stores.createToken(jti, { did }, null);
+    payload = {
+      sub: f.alice.did,
+      jti,
+      iat: Math.floor(Date.now() / 1000),
+      scope: "atproto account:status?action=manage",
+    };
+  };
+  const deactivate = () =>
+    f.invoke("server.deactivateAccount", {
+      authorization: "DPoP access-token",
+      body: {},
+    });
+  return { ...f, stores: oauth.stores, token, deactivate };
+}
+
+test("an unrevoked OAuth token with the status permission can deactivate", async (t) => {
+  const f = await oauthFixture(t);
+  await f.token("live-token");
+  assert.deepEqual(await f.deactivate(), {});
+  assert.deepEqual(f.statusChanges, [
+    { did: f.alice.did, status: "deactivated" },
+  ]);
+});
+
+test("a revoked OAuth token cannot call Entryway account methods before it expires", async (t) => {
+  const f = await oauthFixture(t);
+  await f.token("revoked-token");
+  await f.stores.deleteToken("revoked-token");
+  await assert.rejects(f.deactivate(), {
+    status: 401,
+    error: "InvalidToken",
+  });
+  assert.deepEqual(f.statusChanges, []);
+});
+
+test("a stored OAuth token for another DID cannot act for the token subject", async (t) => {
+  const f = await oauthFixture(t);
+  await f.token("foreign-token", f.bob.did);
+  await assert.rejects(f.deactivate(), {
+    status: 401,
+    error: "InvalidToken",
+  });
+  assert.deepEqual(f.statusChanges, []);
 });

@@ -142,6 +142,12 @@ export async function createProtocolRouting({
           req.res.set("WWW-Authenticate", error.wwwAuthenticateHeader);
         throw new HttpError(401, "InvalidToken", error.message);
       }
+      // Tokens are stateless so each PDS can verify them alone, which leaves a
+      // revoked token usable until expiry. Calls Entryway serves itself make
+      // the same stored-token check as a stock PDS, so revocation is immediate.
+      const stored = await oauth.stores.readToken(payload.jti);
+      if (!stored || stored.data?.did !== payload.sub)
+        throw new HttpError(401, "InvalidToken", "Token has been revoked");
       const account = await accounts.get(payload.sub);
       if (!account || ["deleted", "provisioning"].includes(account.status))
         throw new HttpError(403, "AccountUnavailable", "Account unavailable");
