@@ -315,8 +315,10 @@ hosted exception and context validation are described in the development section
 above. Historical results without context provenance do not establish rootless
 acceptance.
 
-The revised real process-crash drill uses the unchanged 120-second operation lease,
-a 150-second bounded approval wait, a 360-second browser-case deadline and a
+The revised real process-crash drill runs two modes. `before-pds` uses the default
+120-second operation lease with a 150-second bounded recovery wait; `after-pds`
+sets `OPERATION_LEASE_MS=15000` with a 45-second bound (lease plus 30 seconds),
+so only `before-pds` is default-lease recovery evidence. Both use a 360-second browser-case deadline and a
 420-second controller command deadline. It never edits persisted leases. Operator
 recovery follows verified old Entryway exit/removal and a full stop/restart of the
 affected unchanged PDS, then operation-specific observation. Pending desktop/narrow
