@@ -126,7 +126,9 @@ services:
       MAILPIT_URL: https://mailpit.atmosbox.test
     volumes:
       - entryway-config:/config:ro
-      - entryway-data:/entryway-data:ro
+      # Writable so contracts can record the access tokens they mint, as the
+      # provider records the tokens it issues; the browser service is too.
+      - entryway-data:/entryway-data
       - mail-capture-data:/capture:ro
       - database-profile-data:/profile
       - source-fixture-token:/run/secrets:ro
