@@ -14,7 +14,10 @@ export function createAccountRecovery({
   const operations = {
     async requestPasswordReset({ email }) {
       email = normalizeEmail(email);
-      const row = await accounts.get(email);
+      const rows = await accounts.storage.listByEmail(email);
+      // A reset token is DID-bound, so a shared email cannot choose an account
+      // here (TECH-783). It gets the same reply as an unknown email (TECH-733).
+      const row = rows.length === 1 ? rows[0] : null;
       if (!row || ["deleted", "provisioning"].includes(row.status)) {
         await rate(email);
         return {};

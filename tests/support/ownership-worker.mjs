@@ -351,7 +351,7 @@ process.on("message", async ({ id, command, args }) => {
           storage,
           async get(id) {
             return (
-              (await storage.getByDid(id)) ?? (await storage.getByEmail(id))
+              (await storage.getByDid(id)) ?? (await storage.getByHandle(id))
             );
           },
         };

@@ -1,6 +1,7 @@
 import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { escapeHtml } from "../../ui/html.mjs";
 import { hidden } from "../../ui/forms.mjs";
+import { matchesAuthorizationHint } from "../../accounts/rules.js";
 export function createConsent({ db, provider, stores, flows, accountAccess }) {
   const { fields, save, readCurrentIntent, pageForFlow } = flows;
   const chooseAnotherAccountForm = (flow, browser) =>
@@ -31,11 +32,25 @@ export function createConsent({ db, provider, stores, flows, accountAccess }) {
         identity,
         row.did,
       );
+      if (
+        !matchesAuthorizationHint(
+          account,
+          current.accountHint,
+          current.parameters?.login_hint,
+        )
+      )
+        throw new InvalidRequestError(
+          "Sign in to the account requested by this application",
+        );
       current.authEmail = identity.email.toLowerCase();
       // The latest choice wins. An unavailable account still replaces the
       // earlier selection, so that account's consent form no longer matches.
       current.authDid = account.status === "active" ? account.did : undefined;
-      if (account.status === "active")
+      // Inactive accounts still record this browser's fresh sign-in: the
+      // account console requires it, and it is the only place to reactivate
+      // or settle a migration. Authorization choosers skip deactivated
+      // device accounts, so this does not make the account usable for OAuth.
+      if (account.status !== "deleted")
         await provider.accountManager.upsertDeviceAccount(
           browser.deviceId,
           account.did,

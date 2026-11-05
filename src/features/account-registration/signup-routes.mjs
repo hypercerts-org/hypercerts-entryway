@@ -1,6 +1,7 @@
 import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { HttpError } from "../../http/http-error.mjs";
 import { escapeHtml } from "../../ui/html.mjs";
+import { registrationAccountForEmail } from "./create-account.js";
 async function registrationInput({
   db,
   existing,
@@ -73,7 +74,10 @@ export function mountSignupRoutes({
         email,
         emailVerified: true,
       };
-      const existing = await accounts.get(flow.authEmail);
+      const existing = await registrationAccountForEmail(
+        accounts.storage,
+        flow.authEmail,
+      );
       const savedIntent = await accounts.pendingRegistration(flow.authEmail);
       const savedOwner = savedIntent?.registrationIdentity;
       const ownerMatches = matchesRegistrationOwner(savedOwner, session, email);
@@ -84,37 +88,37 @@ export function mountSignupRoutes({
         );
         return await authenticated(req, res, flow, browser, row, { identity });
       }
-      if (existing && existing.status !== "provisioning")
-        throw new HttpError(
-          409,
-          "AccountUnavailable",
-          "This account cannot be registered again",
-        );
-      if (savedIntent && !ownerMatches)
-        throw new HttpError(
-          403,
-          "AccountMismatch",
-          "This saved registration belongs to a different verified identity",
-        );
-      if (existing && (!savedIntent || !ownerMatches))
-        throw new HttpError(
-          403,
-          "AccountMismatch",
-          "This account setup cannot be acquired through email sign-in",
-        );
+      assertRegistrationAcquirable(existing, savedIntent, ownerMatches);
       const registrationIdentity = savedOwner ?? identity;
+      const input = await registrationInput({
+        db,
+        existing,
+        savedIntent,
+        email: flow.authEmail,
+        body: req.body,
+        registrationIdentity,
+      });
+      const requestedHints = [
+        flow.accountHint,
+        flow.parameters?.login_hint,
+      ].filter((hint) => hint != null);
+      if (
+        requestedHints.some(
+          (hint) =>
+            typeof hint !== "string" ||
+            (hint.startsWith("did:")
+              ? existing?.did !== hint
+              : input.handle !== hint.toLowerCase()),
+        )
+      )
+        throw new HttpError(
+          403,
+          "AccountMismatch",
+          "This sign-in can only create the account requested by the application",
+        );
       let row;
       try {
-        row = await accounts.create(
-          await registrationInput({
-            db,
-            existing,
-            savedIntent,
-            email: flow.authEmail,
-            body: req.body,
-            registrationIdentity,
-          }),
-        );
+        row = await accounts.create(input);
       } catch (error) {
         const pending = await accounts.ownership.pendingExternal(
           `email:${flow.authEmail}`,
@@ -134,4 +138,26 @@ export function mountSignupRoutes({
       await authenticated(req, res, flow, browser, row, { identity });
     }),
   );
+}
+
+/** Rejects registration when a non-active account or saved intent belongs to someone else. */
+function assertRegistrationAcquirable(existing, savedIntent, ownerMatches) {
+  if (existing && existing.status !== "provisioning")
+    throw new HttpError(
+      409,
+      "AccountUnavailable",
+      "This account cannot be registered again",
+    );
+  if (savedIntent && !ownerMatches)
+    throw new HttpError(
+      403,
+      "AccountMismatch",
+      "This saved registration belongs to a different verified identity",
+    );
+  if (existing && (!savedIntent || !ownerMatches))
+    throw new HttpError(
+      403,
+      "AccountMismatch",
+      "This account setup cannot be acquired through email sign-in",
+    );
 }

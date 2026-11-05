@@ -18,10 +18,10 @@ test("createAccount rejects JSON email coercion before signup, invite or provisi
     app,
     config: { pds: [{ id: "pds1" }] },
     accounts: {
-      get: record("get", null),
       create: record("create", { did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa" }),
       pendingRegistration: record("pending", null),
       storage: {
+        listByEmail: record("listByEmail", []),
         ensureVerifiedEmailUser: record("ensureUser", "user-alice"),
       },
     },
