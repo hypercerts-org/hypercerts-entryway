@@ -250,9 +250,11 @@ flow.
 
 A handle or DID `login_hint` for an active account with an email that this
 browser does not remember goes straight to that account's code step, with the
-address masked. An unknown hint, a matching remembered session, `prompt=create`
-and `prompt=select_account` from trusted or confidential clients still show the
-sign-in page. The provider stores every prompt except `create` as `consent` for
+address masked. A handle or DID hint matching one fresh remembered session is
+provider silent sign-on and redirects without an Entryway page (see below). When
+the provider instead asks for interaction, an unknown hint, a stale remembered
+session, `prompt=create` and `prompt=select_account` from trusted or
+confidential clients still show the sign-in page. The provider stores every prompt except `create` as `consent` for
 untrusted public clients, so `select_account` cannot be detected there. Code
 limits are per email address (five per ten minutes, shared with the email form),
 so repeated hinted requests for one public handle can exhaust that budget.

@@ -23,16 +23,17 @@ metadata URL and requested scope. Google/GitHub are outside this flow.
    restart. Client trust is the Entryway-wide `OAUTH_TRUSTED_CLIENTS` list.
    A newly created account skips consent only when a trusted client's
    metadata opts in; a returning account that signs in with a code always sees
-   consent, even for a client it already approved. A browser case in
-   `browser.spec.mjs` covers that; the signup skip has no browser case yet, so its
-   decision table lives in `consent-skip.test.mjs`. The email `login_hint` sign-on
-   and consent without a code have no browser case either;
-   `authorization-routes.test.mjs` covers them.
+   consent, even for a client it already approved. Browser cases in
+   `browser.spec.mjs` and `consent-map.spec.mjs` cover that. `consent-map.spec.mjs`
+   also has cases for the trusted signup skip, email `login_hint` sign-on and
+   consent without a code; `consent-skip.test.mjs` and
+   `authorization-routes.test.mjs` hold the full decision tables.
 5. Use the resulting credentials for a real PDS write and refresh.
 6. Check denied/revoked paths in the accompanying lifecycle cases.
 
 **Source cases:** `browser.spec.mjs`, `experience-browser.spec.mjs`,
-`account-chooser.spec.mjs`, `browser-oauth.spec.mjs` and `oauth-lifecycle.spec.mjs`
+`account-chooser.spec.mjs`, `consent-map.spec.mjs`, `browser-oauth.spec.mjs` and
+`oauth-lifecycle.spec.mjs`
 under `tests/browser/`. The account chooser case reads sign-in codes from visible
 Mailpit messages and creates a second real PDS account for a sandbox-only shared-
 email fixture through the reviewed account authority helper. This does not test
