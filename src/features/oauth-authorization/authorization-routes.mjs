@@ -33,6 +33,16 @@ const PROMPTS_WITHOUT_AUTOMATIC_CODE = new Set([
   "select_account",
 ]);
 
+// The account a handle or DID names, when it can be sent a code: active and
+// with an email the code form would accept. The address stays out of the
+// browser until the code page masks it.
+function codeRecipient(row) {
+  return row?.status === "active" &&
+    accountEmailSchema.safeParse(row.email).success
+    ? { did: row.did, email: row.email }
+    : null;
+}
+
 export function mountAuthorizationRoutes({
   app,
   db,
@@ -42,7 +52,7 @@ export function mountAuthorizationRoutes({
   loginForm,
   consentForm,
   startEmailCode,
-  hintedAccount,
+  getAccountByHint,
   listAccountsByEmail,
   priorConsentSkip,
 }) {
@@ -132,7 +142,7 @@ export function mountAuthorizationRoutes({
   // guarded: after sendCodeForAccount the flow has already been replaced.
   const findHintedAccount = async (res, hint) => {
     try {
-      return await hintedAccount(hint);
+      return codeRecipient(await getAccountByHint(hint));
     } catch (error) {
       logHintLookupFailure(res, error);
       return null;
