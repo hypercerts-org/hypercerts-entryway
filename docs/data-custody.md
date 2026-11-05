@@ -60,8 +60,11 @@ settings are shown. The chosen DID travels in `/account?did=...` and each action
 form. Both page reads and actions recheck the current verified user-to-DID
 binding; stale, foreign or revoked selections fail rather than switching to a
 remaining sibling. Each POST is checked for CSRF and carries its DID, and the
-live binding is rechecked on every request, so a form rendered for an earlier
-session or a revoked binding fails instead of acting on another DID. The DID is
+live binding is rechecked on every request. A form fails when the current
+session has expired or been revoked, or when its DID's binding was revoked or
+belongs to another user; it never acts on another DID. Forms carry no session
+ID, so signing in again as the same user on the same device does not by itself
+invalidate a form for a still-bound DID. The DID is
 request-carried, not persistent selection state, and adds no storage schema.
 
 The table below records current storage, not the full approved target. Internal
