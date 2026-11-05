@@ -2,7 +2,7 @@ import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { accountEmailSchema } from "../../accounts/input-schema.js";
 import { ChangedFlowIntentError } from "../../http/browser-flow.mjs";
 import { matchesAuthorizationHint } from "../../accounts/rules.js";
-import { page } from "../../ui/html.mjs";
+import { escapeHtml, page } from "../../ui/html.mjs";
 const RESEND_COOLDOWN = 5_000;
 const loginHints = (flow) =>
   [flow.accountHint, flow.parameters?.login_hint].filter(
@@ -120,7 +120,10 @@ export function mountEmailLogin({
         return pageForFlow(
           res,
           refusal[0],
-          otpForm(flow, browser, refusal[1], email),
+          flow.email
+            ? otpForm(flow, browser, refusal[1], email)
+            : // Nothing was sent yet, so there is no code to resend.
+              `<p role="alert">${escapeHtml(refusal[1])}</p>${loginForm(flow, browser)}`,
           flow,
           429,
         );

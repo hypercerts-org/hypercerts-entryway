@@ -60,7 +60,10 @@ async function fixture(t, { realForms = false } = {}) {
     mail: { async supersedeOtp() {} },
     forms: realForms
       ? createLoginForms({ fields: () => "" })
-      : { otpForm: (_flow, _browser, message) => message },
+      : {
+          otpForm: (_flow, _browser, message) => message,
+          loginForm: () => "",
+        },
   });
   const originalGet = db.get;
   db.get = async (namespace, key) => {
@@ -223,6 +226,10 @@ test("a first masked code request refused by the email limit does not reveal tha
   await f.startEmailCode(res, flow, {}, owner, { maskEmail: true });
   assert.equal(res.result.status, 429);
   assert.doesNotMatch(res.result.body, /owner@example\.test/);
+  // No code was sent, so the page offers the email form, not a resend.
+  assert.doesNotMatch(res.result.body, /\/auth\/resend/);
+  assert.match(res.result.body, /action="\/auth\/email"/);
+  assert.match(res.result.body, /Too many codes were requested/);
 });
 
 test("same-flow concurrent resend preserves the existing five-second cooldown below the flow limit", async (t) => {
