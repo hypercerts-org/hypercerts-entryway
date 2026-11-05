@@ -12,16 +12,18 @@ export const flowBindsAnotherAccount = (flow, did, request) =>
  * client, request and device account first, so a failed lookup is theirs to
  * handle before any code is issued.
  *
- * Those lookups yield, so /auth/select may have bound another account since the
- * caller read the flow. The flow is re-read and deleted in one transaction
- * before the code is issued: either the approved account is still the bound one
- * and this call owns the flow, or the approval fails. Later writers fail
+ * Those lookups yield, so /auth/select may have bound another account, or the
+ * flow may have expired, since the caller read it. The flow is re-read with
+ * the full device and lifetime checks and deleted in one transaction before
+ * the code is issued: either the approved account is still the bound one and
+ * this call owns a live flow, or the approval fails. Later writers fail
  * because the flow is gone.
  */
 export async function completeAuthorization({
   db,
   config,
   provider,
+  refreshFlow,
   res,
   flow,
   browser,
@@ -30,11 +32,7 @@ export async function completeAuthorization({
   deviceAccount,
 }) {
   await db.transact(async () => {
-    const current = await db.get("auth-flows", flow.id);
-    if (!current || current.deviceId !== browser.deviceId)
-      throw new InvalidRequestError(
-        "This sign-in has expired. Start again from your application.",
-      );
+    const current = await refreshFlow(flow, browser);
     if (flowBindsAnotherAccount(current, deviceAccount.account.did, request))
       throw new InvalidRequestError("Sign in to this account first");
     await db.delete("auth-flows", flow.id);

@@ -447,6 +447,26 @@ test("the existing device-account picker remains available before an email ident
   assert.match(response.redirectUrl, /state=original-state/);
 });
 
+test("a consent whose flow expires while its lookups are pending issues no code", async (t) => {
+  const did = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+  const f = await fixture(t, { authDid: did, authEmail: verifiedEmail });
+  const paused = f.pauseNextConsentLookup();
+
+  const pending = f.approve(did);
+  await paused.reached;
+  // A flow older than its lifetime cannot issue a code, even when it was
+  // still live when the consent request first read it.
+  await f.db.set("auth-flows", f.flow.id, {
+    ...(await f.db.get("auth-flows", f.flow.id)),
+    createdAt: new Date(Date.now() - 16 * 60_000),
+  });
+  paused.release();
+  const response = await pending.catch((error) => error);
+
+  assert.notEqual(response.statusCode, 303);
+  assert.deepEqual(f.approved, []);
+});
+
 test("consent for a DID that /auth/select replaced while its lookups were pending issues no code", async (t) => {
   const selectedDid = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
   const replacementDid = "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb";
