@@ -149,7 +149,10 @@ test("verified-email chooser selects each real DID after OTP and keeps OAuth wri
     databasePath,
   });
 
-  // Choosing the second, non-default DID on another PDS proves the chooser
-  // continues the selected account rather than the first binding.
-  await selectAndAuthorize(browser, sharedEmail, [first, second], second);
+  // Each DID completes its own fresh journey after the email is shared, so a
+  // regression that issues the wrong subject for either account fails here.
+  // The second DID lives on another PDS, proving the chooser continues the
+  // selected account rather than the first binding.
+  for (const selected of [first, second])
+    await selectAndAuthorize(browser, sharedEmail, [first, second], selected);
 });
