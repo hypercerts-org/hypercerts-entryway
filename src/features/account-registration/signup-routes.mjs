@@ -9,6 +9,7 @@ async function registrationInput({
   email,
   body,
   registrationIdentity,
+  handleDomain,
 }) {
   if (existing)
     return {
@@ -24,14 +25,31 @@ async function registrationInput({
   return {
     email,
     recoveryKey: savedIntent?.recoveryKey ?? undefined,
-    handle: String(savedIntent?.handle ?? body.handle ?? "")
-      .trim()
-      .toLowerCase(),
+    handle: savedIntent?.handle
+      ? String(savedIntent.handle).trim().toLowerCase()
+      : withHandleDomain(body.handle, handleDomain),
     pdsId: String(savedIntent?.pdsId ?? body.pdsId ?? ""),
     inviteCode: body.inviteCode,
     registrationIdentity,
   };
 }
+
+// The signup form shows the hosted domain as a fixed suffix, so a bare name
+// (no dot) gets that domain; a full handle is kept as typed.
+function withHandleDomain(value, handleDomain) {
+  const handle = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (!handle || handle.includes(".") || !handleDomain) return handle;
+  return `${handle}.${handleDomain.replace(/^\./, "")}`;
+}
+
+// An OAuth flow ends at the client's redirect_uri, so its form pages must
+// allow that origin as a form-action target (the CSP applies to redirects).
+const clientFormPolicy = (flow) =>
+  flow.requestUri
+    ? { formOrigin: new URL(flow.parameters.redirect_uri).origin }
+    : {};
 
 function matchesRegistrationOwner(owner, session, email) {
   return (
@@ -81,6 +99,7 @@ export function mountSignupRoutes({
   flows,
   signupForm,
   authenticated,
+  handleDomain,
 }) {
   const { getFlow, pageForFlow, guarded, form } = flows;
   app.post(
@@ -128,6 +147,7 @@ export function mountSignupRoutes({
         email: flow.authEmail,
         body: req.body,
         registrationIdentity,
+        handleDomain,
       });
       if (!signupMatchesHints(flow, existing, input))
         throw new HttpError(
@@ -152,9 +172,13 @@ export function mountSignupRoutes({
           `<p role="alert">${escapeHtml(message)}</p>${await signupForm(flow, browser)}`,
           flow,
           error.status >= 400 && error.status < 600 ? error.status : 503,
+          clientFormPolicy(flow),
         );
       }
-      await authenticated(req, res, flow, browser, row, { identity });
+      await authenticated(req, res, flow, browser, row, {
+        identity,
+        newAccount: true,
+      });
     }),
   );
 }

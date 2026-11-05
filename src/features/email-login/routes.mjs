@@ -2,7 +2,7 @@ import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { accountEmailSchema } from "../../accounts/input-schema.js";
 import { ChangedFlowIntentError } from "../../http/browser-flow.mjs";
 import { matchesAuthorizationHint } from "../../accounts/rules.js";
-import { page } from "../../ui/html.mjs";
+import { escapeHtml, page } from "../../ui/html.mjs";
 const RESEND_COOLDOWN = 5_000;
 const loginHints = (flow) =>
   [flow.accountHint, flow.parameters?.login_hint].filter(
@@ -16,6 +16,13 @@ const linkedAccounts = (resolution) => {
   return [];
 };
 
+// A trusted client can skip consent after signup, so submitting this page may
+// redirect straight to the client's redirect_uri. The CSP applies to that
+// redirect, so the page must allow the client's origin as a form-action target.
+const clientFormPolicy = (flow) =>
+  flow.requestUri
+    ? { formOrigin: new URL(flow.parameters.redirect_uri).origin }
+    : {};
 export function mountEmailLogin({
   app,
   db,
@@ -42,7 +49,7 @@ export function mountEmailLogin({
     form,
   } = flows;
   const { loginForm, otpForm } = forms;
-  const sendCode = async (res, flow, browser, emailValue) => {
+  const sendCode = async (res, flow, browser, emailValue, options = {}) => {
     let email;
     let reserved;
     let preparingMail = false;
@@ -59,17 +66,30 @@ export function mountEmailLogin({
         if (!input.success)
           throw new InvalidRequestError("Enter a valid email address");
         email = input.data;
+        // A new address takes the caller's masking choice; a resend keeps the
+        // flow's. The choice applies only once the request is accepted: a
+        // refused request still holds the earlier address, so it stays masked
+        // if either that address or the requested one was masked.
+        const requestedMask =
+          emailValue === undefined
+            ? flow.maskEmail
+            : options.maskEmail === true;
+        const refuse = (reason) => {
+          flow.maskEmail = Boolean(flow.maskEmail || requestedMask);
+          return { reason };
+        };
         const now = Date.now();
-        if (flow.otpRequestCount >= 5) return { reason: "flow-limit" };
+        if (flow.otpRequestCount >= 5) return refuse("flow-limit");
         if (flow.lastOtpSentAt && now - flow.lastOtpSentAt < RESEND_COOLDOWN)
-          return { reason: "cooldown" };
+          return refuse("cooldown");
         const limitKey = `${email}/${Math.floor(now / 600_000)}`;
         const count = (await db.get("otp-limits", limitKey)) ?? 0;
-        if (count >= 5) return { reason: "email-limit" };
+        if (count >= 5) return refuse("email-limit");
         if (flow.email && flow.email !== email)
           await mail.supersedeOtp({ email: flow.email, type: "sign-in" });
         await db.set("otp-limits", limitKey, count + 1);
         flow.email = email;
+        flow.maskEmail = Boolean(requestedMask);
         flow.otpRequestCount = (flow.otpRequestCount ?? 0) + 1;
         flow.lastOtpSentAt = now;
         delete flow.authDid;
@@ -101,7 +121,10 @@ export function mountEmailLogin({
         return pageForFlow(
           res,
           refusal[0],
-          otpForm(flow, browser, refusal[1], email),
+          flow.email
+            ? otpForm(flow, browser, refusal[1], email)
+            : // Nothing was sent yet, so there is no code to resend.
+              `<p role="alert">${escapeHtml(refusal[1])}</p>${loginForm(flow, browser)}`,
           flow,
           429,
         );
@@ -259,7 +282,14 @@ export function mountEmailLogin({
             return current;
           });
           response.commitCookies(res);
-          return pageForFlow(res, "Create your account", body, current);
+          return pageForFlow(
+            res,
+            "Create your account",
+            body,
+            current,
+            200,
+            clientFormPolicy(current),
+          );
         }
         if (resolution.kind === "selection-required") {
           response.commitCookies(res);
@@ -377,4 +407,7 @@ export function mountEmailLogin({
       res.redirect(303, "/login");
     }),
   );
+  // Lets authorization start the same rate-limited code send as the email
+  // form when a client supplies an email login_hint on the redirect URL.
+  return { startEmailCode: sendCode };
 }

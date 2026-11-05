@@ -18,6 +18,9 @@ async function fixture(
     accountHint,
     autoRedirect = false,
     statuses = {},
+    accountEmails = {
+      "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa": "first@example.test",
+    },
   } = {},
 ) {
   const db = await openTestDatabase();
@@ -50,6 +53,7 @@ async function fixture(
     ]),
   );
   const upserts = [];
+  const emailCodes = [];
   let authorizeCalls = 0;
   let lookup;
   const provider = {
@@ -152,6 +156,16 @@ async function fixture(
       `<form method="post" action="/auth/email">${flows.fields(flow, browser)}<label>Email address</label><input type="email"></form>`,
     consentForm: (_flow, _browser, account) =>
       `<form method="post" action="/auth/consent"><input name="did" value="${account.did}"></form>`,
+    async startEmailCode(res, codeFlow, _browser, email, options) {
+      emailCodes.push({
+        flow: codeFlow.requestUri,
+        flowId: codeFlow.id,
+        email,
+        ...(options ? { options } : {}),
+      });
+      res.send("<check-your-email>");
+    },
+    accountEmail: async (did) => accountEmails[did],
   });
   const response = () => ({
     statusCode: 200,
@@ -191,6 +205,7 @@ async function fixture(
     flow,
     approved,
     upserts,
+    emailCodes,
     // Stops the next consent request at its client lookup until released.
     pauseNextConsentLookup() {
       let entered;
@@ -234,12 +249,11 @@ async function fixture(
       );
       return res;
     },
-    async startAuthorization() {
+    async startAuthorization(extraQuery = "") {
       const res = response();
       await handlers.get("/oauth/authorize")(
         {
-          originalUrl:
-            "/oauth/authorize?client_id=client-id&request_uri=request-uri",
+          originalUrl: `/oauth/authorize?client_id=client-id&request_uri=request-uri${extraQuery}`,
           headers: {},
         },
         res,
@@ -410,11 +424,13 @@ test("stale remembered accounts start email OTP bound to the selected DID", asyn
   assert.ok(flow);
   assert.ok(csrf);
   const otp = await f.chooseRemembered({ flow, csrf, did: staleDid });
-  assert.equal(otp.statusCode, 200);
-  assert.ok(otp.body.includes('type="email"'));
+  assert.equal(otp.body, "<check-your-email>");
   assert.deepEqual(f.upserts, []);
-  const selectedFlowId = otp.body.match(/name="flow" value="([^"]+)"/)?.[1];
-  const selectedFlow = await f.db.get("auth-flows", selectedFlowId);
+  const [code] = f.emailCodes;
+  assert.equal(f.emailCodes.length, 1);
+  assert.equal(code.email, "first@example.test");
+  assert.deepEqual(code.options, { maskEmail: true });
+  const selectedFlow = await f.db.get("auth-flows", code.flowId);
   assert.equal(selectedFlow.accountHint, staleDid);
   assert.equal(selectedFlow.requestUri, "request-uri");
   assert.equal(selectedFlow.parameters.state, "original-state");
@@ -429,6 +445,26 @@ test("the existing device-account picker remains available before an email ident
   assert.equal(response.statusCode, 303);
   assert.deepEqual(f.approved, [otherDid]);
   assert.match(response.redirectUrl, /state=original-state/);
+});
+
+test("a consent whose flow expires while its lookups are pending issues no code", async (t) => {
+  const did = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+  const f = await fixture(t, { authDid: did, authEmail: verifiedEmail });
+  const paused = f.pauseNextConsentLookup();
+
+  const pending = f.approve(did);
+  await paused.reached;
+  // A flow older than its lifetime cannot issue a code, even when it was
+  // still live when the consent request first read it.
+  await f.db.set("auth-flows", f.flow.id, {
+    ...(await f.db.get("auth-flows", f.flow.id)),
+    createdAt: new Date(Date.now() - 16 * 60_000),
+  });
+  paused.release();
+  const response = await pending.catch((error) => error);
+
+  assert.notEqual(response.statusCode, 303);
+  assert.deepEqual(f.approved, []);
 });
 
 test("consent for a DID that /auth/select replaced while its lookups were pending issues no code", async (t) => {
@@ -486,4 +522,64 @@ test("a consent that claimed the flow cannot be undone or recreated by a later a
     message: /expired/,
   });
   assert.equal(await f.db.get("auth-flows", f.flow.id), null);
+});
+
+test("an email login_hint on the redirect URL sends a code to the normalized email", async (t) => {
+  const f = await fixture(t);
+
+  const response = await f.startAuthorization(
+    `&login_hint=${encodeURIComponent(" Owner@Example.Test ")}`,
+  );
+
+  assert.deepEqual(
+    f.emailCodes.map(({ flow, email, options }) => ({ flow, email, options })),
+    [{ flow: "request-uri", email: "owner@example.test", options: undefined }],
+  );
+  assert.equal(response.body, "<check-your-email>");
+});
+
+test("unusable redirect login_hints fall back to the sign-in page without reflecting the value", async (t) => {
+  for (const extraQuery of [
+    `&login_hint=${encodeURIComponent('a"><script>alert(1)</script>@x.test')}`,
+    `&login_hint=${encodeURIComponent("<svg onload=alert(1)>")}`,
+    `&login_hint=${encodeURIComponent("owner.example.test")}`,
+    "&login_hint=one%40example.test&login_hint=two%40example.test",
+  ]) {
+    const f = await fixture(t);
+
+    const response = await f.startAuthorization(extraQuery);
+
+    assert.deepEqual(f.emailCodes, [], extraQuery);
+    assert.match(response.body, /action="\/auth\/email"/, extraQuery);
+    assert.doesNotMatch(
+      response.body,
+      /<script|<svg|alert\(1\)|login_hint|x\.test|owner\.example/,
+      extraQuery,
+    );
+  }
+});
+
+test("a PAR handle or DID login_hint takes precedence over a redirect email hint", async (t) => {
+  const f = await fixture(t, { loginHint: "account-1.example.test" });
+
+  const response = await f.startAuthorization(
+    "&login_hint=owner%40example.test",
+  );
+
+  assert.deepEqual(f.emailCodes, []);
+  assert.match(response.body, /did:plc:aaaaaaaaaaaaaaaaaaaaaaaa/);
+  assert.doesNotMatch(response.body, /did:plc:bbbbbbbbbbbbbbbbbbbbbbbb/);
+});
+
+test("a remembered account without a stored email falls back to the email form", async (t) => {
+  const staleDid = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+  const f = await fixture(t, { staleDid, accountEmails: {} });
+  const page = await f.startAuthorization();
+  const flow = page.body.match(/name="flow" value="([^"]+)"/)?.[1];
+  const csrf = page.body.match(/name="csrf" value="([^"]+)"/)?.[1];
+
+  const otp = await f.chooseRemembered({ flow, csrf, did: staleDid });
+
+  assert.deepEqual(f.emailCodes, []);
+  assert.match(otp.body, /action="\/auth\/email"/);
 });

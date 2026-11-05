@@ -433,6 +433,10 @@ test(`fresh deployment profile ${stage}`, async ({ browser }) => {
       await page.goto(`${config.clientUrl}/client`);
       await expect(page.getByTestId("signed-in-did")).toHaveText(identity.did);
       await writeRecord(page, identity, `Profile ${stage} PDS write`);
+      // The OAuth provider rotates the device session cookie when the browser's
+      // address or age changes, and treats a replayed older value as session
+      // fixation. A real browser keeps the new cookie, so the next stage must too.
+      await context.storageState({ path: "/profile/browser.json" });
     } else {
       await context.setExtraHTTPHeaders(select(nodes[0]));
       await page.goto(`${config.issuer}/login`);

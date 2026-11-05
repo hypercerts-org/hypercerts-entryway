@@ -8,7 +8,7 @@ import { createConsent } from "../../../dist/src/features/oauth-authorization/co
 import { createLoginForms } from "../../../dist/src/features/email-login/page.mjs";
 import { mountEmailLogin } from "../../../dist/src/features/email-login/routes.mjs";
 
-async function fixture(t) {
+async function fixture(t, { realForms = false } = {}) {
   const db = await openTestDatabase();
   t.after(() => db.close());
   const handlers = new Map();
@@ -52,13 +52,18 @@ async function fixture(t) {
       };
     },
   };
-  mountEmailLogin({
+  const { startEmailCode } = mountEmailLogin({
     app,
     db,
     flows,
     authentication,
     mail: { async supersedeOtp() {} },
-    forms: { otpForm: (_flow, _browser, message) => message },
+    forms: realForms
+      ? createLoginForms({ fields: () => "" })
+      : {
+          otpForm: (_flow, _browser, message) => message,
+          loginForm: () => "",
+        },
   });
   const originalGet = db.get;
   db.get = async (namespace, key) => {
@@ -72,6 +77,7 @@ async function fixture(t) {
     db,
     flows,
     authentication,
+    startEmailCode,
     get sent() {
       return sent;
     },
@@ -168,6 +174,62 @@ test("concurrent requests for one sign-in flow preserve count, cooldown and late
     (await f.db.list("otp-limits")).reduce((sum, row) => sum + row.value, 0),
     1,
   );
+});
+
+test("a masked code request stays masked on resend until the user types an address", async (t) => {
+  const f = await fixture(t),
+    flow = await f.flow("masked");
+  await f.startEmailCode({}, flow, {}, "owner@example.test", {
+    maskEmail: true,
+  });
+  assert.equal((await f.db.get("auth-flows", flow.id)).maskEmail, true);
+
+  const age = async () =>
+    f.db.set("auth-flows", flow.id, {
+      ...(await f.db.get("auth-flows", flow.id)),
+      lastOtpSentAt: 0,
+    });
+  await age();
+  assert.equal((await f.route("/auth/resend", flow)).status, 200);
+  assert.equal((await f.db.get("auth-flows", flow.id)).maskEmail, true);
+
+  await age();
+  assert.equal((await f.request(flow, "other@example.test")).status, 200);
+  assert.equal((await f.db.get("auth-flows", flow.id)).maskEmail, false);
+  assert.equal(f.sent, 3);
+});
+
+test("a refused change of email never reveals the masked address it would replace", async (t) => {
+  const f = await fixture(t, { realForms: true });
+  const flow = await f.flow("masked-cooldown");
+  await f.startEmailCode({}, flow, {}, "owner@example.test", {
+    maskEmail: true,
+  });
+
+  // Still inside the resend cooldown, so the new address is refused.
+  const refused = await f.request(flow, "other@example.test");
+
+  assert.equal(refused.status, 429);
+  assert.doesNotMatch(refused.body, /owner@example\.test/);
+});
+
+test("a first masked code request refused by the email limit does not reveal that email", async (t) => {
+  const f = await fixture(t, { realForms: true });
+  const owner = "owner@example.test";
+  await f.db.set(
+    "otp-limits",
+    `${owner}/${Math.floor(Date.now() / 600_000)}`,
+    5,
+  );
+  const flow = await f.flow("masked-first");
+  const res = {};
+  await f.startEmailCode(res, flow, {}, owner, { maskEmail: true });
+  assert.equal(res.result.status, 429);
+  assert.doesNotMatch(res.result.body, /owner@example\.test/);
+  // No code was sent, so the page offers the email form, not a resend.
+  assert.doesNotMatch(res.result.body, /\/auth\/resend/);
+  assert.match(res.result.body, /action="\/auth\/email"/);
+  assert.match(res.result.body, /Too many codes were requested/);
 });
 
 test("same-flow concurrent resend preserves the existing five-second cooldown below the flow limit", async (t) => {
@@ -482,7 +544,9 @@ async function verificationFixture(
     async request(path, body) {
       const res = {
         statusCode: 200,
-        set() {
+        headers: {},
+        set(headers) {
+          Object.assign(this.headers, headers);
           return this;
         },
         status(code) {
@@ -851,6 +915,33 @@ test("an unbound DID login_hint cannot turn verified email into a different sign
   assert.equal(
     current.parameters.login_hint,
     "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
+  );
+});
+
+test("the signup page allows the client's redirect origin as a form target only for an authorization flow", async (t) => {
+  // A trusted client can skip consent after signup, and the redirect to the
+  // client is checked against this page's form-action.
+  const authorization = await verificationFixture(t, "unbound");
+  const standalone = await verificationFixture(t, "unbound", {
+    standalone: true,
+  });
+
+  const withClient = await authorization.request("/auth/verify", {
+    otp: "controlled-proof",
+  });
+  const without = await standalone.request("/auth/verify", {
+    otp: "controlled-proof",
+  });
+
+  assert.match(withClient.body, /Signup form/);
+  assert.match(
+    withClient.headers["Content-Security-Policy"],
+    /form-action 'self' https:\/\/client\.example\.test;/,
+  );
+  assert.match(without.body, /Signup form/);
+  assert.match(
+    without.headers["Content-Security-Policy"],
+    /form-action 'self';/,
   );
 });
 
