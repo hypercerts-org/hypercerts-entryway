@@ -22,9 +22,9 @@ const artifactDir =
   process.env.ACCEPTANCE_REPORT_DIR ?? resolve(root, "tests/artifacts");
 const project = process.env.SANDBOX_PROJECT ?? "hypercerts-entryway";
 assert.match(project, /^hypercerts-entryway(-[a-z0-9_-]+)?$/);
-process.env.DOCKER_CONTEXT = "rootless";
+process.env.DOCKER_CONTEXT = process.env.ENTRYWAY_DOCKER_CONTEXT ?? "rootless";
 delete process.env.DOCKER_HOST;
-const rootless = spawnSync(
+const contextCheck = spawnSync(
   "bash",
   [
     "-c",
@@ -35,9 +35,9 @@ const rootless = spawnSync(
   { stdio: "inherit" },
 );
 assert.equal(
-  rootless.status,
+  contextCheck.status,
   0,
-  "Explicit rootless daemon preflight must pass",
+  "Explicit Docker context preflight must pass",
 );
 const groups = [
   ["postgres", "dns", "gateway"],
@@ -65,7 +65,7 @@ function docker(args, { allowInterrupted = false, input } = {}) {
     const start = Date.now();
     const argv = [
       "--context",
-      "rootless",
+      process.env.DOCKER_CONTEXT,
       "compose",
       "--project-name",
       project,

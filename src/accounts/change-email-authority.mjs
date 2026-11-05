@@ -4,7 +4,6 @@
  * proof-purpose selection, HTTP route or recovery journal. */
 export function createEmailAuthorityChange({
   db,
-  accounts,
   ownership,
   legacy,
   authority,

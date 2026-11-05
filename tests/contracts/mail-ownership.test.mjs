@@ -4,7 +4,6 @@ import { eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import {
   openTestDatabase,
-  query,
   failureTrigger,
   removeFailureTrigger,
 } from "../support/database-fixture.mjs";

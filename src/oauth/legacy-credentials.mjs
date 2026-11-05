@@ -501,6 +501,7 @@ export async function createLegacy({ db, config, accounts }) {
       typeof name !== "string" ||
       !name.trim() ||
       name.length > 64 ||
+      // eslint-disable-next-line no-control-regex -- Reject control characters in user-visible password names.
       /[\x00-\x1f\x7f]/.test(name)
     )
       throw new HttpError(

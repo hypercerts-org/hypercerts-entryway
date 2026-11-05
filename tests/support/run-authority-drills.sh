@@ -37,7 +37,7 @@ probe() {
   compose run --rm --no-deps test node tests/support/operational-state-probe.mjs tokens "$run" "$1"
   cp "$artifacts/operations-$run-rotation-$1.json" "$out/rotation-$1.json"
 }
-compose run --rm --no-deps --name "${project}-operational-browser" -e OPERATIONAL_RUN="$run" browser npx --no-install playwright test operational-fixture.spec.mjs --config tests/operational.playwright.config.mjs > "$out/fixture.log" 2>&1
+compose run --rm --no-deps --name "${project}-operational-browser" -e OPERATIONAL_RUN="$run" browser npx --no-install playwright test operational-fixture.spec.mjs --config tests/operational.playwright.config.mjs 2>&1 | tee "$out/fixture.log" | python3 "$root/scripts/ci-summary.py"
 compose exec -T entryway node tests/support/operational-state-probe.mjs backup "$run"
 cp "$artifacts/operations-$run-backup.json" "$out/backup.json"
 restored=true
@@ -46,7 +46,7 @@ compose run -d --no-deps --use-aliases --name "$name" \
   -e STATE_DIRECTORY="/data/verification-$run/restored" \
   -e SERVICE_CONFIG_PATH="/data/verification-$run/config.json" entryway node dist/src/main.mjs >/dev/null
 health
-compose run --rm --no-deps --name "${project}-operational-browser" -e OPERATIONAL_RUN="$run" browser npx --no-install playwright test restored-backup.spec.mjs --config tests/operational.playwright.config.mjs > "$out/restored-browser.log" 2>&1
+compose run --rm --no-deps --name "${project}-operational-browser" -e OPERATIONAL_RUN="$run" browser npx --no-install playwright test restored-backup.spec.mjs --config tests/operational.playwright.config.mjs 2>&1 | tee "$out/restored-browser.log" | python3 "$root/scripts/ci-summary.py"
 cp "$artifacts/operations-$run-restored-browser.json" "$out/restored-browser.json"
 remove_owned "$name"
 compose start entryway >/dev/null
@@ -62,13 +62,13 @@ probe issuer-only
 compose restart pds1 pds2 >/dev/null
 health
 probe fleet
-compose run --rm --no-deps --name "${project}-operational-browser" -e OPERATIONAL_RUN="$run" -e ROTATION_STAGE=fleet browser npx --no-install playwright test rotation-browser.spec.mjs --config tests/operational.playwright.config.mjs > "$out/rotation-oauth-fleet.log" 2>&1
+compose run --rm --no-deps --name "${project}-operational-browser" -e OPERATIONAL_RUN="$run" -e ROTATION_STAGE=fleet browser npx --no-install playwright test rotation-browser.spec.mjs --config tests/operational.playwright.config.mjs 2>&1 | tee "$out/rotation-oauth-fleet.log" | python3 "$root/scripts/ci-summary.py"
 cp "$artifacts/operations-$run-oauth-fleet.json" "$out/rotation-oauth-fleet.json"
 configcmd restore-key
 compose restart entryway pds1 pds2 >/dev/null
 health
 probe restored
-compose run --rm --no-deps --name "${project}-operational-browser" -e OPERATIONAL_RUN="$run" -e ROTATION_STAGE=restored browser npx --no-install playwright test rotation-browser.spec.mjs --config tests/operational.playwright.config.mjs > "$out/rotation-oauth-restored.log" 2>&1
+compose run --rm --no-deps --name "${project}-operational-browser" -e OPERATIONAL_RUN="$run" -e ROTATION_STAGE=restored browser npx --no-install playwright test rotation-browser.spec.mjs --config tests/operational.playwright.config.mjs 2>&1 | tee "$out/rotation-oauth-restored.log" | python3 "$root/scripts/ci-summary.py"
 cp "$artifacts/operations-$run-oauth-restored.json" "$out/rotation-oauth-restored.json"
 rotated=false
 echo "PASS backup restore, issuer-only skew, coordinated fleet rotation, and original-key restoration ($run)"

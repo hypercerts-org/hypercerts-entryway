@@ -87,7 +87,7 @@ CREATE TABLE `email_claims` (
 	`email` text NOT NULL,
 	`did` text NOT NULL,
 	`purpose` text NOT NULL,
-	CONSTRAINT `email_claims_email_did_pk` PRIMARY KEY(`email`, `did`),
+	CONSTRAINT `email_claims_pk` PRIMARY KEY(`email`, `did`),
 	CONSTRAINT `fk_email_claims_did_accounts_did_fk` FOREIGN KEY (`did`) REFERENCES `accounts`(`did`)
 );
 --> statement-breakpoint
@@ -245,8 +245,8 @@ CREATE INDEX `mail_outbox_retry_idx` ON `mail_outbox` (`state`,`next_attempt_at`
 CREATE INDEX `mail_outbox_supersede_idx` ON `mail_outbox` (`recipient`,`purpose`,`state`,`created_at`);--> statement-breakpoint
 CREATE UNIQUE INDEX `migration_checkpoint_command` ON `migration_checkpoint` (`workflow_id`,`phase`,`command_id`);--> statement-breakpoint
 CREATE INDEX `migration_checkpoint_workflow_idx` ON `migration_checkpoint` (`workflow_id`,`id`);--> statement-breakpoint
-CREATE INDEX `migration_user_id` ON `migration_reservations` (`user_id`);--> statement-breakpoint
 CREATE INDEX `migration_email_ci` ON `migration_reservations` (lower("email"));--> statement-breakpoint
+CREATE INDEX `migration_user_id` ON `migration_reservations` (`user_id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `migration_handle_ci` ON `migration_reservations` (lower("handle"));--> statement-breakpoint
 CREATE INDEX `operation_admission_id` ON `operation_admissions` (`operation_id`);--> statement-breakpoint
 CREATE INDEX `session_user_id` ON `session` (`userId`);--> statement-breakpoint

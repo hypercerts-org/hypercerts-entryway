@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { exportJWK, generateKeyPair, importJWK, jwtVerify } from "jose";
+import { exportJWK, generateKeyPair, jwtVerify } from "jose";
 import * as plc from "@did-plc/lib";
 import { Secp256k1MigrationPlcSigner } from "../../dist/src/plc/signing.js";
 import { Secp256k1Keypair } from "@atproto/crypto";

@@ -23,6 +23,7 @@ export const EmailClaimPurpose = {
   External: "external",
 } as const;
 
+// eslint-disable-next-line @typescript-eslint/no-redeclare -- Type and value intentionally share the enum-like public name.
 export type EmailClaimPurpose =
   (typeof EmailClaimPurpose)[keyof typeof EmailClaimPurpose];
 
@@ -42,6 +43,7 @@ export const ExternalEmailReservationState = {
   Complete: "complete",
 } as const;
 
+// eslint-disable-next-line @typescript-eslint/no-redeclare -- Type and value intentionally share the enum-like public name.
 export type ExternalEmailReservationState =
   (typeof ExternalEmailReservationState)[keyof typeof ExternalEmailReservationState];
 

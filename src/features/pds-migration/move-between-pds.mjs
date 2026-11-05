@@ -39,7 +39,6 @@ export async function createAccountMigration({
   config,
   accounts,
   custody,
-  legacy,
   security,
 }) {
   const signingKey = await importJWK(config.jwtJwk, "ES256K");
@@ -356,7 +355,7 @@ export async function createAccountMigration({
       current,
       reservedKey,
       target.url,
-      async (candidate, facts, cid) => {
+      async (candidate, facts) => {
         if (operation.requestedPlcOp) {
           await plc.assureValidOp(operation.requestedPlcOp);
           await plc.assureValidSig(

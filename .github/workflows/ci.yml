@@ -1,0 +1,226 @@
+name: CI
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  ENTRYWAY_DOCKER_CONTEXT: default
+  DOCKER_CONTEXT: default
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24.22.0
+      - name: Install application dependencies
+        run: npm ci --ignore-scripts
+      - name: Set up reviewed native dependencies
+        run: npm rebuild better-sqlite3 esbuild
+      - name: Install isolated lint dependencies
+        run: npm ci --ignore-scripts --prefix scripts/lint
+      - name: test:hooks
+        run: npm run test:hooks
+      - name: format:check
+        run: npm run format:check
+      - name: lint
+        run: npm run lint
+      - name: check
+        run: npm run check
+      - name: typecheck
+        run: npm run typecheck
+      - name: check:architecture
+        run: npm run check:architecture
+      - name: test:architecture
+        run: npm run test:architecture
+      - name: schema:check
+        run: npm run schema:check
+      - name: build
+        run: npm run build
+      - name: test:unit
+        run: npm run test:unit
+      - name: test:ci-lifecycle
+        run: npm run test:ci-lifecycle
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      SOURCE_CHECKOUT: ${{ github.workspace }}
+      SANDBOX_PROJECT: hypercerts-entryway-ci-integration-${{ github.run_id }}-${{ github.run_attempt }}
+      SANDBOX_CHECKOUT: ${{ github.workspace }}/tests/.runtime/ci-integration-${{ github.run_id }}-${{ github.run_attempt }}
+      ACCEPTANCE_REPORT_DIR: ${{ github.workspace }}/tests/artifacts/ci-integration-${{ github.run_id }}-${{ github.run_attempt }}/reports
+      CI_OWNERSHIP_MANIFEST: ${{ github.workspace }}/tests/artifacts/ci-integration-${{ github.run_id }}-${{ github.run_attempt }}/ownership.json
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24.22.0
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: 2.8.3
+      - name: Verify standard hosted Docker
+        run: |
+          source tests/support/rootless-docker.sh
+          test "$DOCKER_CONTEXT" = default
+          docker --context default compose version
+          deno --version
+      - name: Register owned project before provisioning
+        run: |
+          python3 scripts/ci-ownership.py init "$CI_OWNERSHIP_MANIFEST"
+          python3 scripts/ci-ownership.py register "$CI_OWNERSHIP_MANIFEST" "$SANDBOX_CHECKOUT" "$SANDBOX_PROJECT"
+          mkdir -p "$SANDBOX_CHECKOUT" "$ACCEPTANCE_REPORT_DIR"
+      - name: Install pinned AiaB dependencies and configure sandbox
+        run: |
+          bash tests/local.sh prepare
+      - name: Build and start managed application and test images
+        run: |
+          bash tests/local.sh up
+      - name: browser
+        run: |
+          bash tests/local.sh browser
+      - name: contracts
+        run: |
+          bash tests/local.sh contracts
+      - name: migration
+        run: |
+          bash tests/local.sh migration
+      - name: Assert only the declared moderation gap
+        run: |
+          status=0
+          bash tests/local.sh interop-profile || status=$?
+          printf "%s\n" "$status" > "$ACCEPTANCE_REPORT_DIR/interop-profile-exit.txt"
+          docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" run --rm --no-deps test node tests/support/assert-interop-profile.mjs /app/artifacts/interop-profile.json "$status" /app/artifacts/interop-profile-acceptance.json
+      - name: plc-recovery
+        run: |
+          bash tests/local.sh plc-recovery
+      - name: process-crash
+        run: |
+          bash tests/local.sh process-crash
+      - name: managed-recovery
+        run: |
+          bash tests/local.sh managed-recovery
+      - name: authority-drills
+        run: |
+          bash tests/local.sh authority-drills
+      - name: resilience
+        run: |
+          bash tests/local.sh resilience
+      - name: Clean only recorded projects and children
+        if: always()
+        run: |
+          if test -f "$CI_OWNERSHIP_MANIFEST"; then
+            python3 scripts/ci-ownership.py cleanup "$CI_OWNERSHIP_MANIFEST"
+          fi
+  databases:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      SOURCE_CHECKOUT: ${{ github.workspace }}
+      SANDBOX_PROJECT: hypercerts-entryway-ci-databases-${{ github.run_id }}-${{ github.run_attempt }}
+      SANDBOX_CHECKOUT: ${{ github.workspace }}/tests/.runtime/ci-databases-${{ github.run_id }}-${{ github.run_attempt }}
+      ACCEPTANCE_REPORT_DIR: ${{ github.workspace }}/tests/artifacts/ci-databases-${{ github.run_id }}-${{ github.run_attempt }}/reports
+      CI_OWNERSHIP_MANIFEST: ${{ github.workspace }}/tests/artifacts/ci-databases-${{ github.run_id }}-${{ github.run_attempt }}/ownership.json
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24.22.0
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: 2.8.3
+      - name: Verify standard hosted Docker
+        run: |
+          source tests/support/rootless-docker.sh
+          test "$DOCKER_CONTEXT" = default
+          docker --context default compose version
+          deno --version
+      - name: Register owned project before provisioning
+        run: |
+          python3 scripts/ci-ownership.py init "$CI_OWNERSHIP_MANIFEST"
+          python3 scripts/ci-ownership.py register "$CI_OWNERSHIP_MANIFEST" "$SANDBOX_CHECKOUT" "$SANDBOX_PROJECT"
+          mkdir -p "$SANDBOX_CHECKOUT" "$ACCEPTANCE_REPORT_DIR"
+      - name: Install pinned AiaB dependencies and configure sandbox
+        run: |
+          bash tests/local.sh prepare
+      - name: Build and start managed application and test images
+        run: |
+          bash tests/local.sh up
+      - name: SQLite and PostgreSQL contracts
+        run: |
+          bash tests/local.sh database-dialects
+      - name: PostgreSQL login restart and restore
+        run: |
+          bash tests/support/run-postgresql-profile.sh
+      - name: Clean only recorded projects and children
+        if: always()
+        run: |
+          if test -f "$CI_OWNERSHIP_MANIFEST"; then
+            python3 scripts/ci-ownership.py cleanup "$CI_OWNERSHIP_MANIFEST"
+          fi
+  profiles:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      SOURCE_CHECKOUT: ${{ github.workspace }}
+      SANDBOX_PROJECT: hypercerts-entryway-ci-profiles-${{ github.run_id }}-${{ github.run_attempt }}
+      SANDBOX_CHECKOUT: ${{ github.workspace }}/tests/.runtime/ci-profiles-${{ github.run_id }}-${{ github.run_attempt }}
+      ACCEPTANCE_REPORT_DIR: ${{ github.workspace }}/tests/artifacts/ci-profiles-${{ github.run_id }}-${{ github.run_attempt }}/reports
+      CI_OWNERSHIP_MANIFEST: ${{ github.workspace }}/tests/artifacts/ci-profiles-${{ github.run_id }}-${{ github.run_attempt }}/ownership.json
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24.22.0
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: 2.8.3
+      - name: Verify standard hosted Docker
+        run: |
+          source tests/support/rootless-docker.sh
+          test "$DOCKER_CONTEXT" = default
+          docker --context default compose version
+          deno --version
+      - name: Register owned project before provisioning
+        run: |
+          python3 scripts/ci-ownership.py init "$CI_OWNERSHIP_MANIFEST"
+          python3 scripts/ci-ownership.py register "$CI_OWNERSHIP_MANIFEST" "$SANDBOX_CHECKOUT" "$SANDBOX_PROJECT"
+          mkdir -p "$SANDBOX_CHECKOUT" "$ACCEPTANCE_REPORT_DIR"
+      - name: Initialize deployment profile collection
+        run: |
+          echo "PROFILE_COLLECTION_INDEX=$ACCEPTANCE_REPORT_DIR/profiles.tsv" >> "$GITHUB_ENV"
+          echo "KEEP_PROFILE_SANDBOX=1" >> "$GITHUB_ENV"
+      - name: sqlite-single-node
+        run: |
+          bash tests/support/run-resilience-profile.sh sqlite-single-node
+      - name: postgresql-single-node
+        run: |
+          bash tests/support/run-resilience-profile.sh postgresql-single-node
+      - name: postgresql-multi-node
+        run: |
+          bash tests/support/run-resilience-profile.sh postgresql-multi-node
+      - name: Assert all deployment profile receipts
+        run: |
+          last=$(tail -1 "$PROFILE_COLLECTION_INDEX" | cut -f2)
+          mapfile -t identity < "$ACCEPTANCE_REPORT_DIR/$last/sandbox-identity.txt"
+          SANDBOX_PROJECT="${identity[1]}" docker --context "$DOCKER_CONTEXT" compose --project-name "${identity[1]}" -f "${identity[0]}/compose.yaml" run --rm --no-deps -v "$ACCEPTANCE_REPORT_DIR:/profiles:ro" -v "$ACCEPTANCE_REPORT_DIR:/app/artifacts:z" test node tests/support/assert-resilience-profiles.mjs
+      - name: Clean only recorded projects and children
+        if: always()
+        run: |
+          if test -f "$CI_OWNERSHIP_MANIFEST"; then
+            python3 scripts/ci-ownership.py cleanup "$CI_OWNERSHIP_MANIFEST"
+          fi

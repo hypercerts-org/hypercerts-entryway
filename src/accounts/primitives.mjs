@@ -1,4 +1,4 @@
-import { noExternalResult, signingKeyResult } from "./operation-ownership.js";
+import { noExternalResult } from "./operation-ownership.js";
 import { ensureValidHandle } from "@atproto/syntax";
 import { validateHostedHandle } from "./input-schema.js";
 import { HttpError } from "../http/http-error.mjs";

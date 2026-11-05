@@ -23,3 +23,7 @@
 **/*.pfx
 **/*-token.txt
 **/*-secret.txt
+# Local planning material is not needed by container builds.
+docs/linear-issues.md
+docs/linear-mapping.md
+matrices/

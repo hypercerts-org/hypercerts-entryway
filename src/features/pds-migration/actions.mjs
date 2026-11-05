@@ -2,12 +2,7 @@ import { page, escapeHtml as esc } from "../../ui/html.mjs";
 import { field, hidden, nextStep } from "../../ui/account-forms.mjs";
 import { HttpError } from "../../http/http-error.mjs";
 
-export function createMigrationActions({
-  config,
-  security,
-  migration,
-  console,
-}) {
+export function createMigrationActions({ config, migration, console }) {
   const perform =
     (action) =>
     async ({ res, account, browser, principal, value, token }) => {

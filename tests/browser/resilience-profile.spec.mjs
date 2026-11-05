@@ -36,7 +36,9 @@ async function waitMarker(name, bound = 30_000) {
     try {
       await access(`/app/artifacts/${name}`);
       return;
-    } catch {}
+    } catch {
+      // The profile probe retries until its bounded deadline.
+    }
     await new Promise((done) => setTimeout(done, 100));
   }
   throw Error(`Missing profile controller marker: ${name}`);

@@ -1,11 +1,13 @@
-# Testing in Atmosphere in a Box
+# Testing Entryway
 
 ## Boundaries and prerequisites
 
 Use Docker Compose v2, Node.js 24, Deno 2.8.3, Python 3, Git, Bash and `flock` on
-the host. Node/Python are orchestration prerequisites. All application dependency
-installation, builds, execution and tests belong in sandbox containers, using
-Node 24 and Playwright 1.58.2.
+the host for live integration tests. Contributors run dependency installs, format,
+lint, syntax, typecheck, build, unit, schema and architecture checks natively with
+Node 24. Only live integration/E2E requiring PDS, Entryway or other services uses
+AiaB containers, with Playwright 1.58.2. Do not start live application servers on
+the host. Native check commands appear in the development section below.
 
 `tests/atmosphere/` owns installation scripts, stack templates, examples and
 provenance. It prepares a disposable Atmosphere in a Box checkout pinned to
@@ -155,13 +157,101 @@ configuration in public reports. Historical spike reports establish provenance o
 Keep design rationale in the existing domain guides and operator-facing release
 notes in [Changesets](../RELEASING.md), not routine test or scanner output.
 
+## Development: automated CI checks
+
+Contributors maintain the actual job commands in `.github/workflows/ci.yml`.
+Formatting, lint, syntax, types, architecture, schema, build, unit and lifecycle
+checks each have a visible step. Integration runs browser before contracts,
+then migration, the declared moderation-gap assertion, recovery/crash/authority
+checks and resilience last. Database dialects and the PostgreSQL application
+profile are separate steps. Each deployment profile has its own step followed
+by the aggregate receipt assertion. These gates do not close the pending public
+migration or moderation requirements.
+
+Contributors reproduce basic checks directly from the repository root:
+
+```sh
+npm ci --ignore-scripts
+npm rebuild better-sqlite3 esbuild
+npm ci --ignore-scripts --prefix scripts/lint
+npm run hooks:install
+npm run test:hooks
+npm run format:check
+npm run lint
+npm run check
+npm run typecheck
+npm run check:architecture
+npm run test:architecture
+npm run schema:check
+npm run build
+npm run test:unit
+npm run test:ci-lifecycle
+```
+
+ESLint dependencies remain isolated under `scripts/lint`; these checks need no
+AiaB or Docker daemon. Script-disabled installation suppresses automatic lifecycle
+scripts, including Lefthook's hook installation. The explicit rebuild runs the
+reviewed native setup for better-sqlite3 and esbuild only. Do not run a plain root
+`npm install` or `npm ci`: upstream may rename an existing hook. For dependency
+updates use `npm install --ignore-scripts`, then run the explicit rebuild above.
+
+`npm run hooks:install` installs the Entryway pre-commit launcher explicitly.
+It refuses an existing custom pre-commit hook or any configured `core.hooksPath`;
+resolve the conflict manually, preserving any hook you need, then retry. It never
+chains or renames hooks. Re-running it with the unchanged Entryway launcher is
+safe. The launcher fails if the local Lefthook binary is missing. It invokes the
+shared `entryway-checks` Lefthook jobs rather than the special `pre-commit` runner,
+which otherwise hides partially staged changes with a stash. Both jobs inspect
+the working tree, not the staged snapshot: unstaged edits can cause a failure
+or mask a staged problem. They do not fix, stage or stash files. CI remains the
+authoritative check of committed content.
+
+For live jobs, select unique owned runtime and report directories before running
+the individual `tests/local.sh` commands shown in the workflow:
+
+```sh
+export SOURCE_CHECKOUT="$PWD"
+export SANDBOX_PROJECT="hypercerts-entryway-ci-local-$(date +%s)-$$"
+export SANDBOX_CHECKOUT="$PWD/tests/.runtime/$SANDBOX_PROJECT"
+export ACCEPTANCE_REPORT_DIR="$PWD/tests/artifacts/$SANDBOX_PROJECT/reports"
+export CI_OWNERSHIP_MANIFEST="$PWD/tests/artifacts/$SANDBOX_PROJECT/ownership.json"
+source tests/support/rootless-docker.sh
+python3 scripts/ci-ownership.py init "$CI_OWNERSHIP_MANIFEST"
+python3 scripts/ci-ownership.py register "$CI_OWNERSHIP_MANIFEST" "$SANDBOX_CHECKOUT" "$SANDBOX_PROJECT"
+bash tests/local.sh prepare
+bash tests/local.sh up
+# Run the desired live gates, then always clean up, including after failure:
+python3 scripts/ci-ownership.py cleanup "$CI_OWNERSHIP_MANIFEST"
+```
+
+Every live job registers its project before provisioning. Child profiles register in
+the same manifest; the `always()` cleanup step validates all identities, enables
+all Compose profiles and checks for remaining project-labelled resources. It
+never prunes the daemon. Failed gates remain failed even when cleanup succeeds;
+cleanup failure also fails the job. Retry with the same manifest and context.
+
+GitHub-hosted jobs explicitly select `ENTRYWAY_DOCKER_CONTEXT=default`, using the
+runner's standard Docker daemon; no rootless installation is needed. Local runs
+default to rootless. Both paths validate the endpoint before use, unset
+`DOCKER_HOST`, record the selection and refuse a changed cleanup context. Checkout
+uses the event's default revision, including the PR merge ref and merge queue.
+Actions are pinned, permissions read-only and jobs bounded by timeouts.
+
+Commands and gate results remain visible. Runtime diagnostic payloads and access
+JSON stay private. Controllers publish phase names and exit status; the summary
+filter publishes repository-declared literal test names, counts and fixed diagnostic
+codes for Docker, assertion and timeout failures, never assertion values. Nested
+profile controllers are not filtered a second time. Raw reports are never uploaded. Inspect
+private reports locally for detailed failures. Lifecycle fixtures use fake Docker
+natively; they do not establish hosted-runner compatibility.
+
 ## Feature tests and operational evidence
 
 Contract discovery executes both `tests/contracts/*.test.mjs` and recursively
 co-located `src/features/**/*.test.mjs`, once and sorted, with a shared JUnit report.
 Run browser before contracts in a fresh project: real contracts require the
 verified account created by the browser journey. Pure diagnostic unit runs use
-`npm run test:unit` inside the managed test container and do not need that fixture.
+`npm run test:unit` natively and do not need that fixture.
 Browser email-proof tests must obtain the recipient's visible code from Mailpit
 message content; reading the database outbox's full token hides missing challenge
 context. Verify the hidden selector is retained and that wrong codes or selectors
@@ -170,8 +260,8 @@ are rejected. Better Auth sign-in OTP remains a separate flow.
 The application images are project-scoped. Source changes require rebuilding the
 selected runtime/test/browser images; test results from an older image cannot
 validate current files. AiaB runtime networks intentionally have no registry
-egress. Lockfile generation uses an isolated managed tooling service with egress
-and no runtime secrets/volumes; it is not performed in the application runtime.
+egress. Lockfile updates and dependency installs run natively with registry access,
+not in the application runtime.
 
 Operational controllers validate the selected manifest/project, share the
 consumer migration lock, use bounded waits and restore only owned services and
@@ -211,11 +301,10 @@ processes. [Deployment profiles](deployment-profiles.md) exercise readiness/drai
 and actual application replicas. The [credential-lifetime defect](implementation-assessment.md#known-limits)
 remains unfixed; passing suites do not erase its earlier failure.
 
-Repository lifecycle entrypoints explicitly select `DOCKER_CONTEXT=rootless`, unset
-`DOCKER_HOST` and verify the rootless endpoint/security option before acting. There
-is no default-daemon fallback, including cleanup. The receipt records the selected
-context, endpoint and security options. A historical result without that
-provenance must not be presented as rootless acceptance.
+Repository lifecycle entrypoints default to rootless Docker locally. The explicit
+hosted exception and context validation are described in the development section
+above. Historical results without context provenance do not establish rootless
+acceptance.
 
 The revised real process-crash drill uses the unchanged 120-second operation lease,
 a 150-second bounded approval wait, a 360-second browser-case deadline and a

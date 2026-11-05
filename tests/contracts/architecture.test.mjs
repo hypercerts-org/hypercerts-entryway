@@ -386,7 +386,7 @@ test("resolved provider aliases cannot bypass authentication, SQL or SMTP owners
     );
     f.options.paths[alias] = [path];
   }
-  for (const [alias, _provider, message] of providers) {
+  for (const [alias, , message] of providers) {
     for (const statement of [
       `import { value } from '${alias}'`,
       `await import('${alias}')`,

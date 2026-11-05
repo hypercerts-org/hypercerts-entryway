@@ -44,6 +44,7 @@ test.beforeAll(async ({ browser }) => {
   page = await context.newPage();
   mkdirSync("artifacts", { recursive: true });
 });
+// eslint-disable-next-line no-empty-pattern -- Playwright requires a destructured fixture parameter.
 test.afterEach(async ({}, info) => {
   if (info.status !== info.expectedStatus && page && !page.isClosed()) {
     await info.attach("browser-page", {

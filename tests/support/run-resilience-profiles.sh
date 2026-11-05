@@ -12,13 +12,13 @@ done
 last=$(tail -1 "$PROFILE_COLLECTION_INDEX" | cut -f2)
 mapfile -t identity < "$ACCEPTANCE_REPORT_DIR/$last/sandbox-identity.txt"
 result=0
-printf '%q ' env "SANDBOX_PROJECT=${identity[1]}" docker --context rootless compose --project-name "${identity[1]}" -f "${identity[0]}/compose.yaml" run --rm --no-deps -v "$ACCEPTANCE_REPORT_DIR:/profiles:ro" -v "$ACCEPTANCE_REPORT_DIR:/app/artifacts:z" test node tests/support/assert-resilience-profiles.mjs > "$ACCEPTANCE_REPORT_DIR/assert-all.command"
+printf '%q ' env "SANDBOX_PROJECT=${identity[1]}" docker --context "$DOCKER_CONTEXT" compose --project-name "${identity[1]}" -f "${identity[0]}/compose.yaml" run --rm --no-deps -v "$ACCEPTANCE_REPORT_DIR:/profiles:ro" -v "$ACCEPTANCE_REPORT_DIR:/app/artifacts:z" test node tests/support/assert-resilience-profiles.mjs > "$ACCEPTANCE_REPORT_DIR/assert-all.command"
 printf '\n' >> "$ACCEPTANCE_REPORT_DIR/assert-all.command"
-SANDBOX_PROJECT="${identity[1]}" docker --context rootless compose --project-name "${identity[1]}" -f "${identity[0]}/compose.yaml" run --rm --no-deps -v "$ACCEPTANCE_REPORT_DIR:/profiles:ro" -v "$ACCEPTANCE_REPORT_DIR:/app/artifacts:z" test node tests/support/assert-resilience-profiles.mjs > "$ACCEPTANCE_REPORT_DIR/assert-all.log" 2>&1 || result=$?
+SANDBOX_PROJECT="${identity[1]}" docker --context "$DOCKER_CONTEXT" compose --project-name "${identity[1]}" -f "${identity[0]}/compose.yaml" run --rm --no-deps -v "$ACCEPTANCE_REPORT_DIR:/profiles:ro" -v "$ACCEPTANCE_REPORT_DIR:/app/artifacts:z" test node tests/support/assert-resilience-profiles.mjs 2>&1 | tee "$ACCEPTANCE_REPORT_DIR/assert-all.log" | python3 "$root/scripts/ci-summary.py" || result=$?
 printf '%s\n' "$result" > "$ACCEPTANCE_REPORT_DIR/assert-all.exit"
-cat "$ACCEPTANCE_REPORT_DIR/assert-all.log"
+echo "Deployment profile assertion: exit $result"
 (( result == 0 )) || exit "$result"
 while IFS=$'\t' read -r profile directory; do
   mapfile -t identity < "$ACCEPTANCE_REPORT_DIR/$directory/sandbox-identity.txt"
-  SANDBOX_PROJECT="${identity[1]}" docker --context rootless compose --project-name "${identity[1]}" -f "${identity[0]}/compose.yaml" down --volumes --remove-orphans
+  SANDBOX_PROJECT="${identity[1]}" docker --context "$DOCKER_CONTEXT" compose --project-name "${identity[1]}" -f "${identity[0]}/compose.yaml" down --volumes --remove-orphans
 done < "$PROFILE_COLLECTION_INDEX"

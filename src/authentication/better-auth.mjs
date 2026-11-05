@@ -59,6 +59,17 @@ export async function createBetterAuthAuthentication({ db, config, mail }) {
     const scope = { dispatch: null, failure: null };
     await db.transact(() =>
       verificationMail.run(scope, async () => {
+        // Consume the provider's entire sign-in identifier before issuing a
+        // replacement; createdAt alone cannot order rows created in the same millisecond.
+        await db.authenticationAdapter(authOptions).deleteMany({
+          model: "verification",
+          where: [
+            {
+              field: "identifier",
+              value: `sign-in-otp-${email.toLowerCase()}`,
+            },
+          ],
+        });
         await auth.api.sendVerificationOTP({
           body: { email, type: "sign-in" },
         });
