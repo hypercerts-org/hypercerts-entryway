@@ -91,6 +91,7 @@ sha256sum "$SANDBOX_CHECKOUT/compose.yaml" "$SANDBOX_CHECKOUT/state/manifest.jso
 run readiness-initial probe ready readiness-initial.json
 run journey browser journey journey
 if [[ "$ENTRYWAY_PROFILE_NODE_COUNT" == 2 ]]; then
+  run cross-node-signin browser cross-node-signin cross-node-signin
   run worker-takeover phase_container -e CONTRACT_DATABASE_BACKEND=postgresql -e CONTRACT_DATABASE_URL=postgresql://authority_owner@entryway-postgres/account_authority test timeout --signal=TERM --kill-after=5s 195s node --test tests/contracts/profile-workers.mjs
 fi
 # Graceful stop is bounded separately from the application deadline. Preserve the
