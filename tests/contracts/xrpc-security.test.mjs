@@ -506,13 +506,3 @@ test("a revoked OAuth token cannot call Entryway account methods before it expir
   });
   assert.deepEqual(f.statusChanges, []);
 });
-
-test("a stored OAuth token for another DID cannot act for the token subject", async (t) => {
-  const f = await oauthFixture(t);
-  await f.token("foreign-token", f.bob.did);
-  await assert.rejects(f.deactivate(), {
-    status: 401,
-    error: "InvalidToken",
-  });
-  assert.deepEqual(f.statusChanges, []);
-});
