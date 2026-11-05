@@ -58,42 +58,45 @@ async function assertOAuthSubjectAndWrite(page, account) {
   expect((await write.json()).uri).toContain(`at://${account.did}/`);
 }
 
-test("verified-email chooser selects each real DID after OTP and keeps OAuth writes account-scoped", async ({
-  browser,
-}) => {
-  test.setTimeout(180_000);
-  const { first, second } = shared;
-  const context = await browser.newContext({ ignoreHTTPSErrors: false });
-  try {
-    const page = await context.newPage();
-    await reachChooser(page);
-    await expect(page.locator('form[action="/auth/select"]')).toHaveCount(2);
-    for (const account of [first, second])
-      await expect(selectionForm(page, account.did)).toHaveCount(1);
+// Each DID completes its own journey in a fresh context, so a regression that
+// only breaks consent, token subject or writes for one binding still fails.
+for (const which of ["first", "second"]) {
+  test(`verified-email chooser completes sign-in as the ${which} DID and keeps OAuth writes account-scoped`, async ({
+    browser,
+  }) => {
+    test.setTimeout(180_000);
+    const { first, second } = shared;
+    const chosen = shared[which];
+    const context = await browser.newContext({ ignoreHTTPSErrors: false });
+    try {
+      const page = await context.newPage();
+      await reachChooser(page);
+      await expect(page.locator('form[action="/auth/select"]')).toHaveCount(2);
+      for (const account of [first, second])
+        await expect(selectionForm(page, account.did)).toHaveCount(1);
 
-    // Choosing the second, non-default DID on another PDS proves the chooser
-    // continues the selected account rather than the first binding.
-    const form = selectionForm(page, second.did);
-    const submitted = await form.evaluate((element) =>
-      Object.fromEntries(new FormData(element).entries()),
-    );
+      const form = selectionForm(page, chosen.did);
+      const submitted = await form.evaluate((element) =>
+        Object.fromEntries(new FormData(element).entries()),
+      );
 
-    await form.getByRole("button").click();
-    await expect(consentForm(page, second.did)).toBeVisible();
+      await form.getByRole("button").click();
+      await expect(consentForm(page, chosen.did)).toBeVisible();
 
-    await finishConsent(page, second.did);
-    const replay = await page.request.post(`${config.issuer}/auth/select`, {
-      maxRedirects: 0,
-      headers: { origin: config.issuer },
-      form: submitted,
-    });
-    expect(replay.status()).toBe(400);
-    expect(await replay.text()).toContain("This sign-in has expired");
-    await assertOAuthSubjectAndWrite(page, second);
-  } finally {
-    await context.close();
-  }
-});
+      await finishConsent(page, chosen.did);
+      const replay = await page.request.post(`${config.issuer}/auth/select`, {
+        maxRedirects: 0,
+        headers: { origin: config.issuer },
+        form: submitted,
+      });
+      expect(replay.status()).toBe(400);
+      expect(await replay.text()).toContain("This sign-in has expired");
+      await assertOAuthSubjectAndWrite(page, chosen);
+    } finally {
+      await context.close();
+    }
+  });
+}
 
 test("each linked account has its own button and status, and consent can return to the chooser", async ({
   browser,
