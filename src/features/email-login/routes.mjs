@@ -65,21 +65,30 @@ export function mountEmailLogin({
         if (!input.success)
           throw new InvalidRequestError("Enter a valid email address");
         email = input.data;
-        // A new address keeps the caller's masking choice; a resend keeps the
-        // flow's. Set before any refusal so every rendered page honors it.
-        if (emailValue !== undefined)
-          flow.maskEmail = options.maskEmail === true;
+        // A new address takes the caller's masking choice; a resend keeps the
+        // flow's. The choice applies only once the request is accepted: a
+        // refused request still holds the earlier address, so it stays masked
+        // if either that address or the requested one was masked.
+        const requestedMask =
+          emailValue === undefined
+            ? flow.maskEmail
+            : options.maskEmail === true;
+        const refuse = (reason) => {
+          flow.maskEmail = Boolean(flow.maskEmail || requestedMask);
+          return { reason };
+        };
         const now = Date.now();
-        if (flow.otpRequestCount >= 5) return { reason: "flow-limit" };
+        if (flow.otpRequestCount >= 5) return refuse("flow-limit");
         if (flow.lastOtpSentAt && now - flow.lastOtpSentAt < RESEND_COOLDOWN)
-          return { reason: "cooldown" };
+          return refuse("cooldown");
         const limitKey = `${email}/${Math.floor(now / 600_000)}`;
         const count = (await db.get("otp-limits", limitKey)) ?? 0;
-        if (count >= 5) return { reason: "email-limit" };
+        if (count >= 5) return refuse("email-limit");
         if (flow.email && flow.email !== email)
           await mail.supersedeOtp({ email: flow.email, type: "sign-in" });
         await db.set("otp-limits", limitKey, count + 1);
         flow.email = email;
+        flow.maskEmail = Boolean(requestedMask);
         flow.otpRequestCount = (flow.otpRequestCount ?? 0) + 1;
         flow.lastOtpSentAt = now;
         delete flow.authDid;
