@@ -132,10 +132,9 @@ test("bound-account lookup returns only accounts with an established user bindin
       email: alice.email,
       userId: "verified-owner",
     });
-    assert.deepEqual(
-      await storage.listBoundAccounts("verified-owner"),
-      [alice],
-    );
+    assert.deepEqual(await storage.listBoundAccounts("verified-owner"), [
+      alice,
+    ]);
     assert.deepEqual(await storage.listBoundAccounts("unrelated-user"), []);
   } finally {
     await db.close();
@@ -308,11 +307,7 @@ test("email-claim writes serialize primary sharing against exclusive claims", as
     );
 
     const competingBackupPending = await Promise.allSettled([
-      storage.reserveEmail(
-        "backup-pending@example.test",
-        alice.did,
-        "backup",
-      ),
+      storage.reserveEmail("backup-pending@example.test", alice.did, "backup"),
       storage.reserveEmail(
         "backup-pending@example.test",
         second.did,
@@ -356,13 +351,7 @@ test("authorized migration can share an email with an unbound DID and roll back 
     };
     await storage.insertAccount(alice);
     await verifiedUser(db, ownerId, alice.email);
-    await browserSession(
-      db,
-      incoming.sessionId,
-      ownerId,
-      now,
-      now + 600_000,
-    );
+    await browserSession(db, incoming.sessionId, ownerId, now, now + 600_000);
     const sourcePlcHead = "bafyreih" + "a".repeat(52);
     const migration = new ExternalMigrationService({
       ownership: {
@@ -454,10 +443,7 @@ test("authorized migration can share an email with an unbound DID and roll back 
       (await storage.getVerifiedBinding(incoming.did)).userId,
       ownerId,
     );
-    assert.deepEqual(await storage.listByEmail(alice.email), [
-      alice,
-      imported,
-    ]);
+    assert.deepEqual(await storage.listByEmail(alice.email), [alice, imported]);
   } finally {
     await db.close();
   }
@@ -817,10 +803,13 @@ test("authorized migration shares an existing primary email without acquiring it
       (await storage.listByEmail(hosted.email)).map(({ did }) => did),
       [hosted.did],
     );
-    assert.deepEqual(await storage.getExternalReservationByEmail(hosted.email), {
-      did: alice.did,
-      userId: "owner",
-    });
+    assert.deepEqual(
+      await storage.getExternalReservationByEmail(hosted.email),
+      {
+        did: alice.did,
+        userId: "owner",
+      },
+    );
     assert.deepEqual(await storage.listEmailClaims(hosted.email), [
       { did: alice.did, purpose: "external" },
       { did: hosted.did, purpose: "primary" },
@@ -829,13 +818,7 @@ test("authorized migration shares an existing primary email without acquiring it
     const freshEmail = "fresh@example.test";
     const freshOwner = "fresh-reservation-owner";
     await verifiedUser(db, freshOwner, freshEmail);
-    await browserSession(
-      db,
-      "fresh-session",
-      freshOwner,
-      now,
-      now + 600_000,
-    );
+    await browserSession(db, "fresh-session", freshOwner, now, now + 600_000);
     const freshReservation = {
       workflowId: "fresh-email-reservation",
       did: "did:plc:gggggggggggggggggggggggg",
@@ -865,8 +848,7 @@ test("authorized migration shares an existing primary email without acquiring it
       (error) => error.code === "EmailNotAvailable",
     );
     await assert.rejects(
-      async () =>
-        await storage.saveAccount({ ...hosted, email: freshEmail }),
+      async () => await storage.saveAccount({ ...hosted, email: freshEmail }),
       (error) => error.code === "EmailNotAvailable",
     );
     assert.equal(await storage.getByEmail(freshEmail), null);

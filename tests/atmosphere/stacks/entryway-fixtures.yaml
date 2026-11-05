@@ -15,7 +15,7 @@ services:
     read_only: true
     tmpfs: [/tmp]
     healthcheck:
-      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:8025/readyz']
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8025/readyz"]
       interval: 5s
       timeout: 3s
       retries: 30
@@ -25,8 +25,8 @@ services:
       MP_SMTP_BIND_ADDR: 0.0.0.0:2525
       MP_ALLOWED_HOSTS: mailpit.atmosbox.test
       MP_MAX_AGE: 1h
-      MP_MAX_MESSAGES: '500'
-      MP_MAX_MESSAGE_SIZE: '1'
+      MP_MAX_MESSAGES: "500"
+      MP_MAX_MESSAGE_SIZE: "1"
     volumes:
       - mail-capture-data:/capture
     networks: [atmosinabox]
@@ -49,7 +49,13 @@ services:
       pds3: { condition: service_healthy }
       ca-export: { condition: service_completed_successfully }
     healthcheck:
-      test: [CMD, node, -e, "const s=require('node:net').connect(3313,'127.0.0.1');s.on('connect',()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1))"]
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "const s=require('node:net').connect(3313,'127.0.0.1');s.on('connect',()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1))",
+        ]
       interval: 3s
       timeout: 3s
       retries: 30

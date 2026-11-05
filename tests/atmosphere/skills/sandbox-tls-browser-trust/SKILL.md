@@ -1,6 +1,6 @@
 ---
 name: sandbox-tls-browser-trust
-description: 'Diagnose and adapt Atmosphere in a Box connections for host or container Node, Deno, and browser clients, including DNS, the local HTTPS relay, public-CA trust, and cleanup.'
+description: "Diagnose and adapt Atmosphere in a Box connections for host or container Node, Deno, and browser clients, including DNS, the local HTTPS relay, public-CA trust, and cleanup."
 ---
 
 # Sandbox TLS and Browser Trust

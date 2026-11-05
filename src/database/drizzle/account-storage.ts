@@ -84,18 +84,13 @@ export function createAccountStorage(
         where: eq(t.account_bindings.user_id, userId),
         orderBy: [asc(t.account_bindings.did)],
       });
-      const rows = await Promise.all(
-        bindings.map(({ did }) => getByDid(did)),
-      );
+      const rows = await Promise.all(bindings.map(({ did }) => getByDid(did)));
       return rows.filter((row): row is AccountRow => row !== null);
     });
   const listByEmail = async (email: string) =>
     (
       await db.read("accounts", {
-        where: eq(
-          sql`lower(${t.accounts.email})`,
-          email.trim().toLowerCase(),
-        ),
+        where: eq(sql`lower(${t.accounts.email})`, email.trim().toLowerCase()),
         orderBy: [asc(t.accounts.sequence)],
       })
     ).map((row) => parseAccount(row)!);
@@ -143,10 +138,13 @@ export function createAccountStorage(
     return [
       ...claims.map(({ did, purpose }) => ({ did, purpose })),
       ...reservations
-        .filter(({ did, state }) => state !== "complete" && !claimedDids.has(did))
+        .filter(
+          ({ did, state }) => state !== "complete" && !claimedDids.has(did),
+        )
         .map(({ did }): EmailClaim => ({ did, purpose: "external" })),
     ].sort(
-      (a, b) => a.did.localeCompare(b.did) || a.purpose.localeCompare(b.purpose),
+      (a, b) =>
+        a.did.localeCompare(b.did) || a.purpose.localeCompare(b.purpose),
     );
   };
   const getEmailClaim = async (email: string) => {
@@ -155,7 +153,7 @@ export function createAccountStorage(
       throw new DomainError(
         "AccountSelectionRequired",
         409,
-        "This email has multiple claims; select an account explicitly"
+        "This email has multiple claims; select an account explicitly",
       );
     return claims[0] ?? null;
   };

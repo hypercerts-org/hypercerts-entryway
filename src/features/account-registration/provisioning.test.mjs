@@ -125,9 +125,7 @@ test("ordinary registration fails closed when an email maps to multiple establis
   assert.equal(f.calls.length, pdsCallsBeforeSignup);
   assert.equal(f.plcHeads.size, plcOperationsBeforeSignup);
   assert.deepEqual(
-    (await f.accounts.storage.listAccounts())
-      .map(({ did }) => did)
-      .sort(),
+    (await f.accounts.storage.listAccounts()).map(({ did }) => did).sort(),
     establishedDids,
   );
   for (const { did } of established)
@@ -144,7 +142,10 @@ test("registration reconciliation isolates shared-email intents and processes la
       failedSigningKeyReservations--;
       return {
         status: 503,
-        body: { error: "Unavailable", message: "Temporary signing-key failure" },
+        body: {
+          error: "Unavailable",
+          message: "Temporary signing-key failure",
+        },
       };
     }
   });
@@ -203,7 +204,10 @@ test("registration reconciliation recognizes a persisted intent account by handl
       failedSigningKeyReservations--;
       return {
         status: 503,
-        body: { error: "Unavailable", message: "Temporary signing-key failure" },
+        body: {
+          error: "Unavailable",
+          message: "Temporary signing-key failure",
+        },
       };
     }
   });

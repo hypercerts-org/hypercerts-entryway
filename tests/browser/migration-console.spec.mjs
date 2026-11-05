@@ -180,9 +180,15 @@ test("console migrates its own DID, record and blob between enrolled PDSs with m
   // The recovery drill loses the target response after the accepted code, so
   // confirmation reports an uncertain outcome (409) instead of completing.
   if (recoveryRun)
-    expect(confirmationStatus, "Visible migration email code was rejected").toBe(409);
+    expect(
+      confirmationStatus,
+      "Visible migration email code was rejected",
+    ).toBe(409);
   else
-    expect(confirmationStatus, "Visible migration email code was rejected").toBe(200);
+    expect(
+      confirmationStatus,
+      "Visible migration email code was rejected",
+    ).toBe(200);
   if (recoveryRun) {
     const prefix = `artifacts/managed-recovery-${recoveryRun}`;
     // The original authenticated request returned. Source freeze intentionally

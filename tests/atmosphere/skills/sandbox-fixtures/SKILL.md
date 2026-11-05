@@ -18,10 +18,12 @@ authority declaration is deliberately narrow:
     "name": "schema-authority",
     "route": "authority",
     "account": { "name": "schemas", "email": "schemas@example.test" },
-    "fixtures": [{
-      "nsid": "org.example.authWrite",
-      "file": "examples/lexicon-fixtures/org.example.authWrite.json"
-    }]
+    "fixtures": [
+      {
+        "nsid": "org.example.authWrite",
+        "file": "examples/lexicon-fixtures/org.example.authWrite.json"
+      }
+    ]
   }
 }
 ```

@@ -96,10 +96,11 @@ export function createAccountAuthority({ db, accounts }) {
     } = {},
   ) => {
     email = normalizeEmail(email);
-    const isCurrentEmail =
-      normalizeEmail((await account(did)).email) === email;
+    const isCurrentEmail = normalizeEmail((await account(did)).email) === email;
     let existing = await claims(email);
-    for (const pending of existing.filter(({ purpose }) => purpose === "pending"))
+    for (const pending of existing.filter(
+      ({ purpose }) => purpose === "pending",
+    ))
       await pendingEmail(pending.did);
     existing = await claims(email);
     const primaryClaimByAnotherDid =
@@ -108,9 +109,8 @@ export function createAccountAuthority({ db, accounts }) {
         ({ did: ownerDid, purpose: claimPurpose }) =>
           ownerDid !== did && claimPurpose === "primary",
       );
-    const reservations = await accounts.storage.listExternalReservationsByEmail(
-      email,
-    );
+    const reservations =
+      await accounts.storage.listExternalReservationsByEmail(email);
     const { userId: reservationOwnerUserId, dids: allowedReservationDids } =
       await sameOwnerActiveReservations(
         email,

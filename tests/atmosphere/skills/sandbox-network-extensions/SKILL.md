@@ -1,6 +1,6 @@
 ---
 name: sandbox-network-extensions
-description: 'Extend or diagnose Atmosphere in a Box subnet selection, private DNS records, application HTTPS routes, and generated connection information.'
+description: "Extend or diagnose Atmosphere in a Box subnet selection, private DNS records, application HTTPS routes, and generated connection information."
 ---
 
 # Sandbox Network Extensions

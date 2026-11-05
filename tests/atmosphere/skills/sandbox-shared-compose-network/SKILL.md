@@ -1,6 +1,6 @@
 ---
 name: sandbox-shared-compose-network
-description: 'Connect a separate Docker Compose project to an existing Atmosphere in a Box closed network without weakening isolation or exposing private state.'
+description: "Connect a separate Docker Compose project to an existing Atmosphere in a Box closed network without weakening isolation or exposing private state."
 ---
 
 # Sandbox Shared Compose Network

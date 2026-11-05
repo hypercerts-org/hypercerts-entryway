@@ -12,12 +12,12 @@ Read public connection JSON only if the pinned CLI supports it; otherwise use
 `access`, manifest fields, and targeted resource inspection. Never print whole
 private state or expanded service environments.
 
-| Client location | Path | What to establish |
-| --- | --- | --- |
-| Managed container | Sandbox DNS and HTTPS gateway | Prepared image, CA readiness, runtime and browser trust |
-| Independent container project | Existing project network/public CA | Shared-network skill, actual physical names and DNS |
-| Local host | Fixed loopback HTTPS relay | Name resolution, public trust, available port 443 |
-| Remote Docker or unsupported host | No assumed host path | Offer container execution or identify the concrete access gap |
+| Client location                   | Path                               | What to establish                                             |
+| --------------------------------- | ---------------------------------- | ------------------------------------------------------------- |
+| Managed container                 | Sandbox DNS and HTTPS gateway      | Prepared image, CA readiness, runtime and browser trust       |
+| Independent container project     | Existing project network/public CA | Shared-network skill, actual physical names and DNS           |
+| Local host                        | Fixed loopback HTTPS relay         | Name resolution, public trust, available port 443             |
+| Remote Docker or unsupported host | No assumed host path               | Offer container execution or identify the concrete access gap |
 
 ## Dynamic names
 

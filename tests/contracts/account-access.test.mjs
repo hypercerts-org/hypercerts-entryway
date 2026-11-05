@@ -58,7 +58,10 @@ test("a bound identity resolves its one established account", async () => {
 
 test("multiple bindings require an explicit DID and expose only safe summaries", async () => {
   const first = account("did:plc:aaaaaaaaaaaaaaaaaaaaaaaa", "one.example.test");
-  const second = account("did:plc:bbbbbbbbbbbbbbbbbbbbbbbb", "two.example.test");
+  const second = account(
+    "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
+    "two.example.test",
+  );
   const access = createAccountAccess(reader([first, second]));
 
   assert.deepEqual(await access.resolveBoundAccounts(identity), {

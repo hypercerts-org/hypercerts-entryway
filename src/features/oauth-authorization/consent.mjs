@@ -18,7 +18,10 @@ export function createConsent({ db, provider, stores, flows, accountAccess }) {
         : null;
     const authorized = await db.transact(async () => {
       const current = await readCurrentIntent(flow, browser);
-      const account = await accountAccess.requireBoundAccount(identity, row.did);
+      const account = await accountAccess.requireBoundAccount(
+        identity,
+        row.did,
+      );
       current.authEmail = identity.email.toLowerCase();
       if (account.status === "active") {
         await provider.accountManager.upsertDeviceAccount(
@@ -51,8 +54,7 @@ export function createConsent({ db, provider, stores, flows, accountAccess }) {
         authorized.current,
         403,
       );
-    if (!authorized.current.requestUri)
-      return res.redirect(303, "/account");
+    if (!authorized.current.requestUri) return res.redirect(303, "/account");
     return pageForFlow(
       res,
       "Authorize application",

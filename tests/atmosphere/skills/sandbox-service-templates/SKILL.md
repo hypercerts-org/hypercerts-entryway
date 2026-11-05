@@ -1,6 +1,6 @@
 ---
 name: sandbox-service-templates
-description: 'Add or modify Atmosphere in a Box managed Compose applications, definitions, presets, secret declarations, and fixture provisioning.'
+description: "Add or modify Atmosphere in a Box managed Compose applications, definitions, presets, secret declarations, and fixture provisioning."
 ---
 
 # Sandbox Service Templates
