@@ -1,5 +1,5 @@
 import { page } from "../../ui/html.mjs";
-import { field, hidden, nextStep } from "../../ui/account-forms.mjs";
+import { codeField, field, hidden, nextStep } from "../../ui/account-forms.mjs";
 import { HttpError } from "../../http/http-error.mjs";
 
 export function createDeletionActions({ security, console }) {
@@ -30,12 +30,7 @@ export function createDeletionActions({ security, console }) {
         contents:
           hidden("confirm", account.handle) +
           hidden("challengeId", issued.challengeId ?? "") +
-          field(
-            "token",
-            "Deletion code",
-            "text",
-            'autocomplete="one-time-code" maxlength="256"',
-          ) +
+          codeField("Deletion code") +
           (state.passwordEnabled
             ? field(
                 "password",

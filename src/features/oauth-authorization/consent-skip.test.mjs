@@ -1,18 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { OAuthProvider } from "@atproto/oauth-provider/provider";
 import { openTestDatabase } from "../../../tests/support/database-fixture.mjs";
 import { createBrowserFlow } from "../../../dist/src/http/browser-flow.mjs";
 import { createConsent } from "../../../dist/src/features/oauth-authorization/consent.mjs";
 import { createSignupConsentSkipReader } from "../../../dist/src/features/oauth-authorization/provider.mjs";
+import { fakeResponse } from "../../../tests/support/fake-http.mjs";
 
 const did = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+const clientId = "https://client.example.test/client-metadata.json";
+const requestedScopes = ["atproto", "transition:generic"];
 
 async function fixture(
   t,
   {
     trusted = true,
+    confidential = true,
     clientOptsIn = true,
     deviceAccountMissing = false,
+    approvedScopes,
+    revokedBeforeCompletion = false,
     failing,
     prompt,
   } = {},
@@ -30,7 +37,7 @@ async function fixture(
   const grants = [];
   const parameters = {
     redirect_uri: "https://client.example.test/callback",
-    scope: "atproto transition:generic",
+    scope: requestedScopes.join(" "),
     state: "original-state",
     ...(prompt ? { prompt } : {}),
   };
@@ -39,7 +46,13 @@ async function fixture(
     handle: "new.example.test",
     email: "new@example.test",
   };
+  const authorizedClients = new Map(
+    approvedScopes ? [[clientId, { authorizedScopes: approvedScopes }]] : [],
+  );
   const provider = {
+    // The real stock policy: these tests decide what Entryway passes to it,
+    // not what it answers.
+    checkConsentRequired: OAuthProvider.prototype.checkConsentRequired,
     deviceManager: {
       async load() {
         return browser;
@@ -48,7 +61,11 @@ async function fixture(
     clientManager: {
       async getClient(clientId) {
         failIf("client lookup");
-        return { id: clientId, isTrusted: trusted };
+        return {
+          id: clientId,
+          isTrusted: trusted,
+          isConfidential: confidential,
+        };
       },
     },
     requestManager: {
@@ -65,9 +82,17 @@ async function fixture(
       async upsertDeviceAccount() {},
       async getDeviceAccount() {
         failIf("device-account lookup");
-        return deviceAccountMissing
-          ? null
-          : { account, authorizedClients: new Map() };
+        return deviceAccountMissing ? null : { account, authorizedClients };
+      },
+      // The fresh read completion makes inside its transaction. A connected-apps
+      // revoke between the skip lookup above and this read leaves no grant.
+      async getAccount() {
+        return {
+          account,
+          authorizedClients: revokedBeforeCompletion
+            ? new Map()
+            : authorizedClients,
+        };
       },
       async setAuthorizedClient(_account, client, data) {
         grants.push({ clientId: client.id, ...data });
@@ -85,7 +110,7 @@ async function fixture(
   });
   const flow = await flows.newFlow(browser, {
     requestUri: "request-uri",
-    clientId: "https://client.example.test/client-metadata.json",
+    clientId,
     clientName: "Example Client",
     parameters,
     authEmail: account.email,
@@ -109,32 +134,12 @@ async function fixture(
   return {
     authorized,
     grants,
+    pendingFlow: () => db.get("auth-flows", flow.id),
     get failed() {
       return failed;
     },
     async complete(options) {
-      const res = {
-        statusCode: 200,
-        set() {
-          return this;
-        },
-        status(code) {
-          this.statusCode = code;
-          return this;
-        },
-        type() {
-          return this;
-        },
-        send(body) {
-          this.body = body;
-          return this;
-        },
-        redirect(code, url) {
-          this.statusCode = code;
-          this.redirectUrl = url;
-          return this;
-        },
-      };
+      const res = fakeResponse();
       await authenticated(
         {},
         res,
@@ -157,12 +162,7 @@ test("a new account skips consent only for a trusted, opted-in client when the o
   assert.match(response.redirectUrl, /code=authorization-code/);
   assert.match(response.redirectUrl, /state=original-state/);
   assert.deepEqual(f.authorized, [did]);
-  assert.deepEqual(f.grants, [
-    {
-      clientId: "https://client.example.test/client-metadata.json",
-      authorizedScopes: ["atproto", "transition:generic"],
-    },
-  ]);
+  assert.deepEqual(f.grants, [{ clientId, authorizedScopes: requestedScopes }]);
 });
 
 test("prompt=consent does not override a trusted client's signup opt-in (ePDS parity)", async (t) => {
@@ -210,7 +210,7 @@ for (const failing of [
   });
 }
 
-test("a returning account always sees the consent page even for a trusted, opted-in client", async (t) => {
+test("a returning account the client was never approved for sees consent even for a trusted, opted-in client", async (t) => {
   const f = await fixture(t);
 
   const response = await f.complete();
@@ -218,6 +218,37 @@ test("a returning account always sees the consent page even for a trusted, opted
   assert.equal(response.statusCode, 200);
   assert.match(response.body, /action="\/auth\/consent"/);
   assert.deepEqual(f.authorized, []);
+});
+
+// Stock PDS parity: its authorization page always shows consent after sign-in,
+// so a code or chooser sign-in does too, even for an already approved client.
+for (const [name, options] of [
+  ["a confidential client", { trusted: false, confidential: true }],
+  ["a trusted public client", { trusted: true, confidential: false }],
+]) {
+  test(`a returning account sees consent after a code sign-in for ${name} that already holds every requested scope`, async (t) => {
+    const f = await fixture(t, { ...options, approvedScopes: requestedScopes });
+
+    const response = await f.complete();
+
+    assert.equal(response.statusCode, 200);
+    assert.match(response.body, /action="\/auth\/consent"/);
+    assert.deepEqual(f.authorized, []);
+    assert.deepEqual(f.grants, []);
+    assert.ok(await f.pendingFlow(), "the flow stays open for consent");
+  });
+}
+
+test("the grant written back extends the grant completion reads, not a stale copy", async (t) => {
+  const f = await fixture(t, {
+    approvedScopes: ["revoked-scope"],
+    revokedBeforeCompletion: true,
+  });
+
+  const response = await f.complete({ newAccount: true });
+
+  assert.equal(response.statusCode, 303);
+  assert.deepEqual(f.grants, [{ clientId, authorizedScopes: requestedScopes }]);
 });
 
 test("the signup consent opt-in is read only as a literal true from an https metadata document", async () => {

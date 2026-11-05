@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { OAuthProvider } from "@atproto/oauth-provider/provider";
 import { openTestDatabase } from "../../../tests/support/database-fixture.mjs";
 import { createBrowserFlow } from "../../../dist/src/http/browser-flow.mjs";
 import { mountAuthorizationRoutes } from "../../../dist/src/features/oauth-authorization/authorization-routes.mjs";
 import { createConsent } from "../../../dist/src/features/oauth-authorization/consent.mjs";
+import { fakeApp, fakeResponse } from "../../../tests/support/fake-http.mjs";
 
 const verifiedEmail = "owner@example.test";
+const hostedFirst = {
+  did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
+  email: "first@example.test",
+  status: "active",
+};
 const identity = { userId: "user-id", email: verifiedEmail };
 
 async function fixture(
@@ -14,13 +21,34 @@ async function fixture(
     authDid,
     authEmail,
     loginHint,
+    prompt,
     staleDid,
     accountHint,
     autoRedirect = false,
     statuses = {},
+    // Device accounts the browser remembers; default both.
+    remembered = [
+      "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
+      "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
+    ],
+    // The email stored on each remembered device account.
     accountEmails = {
       "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa": "first@example.test",
     },
+    // What the account store answers for a handle or DID hint.
+    hosted = {
+      "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa": hostedFirst,
+      "account-1.example.test": hostedFirst,
+    },
+    hintLookupFails = false,
+    // Accounts that own each email, by normalized address.
+    emailAccounts = {},
+    emailLookupFails = false,
+    // The client's trust, and the scopes every remembered account has already
+    // approved for it.
+    client = { isConfidential: true, isTrusted: false },
+    approvedScopes,
+    revokedBeforeCompletion = false,
   } = {},
 ) {
   const db = await openTestDatabase();
@@ -34,6 +62,7 @@ async function fixture(
     scope: "atproto",
     state: "original-state",
     ...(loginHint ? { login_hint: loginHint } : {}),
+    ...(prompt ? { prompt } : {}),
   };
   const dids = [
     "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
@@ -43,8 +72,16 @@ async function fixture(
     dids.map((did, index) => [
       did,
       {
-        account: { did, handle: `account-${index + 1}.example.test` },
-        authorizedClients: new Map(),
+        account: {
+          did,
+          handle: `account-${index + 1}.example.test`,
+          email: accountEmails[did],
+        },
+        authorizedClients: new Map(
+          approvedScopes
+            ? [["client-id", { authorizedScopes: approvedScopes }]]
+            : [],
+        ),
         updatedAt:
           did === staleDid
             ? new Date(Date.now() - 8 * 24 * 60 * 60_000)
@@ -52,11 +89,15 @@ async function fixture(
       },
     ]),
   );
+  for (const did of dids) if (!remembered.includes(did)) sessions.delete(did);
   const upserts = [];
   const emailCodes = [];
   let authorizeCalls = 0;
   let lookup;
   const provider = {
+    // The real stock policy: these tests decide what Entryway passes to it,
+    // not what it answers.
+    checkConsentRequired: OAuthProvider.prototype.checkConsentRequired,
     deviceManager: {
       async load() {
         return browser;
@@ -75,7 +116,7 @@ async function fixture(
     clientManager: {
       async getClient() {
         await lookup?.hold();
-        return { clientId: "client-id" };
+        return { id: "client-id", ...client };
       },
     },
     accountManager: {
@@ -87,7 +128,9 @@ async function fixture(
         if (!session) throw new Error("Account not found");
         return {
           account: session.account,
-          authorizedClients: session.authorizedClients,
+          authorizedClients: revokedBeforeCompletion
+            ? new Map()
+            : session.authorizedClients,
         };
       },
       async listDeviceAccounts() {
@@ -139,57 +182,7 @@ async function fixture(
     ...(accountHint ? { accountHint } : {}),
   });
   await db.set("browser", browser.deviceId, { csrf, createdAt: new Date() });
-  mountAuthorizationRoutes({
-    app: {
-      get(path, ...middleware) {
-        handlers.set(path, middleware.at(-1));
-      },
-      post(path, ...middleware) {
-        handlers.set(path, middleware.at(-1));
-      },
-    },
-    db,
-    config,
-    provider,
-    flows,
-    loginForm: (flow, browser) =>
-      `<form method="post" action="/auth/email">${flows.fields(flow, browser)}<label>Email address</label><input type="email"></form>`,
-    consentForm: (_flow, _browser, account) =>
-      `<form method="post" action="/auth/consent"><input name="did" value="${account.did}"></form>`,
-    async startEmailCode(res, codeFlow, _browser, email, options) {
-      emailCodes.push({
-        flow: codeFlow.requestUri,
-        flowId: codeFlow.id,
-        email,
-        ...(options ? { options } : {}),
-      });
-      res.send("<check-your-email>");
-    },
-    accountEmail: async (did) => accountEmails[did],
-  });
-  const response = () => ({
-    statusCode: 200,
-    set() {
-      return this;
-    },
-    status(code) {
-      this.statusCode = code;
-      return this;
-    },
-    type() {
-      return this;
-    },
-    send(body) {
-      this.body = body;
-      return this;
-    },
-    redirect(code, url) {
-      this.statusCode = code;
-      this.redirectUrl = url;
-      return this;
-    },
-  });
-  const { authenticated } = createConsent({
+  const { authenticated, priorConsentSkip } = createConsent({
     db,
     provider,
     stores: { account: async () => null },
@@ -200,6 +193,36 @@ async function fixture(
       },
     },
   });
+  mountAuthorizationRoutes({
+    app: fakeApp(handlers),
+    db,
+    config,
+    provider,
+    flows,
+    loginForm: (flow, browser) =>
+      `<form method="post" action="/auth/email">${flows.fields(flow, browser)}<label>Email address</label><input type="email"></form>`,
+    consentForm: (consentFlow, _browser, account) =>
+      `<form method="post" action="/auth/consent"><input name="did" value="${account.did}"><input name="account-hint" value="${consentFlow.accountHint ?? ""}"></form>`,
+    async startEmailCode(res, codeFlow, _browser, email, options) {
+      emailCodes.push({
+        flow: codeFlow.requestUri,
+        flowId: codeFlow.id,
+        email,
+        ...(options ? { options } : {}),
+      });
+      res.send("<check-your-email>");
+    },
+    getAccountByHint: async (hint) => {
+      if (hintLookupFails) throw new Error("storage-private-marker");
+      return hosted[hint] ?? null;
+    },
+    listAccountsByEmail: async (email) => {
+      if (emailLookupFails) throw new Error("storage-private-marker");
+      return emailAccounts[email] ?? [];
+    },
+    priorConsentSkip,
+  });
+  const response = fakeResponse;
   return {
     db,
     flow,
@@ -582,4 +605,215 @@ test("a remembered account without a stored email falls back to the email form",
 
   assert.deepEqual(f.emailCodes, []);
   assert.match(otp.body, /action="\/auth\/email"/);
+});
+
+for (const hint of ["account-1.example.test", hostedFirst.did]) {
+  test(`a ${hint.startsWith("did:") ? "DID" : "handle"} login_hint for an account this browser does not remember sends one masked code to its email`, async (t) => {
+    const f = await fixture(t, { loginHint: hint, remembered: [] });
+
+    const response = await f.startAuthorization();
+
+    assert.equal(response.body, "<check-your-email>");
+    assert.equal(f.emailCodes.length, 1);
+    const [code] = f.emailCodes;
+    assert.equal(code.email, hostedFirst.email);
+    assert.deepEqual(code.options, { maskEmail: true });
+    const codeFlow = await f.db.get("auth-flows", code.flowId);
+    assert.equal(codeFlow.accountHint, hostedFirst.did);
+    assert.equal(codeFlow.requestUri, "request-uri");
+    assert.equal(codeFlow.parameters.login_hint, hint);
+  });
+}
+
+for (const [name, options] of [
+  [
+    "it names no hosted account",
+    { loginHint: "nobody.example.test", remembered: [] },
+  ],
+  ...["none", "create", "select_account"].map((prompt) => [
+    `the request has prompt=${prompt}`,
+    { loginHint: "account-1.example.test", remembered: [], prompt },
+  ]),
+  ...[
+    ["is deactivated", { status: "deactivated" }],
+    ["has no usable email", { email: "not-an-email" }],
+  ].map(([state, change]) => [
+    `the hinted account ${state}`,
+    {
+      loginHint: "account-1.example.test",
+      remembered: [],
+      hosted: { "account-1.example.test": { ...hostedFirst, ...change } },
+    },
+  ]),
+  [
+    "a stale remembered session already matches it",
+    { loginHint: "account-1.example.test", staleDid: hostedFirst.did },
+  ],
+]) {
+  test(`a login_hint sends no code on its own when ${name}`, async (t) => {
+    const f = await fixture(t, options);
+
+    const response = await f.startAuthorization();
+
+    assert.deepEqual(f.emailCodes, []);
+    assert.match(response.body, /action="\/auth\/email"/);
+  });
+}
+
+test("a login_hint is matched against the remembered sessions, not their mere presence", async (t) => {
+  const f = await fixture(t, {
+    loginHint: "account-1.example.test",
+    remembered: ["did:plc:bbbbbbbbbbbbbbbbbbbbbbbb"],
+  });
+
+  const response = await f.startAuthorization();
+
+  assert.equal(response.body, "<check-your-email>");
+  assert.deepEqual(
+    f.emailCodes.map(({ email }) => email),
+    [hostedFirst.email],
+  );
+});
+
+test("a failed hint lookup shows the sign-in page and logs only a safe code", async (t) => {
+  const logged = [];
+  t.mock.method(console, "error", (line) => logged.push(line));
+  const f = await fixture(t, {
+    loginHint: "account-1.example.test",
+    remembered: [],
+    hintLookupFails: true,
+  });
+
+  const response = await f.startAuthorization();
+
+  assert.deepEqual(f.emailCodes, []);
+  assert.match(response.body, /action="\/auth\/email"/);
+  assert.equal(logged.length, 1);
+  assert.equal(JSON.parse(logged[0]).code, "RequestFailed");
+  assert.doesNotMatch(logged[0], /storage-private-marker/);
+});
+
+// An email hint skips the code only like the provider does for a handle hint:
+// one account and a fresh remembered session. The app's approval then decides
+// between signing in and consent.
+const emailHint = `&login_hint=${encodeURIComponent(" Owner@Example.Test ")}`;
+const ownerRow = {
+  did: hostedFirst.did,
+  status: "active",
+  email: "owner@example.test",
+};
+const secondOwnerRow = { ...ownerRow, did: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb" };
+const rememberedApprovedOwner = {
+  emailAccounts: { "owner@example.test": [ownerRow] },
+  approvedScopes: ["atproto"],
+};
+
+test("an email login_hint signs in the one remembered account that already approved the app without a code", async (t) => {
+  const f = await fixture(t, rememberedApprovedOwner);
+
+  const response = await f.startAuthorization(emailHint);
+
+  assert.equal(response.statusCode, 303);
+  assert.match(
+    response.redirectUrl,
+    /^https:\/\/client\.example\.test\/callback\?.*code=authorization-code/,
+  );
+  assert.match(response.redirectUrl, /state=original-state/);
+  assert.deepEqual(f.approved, [ownerRow.did]);
+  assert.deepEqual(f.emailCodes, []);
+});
+
+for (const [name, options] of [
+  [
+    "the email belongs to two accounts",
+    {
+      emailAccounts: { "owner@example.test": [ownerRow, secondOwnerRow] },
+    },
+  ],
+  [
+    "the account is not active",
+    {
+      emailAccounts: {
+        "owner@example.test": [{ ...ownerRow, status: "deactivated" }],
+      },
+    },
+  ],
+  [
+    "this browser remembers a different account",
+    { remembered: [secondOwnerRow.did] },
+  ],
+  ["its remembered session is stale", { staleDid: ownerRow.did }],
+  ...["login", "select_account"].map((prompt) => [
+    `the request has prompt=${prompt}`,
+    { prompt },
+  ]),
+]) {
+  test(`an email login_hint still sends a code when ${name}`, async (t) => {
+    const f = await fixture(t, { ...rememberedApprovedOwner, ...options });
+
+    const response = await f.startAuthorization(emailHint);
+
+    assert.equal(response.body, "<check-your-email>");
+    assert.deepEqual(
+      f.emailCodes.map(({ email }) => email),
+      ["owner@example.test"],
+    );
+    assert.deepEqual(f.approved, []);
+  });
+}
+
+// Stock PDS parity: a fresh remembered session that still needs consent goes
+// straight to consent for that account, without a password or a code.
+for (const [name, options] of [
+  ["the app was never approved", { approvedScopes: undefined }],
+  [
+    "the app asks for a scope not yet approved",
+    { approvedScopes: ["transition:generic"] },
+  ],
+  [
+    "the app is an untrusted public client",
+    {
+      client: { isConfidential: false, isTrusted: false },
+    },
+  ],
+  [
+    "the approval is revoked before the code is issued",
+    {
+      revokedBeforeCompletion: true,
+    },
+  ],
+  ["the request has prompt=consent", { prompt: "consent" }],
+]) {
+  test(`an email login_hint shows consent for the remembered account without a code when ${name}`, async (t) => {
+    const f = await fixture(t, { ...rememberedApprovedOwner, ...options });
+
+    const response = await f.startAuthorization(emailHint);
+
+    assert.equal(response.statusCode, 200);
+    assert.match(
+      response.body,
+      new RegExp(
+        `action="/auth/consent"><input name="did" value="${ownerRow.did}"><input name="account-hint" value="${ownerRow.did}">`,
+      ),
+    );
+    assert.deepEqual(f.emailCodes, []);
+    assert.deepEqual(f.approved, []);
+  });
+}
+
+test("a failed account lookup for an email login_hint sends the code and logs only a safe code", async (t) => {
+  const logged = [];
+  t.mock.method(console, "error", (line) => logged.push(line));
+  const f = await fixture(t, {
+    ...rememberedApprovedOwner,
+    emailLookupFails: true,
+  });
+
+  const response = await f.startAuthorization(emailHint);
+
+  assert.equal(response.body, "<check-your-email>");
+  assert.deepEqual(f.approved, []);
+  assert.equal(logged.length, 1);
+  assert.equal(JSON.parse(logged[0]).code, "RequestFailed");
+  assert.doesNotMatch(logged[0], /storage-private-marker/);
 });

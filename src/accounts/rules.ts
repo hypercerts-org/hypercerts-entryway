@@ -78,3 +78,22 @@ export function matchesAuthorizationHint(
 ): boolean {
   return hints.every((hint) => matchesLoginHint(account, hint));
 }
+
+interface HintedFlow {
+  accountHint?: unknown;
+  parameters?: { login_hint?: unknown } | null;
+}
+
+/** The account hints an authorization flow carries, ignoring absent ones. */
+export function flowLoginHints(flow: HintedFlow): unknown[] {
+  return [flow.accountHint, flow.parameters?.login_hint].filter(
+    (hint) => hint != null,
+  );
+}
+
+export function matchesFlowHints(
+  account: HintableAccount | null | undefined,
+  flow: HintedFlow,
+): boolean {
+  return matchesAuthorizationHint(account, ...flowLoginHints(flow));
+}

@@ -1,5 +1,6 @@
 import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { HttpError } from "../../http/http-error.mjs";
+import { matchesFlowHints } from "../../accounts/rules.js";
 import { escapeHtml } from "../../ui/html.mjs";
 import { registrationAccountForEmail } from "./create-account.js";
 async function registrationInput({
@@ -44,13 +45,6 @@ function withHandleDomain(value, handleDomain) {
   return `${handle}.${handleDomain.replace(/^\./, "")}`;
 }
 
-// An OAuth flow ends at the client's redirect_uri, so its form pages must
-// allow that origin as a form-action target (the CSP applies to redirects).
-const clientFormPolicy = (flow) =>
-  flow.requestUri
-    ? { formOrigin: new URL(flow.parameters.redirect_uri).origin }
-    : {};
-
 function matchesRegistrationOwner(owner, session, email) {
   return (
     owner?.kind === "better-auth" &&
@@ -58,16 +52,6 @@ function matchesRegistrationOwner(owner, session, email) {
     owner.email === email
   );
 }
-
-/** A signup started for a requested DID or handle may only create that account. */
-const signupMatchesHints = (flow, existing, input) =>
-  [flow.accountHint, flow.parameters?.login_hint]
-    .filter((hint) => hint != null)
-    .every((hint) => {
-      if (typeof hint !== "string") return false;
-      if (hint.startsWith("did:")) return existing?.did === hint;
-      return input.handle === hint.toLowerCase();
-    });
 
 function assertRegistrationAcquirable(existing, savedIntent, ownerMatches) {
   if (existing && existing.status !== "provisioning")
@@ -149,7 +133,8 @@ export function mountSignupRoutes({
         registrationIdentity,
         handleDomain,
       });
-      if (!signupMatchesHints(flow, existing, input))
+      // A signup started for a requested DID or handle may only create that account.
+      if (!matchesFlowHints({ did: existing?.did, handle: input.handle }, flow))
         throw new HttpError(
           403,
           "AccountMismatch",
@@ -172,7 +157,6 @@ export function mountSignupRoutes({
           `<p role="alert">${escapeHtml(message)}</p>${await signupForm(flow, browser)}`,
           flow,
           error.status >= 400 && error.status < 600 ? error.status : 503,
-          clientFormPolicy(flow),
         );
       }
       await authenticated(req, res, flow, browser, row, {

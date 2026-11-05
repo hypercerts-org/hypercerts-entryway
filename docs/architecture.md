@@ -195,8 +195,9 @@ to email OTP for the selected DID. The authentication check revalidates the live
 DID binding before refreshing that DID's device membership. Account-console
 sensitive actions keep their separate ten-minute rule on the Better Auth session,
 which a confirmation by email code can renew ([Confirm it's you](#confirm-its-you)).
-Client trust is one Entryway-wide list, and the only consent bypass is the
-opt-in [signup consent skip](#client-trust-and-signup-consent-skip). Configured local public
+Client trust is one Entryway-wide list. Consent is skipped only by the opt-in
+[signup consent skip](#client-trust-and-signup-consent-skip), by provider silent
+sign-on, or by the [email-hint sign-on](#client-trust-and-signup-consent-skip). Configured local public
 and confidential client flows have verified hint acceptance, seven-day
 freshness and consent behavior. Full ePDS production consent/freshness parity
 remains outstanding.
@@ -244,10 +245,31 @@ Submission re-reads current bindings, requires a bound DID, and limits consent t
 the chosen DID while preserving the original PAR, client and requested scope.
 Until consent is approved or denied, the same verified session may choose a
 different bound DID from the consent page; consent then applies only to the
-latest choice. Stale selected accounts re-enter the existing visible email-OTP flow. The
-provider request's `login_hint` and any selected-account hint both remain binding
+latest choice. Stale selected accounts re-enter the existing visible email-OTP
+flow.
+
+A handle or DID `login_hint` for an active account with an email that this
+browser does not remember goes straight to that account's code step, with the
+address masked. A handle or DID hint matching one fresh remembered session is
+provider silent sign-on and redirects without an Entryway page (see below). When
+the provider instead asks for interaction, an unknown hint, a stale remembered
+session, `prompt=create` and `prompt=select_account` from trusted or
+confidential clients still show the sign-in page. The provider stores every prompt except `create` as `consent` for
+untrusted public clients, so `select_account` cannot be detected there. Code
+limits are per email address (five per ten minutes, shared with the email form),
+so repeated hinted requests for one public handle can exhaust that budget.
+
+An email `login_hint` on the redirect URL sends no code when the email belongs
+to exactly one active account with a fresh remembered session in this browser,
+matching what the provider does for a handle hint. With no `prompt` and the
+returning-account consent rule met, Entryway issues the authorization code
+directly; otherwise, or with `prompt=consent`, it shows consent for that
+account. Everything else sends the code: a shared email (inactive accounts
+count), a stale session, `prompt=login` or `select_account`, or a failed lookup.
+
+The provider request's `login_hint` and any selected-account hint both remain binding
 across authentication and flow restart; current account binding is checked before
-device membership is refreshed. Existing consent behavior remains unchanged. Security-revocation flows invalidate all Better
+device membership is refreshed. Security-revocation flows invalidate all Better
 Auth sessions for a DID's shared user. Ordinary verified email changes instead
 preserve sessions on the previous user while atomically moving only the selected
 DID binding to the verified destination user; sessions are not migrated to that
@@ -267,9 +289,20 @@ trusted and the client's metadata document contains `"epds_skip_consent_on_signu
 `prompt=consent` does not override that opt-in. If checking the skip fails,
 including a metadata read failure, consent is shown instead. A failure while
 issuing the authorization code itself happens after the sign-in is claimed, so
-the user restarts from the app.
-A skip records the granted scopes. Returning accounts keep the stock provider
-consent policy.
+the user restarts from the app. A skip records the granted scopes.
+
+A returning account that signs in with a code, or picks an account in the
+chooser, always sees consent, as it would after a stock PDS sign-in page, even
+when the client already holds every requested scope. Consent is skipped for a
+returning account only without any Entryway page: provider silent sign-on
+(`prompt=none`, or a handle or DID hint matching one fresh remembered session),
+or the email-hint sign-on described above. The email-hint sign-on uses the stock
+provider policy (`checkConsentRequired`): the client must already hold every
+requested scope, `prompt=consent` is absent, and an untrusted public client never
+qualifies; Entryway checks that itself and does not rely on the provider
+rewriting the stored prompt. The decision is repeated on the grant read inside
+the authorization transaction, so a grant revoked in connected apps meanwhile
+shows consent instead.
 
 | Setting                     | Values and behavior                                                                                                        |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------- |

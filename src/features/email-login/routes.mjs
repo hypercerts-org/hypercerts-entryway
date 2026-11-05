@@ -1,28 +1,19 @@
 import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { accountEmailSchema } from "../../accounts/input-schema.js";
 import { ChangedFlowIntentError } from "../../http/browser-flow.mjs";
-import { matchesAuthorizationHint } from "../../accounts/rules.js";
+import {
+  flowLoginHints as loginHints,
+  matchesFlowHints,
+} from "../../accounts/rules.js";
 import { escapeHtml, page } from "../../ui/html.mjs";
 const RESEND_COOLDOWN = 5_000;
-const loginHints = (flow) =>
-  [flow.accountHint, flow.parameters?.login_hint].filter(
-    (hint) => hint != null,
-  );
-const matchesLoginHint = (flow, account) =>
-  matchesAuthorizationHint(account, ...loginHints(flow));
+const matchesLoginHint = (flow, account) => matchesFlowHints(account, flow);
 const linkedAccounts = (resolution) => {
   if (resolution?.kind === "single") return [resolution.account];
   if (resolution?.kind === "selection-required") return resolution.accounts;
   return [];
 };
 
-// A trusted client can skip consent after signup, so submitting this page may
-// redirect straight to the client's redirect_uri. The CSP applies to that
-// redirect, so the page must allow the client's origin as a form-action target.
-const clientFormPolicy = (flow) =>
-  flow.requestUri
-    ? { formOrigin: new URL(flow.parameters.redirect_uri).origin }
-    : {};
 export function mountEmailLogin({
   app,
   db,
@@ -282,14 +273,7 @@ export function mountEmailLogin({
             return current;
           });
           response.commitCookies(res);
-          return pageForFlow(
-            res,
-            "Create your account",
-            body,
-            current,
-            200,
-            clientFormPolicy(current),
-          );
+          return pageForFlow(res, "Create your account", body, current);
         }
         if (resolution.kind === "selection-required") {
           response.commitCookies(res);

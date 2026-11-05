@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mountSignupRoutes } from "../../../dist/src/features/account-registration/signup-routes.mjs";
+import { fakeApp } from "../../../tests/support/fake-http.mjs";
 
 const email = "owner@example.test";
 const row = {
@@ -9,7 +10,7 @@ const row = {
   email,
 };
 
-function fixture({ existing, createError, handleDomain } = {}) {
+function fixture({ existing, createError, handleDomain, loginHint } = {}) {
   const handlers = new Map();
   const created = [];
   const authenticatedCalls = [];
@@ -18,14 +19,13 @@ function fixture({ existing, createError, handleDomain } = {}) {
     id: "flow",
     requestUri: "request-uri",
     authEmail: email,
-    parameters: { redirect_uri: "https://client.example.test/callback" },
+    parameters: {
+      redirect_uri: "https://client.example.test/callback",
+      login_hint: loginHint,
+    },
   };
   mountSignupRoutes({
-    app: {
-      post(path, ...middleware) {
-        handlers.set(path, middleware.at(-1));
-      },
-    },
+    app: fakeApp(handlers),
     db: {},
     accounts: {
       storage: {
@@ -61,8 +61,8 @@ function fixture({ existing, createError, handleDomain } = {}) {
       async getFlow() {
         return { flow, browser: {} };
       },
-      pageForFlow(_res, title, _body, _flow, status, policy) {
-        pages.push({ title, status, policy });
+      pageForFlow(_res, title, _body, _flow, status) {
+        pages.push({ title, status });
       },
       guarded: (handler) => handler,
       form() {},
@@ -106,7 +106,7 @@ test("a bare signup name gets the hosted handle domain; a full handle is kept", 
   );
 });
 
-test("a failed signup re-renders the form allowing the client's redirect origin as a form target", async () => {
+test("a failed signup re-renders the form with the failure status", async () => {
   const f = fixture({
     createError: Object.assign(new Error("Handle is taken"), { status: 409 }),
   });
@@ -114,11 +114,19 @@ test("a failed signup re-renders the form allowing the client's redirect origin 
   await f.submit();
 
   assert.deepEqual(f.authenticatedCalls, []);
-  assert.deepEqual(f.pages, [
-    {
-      title: "Create your account",
-      status: 409,
-      policy: { formOrigin: "https://client.example.test" },
-    },
-  ]);
+  assert.deepEqual(f.pages, [{ title: "Create your account", status: 409 }]);
+});
+
+test("a signup for a requested handle or DID can only create that account", async () => {
+  const sameHandle = fixture({ loginHint: "Owner.Example.Test" });
+  await sameHandle.submit();
+  assert.equal(sameHandle.created.length, 1);
+
+  const otherHandle = fixture({ loginHint: "someone.example.test" });
+  await assert.rejects(otherHandle.submit(), { status: 403 });
+  assert.deepEqual(otherHandle.created, []);
+
+  const otherDid = fixture({ loginHint: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb" });
+  await assert.rejects(otherDid.submit(), { status: 403 });
+  assert.deepEqual(otherDid.created, []);
 });

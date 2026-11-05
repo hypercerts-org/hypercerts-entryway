@@ -46,7 +46,7 @@ export async function createAuthentication({
     accounts,
     fields: flows.fields,
   });
-  const { consentForm, authenticated } = createConsent({
+  const { consentForm, authenticated, priorConsentSkip } = createConsent({
     db,
     config,
     provider,
@@ -96,7 +96,9 @@ export async function createAuthentication({
     loginForm: forms.loginForm,
     consentForm,
     startEmailCode,
-    accountEmail: async (did) => (await accounts.storage.getByDid(did))?.email,
+    getAccountByHint: (hint) => accounts.get(hint),
+    listAccountsByEmail: (email) => accounts.storage.listByEmail(email),
+    priorConsentSkip,
   });
   return {
     ...authentication,

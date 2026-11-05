@@ -7,18 +7,14 @@ import { createBrowserFlow } from "../../../dist/src/http/browser-flow.mjs";
 import { createConsent } from "../../../dist/src/features/oauth-authorization/consent.mjs";
 import { createLoginForms } from "../../../dist/src/features/email-login/page.mjs";
 import { mountEmailLogin } from "../../../dist/src/features/email-login/routes.mjs";
+import { fakeApp, fakeResponse } from "../../../tests/support/fake-http.mjs";
 
 async function fixture(t, { realForms = false } = {}) {
   const db = await openTestDatabase();
   t.after(() => db.close());
   const handlers = new Map();
   let sent = 0;
-  const app = {
-    get() {},
-    post(path, ...middleware) {
-      handlers.set(path, middleware.at(-1));
-    },
-  };
+  const app = fakeApp(handlers);
   const browser = { deviceId: "test-browser" };
   const save = (flow) => db.set("auth-flows", flow.id, flow);
   const flows = {
@@ -471,12 +467,7 @@ async function verificationFixture(
     createdAt: new Date(),
   });
   mountEmailLogin({
-    app: {
-      get() {},
-      post(path, ...middleware) {
-        handlers.set(path, middleware.at(-1));
-      },
-    },
+    app: fakeApp(handlers),
     db,
     flows,
     authenticated,
@@ -542,29 +533,7 @@ async function verificationFixture(
       boundRows = boundRows.filter((account) => account.did !== did);
     },
     async request(path, body) {
-      const res = {
-        statusCode: 200,
-        headers: {},
-        set(headers) {
-          Object.assign(this.headers, headers);
-          return this;
-        },
-        status(code) {
-          this.statusCode = code;
-          return this;
-        },
-        type() {
-          return this;
-        },
-        send(body) {
-          this.body = body;
-          return this;
-        },
-        redirect(code, url) {
-          this.statusCode = code;
-          this.redirectUrl = url;
-        },
-      };
+      const res = fakeResponse();
       await handlers.get(path)(
         {
           headers: { origin: "https://entryway.example.test" },
@@ -918,27 +887,24 @@ test("an unbound DID login_hint cannot turn verified email into a different sign
   );
 });
 
-test("the signup page allows the client's redirect origin as a form target only for an authorization flow", async (t) => {
-  // A trusted client can skip consent after signup, and the redirect to the
-  // client is checked against this page's form-action.
-  const authorization = await verificationFixture(t, "unbound");
-  const standalone = await verificationFixture(t, "unbound", {
+// Any page of an authorization flow can end in a redirect to the client (for
+// example a signup consent skip), and the submitting page's form-action applies
+// to that redirect. Which origins are emitted is tested at pageForFlow.
+test("the code page allows the client's redirect origin as a form target only for an authorization flow", async (t) => {
+  const authorization = await verificationFixture(t, "resend");
+  const standalone = await verificationFixture(t, "resend", {
     standalone: true,
   });
 
-  const withClient = await authorization.request("/auth/verify", {
-    otp: "controlled-proof",
-  });
-  const without = await standalone.request("/auth/verify", {
-    otp: "controlled-proof",
-  });
+  const withClient = await authorization.request("/auth/resend", {});
+  const without = await standalone.request("/auth/resend", {});
 
-  assert.match(withClient.body, /Signup form/);
+  assert.match(withClient.body, /action="\/auth\/verify"/);
   assert.match(
     withClient.headers["Content-Security-Policy"],
     /form-action 'self' https:\/\/client\.example\.test;/,
   );
-  assert.match(without.body, /Signup form/);
+  assert.match(without.body, /action="\/auth\/verify"/);
   assert.match(
     without.headers["Content-Security-Policy"],
     /form-action 'self';/,
