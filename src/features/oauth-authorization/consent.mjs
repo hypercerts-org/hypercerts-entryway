@@ -136,6 +136,7 @@ export function createConsent({
         db,
         config,
         provider,
+        refreshFlow: flows.refreshFlow,
         res,
         flow: authorized.current,
         browser,

@@ -322,6 +322,7 @@ export function mountAuthorizationRoutes({
         db,
         config,
         provider,
+        refreshFlow: flows.refreshFlow,
         res,
         flow,
         browser,
