@@ -1,8 +1,10 @@
 import { page, escapeHtml as esc } from "../../ui/html.mjs";
 import {
+  accountUrl,
   field,
   hidden,
   form,
+  manageLink,
   stamp,
   section,
   rows,
@@ -43,20 +45,29 @@ function renderIdentityPanel({
   );
 }
 
-function renderRecoveryPanel({ security, state, csrf, accountContext }) {
+const recoveryStatus = (item) =>
+  `<strong>${esc(item.email)}</strong><span>${item.verified ? "Verified" : "Awaiting verification"}</span>`;
+
+// Settings changes that need a recent session are a button here. The button
+// opens a protected page, which asks a stale session to confirm it's you before
+// it shows the form.
+function renderRecoveryPanel({ security, state, accountContext }) {
   return section(
     "recovery",
     "Recovery email",
     security
       ? `
       <p>Add an email you can still access if your primary mailbox is lost. Each recovery address must be verified before it can restore access.</p>
-      ${rows(state.backupEmails ?? [], (item) => `<strong>${esc(item.email)}</strong><span>${item.verified ? "Verified" : "Awaiting verification"}</span>${form("backup-remove", csrf, hidden("email", item.email), "Remove recovery email", accountContext)}`, "No verified recovery email.")}
-      ${form("backup-request", csrf, field("email", "Recovery email address", "email", 'autocomplete="email" maxlength="320"'), "Send recovery verification", accountContext)}
+      ${rows(state.backupEmails ?? [], recoveryStatus, "No verified recovery email.")}
+      ${manageLink("recovery", "Manage recovery email", accountContext)}
       <p><a href="/recover">Recover an account using a verified recovery email</a></p>
     `
       : "<p>Recovery email setup is not available yet.</p>",
   );
 }
+
+const passwordLabel = (state) =>
+  state.passwordEnabled ? "Change account password" : "Set account password";
 
 function renderPasswordPanel({
   security,
@@ -67,15 +78,7 @@ function renderPasswordPanel({
   renderAppPasswords,
   accountContext,
 }) {
-  const passwordInput = state.passwordEnabled
-    ? field(
-        "currentPassword",
-        "Current password",
-        "password",
-        'autocomplete="current-password" maxlength="256"',
-      )
-    : "";
-  if (!security || !legacy)
+  if (!(security && legacy))
     return section(
       "passwords",
       "Passwords",
@@ -84,28 +87,94 @@ function renderPasswordPanel({
   const passwordStatus = state.passwordEnabled
     ? "Optional account password is enabled."
     : "This account has no account password. Email sign-in remains available.";
-  const setPasswordLabel = state.passwordEnabled
-    ? "Change account password"
-    : "Set account password";
-  const removePasswordForm = state.passwordEnabled
-    ? form(
-        "password-remove",
-        csrf,
-        passwordInput,
-        "Remove account password",
-        accountContext,
-      )
-    : "";
   return section(
     "passwords",
     "Passwords",
     `
       <p>${passwordStatus} Passwords here support apps that use the legacy AT Protocol sign-in API. Changing or removing a password ends all sessions and removes existing app passwords.</p>
-      ${form("password-set", csrf, passwordInput + field("password", "New account password", "password", 'autocomplete="new-password" minlength="12" maxlength="256"'), setPasswordLabel, accountContext)}
-      ${removePasswordForm}
+      ${manageLink("password", passwordLabel(state), accountContext)}
       ${renderAppPasswords({ appPasswords, csrf, accountContext })}
     `,
   );
+}
+
+const backLink = (accountContext) =>
+  `<p><a href="${esc(accountUrl(accountContext.did))}">Return to account settings</a></p>`;
+
+const renderPasswordPage = async ({
+  res,
+  security,
+  principal,
+  browser,
+  accountContext,
+}) => {
+  const state = await security.summary(principal);
+  const removeForm = state.passwordEnabled
+    ? `<h2>Remove account password</h2><p>Email sign-in remains available after the password is removed.</p>${form("password-remove", browser.csrf, "", "Remove account password", accountContext)}`
+    : "";
+  page(
+    res,
+    passwordLabel(state),
+    `<p>Changing or removing the password ends all sessions and removes existing app passwords.</p>${form("password-set", browser.csrf, field("password", "New account password", "password", 'autocomplete="new-password" minlength="12" maxlength="256"'), passwordLabel(state), accountContext)}${removeForm}${backLink(accountContext)}`,
+  );
+};
+
+const renderRecoveryPage = async ({
+  res,
+  security,
+  principal,
+  browser,
+  accountContext,
+}) => {
+  const state = await security.summary(principal);
+  const csrf = browser.csrf;
+  page(
+    res,
+    "Manage recovery email",
+    `<p>Add an email you can still access if your primary mailbox is lost. Each recovery address must be verified before it can restore access.</p>
+      ${rows(state.backupEmails ?? [], (item) => `${recoveryStatus(item)}${form("backup-remove", csrf, hidden("email", item.email), "Remove recovery email", accountContext)}`, "No verified recovery email.")}
+      ${form("backup-request", csrf, field("email", "Recovery email address", "email", 'autocomplete="email" maxlength="320"'), "Send recovery verification", accountContext)}${backLink(accountContext)}`,
+  );
+};
+
+const renderStatusPage = ({ res, account, browser, accountContext }) => {
+  const active = account.status === "active";
+  const label = active ? "Deactivate account" : "Reactivate account";
+  const explanation = active
+    ? "Deactivation pauses repository writes and signs out connected apps. You can reactivate the account later."
+    : "Reactivation restores repository writes.";
+  page(
+    res,
+    label,
+    `<p>${explanation}</p>${form("status", browser.csrf, hidden("status", active ? "deactivated" : "active"), label, accountContext)}${backLink(accountContext)}`,
+  );
+};
+
+/** The forms behind each settings button, with the gated actions each page
+ * owns. The console shows a page only to a recent session and sends a stale
+ * submission of one of its actions back to it. */
+function mountProtectedPages({ console, security, renderAppPasswordForm }) {
+  console.mountProtectedPage("password", {
+    actions: ["password-set", "password-remove"],
+    render: (ctx) => renderPasswordPage({ ...ctx, security }),
+  });
+  console.mountProtectedPage("app-password", {
+    actions: ["app-password-create"],
+    render: ({ res, browser, accountContext }) =>
+      page(
+        res,
+        "Create app password",
+        `${renderAppPasswordForm({ csrf: browser.csrf, accountContext })}${backLink(accountContext)}`,
+      ),
+  });
+  console.mountProtectedPage("recovery", {
+    actions: ["backup-request", "backup-confirm", "backup-remove"],
+    render: (ctx) => renderRecoveryPage({ ...ctx, security }),
+  });
+  console.mountProtectedPage("status", {
+    actions: ["status"],
+    render: renderStatusPage,
+  });
 }
 
 export function mountAccountSettingsPage({
@@ -118,11 +187,13 @@ export function mountAccountSettingsPage({
   loadConnections,
   renderConnections,
   renderAppPasswords,
+  renderAppPasswordForm,
   renderHandle,
   renderLifecycle,
   renderMigration,
 }) {
   const { guarded, authenticated } = console;
+  mountProtectedPages({ console, security, renderAppPasswordForm });
   app.get(
     "/account",
     guarded(async (req, res) => {
@@ -161,7 +232,6 @@ export function mountAccountSettingsPage({
       const backup = renderRecoveryPanel({
         security,
         state,
-        csrf,
         accountContext,
       });
       const passwords = renderPasswordPanel({
@@ -180,17 +250,15 @@ export function mountAccountSettingsPage({
         b,
         accountContext,
       });
-      const statusForm = form(
+      const statusAction = manageLink(
         "status",
-        csrf,
-        hidden("status", a.status === "active" ? "deactivated" : "active"),
         a.status === "active" ? "Deactivate account" : "Reactivate account",
         accountContext,
       );
       const lifecycle = renderLifecycle({
         csrf,
         a,
-        statusForm,
+        statusAction,
         accountContext,
       });
       const migrationPanel = renderMigration({

@@ -23,10 +23,15 @@ claimed as another DID's primary email. Moving an existing shared account to an
 unused address preserves sibling claims and bindings; authorized migration/import
 remains the explicit sharing exception. Remembered OAuth device authentication
 expires after seven days and stale selected-DID account requests return to visible
-email sign-in; sensitive account-console actions retain a separate ten-minute
-Better Auth session check. Browser-session removal does not necessarily revoke
-OAuth refresh credentials, and existing access tokens can remain valid until
-expiration.
+email sign-in. Sensitive account-console actions retain a separate ten-minute
+Better Auth session check: opening a protected settings page with an older
+session shows "Confirm it's you" first, takes a Mailpit code and returns to the
+page's form; a gated change submitted after the window is not made, and the user
+confirms and makes it again (`account-confirm.spec.mjs`). A session signed in or
+confirmed within ten minutes is not asked, and `noRecentLogin` actions never
+are. A confirmation code works only for the session that asked and only once.
+Browser-session removal does not necessarily revoke OAuth refresh credentials, and existing access tokens can
+remain valid until expiration.
 
 **Repeat:** use a fresh isolated project for acceptance. Keep independent client
 accounts and avoid parallel state mutations. Run resilience only after these

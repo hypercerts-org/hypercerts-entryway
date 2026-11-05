@@ -478,6 +478,9 @@ test("handle update, deactivate, reactivate, revoke and delete use a disposable 
   expect((await session("secondary")).session.handle).toBe(updated);
   await page.goto(`${config.issuer}/account`);
   await page
+    .getByRole("link", { name: "Deactivate account", exact: true })
+    .click();
+  await page
     .getByRole("button", { name: "Deactivate account", exact: true })
     .click();
   await expect(page.locator("main")).toContainText("Status: deactivated");
@@ -493,6 +496,9 @@ test("handle update, deactivate, reactivate, revoke and delete use a disposable 
       await postClient("/client/write", { text: "Must fail while deactivated" })
     ).ok(),
   ).toBe(false);
+  await page
+    .getByRole("link", { name: "Reactivate account", exact: true })
+    .click();
   await page
     .getByRole("button", { name: "Reactivate account", exact: true })
     .click();

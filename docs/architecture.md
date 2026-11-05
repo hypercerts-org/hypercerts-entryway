@@ -193,7 +193,8 @@ from an email match alone; see [account identity](data-custody.md#1-account-iden
 A remembered device is fresh for seven days; stale device authentication returns
 to email OTP for the selected DID. The authentication check revalidates the live
 DID binding before refreshing that DID's device membership. Account-console
-sensitive actions retain their separate ten-minute Better Auth session check.
+sensitive actions keep their separate ten-minute rule on the Better Auth session,
+which a confirmation by email code can renew ([Confirm it's you](#confirm-its-you)).
 This adds no consent bypass or new client-trust policy. Configured local public
 and confidential client flows have verified hint acceptance, seven-day
 freshness and consent behavior. Full ePDS production consent/freshness parity
@@ -266,6 +267,74 @@ selectors are rejected. The DID does not persist selection authority: tabs
 remain independent, while a revoked session or unbound DID cannot reuse an old
 form or fall through to a sibling account. Settings and email proofs use only the selected DID. No account
 schema or persistent selection state is added.
+
+### Confirm it's you
+
+Sensitive account-console actions need a recent browser session: one that signed
+in, or last confirmed it's you, within ten minutes (`isRecent` in the shared
+security primitives). Every action needs one unless `noRecentLogin` exempts it,
+so a new action is protected by default.
+
+| Rule                   | Actions                                                                                                                                                                                             | Why                                                                                                                                                                                                                                                                                                            |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Needs a recent session | `password-set`, `password-remove`, `app-password-create`, `backup-request`, `backup-confirm`, `backup-remove`, `status`, `migration-confirm`                                                        | The others have no proof of their own: a backup email can recover the account, an app password is a long-lived credential and `status` can deactivate or reactivate the account. `migration-confirm` contacts the target PDS before it checks its code, and continuing a saved migration checks no code at all |
+| Own primary-email code | `email-request`, `email-update`, `email-confirm`, `delete`, `delete-confirm`, `migration-request`                                                                                                   | Each flow requires a code sent to the primary email before anything changes, the same proof a confirmation asks for                                                                                                                                                                                            |
+| Never asks             | Viewing the settings page, `handle`, `revoke`, `grant-revoke`, `oauth-session-revoke`, `legacy-session-revoke`, `browser-session-revoke`, `browsers-revoke`, `device-revoke`, `app-password-revoke` | Revocations only reduce access. An OAuth app with the handle permission can already change the handle                                                                                                                                                                                                          |
+
+A flow that sends its own primary-email code skips the recent-session check,
+so the user enters one code rather than a confirmation code followed by the
+flow's own code:
+
+```mermaid
+flowchart TD
+  A[User chooses an action] --> B{Sends its own<br/>primary-email code?}
+  B -- yes --> F[Enter the flow's code]
+  B -- no --> C{Never asks?}
+  C -- yes --> G[Change is made]
+  C -- no --> D{Signed in or confirmed<br/>within ten minutes?}
+  D -- yes --> G
+  D -- no --> E[Confirm it's you:<br/>enter a reconfirm code]
+  E --> G
+  F --> G
+```
+
+Changing or removing a password does not ask for the current password: a
+passwordless account has none, and the recent session is the proof. Deletion
+still asks for the password of an account that has one.
+
+The settings page shows each gated change as a button, such as "Change account
+password" or "Manage recovery email". The check runs when the user chooses a
+change, not when the settings page loads, so a page left open still asks at the
+right time. Each button opens a protected page,
+`GET /account/manage/<page>` (`password`, `app-password`, `recovery`,
+`status`), mounted with `mountProtectedPage`. A recent session sees the form at
+once. Any other session sees "Confirm it's you" with a "Send code" button;
+opening the page sends nothing.
+
+- `POST /account/confirm/start` emails a one-use eight-digit `reconfirm` code to
+  the primary email. It accepts only a mounted page name or `settings` as the
+  return target.
+- `POST /account/confirm` checks the code, records the confirmation and redirects
+  to the protected page, where the user makes the change.
+- A gated change submitted after the window (for example, a form left open) is
+  not made. The console answers `403` with the same "Send code" step, pointing
+  back to the page that owns the action; `migration-confirm`, which no page
+  declares, returns to account settings. Nothing the user typed is stored or replayed.
+- A confirmation lasts ten minutes and belongs to its Better Auth session;
+  signing out or revoking the session ends it. No other proof counts as one.
+- Each protected page declares the gated actions it owns
+  (`mountProtectedPage(name, { actions, render })`); a stale submission returns
+  to that page.
+- Multi-node deployments need synchronized clocks: a confirmation time recorded
+  ahead of the node that checks it does not count, and the user is asked again.
+- The code expires after ten minutes and allows five guesses. "Send a new code"
+  replaces it, and a newer request from another tab supersedes it.
+- Another session, user or account gets `InvalidToken` without spending guesses.
+- Every code, including re-sends, uses the existing five-per-ten-minutes mailbox
+  budget.
+- The challenge carries only the session, user and return page. Direct callers
+  of the security primitives still get `403 ReauthenticationRequired`. No
+  schema, secret or setting is added.
 
 ## 6. PDS integration and fleet lifecycle
 

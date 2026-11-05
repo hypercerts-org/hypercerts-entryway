@@ -38,6 +38,11 @@ const accountForm = (p, action) =>
   p.locator(`form[action="/account/${action}"]`);
 const submit = (p, action) =>
   accountForm(p, action).getByRole("button").click();
+// Gated settings live on protected pages opened from a settings button.
+const openManage = async (p, name) => {
+  await p.goto(`${config.issuer}/account`);
+  await p.locator(`a[href^="/account/manage/${name}?"]`).click();
+};
 async function readChallengeId(form) {
   const selector = form.locator('input[name="challengeId"]');
   expect(await selector.count()).toBe(1);
@@ -127,6 +132,7 @@ test("console binds verified email to one DID and shows no browser bearer creden
 });
 
 test("backup email requires its visible code and rejects foreign selectors, wrong codes, CSRF, and supplied DIDs", async () => {
+  await openManage(page, "recovery");
   const forged = await post(page, "backup-request", {
     email: backup,
     csrf: "invalid",
@@ -135,9 +141,8 @@ test("backup email requires its visible code and rejects foreign selectors, wron
   expect(readMail(backup)).toBeNull();
 
   const foreignBackup = `other-backup-${run}@example.com`;
-  await otherPage.goto(`${config.issuer}/account`);
-  await otherPage
-    .locator("#recovery")
+  await openManage(otherPage, "recovery");
+  await accountForm(otherPage, "backup-request")
     .getByLabel("Recovery email address")
     .fill(foreignBackup);
   await submit(otherPage, "backup-request");
@@ -146,8 +151,7 @@ test("backup email requires its visible code and rejects foreign selectors, wron
   );
   expect(foreignChallengeId).toBeTruthy();
 
-  await page
-    .locator("#recovery")
+  await accountForm(page, "backup-request")
     .getByLabel("Recovery email address")
     .fill(backup);
   await accountForm(page, "backup-request")
@@ -166,9 +170,8 @@ test("backup email requires its visible code and rejects foreign selectors, wron
   );
   expect(readMail(backup)).toBeNull();
 
-  await page.goto(`${config.issuer}/account`);
-  await page
-    .locator("#recovery")
+  await openManage(page, "recovery");
+  await accountForm(page, "backup-request")
     .getByLabel("Recovery email address")
     .fill(backup);
   const since = Date.now();
@@ -231,6 +234,7 @@ test("backup email requires its visible code and rejects foreign selectors, wron
 });
 
 test("optional password signs out existing sessions and enables actual PDS legacy login", async () => {
+  await openManage(page, "password");
   await accountForm(page, "password-set")
     .getByLabel("New account password")
     .fill(password);
@@ -254,6 +258,7 @@ test("optional password signs out existing sessions and enables actual PDS legac
 
 test("app passwords are displayed once and revocation stops actual PDS login", async () => {
   const name = `Console test ${run}`;
+  await openManage(page, "app-password");
   await accountForm(page, "app-password-create")
     .getByLabel("App password name")
     .fill(name);
@@ -290,9 +295,10 @@ test("app passwords are displayed once and revocation stops actual PDS login", a
 });
 
 test("optional password removal keeps email login and disables password login", async () => {
-  await accountForm(page, "password-remove")
-    .getByLabel("Current password")
-    .fill(password);
+  await openManage(page, "password");
+  await expect(
+    accountForm(page, "password-remove").getByLabel("Current password"),
+  ).toHaveCount(0);
   await submit(page, "password-remove");
   await expect(
     page.getByRole("heading", { name: "Account password removed" }),
@@ -655,7 +661,8 @@ test("backup recovery verifies visible codes with retained selectors for both ma
 });
 
 test("recovery email removal and all-browser sign-out take effect", async () => {
-  const row = page.locator("#recovery li").filter({ hasText: backup });
+  await openManage(page, "recovery");
+  const row = page.locator("li").filter({ hasText: backup });
   await row.getByRole("button", { name: "Remove recovery email" }).click();
   await expect(page.locator("#recovery")).not.toContainText(backup);
   await page.getByRole("button", { name: "Sign out all browsers" }).click();

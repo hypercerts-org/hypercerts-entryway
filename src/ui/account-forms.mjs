@@ -3,8 +3,16 @@ import { page, escapeHtml as esc } from "./html.mjs";
 export const hidden = (name, value) =>
   `<input type="hidden" name="${esc(name)}" value="${esc(value)}">`;
 export const accountUrl = (did) => `/account?did=${encodeURIComponent(did)}`;
+// A protected settings page opens its form only for a recent session; see
+// "Confirm it's you" in docs/architecture.md.
+export const manageUrl = (name, did) =>
+  `/account/manage/${name}?did=${encodeURIComponent(did)}`;
+export const manageLink = (name, label, accountContext) =>
+  `<p><a class="button" href="${esc(manageUrl(name, accountContext.did))}">${esc(label)}</a></p>`;
 const accountContextFields = (context) =>
   context?.did ? hidden("did", context.did) : "";
+const formAction = (action) =>
+  action.startsWith("/") ? action : `/account/${action}`;
 export const field = (name, label, type = "text", attributes = "") =>
   `<label>${esc(label)}<input name="${esc(name)}" type="${type}" ${attributes} required></label>`;
 export const form = (
@@ -14,10 +22,8 @@ export const form = (
   button,
   accountContext,
   extra = "",
-) => {
-  const target = action.startsWith("/") ? action : "/account/" + action;
-  return `<form method="post" action="${target}" ${extra}>${hidden("csrf", csrf)}${accountContextFields(accountContext)}${contents}<button>${esc(button)}</button></form>`;
-};
+) =>
+  `<form method="post" action="${formAction(action)}" ${extra}>${hidden("csrf", csrf)}${accountContextFields(accountContext)}${contents}<button>${esc(button)}</button></form>`;
 export const stamp = (value) => {
   const date = new Date(value);
   return Number.isFinite(date.getTime())

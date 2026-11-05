@@ -39,15 +39,39 @@ before(async () => {
 });
 const sha = (x) => createHash("sha256").update(x).digest("base64url");
 const fullScope = "atproto transition:generic transition:email identity:handle";
+// Entryway refuses an access token it has no stored row for, as a stock PDS
+// does. These tokens are minted here rather than by the provider, so record
+// each one the way the provider records the tokens it issues.
+function storeIssuedToken(jti, did) {
+  const db = new DatabaseSync("/entryway-data/account-authority.sqlite");
+  try {
+    db.prepare(
+      "INSERT OR REPLACE INTO key_value_state (namespace, key, value) VALUES (?, ?, ?)",
+    ).run(
+      "oauth:tokens",
+      jti,
+      JSON.stringify({
+        data: { did },
+        currentRefreshToken: null,
+        refreshTokens: [],
+        previousIds: [],
+      }),
+    );
+  } finally {
+    db.close();
+  }
+}
 async function access(overrides = {}, header = {}) {
   const now = Math.floor(Date.now() / 1000);
+  const jti = overrides.jti ?? `tok-${randomBytes(16).toString("hex")}`;
+  storeIssuedToken(jti, overrides.sub ?? account.did);
   return new SignJWT({
     iss: config.issuer,
     sub: account.did,
     aud: pds.did,
     iat: now,
     exp: now + 300,
-    jti: `tok-${randomBytes(16).toString("hex")}`,
+    jti,
     client_id: `${config.clientUrl}/client-metadata.json`,
     scope: fullScope,
     cnf: { jkt },

@@ -37,6 +37,56 @@ export const phaseOneUnsupported = [
   "com.atproto.admin.updateAccountPassword",
 ];
 export const unsupported = [];
+
+const plcMethods = new Set([
+  "requestPlcOperationSignature",
+  "signPlcOperation",
+  "submitPlcOperation",
+]);
+
+/**
+ * Decides whether an OAuth credential may call an account method Entryway
+ * serves, using the stock PDS rules and refusal responses so clients written
+ * for a stock PDS see the same errors. Returns the error to throw, or null.
+ */
+export function refuseOAuthAccountMethod(method, permissions) {
+  if (["getSession", "checkAccountStatus"].includes(method)) return null;
+  if (["requestEmailUpdate", "updateEmail"].includes(method))
+    return new HttpError(
+      403,
+      "Forbidden",
+      "Use the account manager interface to update email address associated with an account",
+    );
+  // A deactivated account cannot complete OAuth sign-in, so an app could never
+  // hold a usable credential for reactivation.
+  if (method === "activateAccount")
+    return new HttpError(
+      403,
+      "Forbidden",
+      "Account reactivation is not available with OAuth credentials. Sign in to your account management page to reactivate.",
+    );
+  try {
+    if (method === "updateHandle")
+      permissions.assertIdentity({ attr: "handle" });
+    else if (plcMethods.has(method)) permissions.assertIdentity({ attr: "*" });
+    else if (["requestEmailConfirmation", "confirmEmail"].includes(method))
+      permissions.assertAccount({ attr: "email", action: "manage" });
+    else if (method === "deactivateAccount")
+      permissions.assertAccount({ attr: "status", action: "manage" });
+    else
+      return new HttpError(
+        403,
+        "Forbidden",
+        "OAuth credentials are not supported for this endpoint",
+      );
+    return null;
+  } catch (error) {
+    // Stock PDS answers with the error's name and its message, which names the
+    // permission the app must request.
+    if (error?.name !== "ScopeMissingError") throw error;
+    return new HttpError(403, "ScopeMissingError", error.message);
+  }
+}
 export async function createProtocolRouting({
   app,
   db,
@@ -96,6 +146,12 @@ export async function createProtocolRouting({
           req.res.set("WWW-Authenticate", error.wwwAuthenticateHeader);
         throw new HttpError(401, "InvalidToken", error.message);
       }
+      // Tokens are stateless so each PDS can verify them alone, which leaves a
+      // revoked token usable until expiry. Calls Entryway serves itself make
+      // the same stored-token check as a stock PDS, so revocation is immediate.
+      const stored = await oauth.stores.readToken(payload.jti);
+      if (!stored || stored.data?.did !== payload.sub)
+        throw new HttpError(401, "InvalidToken", "Token has been revoked");
       const account = await accounts.get(payload.sub);
       if (!account || ["deleted", "provisioning"].includes(account.status))
         throw new HttpError(403, "AccountUnavailable", "Account unavailable");
@@ -106,28 +162,8 @@ export async function createProtocolRouting({
           "Subject does not match credential",
         );
       req.permissions = new ScopePermissionsTransition(payload.scope);
-      let allowed = ["getSession", "checkAccountStatus"].includes(method);
-      if (method === "updateHandle")
-        allowed = req.permissions.allowsIdentity({ attr: "handle" });
-      if (
-        [
-          "requestPlcOperationSignature",
-          "signPlcOperation",
-          "submitPlcOperation",
-        ].includes(method)
-      )
-        allowed = req.permissions.allowsIdentity({ attr: "*" });
-      if (["requestEmailConfirmation", "confirmEmail"].includes(method))
-        allowed = req.permissions.allowsAccount({
-          attr: "email",
-          action: "manage",
-        });
-      if (!allowed)
-        throw new HttpError(
-          403,
-          "InsufficientScope",
-          "This credential cannot authorize the account operation",
-        );
+      const refusal = refuseOAuthAccountMethod(method, req.permissions);
+      if (refusal) throw refusal;
       req.auth = {
         did: account.did,
         kind: "oauth",
