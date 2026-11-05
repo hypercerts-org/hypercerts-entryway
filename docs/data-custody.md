@@ -1,6 +1,7 @@
 # Data model, identity custody and migration
 
-Status: current storage facts plus proposed domain contracts. Updated: 2026-10-07.
+Status: current storage facts plus accepted domain contracts and implementation gaps.
+Incoming migration design updated: 2026-11-04.
 See [architecture](architecture.md) for domain ownership and [delivery reference](delivery-plan.md) for delivery gates.
 
 ## 1. Account identity and ownership
@@ -8,8 +9,12 @@ See [architecture](architecture.md) for domain ownership and [delivery reference
 Use the DID as the account primary key. A separate account UUID is not required by the agreed scope.
 Better Auth user IDs, browser-session IDs, devices, grants and migration-operation IDs remain separate identifiers.
 
-Multiple accounts can share a primary email after migration or import. They remain
-separate accounts: access to one does not grant access to the others.
+Whole-PDS association import may preserve multiple accounts sharing a primary
+email. Individual incoming DID migration requires a unique destination email,
+which may differ from the source email. Accounts remain separate: access to one
+does not grant access to the others. This accepted individual-arrival policy is
+specified in [public incoming migration](incoming-migration.md); current storage
+support for shared claims is not evidence that its admission checks exist.
 
 Email changes, account recovery, and admin repairs cannot move an account to an
 email already used by another account. Moving an account to an unused email leaves
@@ -41,8 +46,10 @@ Account access is resolved only through explicit DID-to-user bindings. The
 schemas retain support for multiple DIDs sharing a primary email claim and one
 Better Auth user binding multiple DIDs; Better Auth email itself remains unique.
 Ordinary account changes do not add a primary claim to an email already claimed
-by another DID; migration/import remains the explicit sharing exception. The
-resolver returns `selection-required` for multiple established bindings, but the
+by another DID. Existing migration/import adapters still permit sharing; the
+accepted design restricts that exception to whole-PDS association import, not
+individual incoming arrivals. The resolver returns `selection-required` for
+multiple established bindings, but the
 interactive chooser and joining-PDS association import are not implemented. No
 DID is selected or bound from an email match alone.
 
@@ -357,6 +364,28 @@ Migration acceptance is compliance with public protocol endpoints and normal
 credentials. No particular migration tool or version must be selected. If a tool
 is used, record its version for reproducibility; the client choice does not define
 the acceptance contract.
+
+### Accepted public incoming pathway
+
+[Public incoming migration](incoming-migration.md) defines the accepted
+client-driven process for an unchanged PDS already behind Entryway. Browser OTP
+produces destination arrival authorization, separate from configurable operator
+invite codes and standard source DID proof. Entryway publishes a source-signed
+authority handoff, then signs the destination operation supplied to stock creation.
+Creation publishes early cutover and creates active; a separate deactivation
+precedes client imports. This exposure is explicit, not atomic inactive creation.
+
+The accepted design binds the saved verified user atomically after confirmed
+backend provisioning and deactivation, before transfer, so the tool can receive
+destination credentials. A bound migration-pending account is not active and
+cannot bypass guarded activation or ordinary-access restrictions. This differs
+from the current fixture's post-transfer binding and does not change existing
+signup activation semantics. Implementation and public qualification remain open.
+
+Tools may implement an Entryway-specific public journey; no particular tool is
+mandatory or assumed compatible. Arrival-code expiry does not release uncertain
+operations or reverse published custody. No automatic destructive cleanup or
+source deletion is introduced by this design.
 
 ### What the imported external fixture actually does
 
