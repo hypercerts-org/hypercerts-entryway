@@ -288,15 +288,15 @@ export async function mountClient({ app, config, db }) {
       const id = clientId(req, browser);
       const did = browser.subjects[id];
       if (!did) return render(res, browser, id);
+      let session;
       try {
-        const session = await clients[id].restore(did);
-        render(res, browser, id, await sessionData({ session, browser, id }));
+        session = await clients[id].restore(did);
       } catch {
         // A revoked session (e.g. after a password change) can never be
         // restored; forget it so the home page does not fail on every visit.
         delete browser.subjects[id];
         await db.set("client:browsers", browser.id, browser);
-        render(
+        return render(
           res,
           browser,
           id,
@@ -304,6 +304,9 @@ export async function mountClient({ app, config, db }) {
           "Your previous session ended. Sign in again.",
         );
       }
+      // A failed PDS read after a successful restore may be temporary, so it
+      // surfaces as an error and keeps the saved session for the next visit.
+      render(res, browser, id, await sessionData({ session, browser, id }));
     }),
   );
   router.get(
