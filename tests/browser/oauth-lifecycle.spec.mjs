@@ -313,6 +313,9 @@ test("foreign-DID device removal is isolated; login_hint constrains public-clien
       .click();
     const parFields = new URLSearchParams((await parRequest).postData() ?? "");
     expect(parFields.get("prompt")).toBe("login");
+    // The pinned provider rewrites prompt=login to prompt=consent for public,
+    // untrusted clients such as this one (request-manager.js), so Bob's fresh
+    // remembered session goes straight to consent without a new code.
     expect(parFields.get("login_hint")).toBe(bob.handle);
     await expect(
       sharedPage.getByRole("heading", { name: "Sign in to authorize" }),
