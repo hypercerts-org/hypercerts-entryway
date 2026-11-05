@@ -264,8 +264,10 @@ must stay trusted, including the primary one; an empty value trusts no client.
 
 A newly created account skips consent (ePDS parity) only when the client is
 trusted and the client's metadata document contains `"epds_skip_consent_on_signup": true`. As in ePDS,
-`prompt=consent` does not override that opt-in. Any failure before the
-authorization code is issued, including a metadata read failure, shows consent.
+`prompt=consent` does not override that opt-in. If checking the skip fails,
+including a metadata read failure, consent is shown instead. A failure while
+issuing the authorization code itself happens after the sign-in is claimed, so
+the user restarts from the app.
 A skip records the granted scopes. Returning accounts keep the stock provider
 consent policy.
 

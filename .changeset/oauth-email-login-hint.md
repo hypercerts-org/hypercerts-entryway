@@ -7,4 +7,4 @@ OAuth apps can start an email-first sign-in by adding `login_hint=<email>` to th
 - Put the email only on the redirect URL. A pushed authorization request still accepts only a handle or DID as `login_hint`.
 - A handle or DID `login_hint` from the pushed request takes precedence, and the email on the URL is ignored.
 - The email does not choose or restrict the account. After the code, users whose email is linked to several accounts still choose one.
-- An invalid email, more than one `login_hint`, or `prompt=none` shows the usual sign-in page instead. The normal code request limits apply.
+- An invalid email or more than one `login_hint` shows the usual sign-in page instead. With `prompt=none` the email is ignored and the request follows the stock provider, which may redirect straight back to the app. The normal code request limits apply.
