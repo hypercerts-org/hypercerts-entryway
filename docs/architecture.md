@@ -281,6 +281,23 @@ so a new action is protected by default.
 | Own primary-email code | `email-request`, `email-update`, `email-confirm`, `delete`, `delete-confirm`, `migration-request`                                                                                                   | Each flow requires a code sent to the primary email before anything changes, the same proof a confirmation asks for                                                                                                                                                                                            |
 | Never asks             | Viewing the settings page, `handle`, `revoke`, `grant-revoke`, `oauth-session-revoke`, `legacy-session-revoke`, `browser-session-revoke`, `browsers-revoke`, `device-revoke`, `app-password-revoke` | Revocations only reduce access. An OAuth app with the handle permission can already change the handle                                                                                                                                                                                                          |
 
+A flow that sends its own primary-email code skips the recent-session check,
+so the user enters one code rather than a confirmation code followed by the
+flow's own code:
+
+```mermaid
+flowchart TD
+  A[User chooses an action] --> B{Sends its own<br/>primary-email code?}
+  B -- yes --> F[Enter the flow's code]
+  B -- no --> C{Never asks?}
+  C -- yes --> G[Change is made]
+  C -- no --> D{Signed in or confirmed<br/>within ten minutes?}
+  D -- yes --> G
+  D -- no --> E[Confirm it's you:<br/>enter a reconfirm code]
+  E --> G
+  F --> G
+```
+
 Changing or removing a password does not ask for the current password: a
 passwordless account has none, and the recent session is the proof. Deletion
 still asks for the password of an account that has one.
