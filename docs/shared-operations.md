@@ -275,7 +275,9 @@ they are not SMTP conformance or application replica acceptance. Use the
 application checks. The [deployment profiles](deployment-profiles.md) add bounded
 actual replica checks. Complete production recovery qualification remains separate.
 
-The real SIGKILL/browser harness uses the default lease and bounded waits, verifies
+The real SIGKILL/browser harness runs `before-pds` with the default 120-second
+lease (150-second recovery bound) and `after-pds` with `OPERATION_LEASE_MS=15000`
+(45-second bound); only `before-pds` shows default-lease recovery. It verifies
 old Entryway exit/removal and affected unchanged-PDS stop/restart, captures desktop
 and narrow pending context, attempts a retry that remains pending, and retains
 same-DID/operation, sign-in, OAuth and PDS-write assertions after recovery. The

@@ -38,15 +38,22 @@ case "$command" in
     report_root="$root/tests/artifacts/$run_id"
     mkdir -p "$report_root" "$root/tests/.runtime"
     pids=() names=()
+    # setsid gives each group its own process group, so cancellation reaches the
+    # step a group is running, not only the group shell waiting on it.
     start_group() {
       local name=$1; shift
       SANDBOX_PROJECT="$run_id-$name" ACCEPTANCE_REPORT_DIR="$report_root/$name" \
-        "$root/tests/local.sh" fresh-group "$@" > "$report_root/$name.log" 2>&1 &
+        setsid "$root/tests/local.sh" fresh-group "$@" > "$report_root/$name.log" 2>&1 &
       pids+=("$!") names+=("$name")
       echo "Started $name (log: $report_root/$name.log)"
     }
-    trap 'kill "${pids[@]}" 2>/dev/null; wait; exit 130' INT
-    trap 'kill "${pids[@]}" 2>/dev/null; wait; exit 143' TERM
+    stop_groups() {
+      local pid
+      for pid in "${pids[@]}"; do kill -TERM -- "-$pid" 2>/dev/null || true; done
+      wait
+    }
+    trap 'stop_groups; exit 130' INT
+    trap 'stop_groups; exit 143' TERM
     start_group journeys browser contracts resilience
     start_group migration migration interop-acceptance
     start_group faults plc-recovery process-crash managed-recovery authority-drills
@@ -63,6 +70,22 @@ case "$command" in
   fresh-group)
     # One disposable sandbox running the given steps in order, then removed.
     shift
+    (( $# > 0 )) || { echo 'fresh-group needs at least one step' >&2; exit 2; }
+    for step in "$@"; do
+      case "$step" in
+        browser|contracts|database-contracts|migration|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience) ;;
+        *) echo "Unknown fresh-group step: $step" >&2; exit 2 ;;
+      esac
+    done
+    # Cleanup removes the project's volumes, so never target the persistent project.
+    if [[ "$SANDBOX_PROJECT" == hypercerts-entryway ]]; then
+      export SANDBOX_PROJECT="hypercerts-entryway-group-$(date +%s)-$$"
+      if [[ "$ACCEPTANCE_REPORT_DIR" == "$root/tests/artifacts" ]]; then
+        export ACCEPTANCE_REPORT_DIR="$root/tests/artifacts/$SANDBOX_PROJECT"
+        mkdir -p "$ACCEPTANCE_REPORT_DIR"
+      fi
+    fi
+    mkdir -p "$root/tests/.runtime"
     temp=$(mktemp -d "$root/tests/.runtime/hypercerts-entryway-e2e.XXXXXX")
     export SANDBOX_CHECKOUT="$temp/atmosphereinabox"
     cleanup() {
