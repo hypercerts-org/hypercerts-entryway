@@ -23,9 +23,11 @@ jobs:
         with:
           node-version: 24.22.0
       - name: Install application dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
+      - name: Set up reviewed native dependencies
+        run: npm rebuild better-sqlite3 esbuild
       - name: Install isolated lint dependencies
-        run: npm ci --prefix scripts/lint
+        run: npm ci --ignore-scripts --prefix scripts/lint
       - name: test:hooks
         run: npm run test:hooks
       - name: format:check

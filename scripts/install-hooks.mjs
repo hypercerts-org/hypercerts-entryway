@@ -1,6 +1,15 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  lstatSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { delimiter, isAbsolute, join, resolve, sep } from "node:path";
 
 const launcher = `#!/bin/sh
 # Entryway managed pre-commit hook; install with npm run hooks:install.
@@ -34,14 +43,41 @@ for (const name of [
   delete gitEnv[name];
 
 try {
-  const configured = spawnSync(
-    "git",
-    ["config", "--get-all", "core.hooksPath"],
-    {
-      encoding: "utf8",
-      env: gitEnv,
-    },
-  );
+  const cwd = realpathSync(process.cwd());
+  const git = (process.env.PATH ?? "")
+    .split(delimiter)
+    .filter(isAbsolute)
+    .map((entry) => {
+      try {
+        const directory = realpathSync(entry);
+        if (
+          directory === cwd ||
+          directory.startsWith(cwd + sep) ||
+          directory.split(sep).includes("node_modules")
+        )
+          return null;
+        const executable = realpathSync(join(directory, "git"));
+        if (
+          executable === cwd ||
+          executable.startsWith(cwd + sep) ||
+          executable.split(sep).includes("node_modules")
+        )
+          return null;
+        accessSync(executable, constants.X_OK);
+        return statSync(executable).isFile() ? executable : null;
+      } catch {
+        return null;
+      }
+    })
+    .find(Boolean);
+  if (!git)
+    throw new Error(
+      "Could not find Git outside the project and node_modules PATH entries.",
+    );
+  const configured = spawnSync(git, ["config", "--get-all", "core.hooksPath"], {
+    encoding: "utf8",
+    env: gitEnv,
+  });
   if (configured.status === 0) {
     throw new Error(
       "core.hooksPath is configured; resolve it manually before installing Entryway hooks.",
@@ -50,7 +86,7 @@ try {
   if (configured.status !== 1)
     throw new Error("Could not inspect core.hooksPath.");
   const hook = resolve(
-    execFileSync("git", ["rev-parse", "--git-path", "hooks/pre-commit"], {
+    execFileSync(git, ["rev-parse", "--git-path", "hooks/pre-commit"], {
       encoding: "utf8",
       env: gitEnv,
     }).trim(),

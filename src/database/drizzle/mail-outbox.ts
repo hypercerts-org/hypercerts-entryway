@@ -50,9 +50,7 @@ export function createMailOutbox(db: DatabaseExecutor): MailOutboxTransactor {
     claim_attempt: null,
     lease_expires_at: null,
   };
-  async function supersede(recipient: string, purpose: string, now: number) {
-    // The storage port includes a timestamp; supersession itself is unconditional.
-    void now;
+  async function supersede(recipient: string, purpose: string) {
     return db.transact(async () => {
       const changed = await db.update(
         "mail_outbox",
@@ -146,7 +144,7 @@ export function createMailOutbox(db: DatabaseExecutor): MailOutboxTransactor {
     async enqueue(entry) {
       await db.transact(async () => {
         await expire(entry.createdAt);
-        await supersede(entry.recipient, entry.purpose, entry.createdAt);
+        await supersede(entry.recipient, entry.purpose);
         await db.insert("mail_outbox", {
           id: entry.id,
           recipient: entry.recipient,

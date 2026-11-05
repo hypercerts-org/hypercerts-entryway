@@ -58,6 +58,26 @@ function fixture(t) {
   return dir;
 }
 
+test("installer ignores injected project git executable", (t) => {
+  const dir = fixture(t);
+  const injected = join(dir, "node_modules/.bin");
+  rmSync(join(dir, "node_modules"));
+  mkdirSync(injected, { recursive: true });
+  const marker = join(dir, "injected-git-ran");
+  writeFileSync(
+    join(injected, "git"),
+    `#!/bin/sh\ntouch '${marker}'\nexit 0\n`,
+    { mode: 0o755 },
+  );
+  const result = spawnSync(process.execPath, [installer], {
+    cwd: dir,
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${injected}:${process.env.PATH}` },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.throws(() => readFileSync(marker), { code: "ENOENT" });
+});
+
 function install(dir) {
   return run(dir, process.execPath, [installer]);
 }

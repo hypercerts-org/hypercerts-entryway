@@ -4,36 +4,13 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
 
-def main():
-    action, manifest_name = sys.argv[1:3]
-    manifest = Path(manifest_name).resolve()
-    root = Path(__file__).resolve().parents[1]
-    runtime = root / "tests/.runtime"
-    context = os.environ.get("ENTRYWAY_DOCKER_CONTEXT", "rootless")
-    if context not in ("rootless", "default"):
-        raise ValueError("Unsupported Docker context")
-    if action == "init":
-        manifest.parent.mkdir(parents=True, exist_ok=True)
-        with manifest.open("x") as stream:
-            json.dump({"root": str(root), "context": context, "projects": []}, stream)
-        return
-    record = json.loads(manifest.read_text())
-    if record["context"] != context:
-        raise ValueError("CI Docker context identity mismatch")
-    if record["root"] != str(root):
-        raise ValueError("CI checkout identity mismatch")
-    if action == "register":
-        checkout, project = sys.argv[3:5]
-        candidate = {"checkout": str(Path(checkout).resolve()), "project": project}
-        if candidate not in record["projects"]:
-            record["projects"].append(candidate)
-    elif action != "cleanup":
-        raise ValueError("Unknown ownership operation")
-    # Validate the entire set before allowing any destructive operation.
+def validate_projects(record, runtime):
+    runtime = runtime.resolve()
     for item in record["projects"]:
-        checkout = Path(item["checkout"])
+        checkout = Path(item["checkout"]).resolve()
         project = item["project"]
         if not checkout.is_relative_to(runtime) or checkout == runtime:
             raise ValueError("CI checkout outside owned runtime directory")
@@ -41,14 +18,30 @@ def main():
             char.islower() or char.isdigit() or char in "-_" for char in project
         ):
             raise ValueError("Invalid CI project identity")
-        state = checkout / "state/manifest.json"
+        for name in ("state/manifest.json", "compose.yaml"):
+            path = (checkout / name).resolve()
+            if not path.is_relative_to(checkout):
+                raise ValueError("CI sandbox file outside owned checkout")
+        state = (checkout / "state/manifest.json").resolve()
         if state.exists() and json.loads(state.read_text())["project"] != project:
             raise ValueError("Sandbox project identity mismatch")
-    if action == "register":
-        temporary = manifest.with_suffix(".tmp")
-        temporary.write_text(json.dumps(record, indent=2) + "\n")
+        item["checkout"] = str(checkout)
+
+
+def save_record(manifest, record):
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", dir=manifest.parent, prefix=".ownership-", delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(record, stream, indent=2)
+            stream.write("\n")
         os.replace(temporary, manifest)
-        return
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def cleanup(record, root, context, manifest):
     subprocess.run(["bash", "-c", 'source "$1"', "docker-preflight",
                     str(root / "tests/support/rootless-docker.sh")], check=True)
     failed = False
@@ -74,6 +67,37 @@ def main():
                 failed = True
     if failed:
         raise SystemExit(1)
+
+
+def main():
+    action, manifest_name = sys.argv[1:3]
+    manifest = Path(manifest_name).resolve()
+    root = Path(__file__).resolve().parents[1]
+    context = os.environ.get("ENTRYWAY_DOCKER_CONTEXT", "rootless")
+    if context not in ("rootless", "default"):
+        raise ValueError("Unsupported Docker context")
+    if action == "init":
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        with manifest.open("x") as stream:
+            json.dump({"root": str(root), "context": context, "projects": []}, stream)
+        return
+    record = json.loads(manifest.read_text())
+    if record["context"] != context:
+        raise ValueError("CI Docker context identity mismatch")
+    if record["root"] != str(root):
+        raise ValueError("CI checkout identity mismatch")
+    if action == "register":
+        checkout, project = sys.argv[3:5]
+        candidate = {"checkout": str(Path(checkout).resolve()), "project": project}
+        if candidate not in record["projects"]:
+            record["projects"].append(candidate)
+    elif action != "cleanup":
+        raise ValueError("Unknown ownership operation")
+    validate_projects(record, root / "tests/.runtime")
+    if action == "register":
+        save_record(manifest, record)
+    else:
+        cleanup(record, root, context, manifest)
 
 
 if __name__ == "__main__":

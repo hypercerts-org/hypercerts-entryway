@@ -171,8 +171,9 @@ migration or moderation requirements.
 Contributors reproduce basic checks directly from the repository root:
 
 ```sh
-CI=1 npm ci
-npm ci --prefix scripts/lint
+npm ci --ignore-scripts
+npm rebuild better-sqlite3 esbuild
+npm ci --ignore-scripts --prefix scripts/lint
 npm run hooks:install
 npm run test:hooks
 npm run format:check
@@ -188,10 +189,11 @@ npm run test:ci-lifecycle
 ```
 
 ESLint dependencies remain isolated under `scripts/lint`; these checks need no
-AiaB or Docker daemon. For npm installation, `CI=1` suppresses Lefthook 2.2.2's
-upstream automatic postinstall hook installation. Ensure `LEFTHOOK` is unset for
-that command. Do not run a plain root `npm install` or `npm ci`: upstream may
-rename an existing hook. For dependency updates use `CI=1 npm install` instead.
+AiaB or Docker daemon. Script-disabled installation suppresses automatic lifecycle
+scripts, including Lefthook's hook installation. The explicit rebuild runs the
+reviewed native setup for better-sqlite3 and esbuild only. Do not run a plain root
+`npm install` or `npm ci`: upstream may rename an existing hook. For dependency
+updates use `npm install --ignore-scripts`, then run the explicit rebuild above.
 
 `npm run hooks:install` installs the Entryway pre-commit launcher explicitly.
 It refuses an existing custom pre-commit hook or any configured `core.hooksPath`;

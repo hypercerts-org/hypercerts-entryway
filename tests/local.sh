@@ -33,7 +33,7 @@ require_state() {
   guard_project
 }
 browser() { compose run --rm --no-deps browser npx --no-install playwright test --config tests/playwright.config.mjs "$@"; }
-external_browser() { compose run --rm --no-deps -e "EXTERNAL_PHASE=$1" browser npx --no-install playwright test --config tests/external.playwright.config.mjs 2>&1 | tee "$artifacts/external-browser-$1.log" | python3 "$root/scripts/ci-summary.py"; }
+external_browser() { local phase=$1; compose run --rm --no-deps -e "EXTERNAL_PHASE=$phase" browser npx --no-install playwright test --config tests/external.playwright.config.mjs 2>&1 | tee "$artifacts/external-browser-$phase.log" | python3 "$root/scripts/ci-summary.py"; }
 migration_command() { compose exec -T entryway node tests/support/external-migration.mjs "$@"; }
 case "$command" in
   fresh)
@@ -46,13 +46,11 @@ case "$command" in
       if (( result != 0 )) && [[ "${KEEP_FAILED_SANDBOX:-0}" == 1 ]]; then
         echo "Preserved project $SANDBOX_PROJECT at $temp" >&2
       else
-        if test -f "$SANDBOX_CHECKOUT/compose.yaml"; then
-          if ! docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" down --volumes --remove-orphans; then
-            echo "Scoped cleanup failed; preserved $temp for project $SANDBOX_PROJECT" >&2
-            (( result != 0 )) || result=1
-            echo "Run exit: $result; reports: $ACCEPTANCE_REPORT_DIR"
-            exit "$result"
-          fi
+        if test -f "$SANDBOX_CHECKOUT/compose.yaml" && ! docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" down --volumes --remove-orphans; then
+          echo "Scoped cleanup failed; preserved $temp for project $SANDBOX_PROJECT" >&2
+          (( result != 0 )) || result=1
+          echo "Run exit: $result; reports: $ACCEPTANCE_REPORT_DIR"
+          exit "$result"
         fi
         rm -rf -- "$temp"
       fi

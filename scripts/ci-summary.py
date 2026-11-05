@@ -15,7 +15,8 @@ for directory in (root / "tests", root / "src"):
             if name.endswith(".mjs"):
                 path = Path(current) / name
                 titles.update(match[1] for match in re.findall(r'\b(?:test|it|describe)\(\s*(["\'])([^\n]*?)\1', path.read_text()))
-summary = re.compile(r"^(?:(?:#|ℹ) (?:tests|suites|pass|fail|cancelled|skipped|todo|duration_ms) [0-9.]+|[0-9]+ (?:passed|failed|skipped)(?: \([0-9.ms]+\))?)$")
+node_summary = re.compile(r"[#ℹ] (?:tests|suites|pass|fail|cancelled|skipped|todo|duration_ms) [0-9]+(?:\.[0-9]+)?")
+playwright_summary = re.compile(r"[0-9]+ (?:passed|failed|skipped)(?: \([0-9]+(?:\.[0-9]+)?(?:ms|s)\))?")
 diagnostics = {
     "unknown flag:": ("CLI_USAGE_ERROR", "Command rejected an unsupported flag; inspect the private phase log"),
     "Cannot connect to the Docker daemon": ("DOCKER_UNAVAILABLE", "Docker daemon connection failed; check the selected context"),
@@ -28,7 +29,7 @@ diagnostics = {
 }
 for line in sys.stdin:
     text = re.sub(r"\x1b\[[0-9;]*m", "", line).strip()
-    if summary.fullmatch(text):
+    if node_summary.fullmatch(text) or playwright_summary.fullmatch(text):
         print(text, flush=True)
     elif re.match(r"^(?:[✔✖✓✘×]|(?:not )?ok \d+|\d+\))", text):
         for title in sorted(titles, key=len, reverse=True):

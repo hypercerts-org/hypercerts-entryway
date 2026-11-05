@@ -77,6 +77,42 @@ esac
         self.assertNotEqual(self.ownership("register", str(self.root / "foreign"),
                                            "hypercerts-entryway-child").returncode, 0)
 
+    def test_invalid_records_fail_before_any_docker(self):
+        original = json.loads(self.manifest.read_text())
+        outside = self.root / "foreign"
+        outside.mkdir()
+        for checkout in [str(self.checkout / "../../../../foreign"), str(self.root / "tests/.runtime/link")]:
+            link = self.root / "tests/.runtime/link"
+            if not link.exists():
+                link.symlink_to(outside, target_is_directory=True)
+            record = {**original, "projects": [*original["projects"], {"checkout": checkout, "project": "hypercerts-entryway-child"}]}
+            self.manifest.write_text(json.dumps(record))
+            self.assertNotEqual(self.ownership("cleanup").returncode, 0)
+            self.assertFalse(self.calls.exists())
+        self.manifest.write_text(json.dumps({**original, "projects": [*original["projects"], {}]}))
+        self.assertNotEqual(self.ownership("cleanup").returncode, 0)
+        self.assertFalse(self.calls.exists())
+
+    def test_sandbox_file_symlinks_refused(self):
+        outside = self.root / "outside"
+        outside.write_text('{"project":"hypercerts-entryway-parent"}')
+        for name in ["state/manifest.json", "compose.yaml"]:
+            path = self.checkout / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.unlink(missing_ok=True)
+            path.symlink_to(outside)
+            self.assertNotEqual(self.ownership("cleanup").returncode, 0)
+            self.assertFalse(self.calls.exists())
+            path.unlink()
+
+    def test_predictable_temporary_symlink_not_used(self):
+        target = self.root / "target"
+        target.write_text("untouched")
+        self.manifest.with_suffix(".tmp").symlink_to(target)
+        self.assertEqual(self.ownership("register", str(self.root / "tests/.runtime/child"),
+                                        "hypercerts-entryway-child").returncode, 0)
+        self.assertEqual(target.read_text(), "untouched")
+
     def test_context_mismatch_refused(self):
         self.assertNotEqual(self.ownership("cleanup", ENTRYWAY_DOCKER_CONTEXT="default").returncode, 0)
         self.assertFalse(self.calls.exists())
@@ -105,6 +141,13 @@ esac
                                 input='OTP 123456\naccess_token=private\nℹ pass 12\n  3 passed (1.2s)\nassertion payload\n',
                                 capture_output=True, text=True, check=True)
         self.assertEqual(result.stdout, 'ℹ pass 12\n3 passed (1.2s)\n')
+
+    def test_summary_rejects_non_ascii_digits_payload_and_bad_durations(self):
+        source = Path(__file__).resolve().parents[2]
+        result = subprocess.run(["python3", str(source / "scripts/ci-summary.py")],
+                                input='# pass ١٢\n3 passed (١s)\n3 passed (1s) secret\n3 passed (1..2s)\nℹ duration_ms 1..2\n# tests 12\n3 passed (12ms)\n',
+                                capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout, '# tests 12\n3 passed (12ms)\n')
 
     def test_named_failure_and_docker_context_without_payloads(self):
         source = Path(__file__).resolve().parents[2]
