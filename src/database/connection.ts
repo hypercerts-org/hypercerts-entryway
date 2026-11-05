@@ -627,9 +627,10 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
       if (!/^[A-Za-z][A-Za-z0-9]*$/.test(field))
         throw new Error("InvalidStateField");
       const value = tables.key_value_state.value;
+      const jsonPath = `$.${field}`;
       const stored =
         backend === "sqlite"
-          ? sql`json_extract(${value}, ${`$.${field}`})`
+          ? sql`json_extract(${value}, ${jsonPath})`
           : sql`(CASE WHEN jsonb_typeof(${value}::jsonb -> ${field}) = 'number' THEN (${value}::jsonb ->> ${field})::numeric END)`;
       await executor.remove(
         "key_value_state",
