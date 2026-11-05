@@ -11,6 +11,7 @@ const verifiedEmail = "owner@example.test";
 const hostedFirst = {
   did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
   email: "first@example.test",
+  status: "active",
 };
 const identity = { userId: "user-id", email: verifiedEmail };
 
@@ -211,7 +212,7 @@ async function fixture(
       });
       res.send("<check-your-email>");
     },
-    hintedAccount: async (hint) => {
+    getAccountByHint: async (hint) => {
       if (hintLookupFails) throw new Error("storage-private-marker");
       return hosted[hint] ?? null;
     },
@@ -632,6 +633,17 @@ for (const [name, options] of [
   ...["none", "create", "select_account"].map((prompt) => [
     `the request has prompt=${prompt}`,
     { loginHint: "account-1.example.test", remembered: [], prompt },
+  ]),
+  ...[
+    ["is deactivated", { status: "deactivated" }],
+    ["has no usable email", { email: "not-an-email" }],
+  ].map(([state, change]) => [
+    `the hinted account ${state}`,
+    {
+      loginHint: "account-1.example.test",
+      remembered: [],
+      hosted: { "account-1.example.test": { ...hostedFirst, ...change } },
+    },
   ]),
   [
     "a stale remembered session already matches it",
