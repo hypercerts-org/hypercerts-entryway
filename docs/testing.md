@@ -14,7 +14,14 @@ pattern. The reference manifest is `tests/sandbox.json`. The runtime is generate
 it is not vendored upstream source and must remain untracked. Consumer stack
 installation and application runtime are separate phases.
 
-`fresh` creates a unique `hypercerts-entryway-<timestamp>-<pid>` project in a
+`fresh` runs three groups in parallel, each in its own disposable sandbox:
+`journeys` (browser, contracts, resilience), `migration` (external migration and
+interop profile) and `faults` (PLC recovery, process crash, managed recovery,
+authority drills). Steps within a group stay sequential: contracts and resilience
+read accounts and sessions created by the browser suite, and fault steps stop
+shared containers. Expect roughly three sandboxes' worth of CPU and memory.
+
+Each group creates a unique `hypercerts-entryway-<timestamp>-<pid>-<group>` project in a
 temporary checkout, uses `--subnet auto` and validates `sandbox access --json`
 as a connection projection. Its cleanup targets that exact project and volumes,
 then removes its temporary checkout. It does not change host DNS/trust or stop
@@ -29,7 +36,8 @@ and requires no host dependency install:
 
 | Command                                | Purpose and precondition                                                                                                                                                                                 |
 | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `./tests/local.sh fresh`               | Repeatable full run in a disposable project; cleanup follows success/failure                                                                                                                             |
+| `./tests/local.sh fresh`               | Repeatable full run as three parallel disposable groups; cleanup follows success/failure                                                                                                                 |
+| `./tests/local.sh fresh-group <steps>` | Run the named steps in order in one disposable project, for example `fresh-group browser contracts`                                                                                                      |
 | `./tests/local.sh prepare`             | Install sandbox CLI dependencies and create/check project configuration                                                                                                                                  |
 | `./tests/local.sh up`                  | Build/start the sandbox and build test/browser images after prepare                                                                                                                                      |
 | `./tests/local.sh status`              | Inspect this project's services after prepare                                                                                                                                                            |
@@ -45,7 +53,7 @@ and requires no host dependency install:
 | `./tests/local.sh all`                 | Prepare, up, browser, contracts, migration, profile, PLC recovery, crash, managed recovery, authority drills, resilience; requires fresh fixture                                                         |
 | `./tests/local.sh interop-profile`     | Raw product profile; exit 2 retains inherited missing moderation requirement                                                                                                                             |
 | `./tests/local.sh plc-recovery`        | Five named synthetic PLC/cache recovery cases in the selected project                                                                                                                                    |
-| `./tests/local.sh process-crash`       | Two actual SIGKILL boundaries, exit 137 and post-recovery PDS writes                                                                                                                                     |
+| `./tests/local.sh process-crash`       | Two actual SIGKILL boundaries, exit 137 and post-recovery PDS writes; before-pds waits out the default 120 s lease, after-pds uses `OPERATION_LEASE_MS=15000`                                            |
 | `./tests/local.sh managed-recovery`    | Two real managed-migration modes: consumed successful response and rejected request followed by observe-to-retry authorization; pending/reload UI and preserved record/blob/session/PDS-write assertions |
 | `./tests/local.sh authority-drills`    | Fresh two-PDS identities, bounded backup/restore and issuer/fleet/restored key checks                                                                                                                    |
 | `./tests/local.sh down`                | Stop this project; retain volumes and state                                                                                                                                                              |
@@ -78,7 +86,8 @@ from an incompatible schema generation.
 `fresh` generates its own runtime path, project name and report directory; the
 explicit location/name overrides apply to persistent commands.
 
-Default fresh-run reports go to `tests/artifacts/<project>`. Inspect the reported
+Default fresh-run reports go to `tests/artifacts/<run>/<group>`, with each group's
+console output in `tests/artifacts/<run>/<group>.log`. Inspect the reported
 runtime path before resuming or cleaning up retained failed state. Never include
 sandbox state, generated credentials or private CA material in reports.
 
@@ -217,8 +226,10 @@ is no default-daemon fallback, including cleanup. The receipt records the select
 context, endpoint and security options. A historical result without that
 provenance must not be presented as rootless acceptance.
 
-The revised real process-crash drill uses the unchanged 120-second operation lease,
-a 150-second bounded approval wait, a 360-second browser-case deadline and a
+The revised real process-crash drill runs two modes. `before-pds` uses the default
+120-second operation lease with a 150-second bounded recovery wait; `after-pds`
+sets `OPERATION_LEASE_MS=15000` with a 45-second bound (lease plus 30 seconds),
+so only `before-pds` is default-lease recovery evidence. Both use a 360-second browser-case deadline and a
 420-second controller command deadline. It never edits persisted leases. Operator
 recovery follows verified old Entryway exit/removal and a full stop/restart of the
 affected unchanged PDS, then operation-specific observation. Pending desktop/narrow
