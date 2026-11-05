@@ -8,7 +8,7 @@ import { createConsent } from "../../../dist/src/features/oauth-authorization/co
 import { createLoginForms } from "../../../dist/src/features/email-login/page.mjs";
 import { mountEmailLogin } from "../../../dist/src/features/email-login/routes.mjs";
 
-async function fixture(t) {
+async function fixture(t, { realForms = false } = {}) {
   const db = await openTestDatabase();
   t.after(() => db.close());
   const handlers = new Map();
@@ -58,7 +58,9 @@ async function fixture(t) {
     flows,
     authentication,
     mail: { async supersedeOtp() {} },
-    forms: { otpForm: (_flow, _browser, message) => message },
+    forms: realForms
+      ? createLoginForms({ fields: () => "" })
+      : { otpForm: (_flow, _browser, message) => message },
   });
   const originalGet = db.get;
   db.get = async (namespace, key) => {
@@ -192,6 +194,35 @@ test("a masked code request stays masked on resend until the user types an addre
   assert.equal((await f.request(flow, "other@example.test")).status, 200);
   assert.equal((await f.db.get("auth-flows", flow.id)).maskEmail, false);
   assert.equal(f.sent, 3);
+});
+
+test("a refused change of email never reveals the masked address it would replace", async (t) => {
+  const f = await fixture(t, { realForms: true });
+  const flow = await f.flow("masked-cooldown");
+  await f.startEmailCode({}, flow, {}, "owner@example.test", {
+    maskEmail: true,
+  });
+
+  // Still inside the resend cooldown, so the new address is refused.
+  const refused = await f.request(flow, "other@example.test");
+
+  assert.equal(refused.status, 429);
+  assert.doesNotMatch(refused.body, /owner@example\.test/);
+});
+
+test("a first masked code request refused by the email limit does not reveal that email", async (t) => {
+  const f = await fixture(t, { realForms: true });
+  const owner = "owner@example.test";
+  await f.db.set(
+    "otp-limits",
+    `${owner}/${Math.floor(Date.now() / 600_000)}`,
+    5,
+  );
+  const flow = await f.flow("masked-first");
+  const res = {};
+  await f.startEmailCode(res, flow, {}, owner, { maskEmail: true });
+  assert.equal(res.result.status, 429);
+  assert.doesNotMatch(res.result.body, /owner@example\.test/);
 });
 
 test("same-flow concurrent resend preserves the existing five-second cooldown below the flow limit", async (t) => {
