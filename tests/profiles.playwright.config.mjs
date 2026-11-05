@@ -5,7 +5,15 @@ process.env.PLAYWRIGHT_NO_COPY_PROMPT = "1";
 const stage = process.env.PROFILE_STAGE;
 const label = process.env.PROFILE_LABEL ?? stage;
 if (!/^[a-z-]+$/.test(label)) throw new Error("InvalidProfileLabel");
-if (!["journey", "survivor", "rejoin", "database-refusal"].includes(stage))
+if (
+  ![
+    "journey",
+    "cross-node-signin",
+    "survivor",
+    "rejoin",
+    "database-refusal",
+  ].includes(stage)
+)
   throw new Error("InvalidProfileStage");
 export default defineConfig({
   testDir: "./browser",

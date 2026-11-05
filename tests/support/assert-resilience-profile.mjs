@@ -29,7 +29,9 @@ const phases = [
   "kill-rejoin",
   "database-refusal",
   "final-session",
-  ...(count === 2 ? ["graceful-survivor", "kill-survivor"] : []),
+  ...(count === 2
+    ? ["graceful-survivor", "kill-survivor", "cross-node-signin"]
+    : []),
 ];
 const results = await Promise.all(
   phases.map((phase) => read(`profile-${phase}.json`)),
@@ -66,7 +68,12 @@ const commands = [
     ? ["database-stop", "database-start"]
     : ["sqlite-probe-disable", "sqlite-probe-restore"]),
   ...(count === 2
-    ? ["worker-takeover", "graceful-survivor", "kill-survivor"]
+    ? [
+        "worker-takeover",
+        "graceful-survivor",
+        "kill-survivor",
+        "cross-node-signin",
+      ]
     : []),
 ];
 for (const name of commands) {
@@ -146,6 +153,21 @@ assert.equal(
   true,
 );
 const nodes = ["entryway", ...(count === 2 ? ["entryway-replica"] : [])];
+if (count === 2) {
+  // One OAuth sign-in alternated nodes A, B, A, B, each served by that node.
+  const { steps } = results[phases.indexOf("cross-node-signin")];
+  assert.deepEqual(
+    steps.map((step) => step.node),
+    ["entryway", "entryway-replica", "entryway", "entryway-replica"],
+  );
+  for (const step of steps) {
+    assert.ok(step.responses > 0);
+    assert.equal(
+      step.instanceId,
+      initial.observed[nodes.indexOf(step.node)].instanceId,
+    );
+  }
+}
 const appIdentities = await Promise.all(
   nodes.map((node) => read(`profile-${node}-identity.json`)),
 );

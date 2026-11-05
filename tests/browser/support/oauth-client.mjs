@@ -57,3 +57,38 @@ export async function finishConsent(page, did) {
     .click();
   await expect(page.getByTestId("signed-in-did")).toHaveText(did);
 }
+
+/**
+ * Assert the primary client's session subject, token audience and an
+ * account-scoped write for `account`. `headers` apply to both client calls, for
+ * example to select a deployment-profile node; the responses are returned so
+ * callers can inspect where each call was served.
+ */
+export async function assertOAuthSubjectAndWrite(
+  page,
+  account,
+  { text, headers = {} },
+) {
+  const session = await page.request.get(
+    `${config.clientUrl}/client/session?client=primary`,
+    { headers },
+  );
+  expect(session.ok(), await session.text()).toBeTruthy();
+  const current = await session.json();
+  // The OAuth client session DID is the subject returned by the token exchange.
+  expect(current.did).toBe(account.did);
+  const pds = config.pds.find(({ id }) => id === account.pdsId);
+  expect(new URL(current.tokenInfo.aud).href).toBe(new URL(pds.url).href);
+
+  const write = await page.request.post(`${config.clientUrl}/client/write`, {
+    headers: {
+      ...headers,
+      origin: config.clientUrl,
+      "x-csrf-token": current.csrf,
+    },
+    data: { client: "primary", text },
+  });
+  expect(write.ok(), await write.text()).toBeTruthy();
+  expect((await write.json()).uri).toContain(`at://${account.did}/`);
+  return { session, write };
+}
