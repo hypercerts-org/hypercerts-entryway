@@ -33,7 +33,7 @@ function response() {
   };
 }
 
-async function fixture(t, { authDid, authEmail } = {}) {
+async function fixture(t, { authDid, authEmail, statuses = {} } = {}) {
   const db = await openTestDatabase();
   t.after(() => db.close());
   const handlers = new Map();
@@ -124,7 +124,7 @@ async function fixture(t, { authDid, authEmail } = {}) {
     flows,
     accountAccess: {
       async requireBoundAccount(_identity, did) {
-        return { did, status: "active" };
+        return { did, status: statuses[did] ?? "active" };
       },
     },
   });
@@ -154,7 +154,7 @@ async function fixture(t, { authDid, authEmail } = {}) {
         response(),
         flow,
         browser,
-        { did, status: "active" },
+        { did, status: statuses[did] ?? "active" },
         { identity, fromChooser: true },
       );
     },
@@ -230,6 +230,23 @@ test("consent for a DID that /auth/select replaced while its lookups were pendin
     (await f.db.get("auth-flows", f.flowId)).authDid,
     replacementDid,
   );
+});
+
+test("choosing a deactivated account invalidates consent for the previously chosen one", async (t) => {
+  const firstDid = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+  const deactivatedDid = "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb";
+  const f = await fixture(t, {
+    authDid: firstDid,
+    authEmail: verifiedEmail,
+    statuses: { [deactivatedDid]: "deactivated" },
+  });
+
+  await f.select(deactivatedDid);
+  const response = await f.approve(firstDid);
+
+  assert.equal(response.statusCode, 400);
+  assert.deepEqual(f.approved, []);
+  assert.equal((await f.db.get("auth-flows", f.flowId)).authDid, undefined);
 });
 
 test("a consent that claimed the flow cannot be undone or recreated by a later account selection", async (t) => {

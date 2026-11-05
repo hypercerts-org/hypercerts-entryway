@@ -32,13 +32,14 @@ export function createConsent({ db, provider, stores, flows, accountAccess }) {
         row.did,
       );
       current.authEmail = identity.email.toLowerCase();
-      if (account.status === "active") {
+      // The latest choice wins. An unavailable account still replaces the
+      // earlier selection, so that account's consent form no longer matches.
+      current.authDid = account.status === "active" ? account.did : undefined;
+      if (account.status === "active")
         await provider.accountManager.upsertDeviceAccount(
           browser.deviceId,
           account.did,
         );
-        current.authDid = account.did;
-      }
       if (account.status === "active" && !current.requestUri)
         await db.delete("auth-flows", current.id);
       else await save(current);
