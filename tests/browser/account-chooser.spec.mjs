@@ -1,63 +1,39 @@
 import { test, expect } from "@playwright/test";
-import { readFileSync } from "node:fs";
-import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
+import { createSharedEmailPair } from "./support/email-chooser-fixture.mjs";
 import {
-  bindAccountsToSharedEmail,
-  createRealAccount,
-} from "./support/email-chooser-fixture.mjs";
+  beginAuthorization,
+  config,
+  consentForm,
+  finishConsent,
+  requestVisibleCode,
+  selectionForm,
+  verifyVisibleCode,
+} from "./support/oauth-client.mjs";
 
-const config = JSON.parse(
-  readFileSync(
-    process.env.SERVICE_CONFIG_PATH ?? "./.runtime/config.json",
-    "utf8",
-  ),
-);
-const databasePath =
-  process.env.TEST_ACCOUNT_DATABASE_PATH ??
-  "/entryway-data/account-authority.sqlite";
 const runId = Date.now().toString(36);
+let shared;
 
-function consentForm(page, did) {
-  return page
-    .locator('form[action="/auth/consent"]')
-    .filter({ has: page.locator(`input[name="did"][value="${did}"]`) });
-}
+test.describe.configure({ mode: "serial" });
 
-function selectionForm(page, did) {
-  return page
-    .locator('form[action="/auth/select"]')
-    .filter({ has: page.locator(`input[name="did"][value="${did}"]`) });
-}
+test.beforeAll(async ({ browser }) => {
+  test.setTimeout(180_000);
+  shared = await createSharedEmailPair(browser, { prefix: "ch", runId });
+});
 
-async function beginAuthorization(page, { prompt = "consent" } = {}) {
-  const login = new URL("/client/login", config.clientUrl);
-  login.searchParams.set("identifier", config.issuer);
-  login.searchParams.set("client", "primary");
-  login.searchParams.set("prompt", prompt);
-  await page.goto(login.href);
+/** Open the client sign-in and verify the shared email, ending at the chooser. */
+async function reachChooser(page) {
+  await beginAuthorization(page, { prompt: "consent" });
   await expect(page.getByLabel("Email address")).toBeVisible();
-}
+  const message = await requestVisibleCode(page, shared.email);
+  const beforeProof = await page.content();
+  for (const account of [shared.first, shared.second])
+    expect(beforeProof).not.toContain(account.did);
+  await expect(page.locator('form[action="/auth/select"]')).toHaveCount(0);
 
-async function requestVisibleCode(page, email) {
-  const since = Date.now();
-  await page.getByLabel("Email address").fill(email);
-  await page.getByRole("button", { name: "Send sign-in code" }).click();
+  await verifyVisibleCode(page, message.code);
   await expect(
-    page.getByRole("heading", { name: "Check your email" }),
+    page.getByRole("heading", { name: "Choose an account" }),
   ).toBeVisible();
-  return waitForMailpitCode({ recipient: email, since });
-}
-
-async function verifyVisibleCode(page, code) {
-  await page.getByLabel("Sign-in code").fill(code);
-  await page.getByRole("button", { name: "Verify code" }).click();
-}
-
-async function finishConsent(page, did) {
-  await consentForm(page, did)
-    .getByRole("button", { name: "Allow access" })
-    .click();
-  await expect(page.getByTestId("signed-in-did")).toHaveText(did);
 }
 
 async function assertOAuthSubjectAndWrite(page, account) {
@@ -82,77 +58,82 @@ async function assertOAuthSubjectAndWrite(page, account) {
   expect((await write.json()).uri).toContain(`at://${account.did}/`);
 }
 
-async function selectAndAuthorize(browser, email, accounts, selected) {
+// Each DID completes its own journey in a fresh context, so a regression that
+// only breaks consent, token subject or writes for one binding still fails.
+for (const which of ["first", "second"]) {
+  test(`verified-email chooser completes sign-in as the ${which} DID and keeps OAuth writes account-scoped`, async ({
+    browser,
+  }) => {
+    test.setTimeout(180_000);
+    const { first, second } = shared;
+    const chosen = shared[which];
+    const context = await browser.newContext({ ignoreHTTPSErrors: false });
+    try {
+      const page = await context.newPage();
+      await reachChooser(page);
+      await expect(page.locator('form[action="/auth/select"]')).toHaveCount(2);
+      for (const account of [first, second])
+        await expect(selectionForm(page, account.did)).toHaveCount(1);
+
+      const form = selectionForm(page, chosen.did);
+      const submitted = await form.evaluate((element) =>
+        Object.fromEntries(new FormData(element).entries()),
+      );
+
+      await form.getByRole("button").click();
+      await expect(consentForm(page, chosen.did)).toBeVisible();
+
+      await finishConsent(page, chosen.did);
+      const replay = await page.request.post(`${config.issuer}/auth/select`, {
+        maxRedirects: 0,
+        headers: { origin: config.issuer },
+        form: submitted,
+      });
+      expect(replay.status()).toBe(400);
+      expect(await replay.text()).toContain("This sign-in has expired");
+      await assertOAuthSubjectAndWrite(page, chosen);
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+test("each linked account has its own button and status, and consent can return to the chooser", async ({
+  browser,
+}) => {
+  test.setTimeout(180_000);
+  const { first, second } = shared;
   const context = await browser.newContext({ ignoreHTTPSErrors: false });
   try {
     const page = await context.newPage();
-    await beginAuthorization(page);
-    const message = await requestVisibleCode(page, email);
+    await reachChooser(page);
+    for (const account of [first, second]) {
+      const option = page
+        .locator("div.account")
+        .filter({ has: selectionForm(page, account.did) });
+      await expect(option).toContainText(account.handle);
+      await expect(option).toContainText(`${account.did} · active`);
+      await expect(
+        option.getByRole("button", { name: "Continue with this account" }),
+      ).toHaveCount(1);
+    }
 
-    const beforeProof = await page.content();
-    for (const account of accounts)
-      expect(beforeProof).not.toContain(account.did);
-    await expect(page.locator('form[action="/auth/select"]')).toHaveCount(0);
-
-    await verifyVisibleCode(page, message.code);
+    await selectionForm(page, first.did).getByRole("button").click();
+    await expect(consentForm(page, first.did)).toBeVisible();
+    await page
+      .getByRole("button", { name: "Choose a different account" })
+      .click();
     await expect(
       page.getByRole("heading", { name: "Choose an account" }),
     ).toBeVisible();
     await expect(page.locator('form[action="/auth/select"]')).toHaveCount(2);
-    for (const account of accounts)
-      await expect(selectionForm(page, account.did)).toHaveCount(1);
 
-    const form = selectionForm(page, selected.did);
-    const submitted = await form.evaluate((element) =>
-      Object.fromEntries(new FormData(element).entries()),
-    );
-
-    await form.getByRole("button").click();
-    await expect(consentForm(page, selected.did)).toBeVisible();
-
-    await finishConsent(page, selected.did);
-    const replay = await page.request.post(`${config.issuer}/auth/select`, {
-      maxRedirects: 0,
-      headers: { origin: config.issuer },
-      form: submitted,
-    });
-    expect(replay.status()).toBe(400);
-    expect(await replay.text()).toContain("This sign-in has expired");
-    await assertOAuthSubjectAndWrite(page, selected);
+    await selectionForm(page, second.did).getByRole("button").click();
+    await expect(consentForm(page, second.did)).toBeVisible();
+    await expect(consentForm(page, first.did)).toHaveCount(0);
+    // The client shows the last chosen account, not the first one.
+    await finishConsent(page, second.did);
   } finally {
     await context.close();
   }
-}
-
-test("verified-email chooser selects each real DID after OTP and keeps OAuth writes account-scoped", async ({
-  browser,
-}) => {
-  test.setTimeout(180_000);
-  const sharedEmail = `chooser-${runId}-shared@example.test`;
-  const first = {
-    email: sharedEmail,
-    handle: `ch-${runId}-o.entryway.atmosbox.test`,
-    pdsId: "pds1",
-  };
-  const second = {
-    email: `chooser-${runId}-second@example.test`,
-    handle: `ch-${runId}-t.entryway.atmosbox.test`,
-    pdsId: "pds2",
-  };
-  await createRealAccount(browser, first);
-  await createRealAccount(browser, second);
-
-  await bindAccountsToSharedEmail({
-    first,
-    second,
-    email: sharedEmail,
-    databasePath,
-  });
-
-  // Each DID completes its own fresh journey after the email is shared, so a
-  // regression that issues the wrong subject for either account fails here.
-  // The second DID lives on another PDS, proving the chooser continues the
-  // selected account rather than the first binding.
-  for (const selected of [first, second])
-    await selectAndAuthorize(browser, sharedEmail, [first, second], selected);
 });

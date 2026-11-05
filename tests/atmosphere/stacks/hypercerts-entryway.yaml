@@ -56,6 +56,8 @@ services:
       MAIL_SMTP_HOST: mail-capture
       MAIL_SMTP_PORT: "2525"
       BROWSER_CLIENT_METADATA_URL: https://browser.atmosbox.internal/oauth-client-metadata.json
+      # Replaces the built-in default (primary only); untrusted is left out on purpose.
+      OAUTH_TRUSTED_CLIENTS: https://client.entryway.example.com/client-metadata.json,https://client.entryway.example.com/client-metadata-secondary.json
       SOURCE_FIXTURE_URL: http://source-fixture:3313
       SOURCE_FIXTURE_TOKEN_FILE: /run/secrets/source-fixture-token
     depends_on:

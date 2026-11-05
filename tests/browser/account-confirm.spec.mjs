@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
+import { setAccountPassword } from "./support/account-password.mjs";
 
 test.use({ trace: "off", screenshot: "off", video: "off" });
 
@@ -29,6 +30,21 @@ const midFlow = {
   pdsId: "pds2",
 };
 const midFlowBackupEmail = `midflow-backup-${run}@example.com`;
+const lockout = {
+  email: `lockout-${run}@example.com`,
+  handle: `lockout-${run}.entryway.atmosbox.test`,
+  pdsId: "pds1",
+};
+const exempt = {
+  email: `exempt-${run}@example.com`,
+  handle: `exempt-${run}.entryway.atmosbox.test`,
+  pdsId: "pds1",
+};
+const passwordChange = {
+  email: `pwchange-${run}@example.com`,
+  handle: `pwchange-${run}.entryway.atmosbox.test`,
+  pdsId: "pds2",
+};
 
 const accountForm = (page, action) =>
   page.locator(`form[action="/account/${action}"]`);
@@ -310,6 +326,126 @@ test("a change submitted after the ten-minute window is not made; the user confi
     ).toBeVisible();
     const again = await addRecoveryEmail(page, midFlowBackupEmail);
     await verifyRecoveryEmail(page, midFlowBackupEmail, again.code);
+  } finally {
+    await context.close();
+  }
+});
+
+test("five wrong codes lock a confirmation code until a new one is sent", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({ ignoreHTTPSErrors: false });
+  const page = await context.newPage();
+  try {
+    await signIn(page, lockout, { create: true });
+    ageSessions(lockout.email, 11);
+    await page.getByRole("link", { name: "Set account password" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Confirm it's you" }),
+    ).toBeVisible();
+
+    const since = Date.now();
+    await page.getByRole("button", { name: "Send code" }).click();
+    const sent = await waitForMailpitCode({
+      recipient: lockout.email,
+      since,
+    });
+    const wrong = sent.code === "00000000" ? "11111111" : "00000000";
+    const submit = async (code) => {
+      await page.getByLabel("Confirmation code").fill(code);
+      const response = posted(page, "/account/confirm");
+      await page.getByRole("button", { name: "Confirm and continue" }).click();
+      expect((await response).status()).toBe(400);
+      await expect(page.getByRole("alert")).toContainText(
+        "Invalid or already used token",
+      );
+    };
+    for (let guess = 0; guess < 5; guess++) await submit(wrong);
+    // The code is spent: even the right one no longer works.
+    await submit(sent.code);
+
+    const resendSince = Date.now();
+    await page.getByRole("button", { name: "Send a new code" }).click();
+    await expect(page.getByText("We sent a new code")).toBeVisible();
+    const fresh = await waitForMailpitCode({
+      recipient: lockout.email,
+      since: resendSince,
+      excludeIds: [sent.messageId],
+    });
+    await page.getByLabel("Confirmation code").fill(fresh.code);
+    await page.getByRole("button", { name: "Confirm and continue" }).click();
+    await expect(
+      accountForm(page, "password-set").getByLabel("New account password"),
+    ).toBeVisible();
+  } finally {
+    await context.close();
+  }
+});
+
+test("a session past the ten-minute window still revokes app passwords, changes the handle and starts deletion without confirming", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({ ignoreHTTPSErrors: false });
+  const page = await context.newPage();
+  const appPassword = `Exempt ${run}`;
+  const handle = `chg-${run}.entryway.atmosbox.test`;
+  const confirmHeading = page.getByRole("heading", {
+    name: "Confirm it's you",
+  });
+  try {
+    await signIn(page, exempt, { create: true });
+    await page.getByRole("link", { name: "Create app password" }).click();
+    await accountForm(page, "app-password-create")
+      .getByLabel("App password name")
+      .fill(appPassword);
+    await accountForm(page, "app-password-create").getByRole("button").click();
+    await expect(
+      page.getByRole("heading", { name: "App password created" }),
+    ).toBeVisible();
+
+    ageSessions(exempt.email, 11);
+    await page.goto(new URL("/account", config.issuer).href);
+    const row = page.locator("#passwords li").filter({ hasText: appPassword });
+    await row.getByRole("button", { name: "Revoke app password" }).click();
+    await expect(page.locator("#passwords")).not.toContainText(appPassword);
+    await expect(confirmHeading).toHaveCount(0);
+
+    await page.getByLabel("New handle").fill(handle);
+    await page.getByRole("button", { name: "Update handle" }).click();
+    await expect(page.locator("main")).toContainText(handle);
+    await expect(confirmHeading).toHaveCount(0);
+
+    await page
+      .getByLabel("Type your handle to delete this test account")
+      .fill(handle);
+    await page.getByRole("button", { name: "Delete test account" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Confirm account deletion" }),
+    ).toBeVisible();
+  } finally {
+    await context.close();
+  }
+});
+
+test("changing an existing password asks only for the new one", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({ ignoreHTTPSErrors: false });
+  const page = await context.newPage();
+  try {
+    await signIn(page, passwordChange, { create: true });
+    await page.getByRole("link", { name: "Set account password" }).click();
+    await setAccountPassword(page, `First password ${run}!`);
+
+    // Setting a password signs every session out; a fresh sign-in is enough
+    // proof to change it, with no current password.
+    await signIn(page, passwordChange);
+    await page.getByRole("link", { name: "Change account password" }).click();
+    await expect(
+      accountForm(page, "password-set").getByLabel("New account password"),
+    ).toBeVisible();
+    await expect(page.getByLabel(/current password/i)).toHaveCount(0);
+    await setAccountPassword(page, `Second password ${run}!`);
   } finally {
     await context.close();
   }

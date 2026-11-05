@@ -110,12 +110,23 @@ export async function mountClient({ app, config, db }) {
   const metadataPaths = {
     primary: "/client-metadata.json",
     secondary: "/client-metadata-secondary.json",
+    untrusted: "/client-metadata-untrusted.json",
   };
   const callbackPaths = {
     primary: "/client/callback",
     secondary: "/client/callback/secondary",
+    untrusted: "/client/callback/untrusted",
   };
-  for (const id of ["primary", "secondary"]) {
+  const clientNames = {
+    primary: "Hypercerts test client",
+    secondary: "Hypercerts second test client",
+    untrusted: "Hypercerts untrusted test client",
+  };
+  // ePDS signup consent skip opt-in. The sandbox trusts primary and secondary
+  // (OAUTH_TRUSTED_CLIENTS), so secondary skips consent on signup, untrusted
+  // opts in without trust and must still show it, and primary does not opt in.
+  const skipsConsentOnSignup = new Set(["secondary", "untrusted"]);
+  for (const id of Object.keys(metadataPaths)) {
     const jwk = await db.transact(async () => {
       const stored = await db.get("client:keys", id);
       if (stored) return stored;
@@ -134,10 +145,7 @@ export async function mountClient({ app, config, db }) {
     clients[id] = new NodeOAuthClient({
       clientMetadata: {
         client_id: `${origin}${metadataPaths[id]}`,
-        client_name:
-          id === "primary"
-            ? "Hypercerts test client"
-            : "Hypercerts second test client",
+        client_name: clientNames[id],
         client_uri: `${origin}/`,
         redirect_uris: [`${origin}${callbackPaths[id]}`],
         scope: DEFAULT_SCOPE,
@@ -278,7 +286,12 @@ export async function mountClient({ app, config, db }) {
           "Access-Control-Allow-Origin": "*",
           "Cache-Control": "public, max-age=60",
         })
-        .json(clients[id].clientMetadata),
+        .json({
+          ...clients[id].clientMetadata,
+          ...(skipsConsentOnSignup.has(id)
+            ? { epds_skip_consent_on_signup: true }
+            : {}),
+        }),
     );
   }
   router.get(
@@ -360,7 +373,10 @@ export async function mountClient({ app, config, db }) {
   router.get(
     Object.values(callbackPaths),
     route(async (req, res) => {
-      const id = req.path === callbackPaths.secondary ? "secondary" : "primary";
+      const id =
+        Object.keys(callbackPaths).find(
+          (key) => callbackPaths[key] === req.path,
+        ) ?? "primary";
       const browser = await readBrowser(req, res);
       const params = new URL(req.originalUrl, origin).searchParams;
       const state = params.get("state");

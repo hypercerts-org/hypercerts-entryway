@@ -1,55 +1,72 @@
 import { expect } from "@playwright/test";
-import { readFileSync } from "node:fs";
 import { createAccounts } from "../../../dist/src/compose-accounts.mjs";
 import { openDatabase } from "../../../dist/src/database/connection.js";
-import { waitForMailpitCode } from "../../support/helpers/mailpit.mjs";
+import {
+  beginAuthorization,
+  config,
+  databasePath,
+  requestVisibleCode,
+} from "./oauth-client.mjs";
 
-const config = JSON.parse(
-  readFileSync(
-    process.env.SERVICE_CONFIG_PATH ?? "./.runtime/config.json",
-    "utf8",
-  ),
-);
-
-async function requestVisibleCode(page, email) {
-  const since = Date.now();
-  await page.getByLabel("Email address").fill(email);
-  await page.getByRole("button", { name: "Send sign-in code" }).click();
+/**
+ * Sign up `account` through an OAuth client and stop after "Create account",
+ * so callers can assert what follows: a consent page, or straight back to the
+ * client when a trusted client skips consent on signup.
+ */
+export async function startSignup(page, account, { client = "primary" } = {}) {
+  await beginAuthorization(page, { client, prompt: "create" });
+  await expect(page.getByLabel("Email address")).toBeVisible();
+  const message = await requestVisibleCode(page, account.email);
+  await page.getByLabel("Sign-in code").fill(message.code);
+  await page.getByRole("button", { name: "Verify code" }).click();
   await expect(
-    page.getByRole("heading", { name: "Check your email" }),
+    page.getByRole("heading", { name: "Create your account" }),
   ).toBeVisible();
-  return waitForMailpitCode({ recipient: email, since });
+  await page.getByLabel("Handle", { exact: true }).fill(account.handle);
+  await page.getByLabel("Personal data server").selectOption(account.pdsId);
+  await page.getByRole("button", { name: "Create account" }).click();
+}
+
+/** Complete a primary-client signup, including consent, on `page`. */
+export async function signUpOnPage(page, account) {
+  await startSignup(page, account);
+  const consent = page.locator('form[action="/auth/consent"]');
+  await expect(consent).toBeVisible();
+  account.did = await consent.locator('input[name="did"]').inputValue();
+  await consent.getByRole("button", { name: "Allow access" }).click();
+  await expect(page.getByTestId("signed-in-did")).toHaveText(account.did);
+  return account;
 }
 
 export async function createRealAccount(browser, account) {
   const context = await browser.newContext({ ignoreHTTPSErrors: false });
   try {
-    const page = await context.newPage();
-    const login = new URL("/client/login", config.clientUrl);
-    login.searchParams.set("identifier", config.issuer);
-    login.searchParams.set("client", "primary");
-    login.searchParams.set("prompt", "create");
-    await page.goto(login.href);
-    await expect(page.getByLabel("Email address")).toBeVisible();
-
-    const message = await requestVisibleCode(page, account.email);
-    await page.getByLabel("Sign-in code").fill(message.code);
-    await page.getByRole("button", { name: "Verify code" }).click();
-    await expect(
-      page.getByRole("heading", { name: "Create your account" }),
-    ).toBeVisible();
-    await page.getByLabel("Handle", { exact: true }).fill(account.handle);
-    await page.getByLabel("Personal data server").selectOption(account.pdsId);
-    await page.getByRole("button", { name: "Create account" }).click();
-    const consent = page.locator('form[action="/auth/consent"]');
-    await expect(consent).toBeVisible();
-    account.did = await consent.locator('input[name="did"]').inputValue();
-    await consent.getByRole("button", { name: "Allow access" }).click();
-    await expect(page.getByTestId("signed-in-did")).toHaveText(account.did);
-    return account;
+    return await signUpOnPage(await context.newPage(), account);
   } finally {
     await context.close();
   }
+}
+
+/**
+ * Two real accounts on different PDSs that share `email` the way migration or
+ * import shares it. Handles stay within the 18-character label limit.
+ */
+export async function createSharedEmailPair(browser, { prefix, runId }) {
+  const email = `${prefix}-${runId}-shared@example.test`;
+  const first = {
+    email,
+    handle: `${prefix}-${runId}-o.entryway.atmosbox.test`,
+    pdsId: "pds1",
+  };
+  const second = {
+    email: `${prefix}-${runId}-second@example.test`,
+    handle: `${prefix}-${runId}-t.entryway.atmosbox.test`,
+    pdsId: "pds2",
+  };
+  await createRealAccount(browser, first);
+  await createRealAccount(browser, second);
+  await bindAccountsToSharedEmail({ first, second, email, databasePath });
+  return { email, first, second };
 }
 
 export async function bindAccountsToSharedEmail({
