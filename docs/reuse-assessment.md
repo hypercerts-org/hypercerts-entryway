@@ -69,6 +69,20 @@ moderation, credential lifetime and production qualification.
 5. **Email coverage:** sending login OTP through SMTP does not prove every XRPC
    email challenge is delivered through the same transport.
 
+## Incoming public mechanism provenance
+
+For maintainers evaluating incoming migration, the reference PDS 0.5.36
+implementation exposes unauthenticated DID-keyed repository-key reservation and
+forwards activation to Entryway when configured. Its repository export captures a
+root before paging blocks; import applies a verified diff, and missing-blob
+pagination operates on a mutable set. These implementation observations do not
+establish source finality or a destination write barrier. The managed standalone
+source image is separately pinned to PDS 0.5.34; inspect its version-specific
+behavior rather than assuming full equivalence. The synthetic migration fixture
+and repository inventory comparison are reuse candidates, not public end-to-end
+qualification or proof of a historical source signature. See the blocked contract
+gates in [incoming migration](incoming-migration.md#contract-qualification-gates-for-implementers).
+
 ## Custody design reference
 
 The approved model follows [Rust Entryway in atproto-crates](https://tangled.org/ngerakines.me/atproto-crates)

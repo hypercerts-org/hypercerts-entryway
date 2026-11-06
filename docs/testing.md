@@ -79,8 +79,11 @@ qualification phase. After `up`, the qualification phase creates a unique accoun
 on the standalone PDS, requests a PLC confirmation through its public API, reads
 its recipient-bound message from Mailpit and uses the token for public signing.
 The controller applies the repository-owned SMTP overlay to pds3 after startup.
-This preflight is not repository migration or completeness evidence. Use the
-owned-project cleanup procedure below, including after failures.
+The preflight verifies the signed PLC operation against the source's observed
+rotation keys. It does not qualify repository migration, reservation behavior,
+source snapshot finality or activation-race safety. Additional public mechanism
+qualification and acceptance remain pending; see the [contract gates](incoming-migration.md#contract-qualification-gates-for-implementers).
+Use the owned-project cleanup procedure below, including after failures.
 
 Runtime configuration uses `SERVICE_CONFIG_PATH` (default `./.runtime/config.json`).
 `DATABASE_BACKEND` selects SQLite or PostgreSQL and `DEPLOYMENT_MODE` selects the

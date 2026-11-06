@@ -92,7 +92,10 @@ sequenceDiagram
     end
 
     Browser->>Entryway: 1. Verify email with OTP and prepare arrival
-    Entryway->>Destination: Reserve repository signing key
+    Entryway->>Entryway: Persist arrival, DID and selected PDS allocation intent
+    Entryway->>Destination: POST reserveSigningKey with incoming DID (no auth)
+    Destination-->>Entryway: Public signingKey; private key stays on PDS
+    Entryway->>Entryway: Persist validated key with same arrival, DID and PDS
     Entryway-->>Browser: Arrival code and public preparation facts
     Browser->>Tool: Explicit user handoff of arrival code
 
@@ -107,6 +110,7 @@ sequenceDiagram
     Tool->>Source: Obtain fresh createAccount-scoped service JWT
     Source-->>Tool: Creation authorization
     Tool->>Entryway: 3. Create account with arrival code and admission fields
+    Note over Entryway,Destination: Entryway rotation authority signs move containing PDS public key
     Entryway->>Destination: Create with Entryway-signed destination move
     Destination->>PLC: Publish destination move
     Note over Destination,PLC: Identity cutover happens BEFORE data import
@@ -190,10 +194,28 @@ handle, and confirms the migration. Entryway checks email uniqueness and atomica
 records the verified user ID, email/handle reservations, selected PDS, source PLC
 head and key facts, approved custody configuration and operation ID.
 
-Entryway journals the allocation obligation before reserving a repository signing
-key on the selected PDS through its existing contract. The preparation response
-contains arrival authorization, the Entryway service DID, explicit source and
-destination endpoints, the expected PLC predecessor and public handoff configuration.
+The storage work in plan 009 must persist the allocation intent, including the
+operation/arrival ID, incoming DID and selected PDS identity and endpoint, before
+plan 010 dispatches the unauthenticated public request:
+
+```http
+POST /xrpc/com.atproto.server.reserveSigningKey
+Content-Type: application/json
+
+{"did":"<incoming DID>"}
+```
+
+The response is `{"signingKey":"<public did:key>"}`. Although the upstream DID
+field is optional, Entryway must supply the admitted DID and validate the public
+key. Plan 009 must persist that result against the same immutable tuple; a changed
+DID, PDS or key cannot overwrite it. Plan 010 uses that saved key for destination
+creation and plan 011 checks the expected public identity and readiness. These
+consumer interfaces are not yet defined or implemented.
+
+The private repository key remains on the selected PDS. Reservation is not source
+ownership proof. The preparation response contains arrival authorization, the
+Entryway service DID, explicit source and destination endpoints, the expected PLC
+predecessor and public handoff configuration.
 
 A supplied DID or reservation does not establish account ownership. Source proof
 is required separately, and admission rate limits bound reservation abuse.
@@ -248,9 +270,11 @@ when applicable, and arrival-code header. A submit-scoped JWT cannot authorize
 creation.
 
 Entryway matches the supplied facts to the saved arrival and applies invitation
-policy before backend creation. It signs and journals the destination PLC operation
-with the reserved repository key, target endpoint and approved destination custody.
-The selected PDS receives that operation in its stock creation request, publishes
+policy before backend creation. It journals a destination PLC operation containing
+the reserved public repository key in `verificationMethods.atproto`, the target
+endpoint and approved destination custody. Entryway signs that operation with its
+PLC rotation authority, not the PDS repository private key. The selected PDS consumes
+its local private reservation during stock creation, publishes
 the identity move and creates the account active.
 
 ### 4. Deactivation, binding and migration access
@@ -343,6 +367,21 @@ After cutover, recovery no longer requires a source-key JWT because that key is 
 longer the current repository verification key. Replacement credentials recover a
 lost response without repeating account provisioning.
 
+### Reservation uncertainty
+
+The inspected stock PDS implementation can return the same saved public key for
+sequential calls with the same DID on the same PDS. Its read/generate/write sequence
+is not an atomic concurrent-reservation guarantee, nor a promise of indefinite
+retention. A lost response or failed local persistence requires bounded
+same-DID/same-PDS reconciliation under the current operation owner; an uncertain
+remote write cannot be made safe merely by lease expiry. Do not switch placement,
+blindly allocate again after creation, or overwrite a different recorded key.
+The upstream reservation contract exposes no expiry or cancel API. Successful
+creation attempts remote reservation cleanup on a best-effort, nonfatal basis;
+a subsequent reservation is not a safe way to recover the used key. Local
+cancellation does not remove remote private material. The exact safe retry and
+fencing contract remains blocked pending the decisions below.
+
 ### Cancellation
 
 Abandoned arrivals are not automatically deleted. Before handoff dispatch,
@@ -367,6 +406,40 @@ and release of conflicting work.
 
 Recovery records retain public custody evidence and safe operation identifiers.
 Reports exclude OTPs, arrival codes, bearer tokens and private keys.
+
+## Contract qualification gates for implementers
+
+These are unresolved delivery gates, not implemented public APIs. The upstream
+facts below are inspection of pinned PDS 0.5.36; the standalone qualification
+source uses the separately pinned 0.5.34 image. The source and destination versions
+must not be treated as interchangeable.
+
+- **C1 — BLOCKED:** plans 010 and 012 need approved exact preparation, renewal,
+  cancellation and recovery paths, request and response shapes, errors, replay
+  bindings, OTP freshness and rate budgets. The arrival header is proposed, not a
+  substitute for an approved endpoint contract.
+- **C2 — BLOCKED:** plans 009 and 010 need callable conditional persistence and
+  ownership signatures for the allocation tuple above, including an uncertain
+  reservation result and competing remote dispatch. Sequential retry is not
+  concurrency fencing. A maintainer must approve a safe resolution for uncertainty.
+- **C3 — BLOCKED:** plans 009, 011 and 012 need the exact pending projection,
+  shared guard and tracked credential/refresh interfaces and their atomic boundaries.
+  Stock PDS activation delegates to Entryway when configured; its callback must use
+  the same guard. Stock import and blob upload check takedown, not deactivation;
+  a standard backend bearer is not a migration-only credential.
+- **C4 — BLOCKED:** plan 011 needs authenticated historical source key and head,
+  full source and destination inventories, all missing-blob pages and a supported
+  finality/activation barrier. The stock export captures a root before paging blocks;
+  inspection alone does not prove a consistent export under writes. The missing-blob
+  set can change between pages, and a callback guard alone does not fence an in-flight
+  import or write. Maintainers must choose an evidence and mutation-serialization
+  guarantee that closes both source finality and destination activation races without
+  private freeze, client assertions or an arbitrary quiet period. No such choice is
+  implied by this guide. Empty and blob-free repositories remain valid inputs.
+- **C5 — BLOCKED:** plans 009–012 need exact owner/fence and observation signatures
+  for accepted replay after expiry or key cutover, remote dispatch uncertainty,
+  partial PLC publication, creation and activation response loss, and cancellation.
+  Lease expiry alone does not prevent an earlier remote write.
 
 ## Related documentation
 
