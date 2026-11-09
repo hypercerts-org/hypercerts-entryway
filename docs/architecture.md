@@ -266,6 +266,34 @@ Past that budget nothing is sent; the page shows the email form, still bound to
 that account, with a note naming the masked address. Typing the email sends a
 code under the shared budget.
 
+Yellow steps count against the account's two automatic codes; blue steps
+count against the email's five. Counters reset at fixed ten-minute marks.
+
+```mermaid
+flowchart TD
+    A["Hinted login<br/>login_hint = handle or DID<br/>(first load or reload)"] --> E{"Fewer than 2 automatic codes<br/>sent to this account<br/>in this 10-minute window?"}
+
+    E -- yes --> S1["Send code automatically"]
+    S1 --> CP["Check your email<br/>(masked address)"]
+    E -- no --> EF["Email form<br/>'We recently sent codes to ***a.***t@...'<br/>nothing sent"]
+
+    CP -- "Send a new code" --> E
+    CP -- "Change email (typed)" --> SH
+    EF -- "User types email" --> SH{"Fewer than 5 codes<br/>sent to this email<br/>in this 10-minute window?"}
+
+    SH -- yes --> S2["Send code"]
+    SH -- no --> L["'Too many codes for this email.<br/>Wait ten minutes.'"]
+    S2 --> CP2["Check your email"]
+    CP --> V["Verify code"]
+    CP2 --> V
+    V --> CON["Consent page"] --> OK["Signed in"]
+
+    classDef auto fill:#fde68a,stroke:#b45309,color:#000
+    classDef shared fill:#bfdbfe,stroke:#1d4ed8,color:#000
+    class E,S1 auto
+    class SH,S2 shared
+```
+
 An email `login_hint` on the redirect URL sends no code when the email belongs
 to exactly one active account with a fresh remembered session in this browser,
 matching what the provider does for a handle hint. With no `prompt` and the
