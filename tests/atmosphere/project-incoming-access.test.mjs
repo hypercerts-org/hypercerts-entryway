@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { projectIncomingAccess } from "./project-incoming-access.mjs";
 
@@ -134,7 +135,9 @@ test("CLI projects a real JSON file without exposing extra fields", () => {
     const result = spawnSync(
       process.execPath,
       [
-        new URL("./project-incoming-access.mjs", import.meta.url).pathname,
+        fileURLToPath(
+          new URL("./project-incoming-access.mjs", import.meta.url),
+        ),
         accessPath,
         project,
         routes.sourceUrl,
@@ -160,7 +163,7 @@ test("CLI projects a real JSON file without exposing extra fields", () => {
 test("CLI requires explicit arguments and fails without them", () => {
   const result = spawnSync(
     process.execPath,
-    [new URL("./project-incoming-access.mjs", import.meta.url).pathname],
+    [fileURLToPath(new URL("./project-incoming-access.mjs", import.meta.url))],
     { encoding: "utf8" },
   );
   assert.notEqual(result.status, 0);

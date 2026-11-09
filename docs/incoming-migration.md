@@ -389,10 +389,13 @@ and [C5](#c5-dispatch-and-recovery-contract-accepted).
 
 ### Cancellation
 
-Abandoned arrivals are not automatically deleted. Before handoff dispatch,
-cancellation can release reservations only after checking for remote obligations
-and changed PLC state. Once publication is possible, observed or uncertain, the
-arrival and reservations remain available for reconciliation.
+Abandoned arrivals are not automatically deleted. Cancellation can release local
+state only before any allocation intent is persisted, and even then only after
+checking for remote obligations and changed PLC state. Preparation persists the
+allocation intent before it asks the destination for a signing key, so an arrival
+that reached preparation already has a reservation row and cannot be released. Once
+publication is possible, observed or uncertain, the arrival and reservations remain
+available for reconciliation.
 
 Deleting local state cannot remove published Entryway authority. Reversal requires
 an authorized PLC operation; it is not an expiry side effect. The
@@ -482,6 +485,12 @@ logs, URLs, metric labels and error messages. Renewal issues a new code and
 generation and invalidates the previous code for authentication; the previous code
 must fail with the expired error rather than a distinct replay signal.
 
+A lost preparation response leaves the caller holding nothing usable, because the
+saved hash cannot reproduce the code. Recovery is `renew` from a fresh destination
+proof: it issues a new code and generation for the same arrival and invalidates the
+previous code, so no second arrival is created. Renewal is refused once the arrival is
+provisioned, and the caller resumes through `recover` from C3 instead.
+
 Errors. Each code is stable and mapped explicitly, and no message carries a secret.
 
 | Condition | Error code | HTTP status |
@@ -496,8 +505,12 @@ Errors. Each code is stable and mapped explicitly, and no message carries a secr
 | Dispatch state makes cancellation unsafe | `OperationRecoveryRequired` | 409 |
 
 Replay. `prepare` with the same verified user, DID and handle is idempotent and
-returns the same saved operation. A changed DID or handle for the user is a conflict,
-not a second arrival. `cancel` is idempotent and returns the already cancelled state.
+returns the same saved operation while that operation is still actionable. A changed
+DID or handle for the user is a conflict, not a second arrival. A cancelled operation
+is retained as history and is not reused: once its reservations are released the same
+user may prepare that DID and handle again, which starts a new operation rather than
+resurrecting the cancelled one. `cancel` is idempotent and returns the already
+cancelled state.
 Partial success is reported explicitly: a cancellation that cannot release remote
 obligations returns `OperationRecoveryRequired` with the arrival still saved, never a
 success.
@@ -695,14 +708,16 @@ What is qualified, and its limits. The accepted bounded run on this revision
 within the limits those committed tests declare. These are bounded observations from
 that run, not guarantees, and reproof requires a fresh sandbox run:
 
-- Source CAR export verified against the observed repository key, including one
-  nonempty snapshot with bounded export-write overlap. The case asserts a CAR size
-  limit and per-phase budgets; withholding the final client byte does not establish
-  universal finality.
+- Source CAR exports verified against the observed repository key, including a
+  nonempty snapshot. Two export requests were started before a write was dispatched,
+  which shows request ordering only and does not establish server-side overlap. The
+  case asserts a CAR size limit and per-phase budgets; withholding the final client
+  byte does not establish universal finality.
 - Source snapshot capture, signature verification and record inventory comparison are
   qualified only within those budgets for that snapshot.
 - Inactive destination: an Entryway-hosted inactive destination accepted a streamed
-  import and destination readback, within the observed limits.
+  import and destination readback, within the observed limits. Withholding the final
+  client byte does not establish server receipt of the prefix or universal finality.
 - Reservation: sequential same-DID retry and placement isolation only.
 
 What remains unqualified: blob retention across pages, pagination of a mutable
@@ -771,9 +786,12 @@ isolation and drain attestations, an `observe` to `retry-if-safe` upgrade, and a
 fenced execution that observes remote state before acknowledging. It is a candidate
 reuse for public arrival, not automatic coverage.
 
-Cancellation safe point. Cancellation releases reservations only before dispatch and
-only when no remote obligation exists and the canonical PLC state is unchanged. Once
-publication is possible, observed or uncertain, custody and admission are retained.
+Cancellation safe point. Cancellation releases local reservations only before any
+allocation intent is persisted, and only when no remote obligation exists and the
+canonical PLC state is unchanged. Because preparation persists the allocation intent
+before dispatching the reservation, a prepared arrival always carries a reservation
+row and stays pending for reconciliation rather than being released. Once publication
+is possible, observed or uncertain, custody and admission are retained.
 
 Partial outcomes. A partial PLC publication with an absent backend stays pending
 unless an explicitly reviewed repair applies; the managed migration exact-head repair

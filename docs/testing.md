@@ -96,11 +96,21 @@ Case counts and what they mean. One live-gated test runs two further subcases, s
 full opt-in run reports more cases than the file declares. The file declares fifteen
 top-level tests: twelve offline and three live-gated. A full opt-in run reports 17
 cases, which is 12 offline plus 5 live. Only those 5 live cases form the public
-qualification. Without the opt-in environment the same command runs
-the offline tests and reports the three live-gated tests skipped; those skips are not
-qualification. At the time of writing, a native run of the file with no sandbox
-reports 12 passed and 3 skipped, which is the offline subset only. A live count is a
-claim about a sandbox run and must not be reported from this document.
+qualification.
+
+`tests/local.sh incoming-public-mechanisms` always exports
+`INCOMING_PUBLIC_MECHANISMS=1` for the container, so unsetting the variable does not
+turn that command into an offline run. To run only the offline cases natively, use:
+
+```sh
+env -u INCOMING_PUBLIC_MECHANISMS -u INCOMING_ACCESS_PATH node --test \
+  tests/contracts/incoming-public-mechanisms.test.mjs
+```
+
+That run reports the three live-gated tests skipped; those skips are not
+qualification. At the time of writing, that native run reports 12 passed and 3
+skipped, which is the offline subset only. A live count is a claim about a sandbox run
+and must not be reported from this document.
 
 The offline cases cover the managed request boundary and phase budgets. They do not
 prove any public behavior, and no Entryway endpoint or route implements this
