@@ -3,6 +3,7 @@ import express from "express";
 import {
   JoseKey,
   NodeOAuthClient,
+  isExpectedSessionError,
   requestLocalLock,
 } from "@atproto/oauth-client-node";
 import { escapeHtml, page } from "../../src/ui/html.mjs";
@@ -291,9 +292,12 @@ export async function mountClient({ app, config, db }) {
       let session;
       try {
         session = await clients[id].restore(did);
-      } catch {
+      } catch (error) {
         // A revoked session (e.g. after a password change) can never be
         // restored; forget it so the home page does not fail on every visit.
+        // Other failures, such as an authorization-server 5xx during refresh,
+        // may be temporary, so they surface and keep the saved session.
+        if (!isExpectedSessionError(error)) throw error;
         delete browser.subjects[id];
         await db.set("client:browsers", browser.id, browser);
         return render(
