@@ -88,7 +88,8 @@ Entryway-hosted inactive destination accepting a streamed import, and sequential
 same-DID reservation with placement isolation. That run is bounded by its own
 committed byte and phase budgets and does not establish finality, blob pagination
 or an activation barrier. C4 therefore stays blocked, while C1, C2, C3 and C5 are
-proposed contracts awaiting per-case acceptance; see the contract gates in
+accepted contracts whose callables the downstream plans must still produce; see the
+contract gates in
 [incoming migration](incoming-migration.md#contract-qualification-gates-for-implementers).
 
 ## Custody design reference

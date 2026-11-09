@@ -211,7 +211,7 @@ field is optional, Entryway must supply the admitted DID and validate the public
 key. Plan 009 must persist that result against the same immutable tuple; a changed
 DID, PDS or key cannot overwrite it. Plan 010 uses that saved key for destination
 creation and plan 011 checks the expected public identity and readiness. These
-consumer interfaces are proposed in [C2](#c2-persisted-arrival-contract-proposed-acceptance-held)
+consumer interfaces are specified in [C2](#c2-persisted-arrival-contract-accepted)
 and not implemented.
 
 The private repository key remains on the selected PDS. Reservation is not source
@@ -384,8 +384,8 @@ The upstream reservation contract exposes no expiry or cancel API. Successful
 creation attempts remote reservation cleanup on a best-effort, nonfatal basis;
 a subsequent reservation is not a safe way to recover the used key. Local
 cancellation does not remove remote private material. The exact retry and fencing
-contract is proposed in [C2](#c2-persisted-arrival-contract-proposed-acceptance-held)
-and [C5](#c5-dispatch-and-recovery-contract-proposed), and both await acceptance.
+contract is specified in [C2](#c2-persisted-arrival-contract-accepted)
+and [C5](#c5-dispatch-and-recovery-contract-accepted).
 
 ### Cancellation
 
@@ -423,8 +423,8 @@ exposes, accepts or gates it.
 Read each gate as a producer/consumer handoff. A contract becomes usable by
 downstream code only when this section states both the exact call shape and the
 failure behavior, and a maintainer accepts it per case. C1, C2, C3 and C5 are
-**PROPOSED** and await that acceptance. C4 remains **BLOCKED** on a named maintainer
-decision described below.
+**ACCEPTED**; the maintainer decisions behind them are recorded inline as M1 to M4.
+C4 remains **BLOCKED** on the named maintainer decision described below.
 
 Source and destination versions stay distinct. The upstream facts here are
 inspection of pinned PDS 0.5.36, and the standalone qualification source is the
@@ -448,7 +448,7 @@ consumer must use these named producers, not restate the numbers.
 The accepted 24-hour arrival code lifetime is a reservation lifetime for one
 arrival. It is not an OTP freshness window and does not extend any proof above.
 
-### C1 wire and admission contract (PROPOSED)
+### C1 wire and admission contract (ACCEPTED)
 
 Owner: plan 010 prepares and manages arrival lifecycle; plan 012 owns the wire
 adapter. Consumers: the browser pages in plans 010 and 012, and the migration tool
@@ -507,7 +507,7 @@ Standard XRPC bodies keep their shapes and carry the arrival code in the propose
 `com.atproto.server.createAccount`. The arrival code never substitutes for
 `inviteCode`, and invitation policy is unchanged.
 
-Proposed callables. Plan 010 owns the first three and plan 011 owns the last:
+Callables. Plan 010 owns the first three and plan 011 owns the last:
 
 ```text
 prepareArrival(principal, proof, {did, handle}) -> prepared arrival
@@ -518,11 +518,15 @@ recoverArrival(principal, proof, {operationId, expectedVersion})
   -> standard tracked credential fields
 ```
 
-Awaiting acceptance: maintainers must confirm that the existing per-IP reservation
-budget above is the intended arrival budget and state the renewal and reservation
-budgets. This guide asserts no new numeric budget.
+Accepted decision M1 (budgets). Arrival wiring reuses the existing limits in
+[existing policy](#existing-policy-these-contracts-reuse) and adds no new numeric
+budget. Reservation requests keep the existing 30-per-IP limit in
+`src/plc/xrpc-routes.mjs:7`. Preparation and renewal use the existing challenge
+producer in `src/accounts/challenges.mjs:22-29`, which is five requests per
+600-second bucket per purpose and subject. A consumer must call that producer rather
+than restate or retune these numbers.
 
-### C2 persisted arrival contract (PROPOSED, acceptance held)
+### C2 persisted arrival contract (ACCEPTED)
 
 Owner: plan 010 produces the reservation result and plan 009 owns conditional
 persistence. Consumers: 010 for destination creation signing and 011 for readiness.
@@ -538,7 +542,7 @@ validated result is durable against that same tuple:
    incoming DID and validates a public `did:key`.
 3. Persist the validated public key against the same operation, DID and PDS.
 
-Proposed callables, all owned by plan 009. Each returns a new version or a stable
+Callables, all owned by plan 009. Each returns a new version or a stable
 outcome, and none overwrites an already-saved tuple member.
 
 ```text
@@ -580,11 +584,15 @@ drained allocation may allocate again. Any uncertain or divergent result retains
 `OperationRecoveryRequired` until the operator recovery in
 [shared operations](shared-operations.md#supported-operator-recovery) applies.
 
-Awaiting acceptance: maintainers must confirm that existing operator isolation and
-drain evidence is sufficient for an arrival reservation, and whether any automatic
-safe retry is permitted. Automatic safe retry stays unqualified.
+Accepted decision M2 (retry). Existing operator isolation and drain evidence is
+sufficient for an arrival reservation. Automatic retry is permitted only for the
+worker that still owns the live operation and whose fence is current, and only after
+it has re-read the saved attempt and confirmed that no other dispatch is in flight.
+Every other case retains `OperationRecoveryRequired`. A worker may not retry after
+lease expiry, after losing ownership, or on behalf of another worker, and no caller
+may promote the sequential same-DID observation into a concurrency guarantee.
 
-### C3 lifecycle and credential contract (PROPOSED)
+### C3 lifecycle and credential contract (ACCEPTED)
 
 Owner: plan 009 owns the atomic association, binding, claims and checkpoint writes.
 Plans 011 and 012 consume the projection, guard and credential interfaces below.
@@ -664,12 +672,15 @@ require one.
 Saved-user recovery after cutover is distinct from source JWT authorization before
 it. Recovery uses the saved verified user binding and never an email match alone.
 
-Awaiting acceptance: maintainers must decide the family policy for
-`recoverArrivalSession`, specifically whether recovery revokes prior refresh families
-or leaves them usable. Revoking local family state does not revoke stateless
-stock-PDS access tokens already issued, and this guide makes no such claim. The
-destination permission and callback runtime proof also remains unrun; authoring the
-guard contract does not qualify it.
+Accepted decision M3 (recovery families). `recoverArrivalSession` revokes every prior
+refresh family for that arrival in the same committed association that issues the new
+one. Earlier families cannot be refreshed afterwards. Revoking local family state
+does not revoke stateless stock-PDS access tokens already issued, so already-issued
+access tokens remain usable until they expire. Entryway must state that gap wherever
+it describes recovery rather than implying full revocation.
+
+The destination permission and callback runtime proof also remains unrun; authoring
+the guard contract does not qualify it.
 
 ### C4 completeness contract (BLOCKED)
 
@@ -710,7 +721,7 @@ is agreed, how later source changes invalidate prior readiness, and whether sour
 availability or source-supplied authorization is required after cutover. Empty and
 blob-free repositories remain valid inputs.
 
-### C5 dispatch and recovery contract (PROPOSED)
+### C5 dispatch and recovery contract (ACCEPTED)
 
 Owner: plans 009 to 012 share one owner/fence and observation contract. The only
 callable seam today is the generic dispatch at
@@ -725,7 +736,7 @@ expected version:
 owner = {operationId, workerId, executionAttemptId, fence}
 ```
 
-Proposed callables:
+Callables:
 
 ```text
 beginExternalAttempt(tx, owner, expectedVersion, {target, method, publicIntent}) -> attemptId
@@ -769,9 +780,13 @@ unless an explicitly reviewed repair applies; the managed migration exact-head r
 must not be extrapolated to public arrival. Activation response loss retains its
 attempt until exact completion or drain evidence permits reconciliation.
 
-Awaiting acceptance: maintainers must state the permission and evidence required for
-each repair and retry of a public arrival. The open question is not whether lease
-expiry suffices; it does not.
+Accepted decision M4 (repair permission). The affected user may resume the exact
+accepted operation at any time; that continuation never creates new authority and
+always replays the saved signed facts. An operator may additionally reconcile a
+partial outcome, but only with canonical observation evidence recorded for that
+attempt. Lease expiry alone authorizes no repair and permits no new remote write, and
+no automatic repair exists. A repair whose evidence is missing, uncertain or
+divergent retains `OperationRecoveryRequired`.
 
 ## Related documentation
 

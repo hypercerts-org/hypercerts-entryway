@@ -109,8 +109,8 @@ migration: the contract test consumes stock PDS APIs, not Entryway handlers.
 The preflight verifies the signed PLC operation against the source's observed
 rotation keys. The remaining contracts are still open in the
 [contract gates](incoming-migration.md#contract-qualification-gates-for-implementers):
-C4 finality and activation-race closure stay BLOCKED, and C1, C2, C3 and C5 are
-proposed and await per-case acceptance.
+C4 finality and activation-race closure stay BLOCKED; C1, C2, C3 and C5 are accepted
+contracts whose callables the downstream plans must still produce.
 
 The helper used by this phase has its own focused test,
 `tests/support/helpers/incoming-public-io.test.mjs`. Contract auto-discovery does not
