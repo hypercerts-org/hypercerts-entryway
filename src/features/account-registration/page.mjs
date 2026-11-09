@@ -82,7 +82,10 @@ export function createSignupForm({ db, config, accounts, fields }) {
     const handleField = suffix
       ? `<div style="display:flex;align-items:center;gap:.25rem">${handleInput}<span id="handle-suffix" style="white-space:nowrap">${escapeHtml(suffix)}</span></div>`
       : handleInput;
-    return `<p>${intro}</p><form method="post" action="/auth/account">${fields(flow, browser)}<label for="handle">Handle</label>${handleField}${suggestions}<small>${suffix ? `Enter a name; ${escapeHtml(suffix)} is added for you.` : handleHelp}</small><label for="pdsId">Personal data server</label><select id="pdsId" name="pdsId" ${retry ? "disabled" : ""}>${pdsOptions}</select>${inviteInput}<button ${recoveryRequired ? "disabled" : ""}>${button}</button></form>`;
+    const handleHint = suffix
+      ? "Enter a name; " + escapeHtml(suffix) + " is added for you."
+      : handleHelp;
+    return `<p>${intro}</p><form method="post" action="/auth/account">${fields(flow, browser)}<label for="handle">Handle</label>${handleField}${suggestions}<small>${handleHint}</small><label for="pdsId">Personal data server</label><select id="pdsId" name="pdsId" ${retry ? "disabled" : ""}>${pdsOptions}</select>${inviteInput}<button ${recoveryRequired ? "disabled" : ""}>${button}</button></form>`;
   };
   return signupForm;
 }
