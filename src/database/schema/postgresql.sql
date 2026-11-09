@@ -75,6 +75,20 @@ CREATE TABLE "arrival_reservations" (
 	CONSTRAINT "arrival_reservation_key" CHECK (("signing_key" IS NULL) OR "signing_key" LIKE 'did:key:z%')
 );
 --> statement-breakpoint
+CREATE TABLE "arrival_signed_operations" (
+	"operation_id" text,
+	"kind" text,
+	"did" text NOT NULL,
+	"cid" text NOT NULL,
+	"operation" text NOT NULL,
+	"kind_operation_cid" text NOT NULL,
+	"recorded_at" bigint NOT NULL,
+	CONSTRAINT "arrival_signed_operations_pkey" PRIMARY KEY("operation_id","kind"),
+	CONSTRAINT "arrival_signed_kind" CHECK ("kind" IN ('handoff','destination-move')),
+	CONSTRAINT "arrival_signed_did" CHECK ("did" LIKE 'did:%'),
+	CONSTRAINT "arrival_signed_cid" CHECK ("cid" LIKE 'baf%')
+);
+--> statement-breakpoint
 CREATE TABLE "arrivals" (
 	"operation_id" text PRIMARY KEY,
 	"did" text NOT NULL,
@@ -86,6 +100,7 @@ CREATE TABLE "arrivals" (
 	"pds_id" text NOT NULL,
 	"endpoint" text NOT NULL,
 	"source_plc_head" text NOT NULL,
+	"source_endpoint" text,
 	"version" bigint NOT NULL,
 	"generation" bigint NOT NULL,
 	"created_at" bigint NOT NULL,
@@ -298,6 +313,7 @@ CREATE UNIQUE INDEX "accounts_handle_ci" ON "accounts" (lower("handle"));--> sta
 CREATE INDEX "accounts_pds_status" ON "accounts" ("pds_id","status");--> statement-breakpoint
 CREATE INDEX "arrival_attempt_operation" ON "arrival_attempts" ("operation_id");--> statement-breakpoint
 CREATE INDEX "arrival_family_operation" ON "arrival_families" ("operation_id","revoked_at");--> statement-breakpoint
+CREATE UNIQUE INDEX "arrival_signed_kind_cid" ON "arrival_signed_operations" ("operation_id","kind_operation_cid");--> statement-breakpoint
 CREATE UNIQUE INDEX "arrivals_did_active" ON "arrivals" ("did_root");--> statement-breakpoint
 CREATE INDEX "arrivals_did" ON "arrivals" ("did","created_at");--> statement-breakpoint
 CREATE INDEX "arrivals_user" ON "arrivals" ("user_id","created_at");--> statement-breakpoint
@@ -330,6 +346,7 @@ ALTER TABLE "arrival_attempts" ADD CONSTRAINT "arrival_attempts_operation_id_arr
 ALTER TABLE "arrival_code" ADD CONSTRAINT "arrival_code_operation_id_arrivals_operation_id_fkey" FOREIGN KEY ("operation_id") REFERENCES "arrivals"("operation_id");--> statement-breakpoint
 ALTER TABLE "arrival_families" ADD CONSTRAINT "arrival_families_operation_id_arrivals_operation_id_fkey" FOREIGN KEY ("operation_id") REFERENCES "arrivals"("operation_id");--> statement-breakpoint
 ALTER TABLE "arrival_reservations" ADD CONSTRAINT "arrival_reservations_operation_id_arrivals_operation_id_fkey" FOREIGN KEY ("operation_id") REFERENCES "arrivals"("operation_id");--> statement-breakpoint
+ALTER TABLE "arrival_signed_operations" ADD CONSTRAINT "arrival_signed_operations_lgIMaTRt2yjc_fkey" FOREIGN KEY ("operation_id") REFERENCES "arrivals"("operation_id");--> statement-breakpoint
 ALTER TABLE "backup_emails" ADD CONSTRAINT "backup_emails_did_accounts_did_fkey" FOREIGN KEY ("did") REFERENCES "accounts"("did");--> statement-breakpoint
 ALTER TABLE "custody_history" ADD CONSTRAINT "custody_history_Hb73d4yN25nV_fkey" FOREIGN KEY ("supporting_observation_id") REFERENCES "custody_observations"("id");--> statement-breakpoint
 ALTER TABLE "email_claims" ADD CONSTRAINT "email_claims_did_accounts_did_fkey" FOREIGN KEY ("did") REFERENCES "accounts"("did");--> statement-breakpoint

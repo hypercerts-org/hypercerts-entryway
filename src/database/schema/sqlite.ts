@@ -184,6 +184,7 @@ export const arrivals = table(
     pds_id: text("pds_id").notNull(),
     endpoint: text("endpoint").notNull(),
     source_plc_head: text("source_plc_head").notNull(),
+    source_endpoint: text("source_endpoint"),
     version: count("version").notNull(),
     generation: count("generation").notNull(),
     created_at: count("created_at").notNull(),
@@ -265,6 +266,35 @@ export const arrival_reservations = table(
       "arrival_reservation_key",
       sql`(${t.signing_key} IS NULL) OR ${t.signing_key} LIKE 'did:key:z%'`,
     ),
+  ],
+);
+// Signed public PLC bytes for one arrival and signature kind. Private keys never
+// reach this table; an operation or CID is immutable once recorded.
+export const arrival_signed_operations = table(
+  "arrival_signed_operations",
+  {
+    operation_id: text("operation_id")
+      .notNull()
+      .references(() => arrivals.operation_id),
+    kind: text("kind").notNull(),
+    did: text("did").notNull(),
+    cid: text("cid").notNull(),
+    operation: text("operation").notNull(),
+    kind_operation_cid: text("kind_operation_cid").notNull(),
+    recorded_at: count("recorded_at").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.operation_id, t.kind] }),
+    uniqueIndex("arrival_signed_kind_cid").on(
+      t.operation_id,
+      t.kind_operation_cid,
+    ),
+    check(
+      "arrival_signed_kind",
+      sql`${t.kind} IN ('handoff','destination-move')`,
+    ),
+    check("arrival_signed_did", sql`${t.did} LIKE 'did:%'`),
+    check("arrival_signed_cid", sql`${t.cid} LIKE 'baf%'`),
   ],
 );
 export const arrival_replay = table(

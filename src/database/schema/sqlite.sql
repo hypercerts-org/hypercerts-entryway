@@ -82,6 +82,21 @@ CREATE TABLE `arrival_reservations` (
 	CONSTRAINT "arrival_reservation_key" CHECK(("signing_key" IS NULL) OR "signing_key" LIKE 'did:key:z%')
 );
 --> statement-breakpoint
+CREATE TABLE `arrival_signed_operations` (
+	`operation_id` text NOT NULL,
+	`kind` text NOT NULL,
+	`did` text NOT NULL,
+	`cid` text NOT NULL,
+	`operation` text NOT NULL,
+	`kind_operation_cid` text NOT NULL,
+	`recorded_at` integer NOT NULL,
+	CONSTRAINT `arrival_signed_operations_pk` PRIMARY KEY(`operation_id`, `kind`),
+	CONSTRAINT `fk_arrival_signed_operations_operation_id_arrivals_operation_id_fk` FOREIGN KEY (`operation_id`) REFERENCES `arrivals`(`operation_id`),
+	CONSTRAINT "arrival_signed_kind" CHECK("kind" IN ('handoff','destination-move')),
+	CONSTRAINT "arrival_signed_did" CHECK("did" LIKE 'did:%'),
+	CONSTRAINT "arrival_signed_cid" CHECK("cid" LIKE 'baf%')
+);
+--> statement-breakpoint
 CREATE TABLE `arrivals` (
 	`operation_id` text PRIMARY KEY,
 	`did` text NOT NULL,
@@ -93,6 +108,7 @@ CREATE TABLE `arrivals` (
 	`pds_id` text NOT NULL,
 	`endpoint` text NOT NULL,
 	`source_plc_head` text NOT NULL,
+	`source_endpoint` text,
 	`version` integer NOT NULL,
 	`generation` integer NOT NULL,
 	`created_at` integer NOT NULL,
@@ -314,6 +330,7 @@ CREATE UNIQUE INDEX `accounts_handle_ci` ON `accounts` (lower("handle"));--> sta
 CREATE INDEX `accounts_pds_status` ON `accounts` (`pds_id`,`status`);--> statement-breakpoint
 CREATE INDEX `arrival_attempt_operation` ON `arrival_attempts` (`operation_id`);--> statement-breakpoint
 CREATE INDEX `arrival_family_operation` ON `arrival_families` (`operation_id`,`revoked_at`);--> statement-breakpoint
+CREATE UNIQUE INDEX `arrival_signed_kind_cid` ON `arrival_signed_operations` (`operation_id`,`kind_operation_cid`);--> statement-breakpoint
 CREATE UNIQUE INDEX `arrivals_did_active` ON `arrivals` (`did_root`);--> statement-breakpoint
 CREATE INDEX `arrivals_did` ON `arrivals` (`did`,`created_at`);--> statement-breakpoint
 CREATE INDEX `arrivals_user` ON `arrivals` (`user_id`,`created_at`);--> statement-breakpoint

@@ -1,3 +1,4 @@
+import { cidForCbor } from "@atproto/common";
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { DomainError } from "../../accounts/errors.js";
 import { normalizeEmail } from "../../accounts/rules.js";
@@ -8,7 +9,10 @@ import { isObservedArrivalActivation } from "../../features/external-migration/a
 import type {
   ArrivalAccess,
   ArrivalRecord,
+  ArrivalSignedOperationRecord,
 } from "../../features/external-migration/arrival-types.js";
+import { PlcError } from "../../plc/errors.js";
+import { validateHistoryOperation } from "../../plc/policy.js";
 
 const signingKeyPattern = /^did:key:z[1-9A-HJ-NP-Za-km-z]+$/;
 const digestPattern = /^[a-f0-9]{64}$/;
@@ -61,6 +65,24 @@ export interface ArrivalAuthority {
   recordSavedUserBinding(did: string, userId: string): Promise<void>;
 }
 
+const canonicalFact = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(canonicalFact).join(",")}]`;
+  if (typeof value === "object" && value !== null)
+    return `{${Object.entries(value)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalFact(item)}`)
+      .join(",")}}`;
+  return JSON.stringify(value);
+};
+const carriesPrivateMaterial = (value: Record<string, unknown>): boolean =>
+  ["sig", "signature", "privateKey", "privateKeys"].some((key) => key in value);
+const sameTuple = (
+  saved: StoredRow<"arrival_signed_operations">,
+  input: ArrivalSignedOperationRecord,
+): boolean =>
+  saved.did === input.did &&
+  saved.cid === input.cid &&
+  canonicalFact(JSON.parse(saved.operation)) === canonicalFact(input.operation);
 function arrivalRecord(
   row: StoredRow<"arrivals">,
   reservation: StoredRow<"arrival_reservations"> | undefined,
@@ -96,6 +118,7 @@ export function createArrivalStorage(
   const reservationTable = db.tables.arrival_reservations;
   const replayTable = db.tables.arrival_replay;
   const familyTable = db.tables.arrival_families;
+  const signedTable = db.tables.arrival_signed_operations;
 
   const row = async (operationId: string) =>
     (
@@ -472,6 +495,101 @@ export function createArrivalStorage(
               },
               eq(reservationTable.operation_id, input.operationId),
             );
+          return {
+            kind: "applied" as const,
+            version: await advance(saved, {}),
+          };
+        });
+      });
+    },
+
+    async recordSignedOperation(owner, expectedVersion, input) {
+      assertClaim(owner);
+      if (!input.operationId || !input.did.startsWith("did:"))
+        throw new DomainError(
+          "InvalidAccount",
+          400,
+          "A signed operation belongs to one arrival and DID",
+        );
+      if (
+        "repositoryKey" in input &&
+        !signingKeyPattern.test(input.repositoryKey)
+      )
+        throw new DomainError(
+          "InvalidAccount",
+          400,
+          "A destination move names one validated public repository key",
+        );
+      if (carriesPrivateMaterial(input.operation))
+        throw new DomainError(
+          "InvalidAccount",
+          400,
+          "Signed public facts never carry private material",
+        );
+      let facts: unknown;
+      try {
+        facts = validateHistoryOperation(input.operation);
+      } catch (error) {
+        if (!(error instanceof PlcError)) throw error;
+        throw new DomainError(
+          "InvalidAccount",
+          400,
+          "A normalized public PLC operation is required",
+        );
+      }
+      if (input.cid !== String(await cidForCbor(facts)))
+        throw new DomainError(
+          "OperationConflict",
+          409,
+          "The signed operation does not match its CID",
+        );
+      const saved = await row(input.operationId);
+      if (!saved)
+        throw new DomainError("AccountNotFound", 404, "Arrival not found");
+      if (saved.did !== input.did) throw immutableTuple();
+      return db.transact(async () => {
+        if (saved.active === 0) throw notActionable();
+        return db.withOperationFence(owner, async () => {
+          const savedKinds = await db.read("arrival_signed_operations", {
+            where: eq(signedTable.operation_id, input.operationId),
+          });
+          const recorded = savedKinds.find(
+            (savedRow) => savedRow.kind === input.kind,
+          );
+          if (recorded) {
+            if (!sameTuple(recorded, input)) throw immutableTuple();
+            return {
+              kind: "already-settled" as const,
+              version: saved.version,
+            };
+          }
+          if (
+            !Number.isSafeInteger(expectedVersion) ||
+            saved.version !== expectedVersion
+          )
+            throw versionConflict();
+          if (input.kind === "destination-move") {
+            if (!savedKinds.some((savedRow) => savedRow.kind === "handoff"))
+              throw new DomainError(
+                "OperationConflict",
+                409,
+                "A destination move follows a saved source handoff",
+              );
+            if (
+              input.repositoryKey !==
+              (await reservation(input.operationId))?.signing_key
+            )
+              throw immutableTuple();
+          } else if (input.did !== saved.did) throw immutableTuple();
+          await db.insert("arrival_signed_operations", {
+            operation_id: input.operationId,
+            kind: input.kind,
+            did: input.did,
+            cid: input.cid,
+            operation: JSON.stringify(facts),
+            kind_operation_cid: `${input.kind}:${input.cid}`,
+            recorded_at: await db.databaseTime(),
+          });
           return {
             kind: "applied" as const,
             version: await advance(saved, {}),

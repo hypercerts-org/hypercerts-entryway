@@ -12,6 +12,7 @@ import type {
   ArrivalReplayFacts,
   ArrivalReplayReuse,
   ArrivalReservationResult,
+  ArrivalSignedOperationRecord,
   ArrivalUncertainAttempt,
 } from "../features/external-migration/arrival-types.js";
 import type { AccountTransactor } from "./accounts.port.js";
@@ -94,6 +95,14 @@ export interface ArrivalTransactor {
     owner: OperationClaim,
     expectedVersion: number,
     input: ArrivalReservationResult,
+  ): Promise<ArrivalOutcome>;
+  /** Immutable signed public handoff or destination move, journaled before dispatch.
+   * An exact repeat is idempotent without advancing the arrival version; any
+   * other operation or CID for the same kind conflicts instead of overwriting. */
+  recordSignedOperation(
+    owner: OperationClaim,
+    expectedVersion: number,
+    input: ArrivalSignedOperationRecord,
   ): Promise<ArrivalOutcome>;
   retainUncertainAttempt(
     owner: OperationClaim,

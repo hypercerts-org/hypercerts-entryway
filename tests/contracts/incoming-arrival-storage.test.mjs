@@ -11,6 +11,7 @@ import {
 import { createAccountStorage } from "../../dist/src/database/drizzle/account-storage.js";
 import { createArrivalStorage } from "../../dist/src/database/drizzle/migration-arrival.js";
 import { createOperationOwnershipStore } from "../../dist/src/database/drizzle/operation-ownership.js";
+import { cidForCbor } from "@atproto/common";
 
 const hosts = [
   { id: "pds1", url: "https://pds1.example.test" },
@@ -30,6 +31,31 @@ const persistedVersion = async (db, operationId) =>
   )[0].version;
 const head = (char) => "bafyreih".concat(char.repeat(52));
 const publicKey = (char) => "did:key:zQ3sh".concat(char.repeat(44));
+const fact = (char) => `did:key:zQ3sh${char.repeat(44)}`;
+const rotationKeys = [fact("P"), fact("S")];
+const predecessor = {};
+const plainCid = async (tag) => {
+  predecessor[tag] ??= String(await cidForCbor({ arrival: tag }));
+  return predecessor[tag];
+};
+const signFacts = async (tag, overrides = {}) => ({
+  type: "plc_operation",
+  rotationKeys,
+  verificationMethods: { atproto: publicKey("X") },
+  alsoKnownAs: ["at://dest.entryway.test"],
+  services: {
+    atproto_pds: {
+      type: "AtprotoPersonalDataServer",
+      endpoint,
+    },
+  },
+  prev: await plainCid(tag),
+  ...overrides,
+});
+const signed = async (tag = "a", overrides = {}) => {
+  const operation = await signFacts(tag, overrides);
+  return { operation, cid: String(await cidForCbor(operation)) };
+};
 
 async function fixture() {
   const db = await openTestDatabase(":memory:");
@@ -1592,6 +1618,311 @@ test("credential families associate only after binding and never replace signing
       ["family-1"],
     );
     assert.notEqual(rows[0].revoked_at, null);
+  } finally {
+    await db.close();
+  }
+});
+
+test("the arrival row has a source endpoint slot for the approved handoff facts", async () => {
+  const { db, prepare } = await fixture();
+  try {
+    await prepare();
+    assert.deepEqual(
+      await query(
+        db,
+        "SELECT endpoint, source_endpoint FROM arrivals WHERE operation_id = ?",
+        ["op-1"],
+      ),
+      [{ endpoint, source_endpoint: null }],
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("a signed handoff is journaled with a new version and an exact repeat does not advance", async () => {
+  const { db, arrivals, claim, prepare, allocate } = await fixture();
+  try {
+    const prepared = await prepare();
+    const version = await allocate(prepared.version);
+    const handoff = await signed();
+    const recorded = await arrivals.recordSignedOperation(claim, version, {
+      kind: "handoff",
+      operationId: "op-1",
+      did,
+      ...handoff,
+    });
+    assert.deepEqual(recorded, { kind: "applied", version: version + 1 });
+    assert.equal(await persistedVersion(db, "op-1"), version + 1);
+    assert.deepEqual(
+      await query(
+        db,
+        "SELECT kind, did, cid, operation, kind_operation_cid FROM arrival_signed_operations WHERE operation_id = ?",
+        ["op-1"],
+      ),
+      [
+        {
+          kind: "handoff",
+          did,
+          cid: handoff.cid,
+          operation: JSON.stringify(handoff.operation),
+          kind_operation_cid: `handoff:${handoff.cid}`,
+        },
+      ],
+    );
+    assert.deepEqual(
+      await arrivals.recordSignedOperation(claim, version + 1, {
+        kind: "handoff",
+        operationId: "op-1",
+        did,
+        ...handoff,
+      }),
+      { kind: "already-settled", version: version + 1 },
+    );
+    assert.equal(await persistedVersion(db, "op-1"), version + 1);
+    assert.equal(
+      (await query(db, "SELECT cid FROM arrival_signed_operations")).length,
+      1,
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("a changed handoff CID or operation is a conflict and never overwrites the saved bytes", async () => {
+  const { db, arrivals, claim, prepare, allocate } = await fixture();
+  try {
+    const prepared = await prepare();
+    const version = await allocate(prepared.version);
+    const handoff = await signed();
+    await arrivals.recordSignedOperation(claim, version, {
+      kind: "handoff",
+      operationId: "op-1",
+      did,
+      ...handoff,
+    });
+    const other = await signed("a", {
+      alsoKnownAs: ["at://changed.entryway.test"],
+    });
+    assert.notEqual(other.cid, handoff.cid);
+    for (const changed of [
+      { ...handoff, cid: other.cid },
+      { ...other, cid: handoff.cid },
+    ])
+      await assert.rejects(
+        arrivals.recordSignedOperation(claim, version + 1, {
+          kind: "handoff",
+          operationId: "op-1",
+          did,
+          ...changed,
+        }),
+        { code: "OperationConflict" },
+      );
+    assert.deepEqual(
+      await query(
+        db,
+        "SELECT cid, operation FROM arrival_signed_operations WHERE operation_id = ? AND kind = ?",
+        ["op-1", "handoff"],
+      ),
+      [{ cid: handoff.cid, operation: JSON.stringify(handoff.operation) }],
+    );
+    assert.equal(await persistedVersion(db, "op-1"), version + 1);
+  } finally {
+    await db.close();
+  }
+});
+
+test("a stale owner records no signed operation and leaves the arrival version unchanged", async () => {
+  const { db, arrivals, claim, prepare, allocate } = await fixture();
+  try {
+    const prepared = await prepare();
+    const version = await allocate(prepared.version);
+    await query(
+      db,
+      "UPDATE authority_operations SET lease_expires_at = ? WHERE id = ?",
+      [Date.now() - 1_000, claim.operationId],
+      "run",
+    );
+    await assert.rejects(
+      arrivals.recordSignedOperation(claim, version, {
+        kind: "handoff",
+        operationId: "op-1",
+        did,
+        ...(await signed()),
+      }),
+      { code: "OperationLeaseLost" },
+    );
+    assert.equal(
+      (await query(db, "SELECT cid FROM arrival_signed_operations")).length,
+      0,
+    );
+    assert.equal(await persistedVersion(db, "op-1"), version);
+  } finally {
+    await db.close();
+  }
+});
+
+test("a destination move is refused before a handoff and accepted after it", async () => {
+  const { db, arrivals, claim, prepare, allocate } = await fixture();
+  try {
+    const prepared = await prepare();
+    const version = await allocate(prepared.version);
+    const move = await signed("b");
+    await assert.rejects(
+      arrivals.recordSignedOperation(claim, version, {
+        kind: "destination-move",
+        operationId: "op-1",
+        did,
+        repositoryKey: publicKey("k"),
+        ...move,
+      }),
+      { code: "OperationConflict" },
+    );
+    assert.equal(
+      (await query(db, "SELECT cid FROM arrival_signed_operations")).length,
+      0,
+    );
+    assert.equal(await persistedVersion(db, "op-1"), version);
+
+    const handoff = await signed();
+    const handedOff = await arrivals.recordSignedOperation(claim, version, {
+      kind: "handoff",
+      operationId: "op-1",
+      did,
+      ...handoff,
+    });
+    assert.deepEqual(handedOff, { kind: "applied", version: version + 1 });
+    const recorded = await arrivals.recordSignedOperation(
+      claim,
+      handedOff.version,
+      {
+        kind: "destination-move",
+        operationId: "op-1",
+        did,
+        repositoryKey: publicKey("k"),
+        ...move,
+      },
+    );
+    assert.deepEqual(recorded, { kind: "applied", version: version + 2 });
+    assert.deepEqual(
+      await query(
+        db,
+        "SELECT kind, cid FROM arrival_signed_operations WHERE operation_id = ? ORDER BY kind",
+        ["op-1"],
+      ),
+      [
+        { kind: "destination-move", cid: move.cid },
+        { kind: "handoff", cid: handoff.cid },
+      ],
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("signed operations must match their CID and carry no private material", async () => {
+  const { db, arrivals, claim, prepare, allocate } = await fixture();
+  try {
+    const prepared = await prepare();
+    const version = await allocate(prepared.version);
+    const handoff = await signed();
+    await assert.rejects(
+      arrivals.recordSignedOperation(claim, version, {
+        kind: "handoff",
+        operationId: "op-1",
+        did,
+        operation: {
+          ...handoff.operation,
+          verificationMethods: { atproto: "did:key:zPrivateMaterial" },
+        },
+        cid: handoff.cid,
+      }),
+      { code: "InvalidAccount" },
+    );
+    const unsigned = {
+      ...handoff.operation,
+      verificationMethods: { atproto: "did:key:zQ3shnotavalidkey" },
+    };
+    await assert.rejects(
+      arrivals.recordSignedOperation(claim, version, {
+        kind: "handoff",
+        operationId: "op-1",
+        did,
+        operation: unsigned,
+        cid: String(await cidForCbor(unsigned)),
+      }),
+      { code: "InvalidAccount" },
+    );
+    assert.equal(
+      (await query(db, "SELECT cid FROM arrival_signed_operations")).length,
+      0,
+    );
+    assert.equal(await persistedVersion(db, "op-1"), version);
+  } finally {
+    await db.close();
+  }
+});
+
+test("signed operation rows are immutable at the database boundary on both dialects", async () => {
+  const { db, arrivals, claim, prepare, allocate } = await fixture();
+  try {
+    const prepared = await prepare();
+    const version = await allocate(prepared.version);
+    const handoff = await signed();
+    await arrivals.recordSignedOperation(claim, version, {
+      kind: "handoff",
+      operationId: "op-1",
+      did,
+      ...handoff,
+    });
+    await assert.rejects(
+      query(
+        db,
+        "INSERT INTO arrival_signed_operations (operation_id, kind, did, cid, operation, kind_operation_cid, recorded_at) VALUES (?, 'handoff', ?, ?, ?, ?, ?)",
+        [
+          "op-1",
+          did,
+          handoff.cid,
+          JSON.stringify(handoff.operation),
+          `handoff:${handoff.cid}`,
+          Date.now(),
+        ],
+        "run",
+      ),
+      hasFailure("arrival_signed_operations"),
+    );
+    await assert.rejects(
+      query(
+        db,
+        "INSERT INTO arrival_signed_operations (operation_id, kind, did, cid, operation, kind_operation_cid, recorded_at) VALUES (?, 'move', ?, ?, ?, ?, ?)",
+        [
+          "op-1",
+          did,
+          handoff.cid,
+          JSON.stringify(handoff.operation),
+          `move:${handoff.cid}`,
+          Date.now(),
+        ],
+        "run",
+      ),
+      hasFailure("arrival_signed_kind"),
+    );
+    await assert.rejects(
+      query(
+        db,
+        "INSERT INTO arrival_signed_operations (operation_id, kind, did, cid, operation, kind_operation_cid, recorded_at) VALUES (?, 'handoff', ?, ?, ?, ?, ?)",
+        [
+          "op-missing",
+          did,
+          handoff.cid,
+          JSON.stringify(handoff.operation),
+          `handoff:${handoff.cid}`,
+          Date.now(),
+        ],
+        "run",
+      ),
+      hasFailure("arrival_signed_operations"),
+    );
   } finally {
     await db.close();
   }

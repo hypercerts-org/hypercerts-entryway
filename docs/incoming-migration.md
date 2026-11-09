@@ -562,7 +562,16 @@ outcome, and none overwrites an already-saved tuple member.
 recordAllocationIntent(tx, owner, expectedVersion, {operationId, did, pdsId, endpoint})
 recordReservationResult(tx, owner, expectedVersion, {operationId, did, pdsId, endpoint, signingKey})
 retainUncertainAttempt(tx, owner, expectedVersion, attemptBinding)
+recordSignedOperation(tx, owner, expectedVersion, {operationId, did, kind, operation, cid})
 ```
+
+`recordSignedOperation` journals a signed public PLC operation before it is
+dispatched, where `kind` is `handoff` or `destination-move`. The CID must match the
+normalized operation bytes, a destination move cannot be recorded before its
+handoff, and private key material is rejected. Repeating the same operation and CID
+for a kind is idempotent and does not advance the version; a different operation or
+CID for that kind is a conflict. A caller holding the pre-record version may receive
+`already-settled`, so it must not treat that version as a fresh baseline.
 
 Binding rules these calls must enforce:
 

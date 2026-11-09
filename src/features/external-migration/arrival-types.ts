@@ -100,3 +100,28 @@ export interface ArrivalReplayReuse {
   readonly operationId: string;
   readonly generation: number;
 }
+
+/** Signed public bytes and their CID stay together; private keys never enter here. */
+export interface ArrivalSignedOperation {
+  readonly operation: Record<string, unknown>;
+  readonly cid: string;
+}
+
+/** Source-authorized authority-only handoff, recorded before directory submission. */
+export interface ArrivalHandoffRecord extends ArrivalSignedOperation {
+  readonly kind: "handoff";
+  readonly operationId: string;
+  readonly did: string;
+}
+
+/** Destination move signed for the reserved public repository key. */
+export interface ArrivalDestinationMoveRecord extends ArrivalSignedOperation {
+  readonly kind: "destination-move";
+  readonly operationId: string;
+  readonly did: string;
+  readonly repositoryKey: string;
+}
+
+export type ArrivalSignedOperationRecord =
+  | ArrivalHandoffRecord
+  | ArrivalDestinationMoveRecord;
