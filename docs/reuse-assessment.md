@@ -80,8 +80,16 @@ establish source finality or a destination write barrier. The managed standalone
 source image is separately pinned to PDS 0.5.34; inspect its version-specific
 behavior rather than assuming full equivalence. The synthetic migration fixture
 and repository inventory comparison are reuse candidates, not public end-to-end
-qualification or proof of a historical source signature. See the blocked contract
-gates in [incoming migration](incoming-migration.md#contract-qualification-gates-for-implementers).
+qualification or proof of a historical source signature.
+
+One bounded committed qualification run observed a real stock source CAR
+verification, a nonempty snapshot with bounded export-write overlap, an
+Entryway-hosted inactive destination accepting a streamed import, and sequential
+same-DID reservation with placement isolation. That run is bounded by its own
+committed byte and phase budgets and does not establish finality, blob pagination
+or an activation barrier. C4 therefore stays blocked, while C1, C2, C3 and C5 are
+proposed contracts awaiting per-case acceptance; see the contract gates in
+[incoming migration](incoming-migration.md#contract-qualification-gates-for-implementers).
 
 ## Custody design reference
 
