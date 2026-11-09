@@ -111,6 +111,78 @@ export function validateUnsignedOperation(
   return op;
 }
 
+/** Source facts an authority-only handoff must not alter. Comparison is exact
+ * and order-sensitive: a reordered rotation list is a different approved list. */
+export interface IncomingSourceFacts {
+  readonly services: plc.UnsignedOperation["services"];
+  readonly verificationMethods: plc.UnsignedOperation["verificationMethods"];
+  readonly alsoKnownAs: plc.UnsignedOperation["alsoKnownAs"];
+}
+
+/** Validate a source-signed authority-only handoff in its original encoding.
+ * The signature must prove the expected source predecessor, and the only change
+ * to the approved ordered rotation list may be adding the Entryway rotation key,
+ * within the protocol limit. Overfull lists, removals, reordering, unexpected
+ * keys, changed source facts and tombstones are rejected rather than truncated. */
+export async function validateIncomingHandoff(input: {
+  readonly operation: unknown;
+  readonly expectedPredecessor: unknown;
+  readonly approvedRotationKeys: readonly string[];
+  readonly source: IncomingSourceFacts;
+}): Promise<plc.Operation> {
+  const approved = [...input.approvedRotationKeys];
+  if (
+    approved.length < 2 ||
+    approved.length > 5 ||
+    new Set(approved).size !== approved.length
+  )
+    return invalid();
+  let candidate: plc.CompatibleOp;
+  let predecessor: plc.UnsignedOperation;
+  try {
+    approved.forEach(publicRotationKey);
+    predecessor = plc.normalizeOp(
+      plc.def.operation.parse(structuredClone(input.expectedPredecessor)),
+    );
+    // The handoff is always the current signed operation form, never legacy v1.
+    candidate = plc.def.operation.parse(structuredClone(input.operation));
+    if (candidate.prev !== String(await cidForCbor(predecessor)))
+      return invalid();
+    await plc.assureValidSig([...predecessor.rotationKeys], candidate);
+  } catch (error) {
+    if (error instanceof PlcError) throw error;
+    return invalid();
+  }
+  const facts = plc.normalizeOp(candidate);
+  if (facts.rotationKeys.length !== approved.length) return invalid();
+  for (let index = 0; index < approved.length; index += 1)
+    if (facts.rotationKeys[index] !== approved[index]) return invalid();
+  if (
+    JSON.stringify(facts.alsoKnownAs) !==
+      JSON.stringify(input.source.alsoKnownAs) ||
+    JSON.stringify(facts.verificationMethods) !==
+      JSON.stringify(input.source.verificationMethods) ||
+    JSON.stringify(facts.services) !== JSON.stringify(input.source.services)
+  )
+    return invalid();
+  return candidate;
+}
+
+/** A retried handoff resumes the saved bytes or conflicts; it never re-signs. */
+export function sameSignedOperation(left: unknown, right: unknown): boolean {
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (record(value))
+      return Object.fromEntries(
+        Object.entries(value)
+          .sort(([first], [second]) => (first < second ? -1 : 1))
+          .map(([key, item]) => [key, canonical(item)]),
+      );
+    return value;
+  };
+  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
+}
+
 export async function publicUpdateCandidate(
   current: unknown,
   replacement: unknown,
