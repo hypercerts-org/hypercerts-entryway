@@ -32,6 +32,85 @@ CREATE TABLE `accounts` (
 	`sequence` integer NOT NULL UNIQUE
 );
 --> statement-breakpoint
+CREATE TABLE `arrival_attempts` (
+	`attempt_binding` text PRIMARY KEY,
+	`operation_id` text NOT NULL,
+	`reason` text NOT NULL,
+	`recorded_at` integer NOT NULL,
+	`fence` integer NOT NULL,
+	CONSTRAINT `fk_arrival_attempts_operation_id_arrivals_operation_id_fk` FOREIGN KEY (`operation_id`) REFERENCES `arrivals`(`operation_id`)
+);
+--> statement-breakpoint
+CREATE TABLE `arrival_code` (
+	`operation_id` text PRIMARY KEY,
+	`code_hash` text NOT NULL,
+	`generation` integer NOT NULL,
+	`issued_at` integer NOT NULL,
+	`expires_at` integer NOT NULL,
+	CONSTRAINT `fk_arrival_code_operation_id_arrivals_operation_id_fk` FOREIGN KEY (`operation_id`) REFERENCES `arrivals`(`operation_id`),
+	CONSTRAINT "arrival_code_lifetime" CHECK("expires_at" > "issued_at"),
+	CONSTRAINT "arrival_code_ceiling" CHECK("expires_at" <= "issued_at" + 86400000)
+);
+--> statement-breakpoint
+CREATE TABLE `arrival_families` (
+	`family_id` text PRIMARY KEY,
+	`operation_id` text NOT NULL,
+	`pds_id` text NOT NULL,
+	`created_at` integer NOT NULL,
+	`revoked_at` integer,
+	CONSTRAINT `fk_arrival_families_operation_id_arrivals_operation_id_fk` FOREIGN KEY (`operation_id`) REFERENCES `arrivals`(`operation_id`)
+);
+--> statement-breakpoint
+CREATE TABLE `arrival_replay` (
+	`operation_id` text NOT NULL,
+	`method` text NOT NULL,
+	`request_digest` text NOT NULL,
+	`generation` integer NOT NULL,
+	`accepted_at` integer NOT NULL,
+	CONSTRAINT `arrival_replay_pk` PRIMARY KEY(`operation_id`, `method`, `request_digest`),
+	CONSTRAINT "arrival_replay_digest" CHECK(length("request_digest") = 64)
+);
+--> statement-breakpoint
+CREATE TABLE `arrival_reservations` (
+	`operation_id` text PRIMARY KEY,
+	`signing_key` text,
+	`uncertain_reason` text,
+	`uncertain_at` integer,
+	`recorded_at` integer,
+	CONSTRAINT `fk_arrival_reservations_operation_id_arrivals_operation_id_fk` FOREIGN KEY (`operation_id`) REFERENCES `arrivals`(`operation_id`),
+	CONSTRAINT "arrival_reservation_evidence" CHECK(("uncertain_reason" IS NULL AND "uncertain_at" IS NULL) OR ("uncertain_reason" IS NOT NULL AND "uncertain_at" IS NOT NULL)),
+	CONSTRAINT "arrival_reservation_key" CHECK(("signing_key" IS NULL) OR "signing_key" LIKE 'did:key:z%')
+);
+--> statement-breakpoint
+CREATE TABLE `arrivals` (
+	`operation_id` text PRIMARY KEY,
+	`did` text NOT NULL,
+	`did_root` text,
+	`active` integer NOT NULL,
+	`user_id` text NOT NULL,
+	`email` text NOT NULL,
+	`handle` text NOT NULL,
+	`pds_id` text NOT NULL,
+	`endpoint` text NOT NULL,
+	`source_plc_head` text NOT NULL,
+	`version` integer NOT NULL,
+	`generation` integer NOT NULL,
+	`created_at` integer NOT NULL,
+	`updated_at` integer NOT NULL,
+	`cancelled_at` integer,
+	`provisioned_at` integer,
+	`deactivated_at` integer,
+	`bound_at` integer,
+	`activation_method` text,
+	`activation_at` integer,
+	`completed_at` integer,
+	CONSTRAINT "arrival_active" CHECK("active" IN (0, 1)),
+	CONSTRAINT "arrival_tuple" CHECK(("active" = 1 AND "did_root" = "did") OR ("active" = 0 AND "did_root" IS NULL)),
+	CONSTRAINT "arrival_cancel" CHECK(("cancelled_at" IS NULL) OR ("cancelled_at" IS NOT NULL AND "active" = 0)),
+	CONSTRAINT "arrival_bound" CHECK(("bound_at" IS NULL) OR ("bound_at" IS NOT NULL AND "deactivated_at" IS NOT NULL)),
+	CONSTRAINT "arrival_complete" CHECK(("completed_at" IS NULL) OR ("completed_at" IS NOT NULL AND "bound_at" IS NOT NULL AND "activation_method" IS NOT NULL))
+);
+--> statement-breakpoint
 CREATE TABLE `authority_operations` (
 	`id` text PRIMARY KEY,
 	`kind` text NOT NULL,
@@ -233,6 +312,14 @@ CREATE INDEX `account_bindings_user_id` ON `account_bindings` (`user_id`);--> st
 CREATE INDEX `accounts_email_ci` ON `accounts` (lower("email"));--> statement-breakpoint
 CREATE UNIQUE INDEX `accounts_handle_ci` ON `accounts` (lower("handle"));--> statement-breakpoint
 CREATE INDEX `accounts_pds_status` ON `accounts` (`pds_id`,`status`);--> statement-breakpoint
+CREATE INDEX `arrival_attempt_operation` ON `arrival_attempts` (`operation_id`);--> statement-breakpoint
+CREATE INDEX `arrival_family_operation` ON `arrival_families` (`operation_id`,`revoked_at`);--> statement-breakpoint
+CREATE UNIQUE INDEX `arrivals_did_active` ON `arrivals` (`did_root`);--> statement-breakpoint
+CREATE INDEX `arrivals_did` ON `arrivals` (`did`,`created_at`);--> statement-breakpoint
+CREATE INDEX `arrivals_user` ON `arrivals` (`user_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `arrivals_email` ON `arrivals` (lower("email"));--> statement-breakpoint
+CREATE UNIQUE INDEX `arrivals_handle_active` ON `arrivals` (lower("handle")) WHERE "arrivals"."did_root" IS NOT NULL AND "arrivals"."cancelled_at" IS NULL AND "arrivals"."provisioned_at" IS NULL;--> statement-breakpoint
+CREATE INDEX `arrivals_handle` ON `arrivals` (lower("handle"),`created_at`);--> statement-breakpoint
 CREATE INDEX `authority_operation_lease` ON `authority_operations` (`state`,`lease_expires_at`);--> statement-breakpoint
 CREATE UNIQUE INDEX `backup_emails_ci` ON `backup_emails` (lower("email"));--> statement-breakpoint
 CREATE INDEX `custody_history_did` ON `custody_history` (`did`);--> statement-breakpoint

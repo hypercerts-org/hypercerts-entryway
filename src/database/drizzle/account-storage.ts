@@ -629,14 +629,24 @@ export function createAccountStorage(
       );
     },
     async hasPendingExternalMigration(did) {
-      return Boolean(
-        await one(
+      const [adopting, arrival] = await Promise.all([
+        one(
           "migration_reservations",
           and(
             eq(t.migration_reservations.did, did),
             ne(t.migration_reservations.state, "complete"),
           )!,
         ),
+        one(
+          "arrivals",
+          and(eq(t.arrivals.did, did), eq(t.arrivals.active, 1))!,
+        ),
+      ]);
+      return Boolean(adopting || arrival);
+    },
+    async hadPublishedPlcOperation(did) {
+      return Boolean(
+        await one("custody_operations", eq(t.custody_operations.did, did)),
       );
     },
     async listAccounts() {
@@ -670,7 +680,7 @@ export function createAccountStorage(
         and(eq(t.handle_claims.handle, handle), eq(t.handle_claims.did, did))!,
       );
     },
-    async finalizeImportedAccount(input) {
+    async bindProvisionedArrival(input) {
       return db.transact(async () => {
         const reservation = await one(
           "migration_reservations",
@@ -746,7 +756,7 @@ export function createAccountStorage(
         return row;
       });
     },
-    async activateImportedAccount(input) {
+    async activateBoundArrival(input) {
       return db.transact(async () => {
         const reservation = await one(
           "migration_reservations",

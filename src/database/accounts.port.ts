@@ -3,10 +3,10 @@ import type {
   EmailClaim,
   StoredEmailClaimPurpose,
   ExternalEmailReservation,
-  ActivateImportedAccount,
+  ActivateBoundArrival,
   BindVerifiedIdentity,
   ExternalMigrationReservation,
-  FinalizeImportedAccount,
+  BindProvisionedArrival,
   LegacyVerifiedEmail,
   OwnerSession,
   VerifiedBinding,
@@ -35,6 +35,8 @@ export interface AccountReader {
   getVerifiedBinding(did: string): Promise<VerifiedBinding | null>;
   getVerifiedOwner(input: OwnerSession): Promise<VerifiedOwner | null>;
   hasPendingExternalMigration(did: string): Promise<boolean>;
+  /** Observation only: whether this DID already has a saved published PLC operation. */
+  hadPublishedPlcOperation(did: string): Promise<boolean>;
   listAccounts(): Promise<AccountRow[]>;
 }
 
@@ -53,8 +55,8 @@ export interface AccountTransactor extends AccountReader {
   /** Bind an account to its verified email user. Callers must validate mailbox proof first. */
   bindAccountToVerifiedEmailUser(input: LegacyVerifiedEmail): Promise<string>;
   reserveExternalMigration(input: ExternalMigrationReservation): Promise<void>;
-  finalizeImportedAccount(input: FinalizeImportedAccount): Promise<AccountRow>;
-  activateImportedAccount(input: ActivateImportedAccount): Promise<AccountRow>;
+  bindProvisionedArrival(input: BindProvisionedArrival): Promise<AccountRow>;
+  activateBoundArrival(input: ActivateBoundArrival): Promise<AccountRow>;
   reserveEmail(
     email: string,
     did: string,

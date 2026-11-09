@@ -29,6 +29,81 @@ CREATE TABLE "accounts" (
 	"sequence" bigint NOT NULL UNIQUE
 );
 --> statement-breakpoint
+CREATE TABLE "arrival_attempts" (
+	"attempt_binding" text PRIMARY KEY,
+	"operation_id" text NOT NULL,
+	"reason" text NOT NULL,
+	"recorded_at" bigint NOT NULL,
+	"fence" bigint NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "arrival_code" (
+	"operation_id" text PRIMARY KEY,
+	"code_hash" text NOT NULL,
+	"generation" bigint NOT NULL,
+	"issued_at" bigint NOT NULL,
+	"expires_at" bigint NOT NULL,
+	CONSTRAINT "arrival_code_lifetime" CHECK ("expires_at" > "issued_at"),
+	CONSTRAINT "arrival_code_ceiling" CHECK ("expires_at" <= "issued_at" + 86400000)
+);
+--> statement-breakpoint
+CREATE TABLE "arrival_families" (
+	"family_id" text PRIMARY KEY,
+	"operation_id" text NOT NULL,
+	"pds_id" text NOT NULL,
+	"created_at" bigint NOT NULL,
+	"revoked_at" bigint
+);
+--> statement-breakpoint
+CREATE TABLE "arrival_replay" (
+	"operation_id" text,
+	"method" text,
+	"request_digest" text,
+	"generation" bigint NOT NULL,
+	"accepted_at" bigint NOT NULL,
+	CONSTRAINT "arrival_replay_pkey" PRIMARY KEY("operation_id","method","request_digest"),
+	CONSTRAINT "arrival_replay_digest" CHECK (length("request_digest") = 64)
+);
+--> statement-breakpoint
+CREATE TABLE "arrival_reservations" (
+	"operation_id" text PRIMARY KEY,
+	"signing_key" text,
+	"uncertain_reason" text,
+	"uncertain_at" bigint,
+	"recorded_at" bigint,
+	CONSTRAINT "arrival_reservation_evidence" CHECK (("uncertain_reason" IS NULL AND "uncertain_at" IS NULL) OR ("uncertain_reason" IS NOT NULL AND "uncertain_at" IS NOT NULL)),
+	CONSTRAINT "arrival_reservation_key" CHECK (("signing_key" IS NULL) OR "signing_key" LIKE 'did:key:z%')
+);
+--> statement-breakpoint
+CREATE TABLE "arrivals" (
+	"operation_id" text PRIMARY KEY,
+	"did" text NOT NULL,
+	"did_root" text,
+	"active" integer NOT NULL,
+	"user_id" text NOT NULL,
+	"email" text NOT NULL,
+	"handle" text NOT NULL,
+	"pds_id" text NOT NULL,
+	"endpoint" text NOT NULL,
+	"source_plc_head" text NOT NULL,
+	"version" bigint NOT NULL,
+	"generation" bigint NOT NULL,
+	"created_at" bigint NOT NULL,
+	"updated_at" bigint NOT NULL,
+	"cancelled_at" bigint,
+	"provisioned_at" bigint,
+	"deactivated_at" bigint,
+	"bound_at" bigint,
+	"activation_method" text,
+	"activation_at" bigint,
+	"completed_at" bigint,
+	CONSTRAINT "arrival_active" CHECK ("active" IN (0, 1)),
+	CONSTRAINT "arrival_tuple" CHECK (("active" = 1 AND "did_root" = "did") OR ("active" = 0 AND "did_root" IS NULL)),
+	CONSTRAINT "arrival_cancel" CHECK (("cancelled_at" IS NULL) OR ("cancelled_at" IS NOT NULL AND "active" = 0)),
+	CONSTRAINT "arrival_bound" CHECK (("bound_at" IS NULL) OR ("bound_at" IS NOT NULL AND "deactivated_at" IS NOT NULL)),
+	CONSTRAINT "arrival_complete" CHECK (("completed_at" IS NULL) OR ("completed_at" IS NOT NULL AND "bound_at" IS NOT NULL AND "activation_method" IS NOT NULL))
+);
+--> statement-breakpoint
 CREATE TABLE "authority_operations" (
 	"id" text PRIMARY KEY,
 	"kind" text NOT NULL,
@@ -221,6 +296,14 @@ CREATE INDEX "account_bindings_user_id" ON "account_bindings" ("user_id");--> st
 CREATE INDEX "accounts_email_ci" ON "accounts" (lower("email"));--> statement-breakpoint
 CREATE UNIQUE INDEX "accounts_handle_ci" ON "accounts" (lower("handle"));--> statement-breakpoint
 CREATE INDEX "accounts_pds_status" ON "accounts" ("pds_id","status");--> statement-breakpoint
+CREATE INDEX "arrival_attempt_operation" ON "arrival_attempts" ("operation_id");--> statement-breakpoint
+CREATE INDEX "arrival_family_operation" ON "arrival_families" ("operation_id","revoked_at");--> statement-breakpoint
+CREATE UNIQUE INDEX "arrivals_did_active" ON "arrivals" ("did_root");--> statement-breakpoint
+CREATE INDEX "arrivals_did" ON "arrivals" ("did","created_at");--> statement-breakpoint
+CREATE INDEX "arrivals_user" ON "arrivals" ("user_id","created_at");--> statement-breakpoint
+CREATE INDEX "arrivals_email" ON "arrivals" (lower("email"));--> statement-breakpoint
+CREATE UNIQUE INDEX "arrivals_handle_active" ON "arrivals" (lower("handle")) WHERE "did_root" IS NOT NULL AND "cancelled_at" IS NULL AND "provisioned_at" IS NULL;--> statement-breakpoint
+CREATE INDEX "arrivals_handle" ON "arrivals" (lower("handle"),"created_at");--> statement-breakpoint
 CREATE INDEX "authority_operation_lease" ON "authority_operations" ("state","lease_expires_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "backup_emails_ci" ON "backup_emails" (lower("email"));--> statement-breakpoint
 CREATE INDEX "custody_history_did" ON "custody_history" ("did");--> statement-breakpoint
@@ -243,6 +326,10 @@ CREATE INDEX "verification_identifier" ON "verification" ("identifier");--> stat
 ALTER TABLE "account" ADD CONSTRAINT "account_userId_user_id_fkey" FOREIGN KEY ("userId") REFERENCES "user"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "account_bindings" ADD CONSTRAINT "account_bindings_did_accounts_did_fkey" FOREIGN KEY ("did") REFERENCES "accounts"("did");--> statement-breakpoint
 ALTER TABLE "account_bindings" ADD CONSTRAINT "account_bindings_user_id_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "user"("id");--> statement-breakpoint
+ALTER TABLE "arrival_attempts" ADD CONSTRAINT "arrival_attempts_operation_id_arrivals_operation_id_fkey" FOREIGN KEY ("operation_id") REFERENCES "arrivals"("operation_id");--> statement-breakpoint
+ALTER TABLE "arrival_code" ADD CONSTRAINT "arrival_code_operation_id_arrivals_operation_id_fkey" FOREIGN KEY ("operation_id") REFERENCES "arrivals"("operation_id");--> statement-breakpoint
+ALTER TABLE "arrival_families" ADD CONSTRAINT "arrival_families_operation_id_arrivals_operation_id_fkey" FOREIGN KEY ("operation_id") REFERENCES "arrivals"("operation_id");--> statement-breakpoint
+ALTER TABLE "arrival_reservations" ADD CONSTRAINT "arrival_reservations_operation_id_arrivals_operation_id_fkey" FOREIGN KEY ("operation_id") REFERENCES "arrivals"("operation_id");--> statement-breakpoint
 ALTER TABLE "backup_emails" ADD CONSTRAINT "backup_emails_did_accounts_did_fkey" FOREIGN KEY ("did") REFERENCES "accounts"("did");--> statement-breakpoint
 ALTER TABLE "custody_history" ADD CONSTRAINT "custody_history_Hb73d4yN25nV_fkey" FOREIGN KEY ("supporting_observation_id") REFERENCES "custody_observations"("id");--> statement-breakpoint
 ALTER TABLE "email_claims" ADD CONSTRAINT "email_claims_did_accounts_did_fkey" FOREIGN KEY ("did") REFERENCES "accounts"("did");--> statement-breakpoint
