@@ -7,6 +7,9 @@ import {
 } from "../../accounts/rules.js";
 import { escapeHtml, page } from "../../ui/html.mjs";
 const RESEND_COOLDOWN = 5_000;
+const EMAIL_CODE_LIMIT = 5;
+const AUTOMATIC_CODE_LIMIT = 2;
+const LIMIT_WINDOW = 600_000;
 const matchesLoginHint = (flow, account) => matchesFlowHints(account, flow);
 const linkedAccounts = (resolution) => {
   if (resolution?.kind === "single") return [resolution.account];
@@ -39,6 +42,13 @@ export function mountEmailLogin({
     form,
   } = flows;
   const { loginForm, otpForm } = forms;
+  // Sends a sign-in code and renders the code page. A send the user did not
+  // type the address for spends the account's own small budget, never the
+  // email's shared one, so a stranger who knows only a public handle cannot use
+  // up the owner's sign-in codes. `options.automatic: { did }` marks such a
+  // send (a login_hint's), and a resend of its code stays on that budget. When
+  // the budget is spent an automatic send renders nothing and returns
+  // "auto-limit" for the caller to handle; a resend renders its own refusal.
   const sendCode = async (res, flow, browser, emailValue, options = {}) => {
     let email;
     let reserved;
@@ -72,13 +82,21 @@ export function mountEmailLogin({
         if (flow.otpRequestCount >= 5) return refuse("flow-limit");
         if (flow.lastOtpSentAt && now - flow.lastOtpSentAt < RESEND_COOLDOWN)
           return refuse("cooldown");
-        const limitKey = `${email}/${Math.floor(now / 600_000)}`;
+        const window = Math.floor(now / LIMIT_WINDOW);
+        const automaticDid =
+          emailValue === undefined ? flow.automaticDid : options.automatic?.did;
+        const limitKey = automaticDid
+          ? `auto/${automaticDid}/${window}`
+          : `${email}/${window}`;
         const count = (await db.get("otp-limits", limitKey)) ?? 0;
-        if (count >= 5) return refuse("email-limit");
+        if (count >= (automaticDid ? AUTOMATIC_CODE_LIMIT : EMAIL_CODE_LIMIT))
+          return refuse(automaticDid ? "auto-limit" : "email-limit");
         if (flow.email && flow.email !== email)
           await mail.supersedeOtp({ email: flow.email, type: "sign-in" });
         await db.set("otp-limits", limitKey, count + 1);
         flow.email = email;
+        if (automaticDid) flow.automaticDid = automaticDid;
+        else delete flow.automaticDid;
         flow.maskEmail = Boolean(requestedMask);
         flow.otpRequestCount = (flow.otpRequestCount ?? 0) + 1;
         flow.lastOtpSentAt = now;
@@ -93,6 +111,8 @@ export function mountEmailLogin({
         preparingMail = false;
         return { dispatch };
       });
+      if (reserved.reason === "auto-limit" && options.automatic)
+        return "auto-limit";
       const refusal = {
         "flow-limit": [
           "Code request limit reached",
@@ -105,6 +125,10 @@ export function mountEmailLogin({
         "email-limit": [
           "Try again later",
           "Too many codes were requested for this email. Wait ten minutes.",
+        ],
+        "auto-limit": [
+          "Try again later",
+          "Too many codes were sent to this account recently. Enter your email address below to get another.",
         ],
       }[reserved.reason];
       if (refusal)
@@ -391,6 +415,6 @@ export function mountEmailLogin({
     }),
   );
   // Lets authorization start the same rate-limited code send as the email
-  // form when a client supplies an email login_hint on the redirect URL.
+  // form, for an email login_hint on the redirect URL or a hinted account.
   return { startEmailCode: sendCode };
 }

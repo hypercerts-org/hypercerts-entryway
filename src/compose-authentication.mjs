@@ -1,7 +1,7 @@
 import { createBetterAuthAuthentication } from "./authentication/better-auth.mjs";
 import { createBrowserFlow } from "./http/browser-flow.mjs";
 import { page, escapeHtml } from "./ui/html.mjs";
-import { createLoginForms } from "./features/email-login/page.mjs";
+import { createLoginForms, maskEmail } from "./features/email-login/page.mjs";
 import { mountEmailLogin } from "./features/email-login/routes.mjs";
 import { createSignupForm } from "./features/account-registration/page.mjs";
 import { mountSignupRoutes } from "./features/account-registration/signup-routes.mjs";
@@ -99,6 +99,7 @@ export async function createAuthentication({
     getAccountByHint: (hint) => accounts.get(hint),
     listAccountsByEmail: (email) => accounts.storage.listByEmail(email),
     priorConsentSkip,
+    maskEmail,
   });
   return {
     ...authentication,

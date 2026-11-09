@@ -195,6 +195,70 @@ test("a masked code request stays masked on resend until the user types an addre
   assert.equal(f.sent, 3);
 });
 
+test("automatic code requests spend their own per-account budget, never the email's shared one", async (t) => {
+  const f = await fixture(t),
+    email = "owner@example.test",
+    did = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+  // Every hinted authorization starts a fresh flow, so per-flow limits reset.
+  const automatic = async (id) => {
+    const res = {};
+    const result = await f.startEmailCode(res, await f.flow(id), {}, email, {
+      maskEmail: true,
+      automatic: { did },
+    });
+    return { result, rendered: res.result };
+  };
+
+  for (const id of ["hint-1", "hint-2"])
+    assert.equal((await automatic(id)).rendered.status, 200);
+  const refused = await automatic("hint-3");
+  assert.deepEqual(
+    [refused.result, refused.rendered, f.sent],
+    ["auto-limit", undefined, 2],
+  );
+
+  const [row, ...others] = await f.db.list("otp-limits");
+  assert.deepEqual(others, []);
+  assert.ok(row.key.startsWith(`auto/${did}/`));
+  assert.equal(row.value, 2);
+  assert.equal((await f.request(await f.flow("typed"), email)).status, 200);
+  assert.equal(f.sent, 3);
+});
+
+test("resending a code the user never typed the address for stays on the automatic budget until the address is typed", async (t) => {
+  const f = await fixture(t),
+    email = "owner@example.test",
+    did = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+  const flow = await f.flow("hinted");
+  await f.startEmailCode({}, flow, {}, email, {
+    maskEmail: true,
+    automatic: { did },
+  });
+  const wait = async () =>
+    f.db.set("auth-flows", flow.id, {
+      ...(await f.db.get("auth-flows", flow.id)),
+      lastOtpSentAt: 0,
+    });
+  const sharedRows = async () =>
+    (await f.db.list("otp-limits")).filter(
+      ({ key }) => !key.startsWith("auto/"),
+    );
+
+  await wait();
+  assert.equal((await f.route("/auth/resend", flow)).status, 200);
+  await wait();
+  const refused = await f.route("/auth/resend", flow);
+  assert.deepEqual([refused.status, f.sent, await sharedRows()], [429, 2, []]);
+
+  assert.equal((await f.request(flow, email)).status, 200);
+  await wait();
+  assert.equal((await f.route("/auth/resend", flow)).status, 200);
+  assert.deepEqual(
+    (await sharedRows()).map(({ value }) => value),
+    [2],
+  );
+});
+
 test("a refused change of email never reveals the masked address it would replace", async (t) => {
   const f = await fixture(t, { realForms: true });
   const flow = await f.flow("masked-cooldown");

@@ -55,6 +55,7 @@ export function mountAuthorizationRoutes({
   getAccountByHint,
   listAccountsByEmail,
   priorConsentSkip,
+  maskEmail,
 }) {
   const {
     newFlow,
@@ -93,15 +94,28 @@ export function mountAuthorizationRoutes({
               result.parameters.login_hint,
             ),
         );
+  // The account's automatic-code budget is spent, so nothing was sent. The
+  // ordinary email form takes over, still bound to the hinted account: only
+  // someone who can type the email gets another code, and it spends the
+  // email's shared budget. The note names the address masked, never in full.
+  const askForEmail = (res, browser, flow, email) =>
+    pageForFlow(
+      res,
+      "Sign in to authorize",
+      `<p role="status">We recently sent codes to <strong>${escapeHtml(maskEmail(email))}</strong>. Enter your email to get another.</p>${loginForm(flow, browser)}`,
+      flow,
+    );
   // Binds a new flow to the chosen account and sends its code to the account's
   // email. The page masks the address: this browser never typed it. Without an
-  // email there is nothing to send, so the user is asked for one.
+  // email there is nothing to send, so the user is asked for one. An automatic
+  // send (nobody typed the address) spends the account's own budget.
   const sendCodeForAccount = async (
     res,
     browser,
     flow,
     parameters,
     { did, email },
+    { automatic = false } = {},
   ) => {
     const selectedFlow = await newFlow(browser, {
       requestUri: flow.requestUri,
@@ -111,16 +125,19 @@ export function mountAuthorizationRoutes({
       accountHint: did,
     });
     await db.delete("auth-flows", flow.id);
-    if (email)
-      return await startEmailCode(res, selectedFlow, browser, email, {
-        maskEmail: true,
-      });
-    return pageForFlow(
-      res,
-      "Sign in to authorize",
-      loginForm(selectedFlow, browser),
-      selectedFlow,
-    );
+    if (!email)
+      return pageForFlow(
+        res,
+        "Sign in to authorize",
+        loginForm(selectedFlow, browser),
+        selectedFlow,
+      );
+    const refusal = await startEmailCode(res, selectedFlow, browser, email, {
+      maskEmail: true,
+      ...(automatic ? { automatic: { did } } : {}),
+    });
+    if (refusal === "auto-limit")
+      return askForEmail(res, browser, selectedFlow, email);
   };
   // Lookup failures log only a stable code and the operation ID.
   const logHintLookupFailure = (res, error) => {
@@ -223,8 +240,10 @@ export function mountAuthorizationRoutes({
     }
   };
   // A handle or DID login_hint naming a hosted account that this browser does
-  // not remember goes straight to that account's code step. Anything else,
-  // including an unknown hint or an account without an email, keeps the page.
+  // not remember goes straight to that account's code step, until the
+  // account's automatic-code budget is spent and the email form replaces it.
+  // Anything else, including an unknown hint or an account without an email,
+  // keeps the page.
   const sendCodeForHintedAccount = async (res, browser, flow, result) => {
     const { login_hint: hint, prompt } = result.parameters;
     if (
@@ -235,7 +254,9 @@ export function mountAuthorizationRoutes({
       return false;
     const account = await findHintedAccount(res, hint);
     if (!account) return false;
-    await sendCodeForAccount(res, browser, flow, result.parameters, account);
+    await sendCodeForAccount(res, browser, flow, result.parameters, account, {
+      automatic: true,
+    });
     return true;
   };
   const authorizationPage = (res, browser, flow, result) => {

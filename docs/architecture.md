@@ -255,9 +255,16 @@ provider silent sign-on and redirects without an Entryway page (see below). When
 the provider instead asks for interaction, an unknown hint, a stale remembered
 session, `prompt=create` and `prompt=select_account` from trusted or
 confidential clients still show the sign-in page. The provider stores every prompt except `create` as `consent` for
-untrusted public clients, so `select_account` cannot be detected there. Code
-limits are per email address (five per ten minutes, shared with the email form),
-so repeated hinted requests for one public handle can exhaust that budget.
+untrusted public clients, so `select_account` cannot be detected there. Codes
+sent this way, and re-sends of them, have their own budget of two per account
+per ten minutes, apart from the email form's five per email address. Rule: no
+send a browser with no signed-in session for the account can trigger without
+knowing the email may use the shared budget, so someone who knows only a public
+handle cannot use it up. (A remembered account's "Sign in with an email code"
+button sends under the shared budget; it needs a device session for that DID.)
+Past that budget nothing is sent; the page shows the email form, still bound to
+that account, with a note naming the masked address. Typing the email sends a
+code under the shared budget.
 
 An email `login_hint` on the redirect URL sends no code when the email belongs
 to exactly one active account with a fresh remembered session in this browser,

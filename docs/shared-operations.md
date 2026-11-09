@@ -237,7 +237,8 @@ implementation are unchanged.
 The email-login feature reserves the current persisted flow's count, cooldown and
 email intent together with the normalized-email budget, provider verification
 and queued mail. The limits remain five requests per flow, five per email per
-ten-minute bucket, and a five-second flow cooldown. Delayed delivery cannot enqueue
+ten-minute bucket, and a five-second flow cooldown; codes sent for a handle or
+DID `login_hint` instead use a separate two-per-account automatic budget. Delayed delivery cannot enqueue
 again or overwrite a newer flow intent. Resend resolves its destination from that
 current record. The whole supported verification API runs in the same authority
 transaction boundary used by issuance, including wrong-guess recreation. Expected invalid-code

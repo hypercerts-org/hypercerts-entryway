@@ -35,13 +35,14 @@ metadata URL and requested scope. Google/GitHub are outside this flow.
    and `consent-map.spec.mjs` cover that. `consent-map.spec.mjs` also has cases
    for the trusted signup skip, email `login_hint` sign-on and consent without a
    code; `consent-skip.test.mjs` and `authorization-routes.test.mjs` hold the
-   full decision tables. An OAuth app may also start email-first sign-in with
-   `login_hint=<email>` on the authorize redirect; a handle or DID hint from the
-   pushed request wins, and an invalid email falls back to the sign-in page
-   without sending mail. `prompt=none` signs a remembered, approved account in
-   silently, returns `consent_required` for a client that was never approved and
-   `login_required` without a hint, and is refused for an untrusted public
-   client.
+   full decision tables. `hinted-code-limit.spec.mjs` covers the handle
+   `login_hint`'s two automatic codes and the email form that follows. An OAuth
+   app may also start email-first sign-in with `login_hint=<email>` on the
+   authorize redirect; a handle or DID hint from the pushed request wins, and an
+   invalid email falls back to the sign-in page without sending mail.
+   `prompt=none` signs a remembered, approved account in silently, returns
+   `consent_required` for a client that was never approved and `login_required`
+   without a hint, and is refused for an untrusted public client.
 5. Use the resulting credentials for a real PDS write and refresh.
 6. Check denied/revoked paths in the accompanying lifecycle cases.
 

@@ -5,6 +5,7 @@ import { openTestDatabase } from "../../../tests/support/database-fixture.mjs";
 import { createBrowserFlow } from "../../../dist/src/http/browser-flow.mjs";
 import { mountAuthorizationRoutes } from "../../../dist/src/features/oauth-authorization/authorization-routes.mjs";
 import { createConsent } from "../../../dist/src/features/oauth-authorization/consent.mjs";
+import { maskEmail } from "../../../dist/src/features/email-login/page.mjs";
 import { fakeApp, fakeResponse } from "../../../tests/support/fake-http.mjs";
 
 const verifiedEmail = "owner@example.test";
@@ -41,6 +42,8 @@ async function fixture(
       "account-1.example.test": hostedFirst,
     },
     hintLookupFails = false,
+    // The automatic-code budget is spent: a send marked automatic is refused.
+    automaticLimit = false,
     // Accounts that own each email, by normalized address.
     emailAccounts = {},
     emailLookupFails = false,
@@ -204,6 +207,7 @@ async function fixture(
     consentForm: (consentFlow, _browser, account) =>
       `<form method="post" action="/auth/consent"><input name="did" value="${account.did}"><input name="account-hint" value="${consentFlow.accountHint ?? ""}"></form>`,
     async startEmailCode(res, codeFlow, _browser, email, options) {
+      if (automaticLimit && options?.automatic) return "auto-limit";
       emailCodes.push({
         flow: codeFlow.requestUri,
         flowId: codeFlow.id,
@@ -221,6 +225,7 @@ async function fixture(
       return emailAccounts[email] ?? [];
     },
     priorConsentSkip,
+    maskEmail,
   });
   const response = fakeResponse;
   return {
@@ -617,13 +622,41 @@ for (const hint of ["account-1.example.test", hostedFirst.did]) {
     assert.equal(f.emailCodes.length, 1);
     const [code] = f.emailCodes;
     assert.equal(code.email, hostedFirst.email);
-    assert.deepEqual(code.options, { maskEmail: true });
+    assert.deepEqual(code.options, {
+      maskEmail: true,
+      automatic: { did: hostedFirst.did },
+    });
     const codeFlow = await f.db.get("auth-flows", code.flowId);
     assert.equal(codeFlow.accountHint, hostedFirst.did);
     assert.equal(codeFlow.requestUri, "request-uri");
     assert.equal(codeFlow.parameters.login_hint, hint);
   });
 }
+
+// The hint's automatic codes have their own budget (see email-login); once it
+// is spent the ordinary email form replaces them.
+test("a login_hint whose automatic-code budget is spent sends nothing and shows the email form with a masked note", async (t) => {
+  const f = await fixture(t, {
+    loginHint: "account-1.example.test",
+    remembered: [],
+    automaticLimit: true,
+  });
+
+  const response = await f.startAuthorization();
+
+  assert.deepEqual(f.emailCodes, []);
+  assert.equal(response.statusCode, 200);
+  assert.match(
+    response.body,
+    /We recently sent codes to <strong>\*\*\*t@\*\*\*e\.\*\*\*t<\/strong>\. Enter your email to get another\..*action="\/auth\/email"/,
+  );
+  assert.doesNotMatch(response.body, /first@|example/);
+  const flowId = response.body.match(/name="flow" value="([^"]+)"/)?.[1];
+  const bound = await f.db.get("auth-flows", flowId);
+  assert.equal(bound.accountHint, hostedFirst.did);
+  assert.equal(bound.parameters.login_hint, "account-1.example.test");
+  assert.equal(bound.email, undefined);
+});
 
 for (const [name, options] of [
   [
