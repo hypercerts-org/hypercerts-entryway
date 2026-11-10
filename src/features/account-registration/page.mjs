@@ -78,14 +78,16 @@ export function createSignupForm({ db, config, accounts, fields }) {
         : "";
     const placeholder =
       config.publicHandles?.[0] ?? (suffix ? "alice" : "alice.entryway.test");
-    const handleInput = `<input id="handle" name="handle" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(initialHandle)}" ${locked ? "readonly" : ""} ${config.publicHandles ? 'list="public-handles"' : ""} required>`;
+    const handleInput = `<input id="handle" name="handle" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(initialHandle)}" aria-describedby="handle-help" ${locked ? "readonly" : ""} ${config.publicHandles ? 'list="public-handles"' : ""} required>`;
     const handleField = suffix
       ? `<div style="display:flex;align-items:center;gap:.25rem">${handleInput}<span id="handle-suffix" style="white-space:nowrap">${escapeHtml(suffix)}</span></div>`
       : handleInput;
     const handleHint = suffix
-      ? "Enter a name; " + escapeHtml(suffix) + " is added for you."
+      ? "Enter a name and " +
+        escapeHtml(suffix) +
+        " is added for you. A full handle containing a dot is used as typed."
       : handleHelp;
-    return `<p>${intro}</p><form method="post" action="/auth/account">${fields(flow, browser)}<label for="handle">Handle</label>${handleField}${suggestions}<small>${handleHint}</small><label for="pdsId">Personal data server</label><select id="pdsId" name="pdsId" ${retry ? "disabled" : ""}>${pdsOptions}</select>${inviteInput}<button ${recoveryRequired ? "disabled" : ""}>${button}</button></form>`;
+    return `<p>${intro}</p><form method="post" action="/auth/account">${fields(flow, browser)}<label for="handle">Handle</label>${handleField}${suggestions}<small id="handle-help">${handleHint}</small><label for="pdsId">Personal data server</label><select id="pdsId" name="pdsId" ${retry ? "disabled" : ""}>${pdsOptions}</select>${inviteInput}<button ${recoveryRequired ? "disabled" : ""}>${button}</button></form>`;
   };
   return signupForm;
 }
