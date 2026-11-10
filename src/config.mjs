@@ -18,7 +18,27 @@ export async function loadConfig() {
   Object.assign(config, loadOAuthClientPolicy(process.env));
   config.database = loadDatabaseConfiguration(process.env);
   config.lifecycle = loadLifecycleConfiguration(process.env);
+  config.operationLease = loadOperationLeaseConfiguration(process.env);
   return config;
+}
+
+/**
+ * Optional OPERATION_LEASE_MS overrides the 120-second shared-operation claim.
+ * A shorter lease lets an operator recover a crashed owner sooner, at the cost
+ * of more renewal writes. Renewal stays at 30 seconds or a quarter of the
+ * lease, whichever is shorter, so it always runs before expiry.
+ */
+export function loadOperationLeaseConfiguration(env) {
+  if (env.OPERATION_LEASE_MS === undefined) return {};
+  const leaseMs = Number(env.OPERATION_LEASE_MS);
+  if (!Number.isSafeInteger(leaseMs) || leaseMs < 5_000 || leaseMs > 600_000) {
+    const error = new Error(
+      "OPERATION_LEASE_MS must be an integer from 5000 to 600000",
+    );
+    error.code = "InvalidOperationLeaseConfiguration";
+    throw error;
+  }
+  return { leaseMs, heartbeatMs: Math.min(30_000, Math.floor(leaseMs / 4)) };
 }
 
 /**
