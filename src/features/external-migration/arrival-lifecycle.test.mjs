@@ -339,7 +339,7 @@ test("handoff validation rejects changed source facts, overfull and reordered au
   // A fourth distinct key stays within the protocol limit but is not the approved
   // list, so it is rejected rather than truncated or silently accepted.
   const fourth = (await Secp256k1Keypair.create({ exportable: true })).did();
-  const overfull = plc.addSignature(
+  const overfull = await plc.addSignature(
     {
       ...authority.handoffFacts,
       rotationKeys: [...authority.approved, fourth],
@@ -347,10 +347,7 @@ test("handoff validation rejects changed source facts, overfull and reordered au
     authority.source,
   );
   await assert.rejects(
-    validate({
-      operation: overfull,
-      approvedRotationKeys: [...authority.approved, fourth],
-    }),
+    validate({ operation: overfull, approvedRotationKeys: authority.approved }),
     { code: "InvalidPlcOperation" },
   );
   await assert.rejects(
@@ -393,7 +390,7 @@ test("handoff validation rejects changed source facts, overfull and reordered au
     }),
     { code: "InvalidPlcOperation" },
   );
-  const reordered = plc.addSignature(
+  const reordered = await plc.addSignature(
     {
       ...authority.handoffFacts,
       rotationKeys: [...authority.approved].reverse(),
@@ -633,6 +630,8 @@ test("watched arrival access stays pending until a binding exists", async () => 
   // Canonical observation evidence supplies the full surviving operation, whose
   // signature the destination move must chain from; the journal keeps only facts.
   const handoffCid = String(await cidForCbor(publicHandoff(authority)));
+  // A directory head is the CID of the signed operation, not of its facts.
+  const signedHandoffCid = String(await cidForCbor(handoff));
   const preparation = createArrivalPreparation({
     arrivals,
     reserveSigningKey: async () =>
@@ -706,7 +705,7 @@ test("watched arrival access stays pending until a binding exists", async () => 
         // which is exactly what the stock PDS receives as `plcOp`.
         return await signer.signArrivalMove(input, persist);
       },
-      observe: async () => ({ headCid: handoffCid, tombstone: false }),
+      observe: async () => ({ headCid: signedHandoffCid, tombstone: false }),
     },
     backend: {
       createAccount: async (input) => {

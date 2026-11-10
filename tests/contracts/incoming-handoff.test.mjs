@@ -254,6 +254,8 @@ async function provisioningFixture() {
   };
   // The stored CID covers the normalized public entry, which carries no signature.
   const handoffCid = String(await cidForCbor(handoffFacts));
+  // The directory head covers the signed operation, which includes the signature.
+  const signedHandoffCid = String(await cidForCbor(handoff));
   const reservationKey = (
     await Secp256k1Keypair.create({ exportable: true })
   ).did();
@@ -344,7 +346,7 @@ async function provisioningFixture() {
         calls.push("sign-move");
         return await signer.signArrivalMove(input, persist);
       },
-      observe: async () => ({ headCid: handoffCid, tombstone: false }),
+      observe: async () => ({ headCid: signedHandoffCid, tombstone: false }),
     },
     backend: {
       createAccount: async (input) => {

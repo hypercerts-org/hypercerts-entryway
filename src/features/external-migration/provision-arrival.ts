@@ -210,7 +210,12 @@ export function createArrivalProvisioning({
         conflict("The observed handoff does not match its CID");
       const canonical = await plc.observe(arrival.did);
       if (canonical.tombstone) pending("The identity is tombstoned");
-      if (canonical.headCid !== input.observedHandoff.cid)
+      // A directory head is the CID of the signed operation, so it never equals
+      // the unsigned facts CID the caller supplied for the same handoff.
+      if (
+        canonical.headCid !==
+        String(await cidForCbor(input.observedHandoff.operation))
+      )
         pending("Canonical identity changed after the observed handoff");
       const observedSource = observedEndpoint(input.observedHandoff.operation);
       if (observedSource === null)
