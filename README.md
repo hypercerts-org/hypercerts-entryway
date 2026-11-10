@@ -95,6 +95,6 @@ fork is part of this repository. See the reuse assessment for source evidence.
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](LICENSE). If you redistribute this code or a modified version of it, include the attribution notices from the [NOTICE](NOTICE) file, as section 4(d) of the license requires.
+Licensed under the [Apache License, Version 2.0](LICENSE). Section 4 of the license sets the conditions for redistribution; under section 4(d), a modified version you distribute must include the attribution notices from the [NOTICE](NOTICE) file that pertain to it.
 
 The agent skills in `tests/atmosphere/skills/` are copied from [Atmosphere in a Box](https://tangled.org/kandake.africa/atmosphereinabox), Copyright 2026 Evelyn Osman, and keep its Apache-2.0 license.
