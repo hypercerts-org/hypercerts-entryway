@@ -256,9 +256,9 @@ shows the sign-in page. Untrusted public clients have every prompt except
 `create` stored as `consent`, so `select_account` is undetectable there.
 
 Automatic codes and their re-sends have their own budget: two per account per
-ten minutes, separate from the email form's five per email. A browser without a
-session for the account can never spend the email budget without typing the
-email, so knowing a handle is not enough to use it up. Once the account budget
+ten minutes, separate from the email form's five per email. Only a send that
+names the email, typed or as an email `login_hint`, spends the email budget, so
+knowing a handle is not enough to use it up. Once the account budget
 is spent, the page shows the email form, still bound to the account, with a
 note naming the masked address; typing the email sends under the email budget.
 A remembered account's "Sign in with an email code" button uses the email budget
