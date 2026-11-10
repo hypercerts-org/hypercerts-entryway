@@ -92,3 +92,7 @@ and the required templates are now owned by this repository; earlier spike/repla
 trees are historical provenance, not additional runtime packages.
 Reference PDS behaviour is grounded in Bluesky's source and Entryway tests; no PDS
 fork is part of this repository. See the reuse assessment for source evidence.
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE). If you redistribute this code or a modified version of it, keep the [NOTICE](NOTICE) file and include its text, as section 4(d) of the license requires.

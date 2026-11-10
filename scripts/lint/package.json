@@ -1,6 +1,7 @@
 {
   "name": "entryway-lint-tooling",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "devDependencies": {
     "@eslint/js": "9.39.4",
