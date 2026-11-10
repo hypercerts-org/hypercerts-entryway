@@ -249,24 +249,20 @@ latest choice. Stale selected accounts re-enter the existing visible email-OTP
 flow.
 
 A handle or DID `login_hint` for an active account with an email that this
-browser does not remember goes straight to that account's code step, with the
-address masked. A handle or DID hint matching one fresh remembered session is
-provider silent sign-on and redirects without an Entryway page (see below). When
-the provider instead asks for interaction, an unknown hint, a stale remembered
-session, or `prompt=create` or `prompt=select_account` from a trusted or
-confidential client, the sign-in page is still shown. For untrusted public
-clients the provider stores every prompt except `create` as `consent`, so
-`select_account` cannot be detected there.
+browser does not remember goes straight to the code step, with the email masked. A hint matching
+one fresh remembered session is provider silent sign-on (see below). Anything
+else (unknown hint, stale session, `prompt=create` or `prompt=select_account`)
+shows the sign-in page. Untrusted public clients have every prompt except
+`create` stored as `consent`, so `select_account` is undetectable there.
 
-Codes sent this way, and re-sends of them, have their own budget of two per
-account per ten minutes. This is separate from the email form's five per email
-address. Rule: a send that a browser without a session for the account can
-trigger without typing the email never uses the shared email budget, so someone
-who knows only a public handle cannot use it up. (A remembered account's "Sign
-in with an email code" button sends under the shared budget; it needs a device session for that DID.)
-Past that budget nothing is sent; the page shows the email form, still bound to
-that account, with a note naming the masked address. Typing the email sends a
-code under the shared budget.
+Automatic codes and their re-sends have their own budget: two per account per
+ten minutes, separate from the email form's five per email. A browser without a
+session for the account can never spend the email budget without typing the
+email, so knowing a handle is not enough to use it up. Once the account budget
+is spent, the page shows the email form, still bound to the account, with a
+note naming the masked address; typing the email sends under the email budget.
+A remembered account's "Sign in with an email code" button uses the email budget
+because it requires a device session for that DID.
 
 Yellow steps count against the account's two automatic codes; blue steps
 count against the email's five. Counters reset at fixed ten-minute marks.
@@ -296,13 +292,13 @@ flowchart TD
     class SH,S2 shared
 ```
 
-An email `login_hint` on the redirect URL sends no code when the email belongs
-to exactly one active account with a fresh remembered session in this browser,
-matching what the provider does for a handle hint. With no `prompt` and the
-returning-account consent rule met, Entryway issues the authorization code
-directly; otherwise, or with `prompt=consent`, it shows consent for that
-account. Everything else sends the code: a shared email (inactive accounts
-count), a stale session, `prompt=login` or `select_account`, or a failed lookup.
+An email `login_hint` skips the code when the email belongs to exactly one
+active account that this browser signed in to recently, as the provider does
+for a handle hint. If the app was already approved and no `prompt` is set, the
+user goes straight back to the app; otherwise they see consent. In every other
+case a code is sent: the email is shared by several accounts (inactive ones
+count), the sign-in is not recent, `prompt=login` or `select_account` is set,
+or the lookup fails.
 
 The provider request's `login_hint` and any selected-account hint both remain binding
 across authentication and flow restart; current account binding is checked before
