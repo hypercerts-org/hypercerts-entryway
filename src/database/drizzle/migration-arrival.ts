@@ -261,6 +261,17 @@ export function createArrivalStorage(
         409,
         "Handle is reserved by another arrival",
       );
+    const didHolders = await db.read("arrivals", {
+      where: eq(table.did_root, did),
+    });
+    if (
+      didHolders.some(({ operation_id }) => operation_id !== ignoreOperationId)
+    )
+      throw new DomainError(
+        "OperationPending",
+        409,
+        "An arrival is already active for this DID",
+      );
   };
 
   const advance = async (
@@ -393,7 +404,11 @@ export function createArrivalStorage(
         if (!owner || owner.active === 0 || owner.did !== did) return null;
         if (saved.expires_at <= (await db.databaseTime())) return null;
         if (saved.generation !== owner.generation) return null;
-        return arrivalRecord(owner, undefined, saved);
+        return arrivalRecord(
+          owner,
+          await reservation(owner.operation_id),
+          saved,
+        );
       });
     },
 
@@ -653,16 +668,22 @@ export function createArrivalStorage(
       if (saved.did !== facts.did || saved.active === 0) throw notActionable();
       return db.transact(async () => {
         return db.withOperationFence(owner, async () => {
-          const accepted = (
-            await db.read("arrival_replay", {
-              where: and(
-                eq(replayTable.operation_id, facts.operationId),
-                eq(replayTable.method, facts.method),
-                eq(replayTable.request_digest, facts.requestDigest),
-              ),
-              limit: 1,
-            })
-          )[0];
+          const prior = await db.read("arrival_replay", {
+            where: eq(replayTable.operation_id, facts.operationId),
+          });
+          if (
+            prior.some(
+              (row) =>
+                row.method !== facts.method ||
+                row.request_digest !== facts.requestDigest,
+            )
+          )
+            throw new DomainError(
+              "OperationConflict",
+              409,
+              "The replayed request does not match its accepted facts",
+            );
+          const accepted = prior[0];
           const now = await db.databaseTime();
           if (!accepted)
             await db.insert("arrival_replay", {

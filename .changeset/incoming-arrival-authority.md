@@ -19,9 +19,10 @@ What an operator can observe:
   by a database constraint, so a reissued or shortened lifetime cannot exceed a
   day and code expiry does not release destination reservations or erase progress.
 - A saved public key is immutable for its arrival. A second reservation returning
-  a different key, a stale worker, an uncertain response or a changed DID, host or
-  endpoint retains `OperationRecoveryRequired`; nothing silently reallocates or
-  switches placement.
+  a different key requires reconciliation, an uncertain response retains
+  `OperationRecoveryRequired`, a changed DID, host or endpoint is an
+  `OperationConflict`, and a stale worker is refused with `OperationLeaseLost`.
+  Nothing silently reallocates or switches placement.
 - Cancellation releases local reservations only when the arrival recorded no
   allocation at all. The allocation intent is saved before the destination host is
   asked for a signing key, so a recorded intent whose key is not yet known already

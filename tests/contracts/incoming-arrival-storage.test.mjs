@@ -202,6 +202,18 @@ test("arrival preparation stores only a code hash and admits one active arrival 
       }),
       { code: "HandleNotAvailable" },
     );
+    await assert.rejects(
+      prepare({
+        operationId: "op-7",
+        did,
+        userId: "user-b",
+        email: "second@example.test",
+        handle: "second.example.test",
+        pdsId: "pds2",
+        endpoint: hosts[1].url,
+      }),
+      { code: "OperationPending" },
+    );
     assert.equal(
       (await query(db, "SELECT operation_id FROM arrivals")).length,
       1,
@@ -389,6 +401,16 @@ test("arrival code rotation invalidates the previous generation and cannot redir
     assert.equal((await arrivals.readArrival("op-1", "user-a")).generation, 3);
     assert.equal(
       (await arrivals.readArrival("op-1", "user-a")).signingKey,
+      publicKey("k"),
+    );
+    assert.equal(
+      (
+        await arrivals.consumeArrivalCode({
+          codeHash: hash("c"),
+          did,
+          method: "com.atproto.server.createAccount",
+        })
+      ).signingKey,
       publicKey("k"),
     );
   } finally {
@@ -808,32 +830,32 @@ test("exact accepted replay resumes while a changed digest, method or owner is a
       }),
       { code: "OperationConflict" },
     );
-    assert.deepEqual(
-      await arrivals.recordArrivalReplay(claim, version, {
+    await assert.rejects(
+      arrivals.recordArrivalReplay(claim, version, {
         ...facts,
         method: "com.atproto.server.createAccount",
       }),
-      { operationId: "op-1", generation: 1 },
+      { code: "OperationConflict" },
     );
-    assert.deepEqual(
-      await arrivals.recordArrivalReplay(
+    await assert.rejects(
+      arrivals.recordArrivalReplay(
         claim,
         (await arrivals.readArrival("op-1", "user-a")).version,
         { ...facts, requestDigest: hash("e") },
       ),
-      { operationId: "op-1", generation: 1 },
+      { code: "OperationConflict" },
     );
     await assert.rejects(
       arrivals.recordArrivalReplay(
         { ...claim, operationId: "op-9" },
-        version,
+        (await arrivals.readArrival("op-1", "user-a")).version,
         facts,
       ),
-      { code: "OperationConflict" },
+      { code: "OperationLeaseLost" },
     );
     assert.equal(
       (await query(db, "SELECT operation_id FROM arrival_replay")).length,
-      3,
+      1,
     );
   } finally {
     await db.close();
