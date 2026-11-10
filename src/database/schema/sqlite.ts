@@ -185,6 +185,10 @@ export const arrivals = table(
     endpoint: text("endpoint").notNull(),
     source_plc_head: text("source_plc_head").notNull(),
     source_endpoint: text("source_endpoint"),
+    canonical_handoff_cid: text("canonical_handoff_cid"),
+    source_predecessor: text("source_predecessor").notNull(),
+    source_facts: text("source_facts").notNull(),
+    approved_rotation_keys: text("approved_rotation_keys").notNull(),
     version: count("version").notNull(),
     generation: count("generation").notNull(),
     created_at: count("created_at").notNull(),
@@ -302,12 +306,20 @@ export const arrival_replay = table(
   {
     operation_id: text("operation_id").notNull(),
     method: text("method").notNull(),
+    did: text("did").notNull(),
+    user_id: text("user_id").notNull(),
+    credential_issuer: text("credential_issuer").notNull(),
+    credential_jti: text("credential_jti").notNull(),
     request_digest: text("request_digest").notNull(),
     generation: count("generation").notNull(),
     accepted_at: count("accepted_at").notNull(),
   },
   (t) => [
-    primaryKey({ columns: [t.operation_id, t.method, t.request_digest] }),
+    primaryKey({ columns: [t.operation_id, t.method] }),
+    uniqueIndex("arrival_replay_credential").on(
+      t.credential_issuer,
+      t.credential_jti,
+    ),
     check("arrival_replay_digest", sql`length(${t.request_digest}) = 64`),
   ],
 );
@@ -315,6 +327,8 @@ export const arrival_attempts = table(
   "arrival_attempts",
   {
     attempt_binding: text("attempt_binding").primaryKey(),
+    ownership_operation_id: text("ownership_operation_id").notNull(),
+    attempt_id: text("attempt_id").notNull(),
     operation_id: text("operation_id")
       .notNull()
       .references(() => arrivals.operation_id),

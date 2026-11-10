@@ -1,3 +1,5 @@
+import type { IncomingSourceFacts } from "../../plc/policy.js";
+
 export type ArrivalApplied = {
   readonly kind: "applied";
   readonly version: number;
@@ -42,7 +44,13 @@ export function isObservedArrivalActivation(
   );
 }
 
-export interface ArrivalRecord {
+export interface ArrivalPreparationAuthority {
+  readonly sourcePredecessor: Record<string, unknown>;
+  readonly source: IncomingSourceFacts;
+  readonly approvedRotationKeys: readonly string[];
+}
+
+export interface ArrivalRecord extends ArrivalPreparationAuthority {
   readonly operationId: string;
   readonly did: string;
   readonly userId: string;
@@ -89,11 +97,26 @@ export interface ArrivalUncertainAttempt extends ArrivalAllocationIntent {
   readonly reason: string;
 }
 
+/** Links one generic dispatch receipt without changing repository allocation state. */
+export interface ArrivalExternalAttempt {
+  readonly operationId: string;
+  readonly did: string;
+  readonly externalAttemptId: string;
+  readonly step: "incoming-creation" | "incoming-pause";
+}
+
 export interface ArrivalReplayFacts {
   readonly operationId: string;
   readonly did: string;
   readonly method: string;
   readonly requestDigest: string;
+  readonly credentialIssuer: string;
+  readonly credentialJti: string;
+}
+
+export interface ArrivalAdmissionProof {
+  readonly codeHash: string;
+  readonly codeGeneration: number;
 }
 
 export interface ArrivalReplayReuse {
@@ -125,3 +148,29 @@ export interface ArrivalDestinationMoveRecord extends ArrivalSignedOperation {
 export type ArrivalSignedOperationRecord =
   | ArrivalHandoffRecord
   | ArrivalDestinationMoveRecord;
+
+export interface ArrivalAggregate {
+  readonly arrival: ArrivalRecord;
+  readonly signedOperations: readonly ArrivalSignedOperationRecord[];
+  readonly admissions: readonly (ArrivalReplayFacts & {
+    readonly userId: string;
+    readonly generation: number;
+  })[];
+  readonly reservation: {
+    readonly signingKey: string | null;
+    readonly uncertainReason: string | null;
+  } | null;
+  readonly progress: {
+    readonly provisionedAt: number | null;
+    readonly deactivatedAt: number | null;
+    readonly boundAt: number | null;
+    readonly completedAt: number | null;
+    readonly canonicalHandoffCid: string | null;
+  };
+  readonly attempts: readonly {
+    readonly ownershipOperationId: string;
+    readonly attemptId: string;
+    readonly fence: number;
+    readonly reason: string;
+  }[];
+}
