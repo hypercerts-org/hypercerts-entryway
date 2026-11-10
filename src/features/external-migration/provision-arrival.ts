@@ -50,21 +50,6 @@ const signedOperation = (
   return facts;
 };
 
-/** The authority-only handoff retains source hosting, so the endpoint the
- * destination move leaves in place comes from that observed operation. */
-const observedEndpoint = (
-  operation: Record<string, unknown>,
-): string | null => {
-  const services = operation.services;
-  if (typeof services !== "object" || services === null) return null;
-  const service = (services as Record<string, unknown>).atproto_pds;
-  if (typeof service !== "object" || service === null) return null;
-  const endpoint = (service as Record<string, unknown>).endpoint;
-  return typeof endpoint === "string" && endpoint.startsWith("https://")
-    ? endpoint
-    : null;
-};
-
 /** Ordinary destination creation with a separate observed deactivation. This is
  * not atomic inactive creation: stock creation publishes the move and returns an
  * active account, so deactivation is its own retained obligation. */
@@ -217,10 +202,6 @@ export function createArrivalProvisioning({
         String(await cidForCbor(input.observedHandoff.operation))
       )
         pending("Canonical identity changed after the observed handoff");
-      const observedSource = observedEndpoint(input.observedHandoff.operation);
-      if (observedSource === null)
-        return pending("The observed handoff retains no source endpoint");
-
       // The replay admission may have advanced the arrival; the move and its later
       // binding chain off the re-read version rather than the stale one.
       let version = current;
@@ -234,7 +215,7 @@ export function createArrivalProvisioning({
           {
             handoffOperation: input.observedHandoff.operation,
             repositoryKey: signingKey,
-            endpoint: observedSource,
+            endpoint: arrival.endpoint,
           },
           async (signed, _facts, cid) => {
             // The signed bytes and their CID are recorded together, so a retry

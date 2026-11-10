@@ -772,6 +772,19 @@ test("watched arrival access stays pending until a binding exists", async () => 
   );
   // The destination receives exactly the signed bytes the journal retains.
   assert.deepEqual(dispatched, journaledMove);
+  // A stock entryway-mode PDS compares the move's `atproto_pds.endpoint` to its
+  // own public URL (validateAtprotoData) and refuses an operation naming any
+  // other host. The move must therefore name the destination, not the source.
+  assert.equal(
+    journaledMove.services.atproto_pds.endpoint,
+    endpoint,
+    "the destination move names the selected destination PDS",
+  );
+  assert.notEqual(
+    journaledMove.services.atproto_pds.endpoint,
+    sourceEndpoint,
+    "the destination move must not retain the source endpoint",
+  );
   const projection = await arrivals.readArrivalAccess(did);
   assert.equal(projection.provisioned, true);
   assert.equal(projection.deactivationObserved, true);
