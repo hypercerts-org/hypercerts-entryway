@@ -26,26 +26,30 @@ export function mountRecoveryPage({ app, oauth, security, console }) {
       oauth.checkCsrf(req, browser);
       const value = (name) => String(req.body[name] ?? "").trim();
       if (req.params.action === "request") {
-        await security.requestRecovery({ email: value("email") });
+        const issued = await security.requestRecoveryForBrowser({
+          email: value("email"),
+        });
         return page(
           res,
           "Check your recovery email",
-          `<p>If this is a verified recovery email, a code has been sent. Enter it and choose a new primary email.</p><form method="post" action="/recover/verify">${hidden("csrf", browser.csrf)}${field("token", "Recovery code", "text", 'autocomplete="one-time-code" maxlength="256"')}${field("newEmail", "New primary email", "email", 'maxlength="320"')}<button>Verify recovery code</button></form><a href="/recover">Start again</a>`,
+          `<p>If this is a verified recovery email, a code has been sent. Enter it and choose a new primary email.</p><form method="post" action="/recover/verify">${hidden("csrf", browser.csrf)}${hidden("challengeId", issued.challengeId ?? "")}${field("token", "Recovery code", "text", 'autocomplete="one-time-code" maxlength="256"')}${field("newEmail", "New primary email", "email", 'maxlength="320"')}<button>Verify recovery code</button></form><a href="/recover">Start again</a>`,
         );
       }
       if (req.params.action === "verify") {
-        await security.completeRecovery({
-          token: value("token"),
+        const issued = await security.completeRecoveryForBrowser({
+          token: `${value("challengeId")}.${value("token")}`,
           newEmail: value("newEmail"),
         });
         return page(
           res,
           "Verify your new primary email",
-          `<p>Enter the verification code sent to the new primary email. Existing sessions will end after recovery.</p><form method="post" action="/recover/complete">${hidden("csrf", browser.csrf)}${field("token", "New primary email verification code", "text", 'autocomplete="one-time-code" maxlength="256"')}<button>Complete account recovery</button></form>`,
+          `<p>Enter the verification code sent to the new primary email. Existing sessions will end after recovery.</p><form method="post" action="/recover/complete">${hidden("csrf", browser.csrf)}${hidden("challengeId", issued.challengeId ?? "")}${field("token", "New primary email verification code", "text", 'autocomplete="one-time-code" maxlength="256"')}<button>Complete account recovery</button></form>`,
         );
       }
       if (req.params.action === "complete") {
-        await security.completeRecoveryEmail({ token: value("token") });
+        await security.completeRecoveryEmail({
+          token: `${value("challengeId")}.${value("token")}`,
+        });
         return page(
           res,
           "Account recovered",

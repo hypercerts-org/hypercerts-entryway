@@ -5,7 +5,10 @@
     {
       "service": "entryway-oauth-web-app",
       "environment": [
-        { "name": "APP_URL", "source": { "kind": "route-url", "route": "browser" } },
+        {
+          "name": "APP_URL",
+          "source": { "kind": "route-url", "route": "browser" }
+        },
         { "name": "PLC_URL", "source": { "kind": "plc-url" } }
       ]
     }

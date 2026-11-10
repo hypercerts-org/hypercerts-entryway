@@ -15,6 +15,15 @@ const signed = (prev) => ({
   type: "plc_operation",
   prev,
   sig: "fixture-signature-of-sufficient-length",
+  rotationKeys: [didKey("a"), didKey("b")],
+  verificationMethods: { atproto: didKey("c") },
+  alsoKnownAs: ["at://moved.entryway.test"],
+  services: {
+    atproto_pds: {
+      type: "AtprotoPersonalDataServer",
+      endpoint: "https://target.test",
+    },
+  },
 });
 import test from "node:test";
 import { openTestDatabase } from "../support/database-fixture.mjs";
@@ -128,12 +137,22 @@ async function fixture() {
   };
   const signer = {
     keyReference: "test",
-    async signMigrationMove({ handle }) {
+    async signMigrationMove({ handle }, authorize) {
       assert.equal(handle, "moved.entryway.test");
+      const operation = signed(heads.handoff);
+      const { sig: _signature, ...facts } = operation;
+      await authorize(operation, facts, heads.moved);
       return { operation: signed(heads.handoff), cid: heads.moved };
     },
   };
+  const custodyEvents = [];
   const custody = {
+    async recordSigned(event) {
+      assert.equal(event.provenance, "synthetic-fixture");
+      assert.ok(!("sig" in event.operation));
+      custodyEvents.push(event);
+      calls.push(`custody-${event.kind}`);
+    },
     async save(inventory) {
       calls.push("save-custody");
       assert.equal(inventory.did, "did:plc:" + "a".repeat(24));
@@ -194,6 +213,7 @@ async function fixture() {
   };
   return {
     sqlite,
+    custodyEvents,
     target,
     ownership,
     async recover() {
@@ -231,6 +251,15 @@ test("real service order journals before publication and binds after import", as
   assert.ok(f.calls.indexOf("verify-inactive") < f.calls.indexOf("bind"));
   assert.ok(f.calls.indexOf("save-custody") < f.calls.indexOf("bind"));
   assert.ok(f.calls.indexOf("activate") < f.calls.indexOf("local-active"));
+  assert.deepEqual(
+    f.custodyEvents.map((event) => [event.kind, event.cid]),
+    [
+      ["observed", heads.handoff],
+      ["signed", heads.moved],
+      ["observed", heads.moved],
+    ],
+  );
+  assert.ok(f.calls.indexOf("handoff") < f.calls.indexOf("custody-observed"));
   const phases = (
     await query(
       f.sqlite,
@@ -356,15 +385,16 @@ test("stale journal CAS rejects second transition", async (t) => {
   );
 });
 
-test("verified owner must match the source email before reservation", async (t) => {
+test("verified destination email may differ from the source email", async (t) => {
   const f = await fixture();
   t.after(async () => await f.sqlite.close());
-  await assert.rejects(
-    f.make().start({ ...f.input, sourceEmail: "other@example.test" }),
-    { code: "OwnerBindingChanged" },
-  );
-  assert.deepEqual(f.calls, []);
-  assert.equal(await f.workflows.getById("workflow-1"), null);
+  const started = await f.make().start({
+    ...f.input,
+    sourceEmail: "source@example.test",
+  });
+  assert.equal(started.ownerEmail, "owner@example.test");
+  assert.equal(started.ownerUserId, f.actor.userId);
+  assert.equal(f.calls.filter((call) => call === "reserve").length, 1);
 });
 
 test("a second start cannot replace the immutable target or handle", async (t) => {

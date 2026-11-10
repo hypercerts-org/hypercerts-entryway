@@ -27,7 +27,7 @@ export function createConnectedAppsActions({ db, oauth, legacy, console }) {
         await db.set("oauth:grants", account.did, [...grants]);
       });
     },
-    "oauth-session-revoke": async ({ account, session, value }) => {
+    "oauth-session-revoke": async ({ account, value }) => {
       await db.transact(async () => {
         const item = (await oauth.stores.listAccountTokens(account.did)).find(
           (s) => s.id === value("sessionId"),
@@ -37,7 +37,7 @@ export function createConnectedAppsActions({ db, oauth, legacy, console }) {
         await oauth.stores.deleteToken(item.id);
       });
     },
-    "legacy-session-revoke": async ({ account, session, value }) => {
+    "legacy-session-revoke": async ({ account, value }) => {
       console.needed();
       const item = (await legacy.listSessions(account.did)).find(
         (s) => s.id === value("sessionId"),

@@ -15,3 +15,19 @@ retains the moderation and independent-migration limits.
 
 The clone and generated state live under ignored `tests/.runtime/`. No original
 sandbox state, secrets or prior reports were imported.
+
+## Development: CI lifecycle provenance
+
+For contributors maintaining CI, `.github/workflows/ci.yml` owns the explicit
+pinned-checkout, managed-image, access-projection and scoped-cleanup sequence.
+The original design referenced ePDS's `.github/workflows/e2e-atmosphere.yml` and
+`e2e/atmosphere/run.sh`; those checkouts are not runtime dependencies. The former
+single verification wrapper has been replaced by visible workflow steps.
+Dependency installs, format, lint, syntax, types, schema, architecture, build and
+unit/lifecycle checks run natively on Node 24, without AiaB. Only live integration
+and E2E needing PDS, Entryway or other services uses managed AiaB environments.
+Entryway owns the lifecycle manifest, child registration, context checks and
+container-run failure fixtures. Local Docker remains rootless; hosted CI selects
+the standard daemon explicitly. No upstream tests or PDS behavior are modified.
+See [local CI commands](../../docs/testing.md#development-automated-ci-checks)
+for reproduction, cleanup semantics and evidence limits.

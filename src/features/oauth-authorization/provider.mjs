@@ -73,7 +73,14 @@ export function createClientMetadataFetch({
   };
 }
 
-export async function createOAuth({ app, db, config, accounts, mail }) {
+export async function createOAuth({
+  app,
+  db,
+  config,
+  accounts,
+  accountAccess,
+  mail,
+}) {
   const stores = createOAuthStores(db, accounts, config);
   const clientFetch = createClientMetadataFetch({
     config,
@@ -117,6 +124,7 @@ export async function createOAuth({ app, db, config, accounts, mail }) {
     db,
     config,
     accounts,
+    accountAccess,
     provider,
     stores,
     mail,

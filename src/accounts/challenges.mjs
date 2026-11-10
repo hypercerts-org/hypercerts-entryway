@@ -2,7 +2,12 @@ import { randomInt, createHmac, timingSafeEqual } from "node:crypto";
 
 import { fail } from "./input.mjs";
 
-export async function createProtocolChallenges({ db, config, accounts }) {
+export async function createProtocolChallenges({
+  db,
+  config,
+  accounts,
+  plcMail,
+}) {
   const challengeDigest = (purpose, subject, value) =>
     createHmac("sha256", config.betterAuthSecret)
       .update(
@@ -24,8 +29,9 @@ export async function createProtocolChallenges({ db, config, accounts }) {
         fail("RateLimitExceeded", "Please wait before trying again", 429);
       await db.set("entryway:limits", key, { ...row, count: row.count + 1 });
     });
-  const sendCode = async (purpose, subject, destination, channel, did) =>
-    db.transact(async () => {
+  const sendCode = async (purpose, subject, destination, channel, did) => {
+    let dispatch;
+    await db.transact(async () => {
       const deliveryChannel = channel === undefined ? "email" : channel;
       await rateLimit(`${purpose}:${subject}`);
       const otp = String(randomInt(10_000_000, 100_000_000));
@@ -37,6 +43,20 @@ export async function createProtocolChallenges({ db, config, accounts }) {
           ? { did, version: (await db.get("security:versions", did)) ?? 0 }
           : {}),
       });
+      if (
+        purpose === "plc-operation" &&
+        deliveryChannel === "email" &&
+        plcMail
+      ) {
+        // Only PLC confirmation uses this seam. Challenge and durable mail commit
+        // together; SMTP must not run inside the authority transaction.
+        dispatch = await plcMail.queueOtp({
+          email: destination,
+          otp,
+          type: purpose,
+        });
+        return;
+      }
       await db.set(
         deliveryChannel === "email" ? "outbox" : "sms-outbox",
         destination,
@@ -49,6 +69,9 @@ export async function createProtocolChallenges({ db, config, accounts }) {
       );
       return {};
     });
+    await dispatch?.deliver();
+    return {};
+  };
   const consumeCode = async (purpose, subject, code) =>
     await db.transact(async () => {
       const key = `${purpose}:${subject}`;
@@ -90,5 +113,7 @@ export async function createProtocolChallenges({ db, config, accounts }) {
     if (!(await consumeCode(purpose, subject, code)))
       fail("InvalidToken", "Code is invalid, expired or already used");
   };
-  return { rateLimit, sendCode, requireCode };
+  // Callers composing an authority transaction must throw only after commit,
+  // otherwise an ordinary wrong guess would roll back its attempt increment.
+  return { rateLimit, sendCode, consumeCode, requireCode };
 }

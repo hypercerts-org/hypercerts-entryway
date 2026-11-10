@@ -531,6 +531,7 @@ export async function mountClient({ app, config, db }) {
       res.redirect(303, `/client?client=${id}`);
     }),
   );
+  // eslint-disable-next-line no-unused-vars -- Express requires four-argument error middleware.
   router.use((error, req, res, _next) => {
     const status =
       Number.isInteger(error.status) &&

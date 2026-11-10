@@ -1,0 +1,4 @@
+# Compose fragments merged into another file at runtime; their YAML anchors
+# are defined elsewhere, so prettier cannot parse them on their own.
+tests/atmosphere/stacks/entryway-profile-replica.yaml
+tests/atmosphere/stacks/entryway-profile-services.yaml

@@ -1,4 +1,5 @@
 import { createOperationOwnership } from "./accounts/operation-ownership.js";
+import { createAccountAccess } from "./accounts/account-access.mjs";
 import { createOperationOwnershipStore } from "./database/drizzle/operation-ownership.js";
 import { createAccountAuthority } from "./database/drizzle/account-authority.mjs";
 import { createEmailAuthorityChange } from "./accounts/change-email-authority.mjs";
@@ -10,6 +11,9 @@ import { createMigrationProof } from "./features/pds-migration/proof.mjs";
 
 export async function createAccountSecurity(dependencies) {
   const authority = createAccountAuthority(dependencies);
+  const accountAccess =
+    dependencies.accountAccess ??
+    createAccountAccess(dependencies.accounts.storage);
   await authority.initializeClaims();
   const ownership =
     dependencies.accounts.ownership ??
@@ -27,7 +31,13 @@ export async function createAccountSecurity(dependencies) {
     proofs,
     ownership,
   });
-  const context = { ...dependencies, authority, proofs, changeEmailAuthority };
+  const context = {
+    ...dependencies,
+    accountAccess,
+    authority,
+    proofs,
+    changeEmailAuthority,
+  };
   const security = {
     assertEmailAvailable: proofs.assertEmailAvailable,
     bindVerifiedIdentity: proofs.bindVerifiedIdentity,

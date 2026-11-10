@@ -4,7 +4,7 @@ import { HttpError } from "../../http/http-error.mjs";
 
 export function createDeletionActions({ security, console }) {
   return {
-    delete: async ({ res, account, browser, principal, value, token }) => {
+    delete: async ({ res, account, browser, principal, value }) => {
       console.needed();
 
       if (value("confirm") !== account.handle)
@@ -13,7 +13,7 @@ export function createDeletionActions({ security, console }) {
           "ConfirmationRequired",
           "Handle confirmation did not match",
         );
-      await security.requestAccountDelete(principal);
+      const issued = await security.requestAccountDeleteForBrowser(principal);
       const state = await security.summary(principal);
       return nextStep(
         res,
@@ -21,6 +21,7 @@ export function createDeletionActions({ security, console }) {
         browser.csrf,
         "delete-confirm",
         hidden("confirm", account.handle) +
+          hidden("challengeId", issued.challengeId ?? "") +
           field(
             "token",
             "Deletion code",
@@ -50,7 +51,7 @@ export function createDeletionActions({ security, console }) {
         );
       await security.deleteAccount({
         did: account.did,
-        token: token(),
+        token: `${value("challengeId")}.${token()}`,
         password: String(req.body.password ?? "") || undefined,
       });
       return page(

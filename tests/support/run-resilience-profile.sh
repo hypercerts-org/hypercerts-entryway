@@ -23,16 +23,25 @@ if [[ "$exercise_mode" != --exercise ]]; then
 else
   : "${SANDBOX_CHECKOUT:?}" "${SANDBOX_PROJECT:?}" "${ACCEPTANCE_REPORT_DIR:?}"
 fi
+if [[ -n "${CI_OWNERSHIP_MANIFEST:-}" ]]; then
+  python3 "$root/scripts/ci-ownership.py" register "$CI_OWNERSHIP_MANIFEST" "$SANDBOX_CHECKOUT" "$SANDBOX_PROJECT"
+fi
 source "$root/tests/support/rootless-docker.sh"
-compose() { docker --context rootless compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" "$@"; }
+compose() { docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" "$@"; }
 run() {
   local label=$1; shift
   local result=0
+  echo "Profile $profile: $label"
   printf '%q ' "$@" > "$ACCEPTANCE_REPORT_DIR/$label.command"
   printf '\n' >> "$ACCEPTANCE_REPORT_DIR/$label.command"
   if [[ -n "${exercise_deadline:-}" ]]; then (( SECONDS < exercise_deadline )) || { echo "Complete profile exercise exceeded480s" >&2; return 1; }; fi
-  "$@" > "$ACCEPTANCE_REPORT_DIR/$label.log" 2>&1 || result=$?
+  if [[ "$label" == prepare || "$label" == up || "$label" == exercise ]]; then
+    "$@" 2>&1 | tee "$ACCEPTANCE_REPORT_DIR/$label.log" || result=$?
+  else
+    "$@" 2>&1 | tee "$ACCEPTANCE_REPORT_DIR/$label.log" | python3 "$root/scripts/ci-summary.py" || result=$?
+  fi
   printf '%s\n' "$result" > "$ACCEPTANCE_REPORT_DIR/$label.exit"
+  printf 'profile=%s phase=%s status=finished exit=%s\n' "$profile" "$label" "$result"
   if [[ "$label" == exercise ]]; then
     printf '{"boundMs":480000,"elapsedMs":%s,"exit":%s,"terminationGraceMs":5000}\n' "$(($(date +%s%3N) - PROFILE_EXERCISE_TRIGGER_MS))" "$result" > "$ACCEPTANCE_REPORT_DIR/exercise-controller.json"
   fi
@@ -44,13 +53,13 @@ cleanup() {
   # this profile's explicitly labelled exercise containers; leave service state
   # available after failure. GNU timeout bounds the whole child process group.
   local containers=()
-  mapfile -t containers < <(docker --context rootless ps -q \
+  mapfile -t containers < <(docker --context "$DOCKER_CONTEXT" ps -q \
     --filter "label=com.docker.compose.project=$SANDBOX_PROJECT" \
     --filter "label=org.hypercerts.entryway.profile-exercise=$SANDBOX_PROJECT")
   if (( ${#containers[@]} )); then
     printf '%s\n' "${containers[@]}" > "$ACCEPTANCE_REPORT_DIR/terminated-exercise-containers.txt"
     local termination_status=0
-    timeout 5s docker --context rootless kill "${containers[@]}" > "$ACCEPTANCE_REPORT_DIR/exercise-termination.log" 2>&1 || termination_status=$?
+    timeout 5s docker --context "$DOCKER_CONTEXT" kill "${containers[@]}" 2>&1 | tee "$ACCEPTANCE_REPORT_DIR/exercise-termination.log" | python3 "$root/scripts/ci-summary.py" || termination_status=$?
     printf '%s\n' "$termination_status" > "$ACCEPTANCE_REPORT_DIR/exercise-termination.exit"
   fi
   printf '%s\n' "$status" > "$ACCEPTANCE_REPORT_DIR/profile.exit"
@@ -85,7 +94,7 @@ exercise_started=$SECONDS
 exercise_deadline=$((SECONDS + 480 - ($(date +%s%3N) - PROFILE_EXERCISE_TRIGGER_MS) / 1000))
 for node in entryway $([[ "$ENTRYWAY_PROFILE_NODE_COUNT" == 2 ]] && echo entryway-replica); do
   run "$node-identity" compose exec -T "$node" node tests/support/profile-identity.mjs "$node"
-  docker --context rootless inspect --format '{"containerId":{{json .Id}},"imageId":{{json .Image}},"hostProcessId":{{.State.Pid}},"command":{{json .Config.Cmd}}}' "$(compose ps -q "$node")" > "$ACCEPTANCE_REPORT_DIR/$node-container.json"
+  docker --context "$DOCKER_CONTEXT" inspect --format '{"containerId":{{json .Id}},"imageId":{{json .Image}},"hostProcessId":{{.State.Pid}},"command":{{json .Config.Cmd}}}' "$(compose ps -q "$node")" > "$ACCEPTANCE_REPORT_DIR/$node-container.json"
 done
 sha256sum "$SANDBOX_CHECKOUT/compose.yaml" "$SANDBOX_CHECKOUT/state/manifest.json" > "$ACCEPTANCE_REPORT_DIR/generated-inputs.sha256"
 run readiness-initial probe ready readiness-initial.json
@@ -96,25 +105,26 @@ fi
 # Graceful stop is bounded separately from the application deadline. Preserve the
 # real container exit and test existing sessions/direct writes on the survivor.
 export PROFILE_TRIGGER_MS=$(date +%s%3N)
-run graceful-stop timeout 20s docker --context rootless compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" stop --timeout 18 entryway &
+run graceful-stop timeout 20s docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" stop --timeout 18 entryway &
 stop_pid=$!
 run graceful-ingress probe node-loss graceful-ingress.json
 wait "$stop_pid"
 unset PROFILE_TRIGGER_MS
 container=$(compose ps -aq entryway)
-docker --context rootless inspect --format '{{json .State}}' "$container" > "$ACCEPTANCE_REPORT_DIR/graceful-state.json"
+docker --context "$DOCKER_CONTEXT" inspect --format '{{json .State}}' "$container" > "$ACCEPTANCE_REPORT_DIR/graceful-state.json"
 if [[ "$ENTRYWAY_PROFILE_NODE_COUNT" == 2 ]]; then run graceful-survivor browser survivor graceful-survivor entryway-replica; fi
-run graceful-rejoin timeout 30s docker --context rootless compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" start --wait entryway
+run graceful-rejoin timeout 30s docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" start entryway
 run readiness-rejoin probe ready readiness-rejoin.json
 run rejoin browser rejoin rejoin entryway
 export PROFILE_TRIGGER_MS=$(date +%s%3N)
 run kill compose kill -s SIGKILL entryway
 container=$(compose ps -aq entryway)
-docker --context rootless inspect --format '{{json .State}}' "$container" > "$ACCEPTANCE_REPORT_DIR/kill-state.json"
+docker --context "$DOCKER_CONTEXT" inspect --format '{{json .State}}' "$container" > "$ACCEPTANCE_REPORT_DIR/kill-state.json"
 run kill-ingress probe node-loss kill-ingress.json
 unset PROFILE_TRIGGER_MS
 if [[ "$ENTRYWAY_PROFILE_NODE_COUNT" == 2 ]]; then run kill-survivor browser survivor kill-survivor entryway-replica; fi
-run kill-rejoin timeout 30s docker --context rootless compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" start --wait entryway
+run kill-rejoin timeout 30s docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" start entryway
+run readiness-kill-rejoin probe ready readiness-kill-rejoin.json
 run kill-rejoin-browser browser rejoin kill-rejoin entryway
 wait_marker() {
   local name=$1 deadline=$((SECONDS + 30))

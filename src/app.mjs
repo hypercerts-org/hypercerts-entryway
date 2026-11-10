@@ -2,6 +2,7 @@ import { mountOperationRecoveryRoutes } from "./features/account-settings/operat
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import express from "express";
 import { createAccounts } from "./compose-accounts.mjs";
+import { createAccountAccess } from "./accounts/account-access.mjs";
 import { createOAuth } from "./features/oauth-authorization/provider.mjs";
 import { mountXrpc } from "./compose-protocol.mjs";
 import { mountAccountUi } from "./compose-account-ui.mjs";
@@ -18,6 +19,7 @@ export async function createApp({ config, db, mail, lifecycle }) {
     config,
     workerId: lifecycle?.instanceId,
   });
+  const accountAccess = createAccountAccess(accounts.storage);
   const app = express();
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
@@ -73,17 +75,26 @@ export async function createApp({ config, db, mail, lifecycle }) {
       return res.sendStatus(404);
     next();
   });
-  const oauth = await createOAuth({ app, db, config, accounts, mail });
+  const oauth = await createOAuth({
+    app,
+    db,
+    config,
+    accounts,
+    accountAccess,
+    mail,
+  });
   const legacy = await createLegacy({ db, config, accounts });
   const security = await createAccountSecurity({
     db,
     config,
     accounts,
+    accountAccess,
     oauth,
     legacy,
     mail,
   });
   const protocolOperations = await createProtocolOperations({
+    plcMail: mail,
     db,
     config,
     accounts,
@@ -93,6 +104,7 @@ export async function createApp({ config, db, mail, lifecycle }) {
     complete: protocolOperations.completeInvite,
   });
   const migration = await createAccountMigration({
+    custody: accounts.custody,
     db,
     config,
     accounts,
@@ -146,6 +158,7 @@ export async function createApp({ config, db, mail, lifecycle }) {
     app,
     db,
     accounts,
+    accountAccess,
     oauth,
     config,
     legacy,
@@ -159,6 +172,7 @@ export async function createApp({ config, db, mail, lifecycle }) {
     db,
     config,
     accounts,
+    accountAccess,
     oauth,
     legacy,
     security,
@@ -176,6 +190,7 @@ export async function createApp({ config, db, mail, lifecycle }) {
   app.use((_req, res) =>
     res.status(404).json({ error: "NotFound", message: "Unknown endpoint" }),
   );
+  // eslint-disable-next-line no-unused-vars -- Express requires four-argument error middleware.
   app.use((error, req, res, _next) => {
     // Avoid logging requests, credentials, codes, email addresses, or token bodies.
     const status = Number(error.status ?? error.statusCode ?? 500);

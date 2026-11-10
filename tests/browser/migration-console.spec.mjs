@@ -1,6 +1,8 @@
 import { test, expect } from "@playwright/test";
 import { DatabaseSync } from "node:sqlite";
+import { createHash } from "node:crypto";
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
 
 const config = JSON.parse(
   readFileSync(
@@ -26,7 +28,7 @@ const recoveryMode = process.env.MANAGED_RECOVERY_MODE ?? "consumed-success";
 const run = recoveryRun ?? Date.now().toString(36);
 const identity = {
   email: `migration-console-${run}@example.com`,
-  handle: `migration-${run}.entryway.atmosbox.test`,
+  handle: `migration-${createHash("sha256").update(run).digest("hex").slice(0, 8)}.entryway.atmosbox.test`,
 };
 const source = config.pds.find((p) => p.id === "pds1");
 const target = config.pds.find((p) => p.id === "pds2");
@@ -126,24 +128,67 @@ test("console migrates its own DID, record and blob between enrolled PDSs with m
   await accountForm(page, "migration-request")
     .getByLabel("Destination data server")
     .selectOption(target.id);
+  const migrationSince = Date.now();
   await accountForm(page, "migration-request").getByRole("button").click();
   await expect(
     page.getByRole("heading", { name: "Confirm data server migration" }),
   ).toBeVisible();
   await expect.poll(() => mail(identity.email)?.type).toBe("account-migrate");
-  const token = mail(identity.email).token;
-  expect(typeof token === "string" && token.includes(".")).toBe(true);
-  const invalid = await page.request.post(
+  const selector = accountForm(page, "migration-confirm").locator(
+    'input[name="challengeId"]',
+  );
+  expect(await selector.count()).toBe(1);
+  const challengeId = await selector.inputValue();
+  expect(challengeId).toBeTruthy();
+  const { code } = await waitForMailpitCode({
+    recipient: identity.email,
+    since: migrationSince,
+  });
+  expect(await page.content()).not.toContain(`${challengeId}.${code}`);
+  const wrongCode = code === "00000000" ? "11111111" : "00000000";
+  const wrong = await page.request.post(
     `${config.issuer}/account/migration-confirm`,
     {
       headers: { origin: config.issuer },
-      form: { csrf, pdsId: target.id, token: "invalid.code" },
+      form: { csrf, pdsId: target.id, challengeId, token: wrongCode },
       maxRedirects: 0,
     },
   );
-  expect(invalid.status()).toBe(400);
-  await page.getByLabel("Migration code").fill(token);
+  expect(wrong.status()).toBe(400);
+  const foreignSelector = await page.request.post(
+    `${config.issuer}/account/migration-confirm`,
+    {
+      headers: { origin: config.issuer },
+      form: {
+        csrf,
+        pdsId: target.id,
+        challengeId: "another-browser-challenge",
+        token: code,
+      },
+      maxRedirects: 0,
+    },
+  );
+  expect(foreignSelector.status()).toBe(400);
+  await page.getByLabel("Migration code").fill(code);
+  const confirmation = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/account/migration-confirm" &&
+      response.request().method() === "POST",
+  );
   await accountForm(page, "migration-confirm").getByRole("button").click();
+  const confirmationStatus = (await confirmation).status();
+  // The recovery drill loses the target response after the accepted code, so
+  // confirmation reports an uncertain outcome (409) instead of completing.
+  if (recoveryRun)
+    expect(
+      confirmationStatus,
+      "Visible migration email code was rejected",
+    ).toBe(409);
+  else
+    expect(
+      confirmationStatus,
+      "Visible migration email code was rejected",
+    ).toBe(200);
   if (recoveryRun) {
     const prefix = `artifacts/managed-recovery-${recoveryRun}`;
     // The original authenticated request returned. Source freeze intentionally

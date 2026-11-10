@@ -1,11 +1,11 @@
 import { InvalidRequestError } from "@atproto/oauth-provider/errors";
+import { accountEmailSchema } from "../../accounts/input-schema.js";
 import { ChangedFlowIntentError } from "../../http/browser-flow.mjs";
 import { page } from "../../ui/html.mjs";
 const RESEND_COOLDOWN = 5_000;
 export function mountEmailLogin({
   app,
   db,
-  accounts,
   authentication,
   mail,
   flows,
@@ -16,7 +16,6 @@ export function mountEmailLogin({
   forgetBrowserAccounts,
 }) {
   const {
-    fields,
     save,
     newFlow,
     getFlow,
@@ -38,17 +37,14 @@ export function mountEmailLogin({
         // getFlow authenticated this flow before yielding. Refresh its mutable
         // request counters and intent under the same lock as the shared budget.
         flow = await refreshFlow(flow, browser);
-        email = String(emailValue ?? flow.email ?? "")
-          .trim()
-          .toLowerCase();
-        if (!email && emailValue === undefined)
+        if (emailValue === undefined && !flow.email)
           throw new InvalidRequestError("Request a sign-in code first");
-        if (
-          !email ||
-          email.length > 320 ||
-          !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-        )
+        const input = accountEmailSchema.safeParse(
+          emailValue === undefined ? flow.email : emailValue,
+        );
+        if (!input.success)
           throw new InvalidRequestError("Enter a valid email address");
+        email = input.data;
         const now = Date.now();
         if (flow.otpRequestCount >= 5) return { reason: "flow-limit" };
         if (flow.lastOtpSentAt && now - flow.lastOtpSentAt < RESEND_COOLDOWN)
@@ -125,7 +121,7 @@ export function mountEmailLogin({
     form,
     guarded(async (req, res) => {
       const { flow, browser } = await getFlow(req, res);
-      await sendCode(res, flow, browser, String(req.body.email ?? ""));
+      await sendCode(res, flow, browser, req.body.email ?? "");
     }),
   );
   app.post(
@@ -166,18 +162,28 @@ export function mountEmailLogin({
           identity.email.toLowerCase() !== flow.email
         )
           throw new InvalidRequestError("Email verification did not complete");
+        let resolution;
         await db.transact(async () => {
           await readCurrentIntent(flow, browser);
-          await getAccountSecurity()?.assertLoginEmail({
-            email: flow.email,
-            userId: identity.userId,
-          });
+          resolution = await getAccountSecurity()?.assertLoginEmail(identity);
         });
         // Rotate the provider's browser session after successful identity verification.
         const rotated = await loadBrowser(req, res, true);
         const verifiedEmail = identity.email.toLowerCase();
-        const row = await accounts.get(verifiedEmail);
-        if (!row || row.status === "provisioning") {
+        if (resolution?.kind === "account-requires-repair")
+          return pageForFlow(
+            res,
+            "Account requires repair",
+            '<p role="alert">This email is associated with an existing account that needs repair before sign-in can continue. Signup is unavailable for this email. Contact support for help.</p>',
+            flow,
+            409,
+          );
+        if (
+          !resolution ||
+          resolution.kind === "unbound" ||
+          (resolution.kind === "single" &&
+            resolution.account.status === "provisioning")
+        ) {
           const body = await signupForm(
             { ...flow, authEmail: verifiedEmail },
             rotated,
@@ -191,8 +197,16 @@ export function mountEmailLogin({
           response.commitCookies(res);
           return pageForFlow(res, "Create your account", body, current);
         }
-        await authenticated(req, res, flow, rotated, row, {
-          verifiedEmail,
+        if (resolution.kind === "selection-required")
+          return pageForFlow(
+            res,
+            "Account selection required",
+            '<p role="alert">This verified identity is linked to multiple accounts. Account selection is not available yet.</p>',
+            flow,
+            409,
+          );
+        await authenticated(req, res, flow, rotated, resolution.account, {
+          identity,
           commitCookies: () => response.commitCookies(res),
         });
       } catch (error) {

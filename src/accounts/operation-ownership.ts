@@ -457,7 +457,7 @@ export type OperationOwnership = ReturnType<typeof createOperationOwnership>;
 
 /** For mutation responses whose value is deliberately not used after dispatch. */
 export const noExternalResult = {
-  project: (_value: unknown): null => null,
+  project: (): null => null,
   resume(value: unknown): undefined {
     if (value !== null)
       throw new DomainError(

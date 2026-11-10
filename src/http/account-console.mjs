@@ -15,6 +15,7 @@ const requireRecent = (session) => {
 export function createAccountConsole({
   app,
   accounts,
+  accountAccess,
   oauth,
   security,
   legacy,
@@ -43,7 +44,17 @@ export function createAccountConsole({
       res.redirect(303, "/login");
       return null;
     }
-    const account = await accounts.get(session.email.toLowerCase());
+    const resolution = await accountAccess.resolveBoundAccounts(session);
+    if (resolution.kind === "selection-required") {
+      page(
+        res,
+        "Account selection required",
+        '<p>More than one account is linked to this identity. Account selection is not available yet.</p><a href="/login">Return to sign in</a>',
+        409,
+      );
+      return null;
+    }
+    const account = resolution.kind === "single" ? resolution.account : null;
     if (!account || account.status === "deleted") {
       page(
         res,

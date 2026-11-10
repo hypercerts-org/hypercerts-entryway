@@ -16,13 +16,13 @@ mkdir -p "$artifacts"
 cd "$sandbox"
 exec 9> "$artifacts/migration.lock"
 flock -n 9 || { echo 'Another migration or operational flow owns this project' >&2; exit 2; }
-compose() { timeout --foreground "${OPERATIONAL_COMMAND_TIMEOUT_SECONDS:-240}" docker --context rootless compose --project-name "$project" -f "$sandbox/compose.yaml" "$@"; }
+compose() { timeout --foreground "${OPERATIONAL_COMMAND_TIMEOUT_SECONDS:-240}" docker --context "$DOCKER_CONTEXT" compose --project-name "$project" -f "$sandbox/compose.yaml" "$@"; }
 # Assert labels before targeting disposable replacement containers by name.
 remove_owned() {
   local label
-  label=$(docker --context rootless inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$1" 2>/dev/null) || return 0
+  label=$(docker --context "$DOCKER_CONTEXT" inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$1" 2>/dev/null) || return 0
   [[ "$label" == "$project" ]] || { echo 'Refusing foreign replacement container' >&2; return 1; }
-  timeout --foreground 30 docker --context rootless rm -f "$1" >/dev/null
+  timeout --foreground 30 docker --context "$DOCKER_CONTEXT" rm -f "$1" >/dev/null
 }
 # Summaries only. Configuration, tokens, keys and SQLite remain in private volumes.
 record_candidate() {

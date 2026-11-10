@@ -3,14 +3,16 @@ import { createOperationOwnershipStore } from "../../dist/src/database/drizzle/o
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { test } from "node:test";
+import { Secp256k1MigrationPlcSigner } from "../../dist/src/plc/signing.js";
 import { Secp256k1Keypair } from "@atproto/crypto";
 import * as plc from "@did-plc/lib";
 import { cidForLex } from "@atproto/lex-cbor";
 import { decodeJwt, decodeProtectedHeader } from "jose";
 import { openTestDatabase } from "../support/database-fixture.mjs";
+import { createCustodyInventoryStorage } from "../../dist/src/database/drizzle/migration-custody.js";
 import { createProtocolOperations } from "../../dist/src/compose-protocol-operations.mjs";
 
-async function fixture(t) {
+async function fixture(t, plcMail) {
   const db = await openTestDatabase(":memory:");
   t.after(async () => await db.close());
   const { privateKey } = generateKeyPairSync("ec", { namedCurve: "secp256k1" });
@@ -47,10 +49,13 @@ async function fixture(t) {
     store: createOperationOwnershipStore(db),
   });
   const accounts = {
+    custody: createCustodyInventoryStorage(db),
     ownership,
     serialized: (did, perform, intent) =>
       ownership.accountStep(did, intent, perform),
-    rotation,
+    plcSigner: await Secp256k1MigrationPlcSigner.fromHex(
+      Buffer.from(await rotation.export()).toString("hex"),
+    ),
     get(id) {
       return [did, row.handle, row.email].includes(id) ? row : null;
     },
@@ -64,6 +69,7 @@ async function fixture(t) {
     },
   };
   const protocolOperations = await createProtocolOperations({
+    plcMail,
     db,
     config,
     accounts,
@@ -188,7 +194,66 @@ test("PLC operation signing requires current authority and a single-use account 
   await assert.rejects(protocolOperations.signPlcOperation(row, { token }), {
     error: "InvalidToken",
   });
-  assert.equal((await db.list("events")).length, 1);
+  const history = await createCustodyInventoryStorage(db).getHistory(row.did);
+  assert.equal(history.length, 1);
+  assert.equal(history[0].kind, "signed");
+  assert.equal(history[0].operation.sig, undefined);
+  assert.deepEqual(history[0].operation.rotationKeys, operation.rotationKeys);
+});
+
+test("PLC authorization commits wrong guesses and rolls back proof when history fails", async (t) => {
+  const { protocolOperations, db, row } = await fixture(t);
+  await protocolOperations.requestPlcOperationSignature(row);
+  const token = (await db.get("outbox", row.email)).otp;
+  const challengeKey = `plc-operation:${row.did}:${row.email}`;
+  await assert.rejects(
+    protocolOperations.signPlcOperation(row, { token: "wrong" }),
+    { error: "InvalidToken" },
+  );
+  assert.equal((await db.get("entryway:challenges", challengeKey)).attempts, 1);
+  const insert = db.insert.bind(db);
+  db.insert = async (table, ...args) => {
+    if (table === "custody_history") throw new Error("History unavailable");
+    return insert(table, ...args);
+  };
+  await assert.rejects(
+    protocolOperations.signPlcOperation(row, { token }),
+    /History unavailable/,
+  );
+  assert.ok(await db.get("entryway:challenges", challengeKey));
+  assert.equal(
+    (await createCustodyInventoryStorage(db).getHistory(row.did)).length,
+    0,
+  );
+  db.insert = insert;
+  await protocolOperations.signPlcOperation(row, { token });
+  assert.equal(await db.get("entryway:challenges", challengeKey), null);
+});
+
+test("concurrent PLC releases consume one proof and response loss requires fresh confirmation", async (t) => {
+  const { protocolOperations, db, row } = await fixture(t);
+  await protocolOperations.requestPlcOperationSignature(row);
+  const token = (await db.get("outbox", row.email)).otp;
+  const outcomes = await Promise.allSettled([
+    protocolOperations.signPlcOperation(row, { token }),
+    protocolOperations.signPlcOperation(row, { token }),
+  ]);
+  assert.equal(
+    outcomes.filter((result) => result.status === "fulfilled").length,
+    1,
+  );
+  assert.equal(
+    outcomes.filter((result) => result.status === "rejected").length,
+    1,
+  );
+  // Discarding the successful response cannot make its spent proof reusable.
+  await assert.rejects(protocolOperations.signPlcOperation(row, { token }), {
+    error: "InvalidToken",
+  });
+  assert.equal(
+    (await createCustodyInventoryStorage(db).getHistory(row.did)).length,
+    1,
+  );
 });
 
 test("PLC signing rejects unknown fields, invalid endpoint URLs and keys without consuming a valid proof", async (t) => {
@@ -492,4 +557,52 @@ test("parallel protocol attempt reservations preserve the configured limit", asy
       .every((result) => result.reason.error === "RateLimitExceeded"),
   );
   assert.equal((await db.get("entryway:limits", "parallel")).count, 3);
+});
+
+test("PLC-only mail queues atomically and dispatches only after challenge commit", async (t) => {
+  let db, row;
+  let delivered = 0;
+  let failQueue = false;
+  const f = await fixture(t, {
+    async queueOtp(request) {
+      assert.equal(request.type, "plc-operation");
+      await db.set("fixture:queued-mail", request.email, {
+        type: request.type,
+      });
+      if (failQueue) throw new Error("Injected queue failure");
+      return {
+        async deliver() {
+          assert.ok(
+            await db.get(
+              "entryway:challenges",
+              `plc-operation:${row.did}:${row.email}`,
+            ),
+          );
+          delivered++;
+        },
+      };
+    },
+  });
+  ({ db, row } = f);
+  failQueue = true;
+  await assert.rejects(
+    f.protocolOperations.requestPlcOperationSignature(row),
+    /queue failure/,
+  );
+  assert.equal(
+    await db.get(
+      "entryway:challenges",
+      `plc-operation:${row.did}:${row.email}`,
+    ),
+    null,
+  );
+  assert.equal(await db.get("fixture:queued-mail", row.email), null);
+  assert.equal(delivered, 0);
+  failQueue = false;
+  await f.protocolOperations.requestPlcOperationSignature(row);
+  assert.equal(delivered, 1);
+  assert.equal(await db.get("outbox", row.email), null);
+  await f.protocolOperations.requestSignup({ email: "unchanged@example.com" });
+  assert.ok(await db.get("outbox", "unchanged@example.com"));
+  assert.equal(delivered, 1);
 });

@@ -1,5 +1,22 @@
 # Synthetic external migration
 
+## Public incoming migration: shared-email test on hold
+
+The Playwright scenario for migrating an independent account into Entryway with
+an email already used by another Entryway DID is on hold. The current public
+migration path cannot admit that outside account; the synthetic fixture below
+does not prove this behavior.
+
+Blocked by [TECH-681 — Implement the public incoming-migration API](https://linear.app/hypercerts/issue/TECH-681/implement-the-public-incoming-migration-api).
+Once that support is available, add the scenario under
+[TECH-682 — Prove independent incoming migration and post-move OAuth](https://linear.app/hypercerts/issue/TECH-682/prove-independent-incoming-migration-and-post-move-oauth),
+following the existing AiaB test conventions. Use two distinct DIDs with the same
+email, migrate through public endpoints with normal ownership proofs, and verify
+that the incoming DID, records and blobs survive while the existing account
+remains unchanged. Do not substitute private fixture calls for public migration.
+
+## Existing synthetic flow
+
 Prerequisite: `prepare` and `up` have succeeded.
 
 `./tests/local.sh migration` runs:

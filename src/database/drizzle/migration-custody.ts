@@ -1,15 +1,331 @@
-import { eq } from "drizzle-orm";
-import { validateCustodyInventory } from "../../plc/custody.js";
+import { createHash } from "node:crypto";
+import { and, asc, eq } from "drizzle-orm";
+import {
+  validateCustodyObservation,
+  validateChainPredecessor,
+} from "../../plc/custody-observation.js";
+import { PlcError } from "../../plc/errors.js";
+import {
+  publicKeyAlgorithm,
+  validateCustodyInventory,
+  validateSignedEvent,
+} from "../../plc/custody.js";
 import type { DatabaseExecutor } from "../executor.js";
 import type {
   CustodyInventoryReader,
   CustodyInventoryTransactor,
 } from "../custody.port.js";
-import type { CustodyInventory } from "../../plc/types.js";
+import type { CustodyObservation, CustodyInventory } from "../../plc/types.js";
+function compareKeys(leftKey: string, rightKey: string): number {
+  if (leftKey < rightKey) return -1;
+  if (leftKey > rightKey) return 1;
+  return 0;
+}
+
+function observedKeys(
+  observation: CustodyObservation,
+): CustodyInventory["keys"] {
+  // Public directory keys reveal authority, not who holds the private keys.
+  const next = observation.snapshot;
+  const head = observation.entries.find((entry) => entry.cid === next.headCid)!;
+  return head.operation.type === "plc_tombstone"
+    ? []
+    : [
+        ...head.operation.rotationKeys.map((keyReference) => ({
+          keyReference,
+          purpose: "unknown-rotation" as const,
+          custodian: "unknown" as const,
+          algorithm: publicKeyAlgorithm(keyReference),
+          fingerprint: `sha256:${createHash("sha256").update(keyReference).digest("hex")}`,
+          lifecycle: "active" as const,
+          provenance: "directory-observed-unknown-custodian" as const,
+        })),
+        ...[head.operation.verificationMethods.atproto]
+          .filter((key): key is string => typeof key === "string")
+          .map((keyReference) => ({
+            keyReference,
+            purpose: "pds-repository" as const,
+            custodian: "unknown" as const,
+            algorithm: publicKeyAlgorithm(keyReference),
+            fingerprint: `sha256:${createHash("sha256").update(keyReference).digest("hex")}`,
+            lifecycle: "active" as const,
+            provenance: "directory-observed-unknown-custodian" as const,
+          })),
+      ];
+}
+
+function preserveAttributedKeys(
+  previous: CustodyInventory | null,
+  keys: CustodyInventory["keys"],
+): CustodyInventory["keys"] {
+  return (previous?.keys ?? [])
+    .filter(
+      (item) => item.provenance !== "directory-observed-unknown-custodian",
+    )
+    .map((item) => {
+      // PLC directory authority cannot change OAuth issuer lifecycle.
+      if (item.purpose === "oauth-issuer") return item;
+      const effective = keys.some(
+        (current) =>
+          current.keyReference === item.keyReference &&
+          (current.purpose === "pds-repository") ===
+            (item.purpose === "pds-repository"),
+      );
+      return {
+        ...item,
+        lifecycle:
+          item.lifecycle === "active" && !effective
+            ? ("retired" as const)
+            : item.lifecycle,
+      };
+    });
+}
+
+function unattributedKeys(
+  keys: CustodyInventory["keys"],
+  attributed: CustodyInventory["keys"],
+): CustodyInventory["keys"] {
+  return keys.filter((item) =>
+    item.purpose === "pds-repository"
+      ? !attributed.some(
+          (known) =>
+            known.purpose === item.purpose &&
+            known.keyReference === item.keyReference,
+        )
+      : !attributed.some(
+          (known) =>
+            known.keyReference === item.keyReference &&
+            known.purpose !== "pds-repository" &&
+            known.purpose !== "oauth-issuer",
+        ),
+  );
+}
+
+function observedInventory(
+  observation: CustodyObservation,
+  previous: CustodyInventory | null,
+): CustodyInventory["keys"] {
+  const keys = observedKeys(observation);
+  const attributed = preserveAttributedKeys(previous, keys);
+  return [...attributed, ...unattributedKeys(keys, attributed)];
+}
+
+function validateObservationExtension(
+  previous: CustodyInventory["observation"],
+  next: CustodyObservation["snapshot"],
+): void {
+  if (!previous) return;
+  const retainsOrNullifies = (cid: string): boolean =>
+    next.chain.includes(cid) || next.nullified.includes(cid);
+  const accountsForPreviousHead = retainsOrNullifies(previous.headCid);
+  const preservesNullifications = previous.nullified.every((cid) =>
+    next.nullified.includes(cid),
+  );
+  const accountsForPreviousChain = previous.chain.every(retainsOrNullifies);
+  if (
+    !accountsForPreviousHead ||
+    !preservesNullifications ||
+    !accountsForPreviousChain
+  )
+    throw new PlcError(
+      "CustodyConflict",
+      "Directory observation regresses or contradicts retained authority",
+    );
+}
+
+/** Bind public custody persistence to this executor. Nested writes join its
+ * physical transaction and mutation fence; no separate connection is opened.
+ * Reads/writes reject inconsistent or non-public evidence with stable PLC errors. */
 export function createCustodyInventoryStorage(
   db: DatabaseExecutor,
 ): CustodyInventoryReader & CustodyInventoryTransactor {
-  return {
+  const canonical = (value: unknown): string => {
+    if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+    if (typeof value === "object" && value !== null)
+      return `{${Object.entries(value)
+        .sort(([a], [b]) => compareKeys(a, b))
+        .map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`)
+        .join(",")}}`;
+    return JSON.stringify(value);
+  };
+  const retainObservation = async (observation: CustodyObservation) => {
+    const row = {
+      id: observation.id,
+      did: observation.did,
+      directory: observation.directory,
+      value: canonical(observation),
+    };
+    await db.insert("custody_observations", row, { ignoreConflict: true });
+    const retained = (
+      await db.read("custody_observations", {
+        where: eq(db.tables.custody_observations.id, observation.id),
+        limit: 1,
+      })
+    )[0];
+    if (canonical(retained) !== canonical(row))
+      throw new PlcError("CustodyConflict", "Observation retry differs");
+  };
+  const hasCompleteObservationHistory = async (
+    observation: CustodyObservation,
+  ): Promise<boolean> => {
+    const priorEvents = await db.read("custody_history", {
+      where: eq(
+        db.tables.custody_history.supporting_observation_id,
+        observation.id,
+      ),
+    });
+    return priorEvents.length === observation.entries.length;
+  };
+  const recordObservationHistory = async (observation: CustodyObservation) => {
+    for (const entry of observation.entries) {
+      validateChainPredecessor(entry, observation.snapshot.chain);
+      await store.recordSigned({
+        id: `${observation.id}:${entry.cid}`,
+        did: observation.did,
+        cid: entry.cid,
+        operation: entry.operation,
+        kind: entry.nullified ? "nullified" : "observed",
+        supportingObservationId: observation.id,
+        operationId: observation.operationId,
+        provenance: entry.nullified
+          ? "directory-asserted-nullification"
+          : "directory-observed-publication",
+        at: observation.at,
+      });
+    }
+  };
+  const store: CustodyInventoryReader & CustodyInventoryTransactor = {
+    async recordObservation(input) {
+      const observation = validateCustodyObservation(input);
+      await db.transact(async () => {
+        await retainObservation(observation);
+        if (await hasCompleteObservationHistory(observation)) return;
+        const previous = await store.getByDid(observation.did);
+        validateObservationExtension(
+          previous?.observation,
+          observation.snapshot,
+        );
+        await recordObservationHistory(observation);
+        await store.save({
+          did: observation.did,
+          keys: observedInventory(observation, previous),
+          observation: observation.snapshot,
+        });
+      });
+    },
+    async recordSigned(input) {
+      const event = validateSignedEvent(input);
+      await db.transact(async () => {
+        if (event.supportingObservationId !== undefined) {
+          const support = await store.getObservation(
+            event.supportingObservationId,
+          );
+          const entry = support?.entries.find((item) => item.cid === event.cid);
+          if (
+            support?.did !== event.did ||
+            support.at !== event.at ||
+            support.operationId !== event.operationId ||
+            !entry ||
+            canonical(entry.operation) !== canonical(event.operation) ||
+            event.kind !== (entry.nullified ? "nullified" : "observed")
+          )
+            throw new PlcError(
+              "InvalidCustodyEvent",
+              "Supporting observation differs",
+            );
+        }
+        const facts = canonical(event.operation);
+        await db.insert(
+          "custody_operations",
+          { did: event.did, cid: event.cid, operation: facts },
+          { ignoreConflict: true },
+        );
+        const stored = (
+          await db.read("custody_operations", {
+            where: and(
+              eq(db.tables.custody_operations.did, event.did),
+              eq(db.tables.custody_operations.cid, event.cid),
+            ),
+            limit: 1,
+          })
+        )[0];
+        if (stored?.operation !== facts)
+          throw new PlcError(
+            "CustodyConflict",
+            "Immutable custody operation differs",
+          );
+        const row = {
+          id: event.id,
+          did: event.did,
+          cid: event.cid,
+          kind: event.kind,
+          supporting_observation_id: event.supportingObservationId ?? null,
+          operation_id: event.operationId,
+          provenance: event.provenance,
+          at: event.at,
+        };
+        await db.insert("custody_history", row, { ignoreConflict: true });
+        const old = (
+          await db.read("custody_history", {
+            where: eq(db.tables.custody_history.id, event.id),
+            limit: 1,
+          })
+        )[0];
+        if (canonical(old) !== canonical(row))
+          throw new PlcError("CustodyConflict", "Custody event retry differs");
+        // Authorization is append-only evidence; it never promotes the snapshot.
+      });
+    },
+    async getObservation(id) {
+      const row = (
+        await db.read("custody_observations", {
+          where: eq(db.tables.custody_observations.id, id),
+          limit: 1,
+        })
+      )[0];
+      return row ? (JSON.parse(row.value) as CustodyObservation) : null;
+    },
+    async getHistory(did) {
+      const events = await db.read("custody_history", {
+        where: eq(db.tables.custody_history.did, did),
+        // Presentation order only; PLC causality is predecessor-linked evidence.
+        orderBy: [
+          asc(db.tables.custody_history.at),
+          asc(db.tables.custody_history.id),
+        ],
+      });
+      return Promise.all(
+        events.map(async (event) => {
+          const facts = (
+            await db.read("custody_operations", {
+              where: and(
+                eq(db.tables.custody_operations.did, did),
+                eq(db.tables.custody_operations.cid, event.cid),
+              ),
+              limit: 1,
+            })
+          )[0];
+          if (!facts)
+            throw new PlcError(
+              "InvalidCustodyEvent",
+              "Custody operation is missing",
+            );
+          return validateSignedEvent({
+            id: event.id,
+            did,
+            cid: event.cid,
+            kind: event.kind,
+            ...(event.supporting_observation_id === null
+              ? {}
+              : { supportingObservationId: event.supporting_observation_id }),
+            operationId: event.operation_id,
+            provenance: event.provenance,
+            at: event.at,
+            operation: JSON.parse(facts.operation),
+          });
+        }),
+      );
+    },
     async getByDid(did) {
       const row = (
         await db.read("migration_custody_inventory", {
@@ -40,4 +356,5 @@ export function createCustodyInventoryStorage(
       });
     },
   };
+  return store;
 }

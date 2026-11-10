@@ -1,6 +1,7 @@
 # Data model, identity custody and migration
 
-Status: current storage facts plus proposed domain contracts. Updated: 2026-10-07.
+Status: current storage facts plus accepted domain contracts and implementation gaps.
+Incoming migration design updated: 2026-11-04.
 See [architecture](architecture.md) for domain ownership and [delivery reference](delivery-plan.md) for delivery gates.
 
 ## 1. Account identity and ownership
@@ -8,11 +9,21 @@ See [architecture](architecture.md) for domain ownership and [delivery reference
 Use the DID as the account primary key. A separate account UUID is not required by the agreed scope.
 Better Auth user IDs, browser-session IDs, devices, grants and migration-operation IDs remain separate identifiers.
 
-The approved target permits one verified email identity to be associated with
-multiple DIDs when an existing PDS joins Entryway and its DID/email associations
-are imported. Each DID remains a separate account with at most one login binding;
-associations never merge DIDs. An email match alone cannot establish authority over
-an unimported DID.
+Whole-PDS association import may preserve multiple accounts sharing a primary
+email. Individual incoming DID migration requires a unique destination email,
+which may differ from the source email. Accounts remain separate: access to one
+does not grant access to the others. This accepted individual-arrival policy is
+specified in [public incoming migration](incoming-migration.md); current storage
+support for shared claims is not evidence that its admission checks exist.
+
+Email changes, account recovery, and admin repairs cannot move an account to an
+email already used by another account. Moving an account to an unused email leaves
+the others unchanged.
+
+An email match alone never grants account access. Linking an account to a login
+still requires proof that the user controls that account.
+
+Ordinary signup cannot create another DID for an email that already has an account.
 
 Sign-in verifies the email before resolving its associated DIDs. One associated
 DID continues directly; multiple associated DIDs require an explicit account
@@ -20,18 +31,37 @@ choice. The selected DID then continues the original authentication or
 authorization flow before a session for that DID is established. Better Auth's
 email-level browser session is distinct from this selected-account session.
 
-The current implementation still enforces a unique account email and a unique
-Better Auth user in the DID binding. The schema changes, joining-PDS association
-import and post-verification chooser are not implemented. The table below records
-current storage, not the approved target. Internal refactoring does not require
-upgrading existing databases; public account migration and existing ePDS deployment
-conversion remain separate requirements.
+The current implementation resolves browser access only through an established
+`account_bindings` row for the persisted, verified Better Auth user. Matching an
+email neither selects an account nor creates a binding. Registration records the
+verified owner user ID in its existing intent and commits the binding in the same
+database transaction that activates the account; retries and reconciliation use
+that saved ID rather than discovering an owner by email. Startup initializes email
+claims only and does not create bindings. Existing active rows without a binding
+are denied browser access and cannot be acquired through signup or retry.
+Restoring access requires an explicit trusted repair. No repair command is
+currently available, and no automatic backfill is performed.
+
+Account access is resolved only through explicit DID-to-user bindings. The
+schemas retain support for multiple DIDs sharing a primary email claim and one
+Better Auth user binding multiple DIDs; Better Auth email itself remains unique.
+Ordinary account changes do not add a primary claim to an email already claimed
+by another DID. Existing migration/import adapters still permit sharing; the
+accepted design restricts that exception to whole-PDS association import, not
+individual incoming arrivals. The resolver returns `selection-required` for
+multiple established bindings, but the
+interactive chooser and joining-PDS association import are not implemented. No
+DID is selected or bound from an email match alone.
+
+The table below records current storage, not the full approved target. Internal
+refactoring does not require upgrading existing databases; public account migration
+and existing ePDS deployment conversion remain separate requirements.
 
 | State                                  | Domain or system owner              | Current representation                                                |
 | -------------------------------------- | ----------------------------------- | --------------------------------------------------------------------- |
 | Account identity and status            | Accounts                            | `accounts`, keyed by DID                                              |
-| Login identity binding                 | Accounts                            | `account_bindings`, unique DID and Better Auth user                   |
-| Email and handle claims                | Accounts                            | Transactional claim tables with uniqueness constraints                |
+| Login identity binding                 | Accounts                            | `account_bindings`, unique DID and nonunique Better Auth user           |
+| Email and handle claims                | Accounts                            | Primary claims may repeat across DIDs and coexist with a pending primary-email change; backup claims cannot overlap primary claims, and backup and pending claims are mutually exclusive |
 | Verified browser identity and sessions | Access / Better Auth adapter        | Better Auth-owned tables                                              |
 | Device-to-account membership           | Access                              | Indexed provider membership by DID and device ID                      |
 | Clients, grants and protocol state     | Access / OAuth provider adapter     | Provider stores, partly using namespaced JSON storage                 |
@@ -147,10 +177,15 @@ erDiagram
   }
 ```
 
-In the target, account email and the binding's `auth_user_id` are nonunique; the
-DID remains the account primary key and permits only one binding per DID.
+The current schema permits repeated account email claims and repeated
+`account_bindings.user_id` values; the DID remains the account primary key and
+permits only one binding per DID. Better Auth email remains unique.
 `BROWSER_SESSION` represents the email-level Better Auth session, not selected-DID
-authentication. The [login sequence](architecture.md#5-login-and-application-authorization)
+authentication. Security-revocation flows invalidate every Better Auth session
+for the shared user. Ordinary verified email changes instead retain sessions on
+the previous user while atomically rebinding the selected DID to its verified
+destination user; those sessions are not migrated. OAuth and account data remain
+DID-scoped. The [login sequence](architecture.md#5-login-and-application-authorization)
 keeps those steps separate.
 
 Device membership requires uniqueness for its device/DID pair.
@@ -198,8 +233,52 @@ its existing PLC rotation authority subject to valid PLC rules and limits; do no
 replace it mechanically with the genesis arrangement or assume that its repository
 signing key is a recovery key.
 
-These are the target custody rules, not a claim that their provisioning, migration
-or recovery workflows are implemented.
+New registration now requires the public-only `plcRecoveryKeyDid` operator recovery
+reference. Its ordered genesis list is selected before PDS key allocation and
+retained in the pending intent; changing deployment defaults does not rewrite that
+selection. A saved signed genesis is reused unchanged. If unsigned pending work
+requires a hot signer no longer available, it remains pending with
+`RequiredSignerUnavailable`. Public references do not prove private-key backup,
+independent custody or operational recovery readiness.
+
+The concrete PLC signer keeps private material in an ECMAScript private field.
+Public-update authorization receives only unsigned facts and the candidate CID.
+`custody_operations` retains immutable unsigned public facts and `custody_history`
+retains signature-release authorization events. Identical event retries are no-ops;
+changed event identity or operation facts conflict. These fresh-schema tables do
+not implement a historical database upgrade.
+
+Directory audit observations retain immutable public operations and append-only
+publication/nullification events with explicit supporting observation IDs. Immutable
+`custody_observations` retain the public evidence and configured directory URL,
+even after a newer snapshot supersedes them. Observation retries with changed
+directory, owner or evidence conflict. These records commit with history and the
+atomically fenced last-observed
+snapshot. Signing events never promote authority. The configured PLC directory is
+trusted for canonical branch selection, historic timestamps and nullification;
+publication provenance is `directory-observed-publication`; nullification provenance
+is `directory-asserted-nullification`, not independently verified historic recovery
+timing. Both require matching immutable supporting observations. Synthetic fixtures
+may record fixture-confirmed publication but cannot assert directory nullification.
+Signed events cannot carry directory evidence. Signed operation CIDs include the
+signature: unsigned history cannot recompute that CID. The concrete signer or
+validated directory observation supplies the binding; storage validates its
+canonical DAG-CBOR SHA-256 CID shape. Envelopes, DIDs, recomputed CIDs, supported keys
+and predecessor-linked surviving signatures are validated with the pinned library.
+An unexplained regression or branch change without explicit nullification of the
+previous head preserves the old snapshot and fails. Tombstone is observed state,
+not an assertion of irreversible finality. No clock patch or custom recovery
+validator is used.
+
+The internal `refreshCustodyObservation(did)` operation admits `custody-observe`
+through existing ownership. It never grants account access, mutates account
+binding or clears uncertain writes. Conflicting pending admission blocks refresh;
+it is available only to internal operator tooling, not a new public route.
+PLC confirmation alone now reuses durable mail delivery: its challenge and mail
+queue commit together and SMTP runs afterward. Other legacy XRPC mail flows are
+unchanged. Public identity qualification covers optional-key addition and bounded
+departure using destination service authorization and the unchanged stock PDS;
+full repository/blob migration and recovery qualification remain separate requirements.
 
 ```mermaid
 %%{init: {"theme":"base","themeVariables":{"primaryTextColor":"#172B4D","lineColor":"#45556C","edgeLabelBackground":"#FFFFFF","fontFamily":"Arial"},"flowchart":{"nodeSpacing":40,"rankSpacing":50,"curve":"linear"}}}%%
@@ -248,9 +327,11 @@ provide that independence. Identity control also cannot recover repository or
 blob data that is unavailable; source availability or a usable backup remains a
 separate requirement.
 
-The current custody validator assumes four fixture-specific key purposes,
-including a user-held source recovery key. Those purposes are not a required
-rotation-key count or proof that every account has user recovery authority.
+Legacy fixture inventory retains its four-purpose validation and explicitly
+fixture-derived provenance. Directory observations accept account-mode inventories
+with any protocol-valid ordered rotation list and unknown custodians; public keys
+alone never establish who possesses their private counterparts. Configured public
+references and unknown directory-observed custody remain distinct assertions.
 A production key-management product, retention periods and detailed provisioning
 procedures are not selected by this policy.
 
@@ -283,6 +364,28 @@ Migration acceptance is compliance with public protocol endpoints and normal
 credentials. No particular migration tool or version must be selected. If a tool
 is used, record its version for reproducibility; the client choice does not define
 the acceptance contract.
+
+### Accepted public incoming pathway
+
+[Public incoming migration](incoming-migration.md) defines the accepted
+client-driven process for an unchanged PDS already behind Entryway. Browser OTP
+produces destination arrival authorization, separate from configurable operator
+invite codes and standard source DID proof. Entryway publishes a source-signed
+authority handoff, then signs the destination operation supplied to stock creation.
+Creation publishes early cutover and creates active; a separate deactivation
+precedes client imports. This exposure is explicit, not atomic inactive creation.
+
+The accepted design binds the saved verified user atomically after confirmed
+backend provisioning and deactivation, before transfer, so the tool can receive
+destination credentials. A bound migration-pending account is not active and
+cannot bypass guarded activation or ordinary-access restrictions. This differs
+from the current fixture's post-transfer binding and does not change existing
+signup activation semantics. Implementation and public qualification remain open.
+
+Tools may implement an Entryway-specific public journey; no particular tool is
+mandatory or assumed compatible. Arrival-code expiry does not release uncertain
+operations or reverse published custody. No automatic destructive cleanup or
+source deletion is introduced by this design.
 
 ### What the imported external fixture actually does
 
@@ -339,10 +442,9 @@ failures, but cannot substitute for public endpoint and credential coverage.
 
 ## Required recovery decisions
 
-The multiple-DID email policy is settled as described [above](#1-account-identity-and-ownership);
-its implementation is pending. Import must establish the DID/email association
-under the account-authority contract. Email verification cannot substitute for
-that authority or merge identities.
+Any import that associates an existing PDS identity with an Entryway account
+must establish the DID/email association under the account-authority contract.
+Email verification cannot substitute for that authority or merge identities.
 
 The key roles and normal departure rules are settled above. Remaining work covers
 provisioning, protection, backup/rotation procedures, recovery execution and data

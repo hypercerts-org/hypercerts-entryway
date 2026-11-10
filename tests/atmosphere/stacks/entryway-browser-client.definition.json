@@ -5,7 +5,10 @@
     {
       "service": "entryway-browser-client",
       "environment": [
-        { "name": "APP_URL", "source": { "kind": "route-url", "route": "browser-sdk" } },
+        {
+          "name": "APP_URL",
+          "source": { "kind": "route-url", "route": "browser-sdk" }
+        },
         { "name": "PLC_URL", "source": { "kind": "plc-url" } }
       ]
     }

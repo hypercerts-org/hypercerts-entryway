@@ -2,6 +2,7 @@ export type DomainErrorCode =
   | "AccountNotFound"
   | "AccountUnavailable"
   | "AccountMismatch"
+  | "AccountSelectionRequired"
   | "IdentityConflict"
   | "EmailNotAvailable"
   | "HandleNotAvailable"

@@ -42,27 +42,27 @@ for mode in before-pds after-pds; do
   health
   compose run --rm --no-deps --name "${project}-operational-browser" -e CRASH_PROBE_RUN="$run" -e CRASH_PROBE_MODE="$mode" \
     browser npx --no-install playwright test process-crash.spec.mjs --config tests/operational.playwright.config.mjs \
-    > "$artifacts/crash-$mode.log" 2>&1 &
+    2>&1 | tee "$artifacts/crash-$mode.log" | python3 "$root/scripts/ci-summary.py" &
   browser_pid=$!
   filewait "$prefix-observed.json"
-  docker --context rootless kill --signal KILL "$name" >/dev/null
-  docker --context rootless inspect --format '{{.State.ExitCode}}' "$name" > "$artifacts/crash-$mode-exit.txt"
+  docker --context "$DOCKER_CONTEXT" kill --signal KILL "$name" >/dev/null
+  docker --context "$DOCKER_CONTEXT" inspect --format '{{.State.ExitCode}}' "$name" > "$artifacts/crash-$mode-exit.txt"
   [[ $(cat "$artifacts/crash-$mode-exit.txt") == 137 ]]
-  dispatcher_id=$(docker --context rootless inspect --format '{{.Id}}' "$name")
+  dispatcher_id=$(docker --context "$DOCKER_CONTEXT" inspect --format '{{.Id}}' "$name")
   remove_owned "$name"
   # The old Entryway container cannot send again. Stop the affected unchanged PDS
   # before restart, proving no prior handler can continue after acknowledgement.
-  compose stop --timeout 10 pds1 > "$artifacts/crash-$mode-pds-drain.log" 2>&1
+  compose stop --timeout 10 pds1 2>&1 | tee "$artifacts/crash-$mode-pds-drain.log" | python3 "$root/scripts/ci-summary.py"
   upstream_id=$(compose ps -a -q pds1)
-  [[ $(docker --context rootless inspect --format '{{.State.Running}}' "$upstream_id") == false ]]
-  compose start pds1 >> "$artifacts/crash-$mode-pds-drain.log" 2>&1
+  [[ $(docker --context "$DOCKER_CONTEXT" inspect --format '{{.State.Running}}' "$upstream_id") == false ]]
+  compose start pds1 2>&1 | tee -a "$artifacts/crash-$mode-pds-drain.log" | python3 "$root/scripts/ci-summary.py"
   compose exec -T pds1 node --input-type=module -e 'for(let i=0;i<120;i++){try{if((await fetch("http://localhost:3000/xrpc/_health")).ok)process.exit(0)}catch{};await new Promise(r=>setTimeout(r,250))};process.exit(1)'
   compose start entryway >/dev/null
   health
   compose exec -T entryway node --input-type=module -e 'import{writeFileSync}from"node:fs";writeFileSync(process.argv[1], "")' "/app/artifacts/crash-$run-restarted"
   filewait "$prefix-pending-ui.json"
   compose exec -T entryway node --input-type=module -e 'import{writeFileSync}from"node:fs";const [run,dispatcherId,upstreamId]=process.argv.slice(1);writeFileSync(`/app/artifacts/crash-${run}-isolation.json`,JSON.stringify({run,dispatcherId,dispatcherExit:137,dispatcherRemoved:true,upstreamId,upstreamStopped:true,upstreamRestarted:true,at:new Date().toISOString()}))' "$run" "$dispatcher_id" "$upstream_id"
-  compose exec -T entryway node tests/support/recover-crash-operation.mjs "$run" > "$artifacts/crash-$mode-recovery.log" 2>&1
+  compose exec -T entryway node tests/support/recover-crash-operation.mjs "$run" 2>&1 | tee "$artifacts/crash-$mode-recovery.log" | python3 "$root/scripts/ci-summary.py"
   wait "$browser_pid"
   browser_pid=''
   cp "$prefix-result.json" "$artifacts/crash-$mode.json"

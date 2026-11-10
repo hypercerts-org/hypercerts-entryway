@@ -100,6 +100,35 @@ async function fixture(t) {
   };
 }
 
+test("sign-in rejects nonstring and malformed email before reserving budgets or queuing mail", async (t) => {
+  const f = await fixture(t);
+  const flow = await f.flow("invalid-email", { email: "prior@example.com" });
+  let queued = 0;
+  f.authentication.queueSignInCode = async () => {
+    queued++;
+    return { async deliver() {} };
+  };
+  for (const email of [
+    ["alice@example.com"],
+    null,
+    {},
+    123,
+    "a@b..c",
+    `${"a".repeat(65)}@example.com`,
+    {
+      toString() {
+        assert.fail("Email must not be coerced");
+      },
+    },
+  ]) {
+    await assert.rejects(f.request(flow, email), /Enter a valid email address/);
+    assert.deepEqual(await f.db.get("auth-flows", flow.id), flow);
+    assert.deepEqual(await f.db.list("otp-limits"), []);
+    assert.equal(queued, 0);
+    assert.equal(f.sent, 0);
+  }
+});
+
 test("concurrent sign-in flows reserve the existing five-code normalized email budget atomically", async (t) => {
   const f = await fixture(t),
     email = "owner@example.test";
@@ -300,10 +329,21 @@ async function verificationFixture(t, stage) {
       clientUrl: "https://client.example.test",
     },
   });
+  const loadBrowser = flows.loadBrowser;
+  flows.loadBrowser = async (req, res, rotate) => {
+    const loaded = await loadBrowser(req, res, rotate);
+    if (stage === "continuation" && rotate) await gate.pause();
+    return loaded;
+  };
   const { authenticated } = createConsent({
     db,
     provider,
     flows,
+    accountAccess: {
+      async requireBoundAccount(_identity, did) {
+        return { ...row, did };
+      },
+    },
     stores: {
       async account() {
         if (stage === "consent") await gate.pause();
@@ -335,12 +375,6 @@ async function verificationFixture(t, stage) {
     db,
     flows,
     authenticated,
-    accounts: {
-      async get(email) {
-        if (stage === "continuation") await gate.pause();
-        return stage === "signup" ? null : { ...row, email };
-      },
-    },
     authentication: {
       async queueSignInCode() {
         return { async deliver() {} };
@@ -366,7 +400,14 @@ async function verificationFixture(t, stage) {
       if (stage === "signup") await gate.pause();
       return "Signup form";
     },
-    getAccountSecurity: () => ({ async assertLoginEmail() {} }),
+    getAccountSecurity: () => ({
+      async assertLoginEmail() {
+        if (stage === "signup") return { kind: "unbound" };
+        if (stage === "repair-required")
+          return { kind: "account-requires-repair" };
+        return { kind: "single", account: row };
+      },
+    }),
   });
   return {
     db,
@@ -452,6 +493,22 @@ for (const stage of ["verification", "continuation", "consent", "signup"]) {
     assert.equal(f.cookies, 1);
   });
 }
+
+test("an existing unbound account gets a repair page instead of signup", async (t) => {
+  const f = await verificationFixture(t, "repair-required");
+  const response = await f.request("/auth/verify", {
+    otp: "controlled-proof",
+  });
+
+  assert.equal(response.statusCode, 409);
+  assert.match(response.body, /Account requires repair/);
+  assert.doesNotMatch(response.body, /Signup form/);
+  assert.equal(f.cookies, 0);
+  assert.equal(await f.db.get("fixture-device-accounts", "browser"), null);
+  const current = await f.db.get("auth-flows", f.flow.id);
+  assert.equal(current.authEmail, undefined);
+  assert.equal(current.authDid, undefined);
+});
 
 test("consent association and final flow save roll back together before committing proof cookies", async (t) => {
   const f = await verificationFixture(t, "rollback");

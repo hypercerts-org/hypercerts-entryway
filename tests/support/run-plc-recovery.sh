@@ -8,7 +8,7 @@ disrupted=false
 child=''
 restore() {
   if [[ "$disrupted" == true ]]; then
-    compose start plc > "$report_dir/restore.log" 2>&1
+    compose start plc 2>&1 | tee "$report_dir/restore.log" | python3 "$root/scripts/ci-summary.py"
     compose exec -T entryway node --input-type=module -e '
       for(let i=0;i<120;i++) {
         try { if ((await fetch("https://plc.atmosbox.test/_health",{signal:AbortSignal.timeout(2000)})).ok) process.exit(0) } catch {}
@@ -49,19 +49,19 @@ signal_file() {
 }
 for mode in lost-response plc-outage restart-outage cache-miss-outage plc-outage-before-create; do
   run="$run_id-$mode"
-  compose run --rm --no-deps --name "${project}-plc-probe" test node tests/support/plc-recovery-probe.mjs "$mode" "$run" > "$report_dir/$mode.log" 2>&1 &
+  compose run --rm --no-deps --name "${project}-plc-probe" test node tests/support/plc-recovery-probe.mjs "$mode" "$run" 2>&1 | tee "$report_dir/$mode.log" | python3 "$root/scripts/ci-summary.py" &
   child=$!
   if [[ "$mode" != lost-response ]]; then
     wait_file ready.json
     disrupted=true
-    compose stop --timeout 10 plc > "$report_dir/$mode-stop.log" 2>&1
+    compose stop --timeout 10 plc 2>&1 | tee "$report_dir/$mode-stop.log" | python3 "$root/scripts/ci-summary.py"
     if [[ "$mode" == restart-outage ]]; then
-      compose restart pds1 > "$report_dir/pds-restart.log" 2>&1
+      compose restart pds1 2>&1 | tee "$report_dir/pds-restart.log" | python3 "$root/scripts/ci-summary.py"
       compose exec -T pds1 node --input-type=module -e 'for(let i=0;i<100;i++){try{if((await fetch("http://localhost:3000/xrpc/_health")).ok)process.exit(0)}catch{};await new Promise(r=>setTimeout(r,200))};process.exit(1)'
     elif [[ "$mode" == cache-miss-outage ]]; then
       did=$(compose exec -T entryway node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(`/app/artifacts/plc-recovery-${process.argv[1]}-ready.json`)).did)' "$run")
       # Only this newly-created synthetic DID's regenerable cache entry is removed.
-      compose exec -T pds1 node -e 'const assert=require("assert/strict");const {DatabaseSync}=require("node:sqlite");const did=process.argv[1];assert.match(did,/^did:plc:[a-z2-7]{24}$/);const db=new DatabaseSync("/data/did_cache.sqlite");const row=db.prepare("SELECT doc FROM did_doc WHERE did=?").get(did);assert.ok(JSON.parse(row.doc).alsoKnownAs.some(v=>/^at:\/\/plc-[0-9a-f]{10}\./.test(v)));const result=db.prepare("DELETE FROM did_doc WHERE did=?").run(did);assert.equal(result.changes,1);db.close();console.log("Removed only the probe DID cache entry")' "$did" > "$report_dir/cache-fault.log" 2>&1
+      compose exec -T pds1 node -e 'const assert=require("assert/strict");const {DatabaseSync}=require("node:sqlite");const did=process.argv[1];assert.match(did,/^did:plc:[a-z2-7]{24}$/);const db=new DatabaseSync("/data/did_cache.sqlite");const row=db.prepare("SELECT doc FROM did_doc WHERE did=?").get(did);assert.ok(JSON.parse(row.doc).alsoKnownAs.some(v=>/^at:\/\/plc-[0-9a-f]{10}\./.test(v)));const result=db.prepare("DELETE FROM did_doc WHERE did=?").run(did);assert.equal(result.changes,1);db.close();console.log("Removed only the probe DID cache entry")' "$did" 2>&1 | tee "$report_dir/cache-fault.log" | python3 "$root/scripts/ci-summary.py"
     fi
     signal_file continue
     wait_file observed.json

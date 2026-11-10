@@ -34,7 +34,7 @@ for mode in consumed-success rejected-request; do
   health
   compose run --rm --no-deps --name "${project}-managed-recovery-browser" -e MANAGED_RECOVERY_RUN="$run" -e MANAGED_RECOVERY_MODE="$mode" \
     browser npx --no-install playwright test migration-console.spec.mjs --config tests/operational.playwright.config.mjs \
-    > "$artifacts/managed-recovery-$run.log" 2>&1
+    2>&1 | tee "$artifacts/managed-recovery-$run.log" | python3 "$root/scripts/ci-summary.py"
   cp "$artifacts/managed-recovery-$run-result.json" "$artifacts/managed-recovery-$mode.json"
   remove_owned "$name"
 done

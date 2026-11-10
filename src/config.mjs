@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { publicRotationKey } from "./plc/policy.js";
 import { loadLifecycleConfiguration } from "./http/lifecycle.js";
 
 export async function loadConfig() {
@@ -11,6 +12,9 @@ export async function loadConfig() {
   if (process.env.BROWSER_CLIENT_METADATA_URL) {
     config.browserClientMetadataUrl = process.env.BROWSER_CLIENT_METADATA_URL;
   }
+  // Only a public reference enters runtime configuration. This says nothing
+  // about independent private custody, backup or operational recoverability.
+  publicRotationKey(config.plcRecoveryKeyDid);
   config.database = loadDatabaseConfiguration(process.env);
   config.lifecycle = loadLifecycleConfiguration(process.env);
   return config;

@@ -347,6 +347,7 @@ for (const fault of ["delayed-response", "paused-preflight"])
       const signer = await Secp256k1Keypair.create({ exportable: true });
       const config = {
         plcRotationKeyHex: Buffer.from(await signer.export()).toString("hex"),
+        plcRecoveryKeyDid: (await Secp256k1Keypair.create()).did(),
         plcUrl: origin,
         handleDomains: [".example.test"],
         pds: [
