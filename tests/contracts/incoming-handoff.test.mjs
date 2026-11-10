@@ -4,6 +4,7 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 import { cidForCbor } from "@atproto/common";
 import { Secp256k1Keypair } from "@atproto/crypto";
 import { createServiceJwt } from "@atproto/xrpc-server";
+import { decodeJwt, decodeProtectedHeader } from "jose";
 import * as plc from "@did-plc/lib";
 import {
   openTestDatabase,
@@ -31,6 +32,9 @@ const did = `did:plc:${"a".repeat(24)}`;
 const handle = "dest.entryway.test";
 const email = "dest@example.test";
 const serviceDid = "did:web:entryway.example.test";
+/** A destination names itself in `did:web`, derived from its public endpoint. */
+const destinationDid = (url) =>
+  `did:web:${new URL(url).host.replaceAll(":", "%3A")}`;
 const userId = "user-a";
 const day = 86_400_000;
 const hash = (char) => char.repeat(64);
@@ -60,7 +64,13 @@ test("stock reservation is unauthenticated, sends only the DID and never echoes 
   const reservationKey = (
     await Secp256k1Keypair.create({ exportable: true })
   ).did();
-  const client = new ArrivalPdsClient({ endpoint, did, jwtJwk: jwk() });
+  const client = new ArrivalPdsClient({
+    endpoint,
+    did,
+    pdsDid: destinationDid(endpoint),
+    issuer: serviceDid,
+    jwtJwk: jwk(),
+  });
   const { result, requests } = await serving(
     async () =>
       new Response(JSON.stringify({ signingKey: reservationKey }), {
@@ -80,8 +90,49 @@ test("stock reservation is unauthenticated, sends only the DID and never echoes 
   assert.deepEqual(JSON.parse(requests[0].init.body), { did });
 });
 
+test("destination access tokens name the PDS as audience and keep the at+jwt type", async () => {
+  const client = new ArrivalPdsClient({
+    endpoint,
+    did,
+    pdsDid: destinationDid(endpoint),
+    issuer: serviceDid,
+    jwtJwk: jwk(),
+  });
+  const { requests } = await serving(
+    async () =>
+      new Response(JSON.stringify({ activated: false }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    () => client.checkAccountStatus(did),
+  );
+  assert.equal(requests.length, 1);
+  const [scheme, token] = new Headers(requests[0].init.headers)
+    .get("authorization")
+    .split(" ");
+  assert.equal(scheme, "Bearer");
+  const header = decodeProtectedHeader(token);
+  const claims = decodeJwt(token);
+  // The destination's own access() verifier pins both of these.
+  assert.equal(header.typ, "at+jwt");
+  assert.equal(header.alg, "ES256K");
+  assert.equal(claims.aud, destinationDid(endpoint));
+  assert.notEqual(claims.aud, did);
+  // The credential speaks for the account, never for the service taking it.
+  assert.equal(claims.sub, did);
+  assert.notEqual(claims.sub, destinationDid(endpoint));
+  assert.equal(claims.iss, serviceDid);
+  assert.equal(claims.exp - claims.iat, 60);
+});
+
 test("a stock reservation HTTP error, malformed body or unsupported key is refused", async () => {
-  const client = new ArrivalPdsClient({ endpoint, did, jwtJwk: jwk() });
+  const client = new ArrivalPdsClient({
+    endpoint,
+    did,
+    pdsDid: destinationDid(endpoint),
+    issuer: serviceDid,
+    jwtJwk: jwk(),
+  });
   const respond = (status, body) => async () =>
     new Response(body, {
       status,
@@ -129,7 +180,13 @@ test("a stock reservation HTTP error, malformed body or unsupported key is refus
 });
 
 test("destination creation sends only the exact move and returns no session to callers", async () => {
-  const client = new ArrivalPdsClient({ endpoint, did, jwtJwk: jwk() });
+  const client = new ArrivalPdsClient({
+    endpoint,
+    did,
+    pdsDid: destinationDid(endpoint),
+    issuer: serviceDid,
+    jwtJwk: jwk(),
+  });
   const operation = { type: "plc_operation", prev: `bafyrei${"a".repeat(52)}` };
   const { result, requests } = await serving(
     async () =>
@@ -155,7 +212,13 @@ test("destination creation sends only the exact move and returns no session to c
 });
 
 test("deactivation is observed through the account's own status read", async () => {
-  const client = new ArrivalPdsClient({ endpoint, did, jwtJwk: jwk() });
+  const client = new ArrivalPdsClient({
+    endpoint,
+    did,
+    pdsDid: destinationDid(endpoint),
+    issuer: serviceDid,
+    jwtJwk: jwk(),
+  });
   let activated = true;
   await serving(
     async (url) => {

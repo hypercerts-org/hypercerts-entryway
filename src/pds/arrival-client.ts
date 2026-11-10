@@ -1,8 +1,7 @@
-import { randomBytes } from "node:crypto";
 import { parseDidKey } from "@atproto/crypto";
-import { importJWK, SignJWT } from "jose";
 import type { JWK } from "jose";
 import { DomainError } from "../accounts/errors.js";
+import { createTargetAccessTokenSigner } from "./access-token.js";
 
 /** A stock PDS holds the reserved repository private key. This client only ever
  * receives public key material and never persists a returned session. */
@@ -61,29 +60,39 @@ async function readPublicJson(
  * lifecycle-hook or administration credential: ordinary `createAccount` with a
  * caller-signed move, then self-deactivation with the account credential. */
 export class ArrivalPdsClient {
-  readonly #jwtKey: Promise<Awaited<ReturnType<typeof importJWK>>>;
+  readonly #accountAccess: Promise<{
+    sign: (did: string) => Promise<string>;
+  }>;
   public constructor(
     private readonly options: {
       readonly endpoint: string;
       readonly did: string;
+      readonly pdsDid: string;
+      readonly issuer: string;
       readonly jwtJwk: JWK;
     },
   ) {
-    this.#jwtKey = importJWK(options.jwtJwk, "ES256K");
+    for (const did of [options.pdsDid, options.issuer])
+      if (!did.startsWith("did:"))
+        throw new TypeError(
+          "A destination service DID and issuer are required",
+        );
+    this.#accountAccess = createTargetAccessTokenSigner({
+      privateJwk: options.jwtJwk,
+      issuer: options.issuer,
+      audience: options.pdsDid,
+    });
   }
   #url(method: string): URL {
     return new URL(`/xrpc/${method}`, this.options.endpoint);
   }
-  async #accountAccess(did: string): Promise<string> {
-    const key = await this.#jwtKey;
-    return await new SignJWT({ scope: "com.atproto.access" })
-      .setProtectedHeader({ alg: "ES256K", typ: "at+jwt" })
-      .setSubject(did)
-      .setAudience(did)
-      .setIssuedAt()
-      .setExpirationTime("30s")
-      .setJti(randomBytes(16).toString("hex"))
-      .sign(key);
+  /** These two methods reach the destination's `authVerifier.access()` through
+   * `authorization()`, which pins `typ: "at+jwt"` and requires the audience to be
+   * the destination PDS's own DID, with no Entryway fallback. It is a different
+   * verifier from `verifyEntrywayServiceJwt`, which serves `createAccount` and
+   * `reserveSigningKey` and requires `typ: "JWT"`; those rules do not apply here. */
+  async #accessToken(did: string): Promise<string> {
+    return await (await this.#accountAccess).sign(did);
   }
   /** Stock reservation is unauthenticated and echoes neither DID nor host: the
    * caller binds the result through its own durable intent, not this response. */
@@ -135,7 +144,7 @@ export class ArrivalPdsClient {
     const method = "com.atproto.server.checkAccountStatus";
     const response = await fetch(this.#url(method), {
       method: "GET",
-      headers: { authorization: `Bearer ${await this.#accountAccess(did)}` },
+      headers: { authorization: `Bearer ${await this.#accessToken(did)}` },
       redirect: "error",
       signal: AbortSignal.timeout(15_000),
     });
@@ -159,7 +168,7 @@ export class ArrivalPdsClient {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${await this.#accountAccess(did)}`,
+        authorization: `Bearer ${await this.#accessToken(did)}`,
       },
       body: JSON.stringify({}),
       redirect: "error",
