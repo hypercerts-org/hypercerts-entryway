@@ -571,7 +571,9 @@ normalized operation bytes, a destination move cannot be recorded before its
 handoff, and private key material is rejected. Repeating the same operation and CID
 for a kind is idempotent and does not advance the version; a different operation or
 CID for that kind is a conflict. A caller holding the pre-record version may receive
-`already-settled`, so it must not treat that version as a fresh baseline.
+`already-settled`, so it must not treat that version as a fresh baseline. The
+retained bytes carry the operation signature, and the stored CID is computed over
+those signed bytes, so it matches the value the PLC directory reports as the head.
 
 Binding rules these calls must enforce:
 

@@ -75,7 +75,7 @@ const canonicalFact = (value: unknown): string => {
   return JSON.stringify(value);
 };
 const carriesPrivateMaterial = (value: Record<string, unknown>): boolean =>
-  ["sig", "signature", "privateKey", "privateKeys"].some((key) => key in value);
+  ["signature", "privateKey", "privateKeys"].some((key) => key in value);
 const sameTuple = (
   saved: StoredRow<"arrival_signed_operations">,
   input: ArrivalSignedOperationRecord,
@@ -526,9 +526,16 @@ export function createArrivalStorage(
           400,
           "Signed public facts never carry private material",
         );
-      let facts: unknown;
+      const { sig, ...facts } = input.operation;
+      if (typeof sig !== "string" || sig.length === 0)
+        throw new DomainError(
+          "InvalidAccount",
+          400,
+          "A signed PLC operation is required",
+        );
+      let validated: unknown;
       try {
-        facts = validateHistoryOperation(input.operation);
+        validated = validateHistoryOperation(facts);
       } catch (error) {
         if (!(error instanceof PlcError)) throw error;
         throw new DomainError(
@@ -537,7 +544,11 @@ export function createArrivalStorage(
           "A normalized public PLC operation is required",
         );
       }
-      if (input.cid !== String(await cidForCbor(facts)))
+      const signedOperation = {
+        ...(validated as Record<string, unknown>),
+        sig,
+      };
+      if (input.cid !== String(await cidForCbor(signedOperation)))
         throw new DomainError(
           "OperationConflict",
           409,
@@ -586,7 +597,7 @@ export function createArrivalStorage(
             kind: input.kind,
             did: input.did,
             cid: input.cid,
-            operation: JSON.stringify(facts),
+            operation: JSON.stringify(signedOperation),
             kind_operation_cid: `${input.kind}:${input.cid}`,
             recorded_at: await db.databaseTime(),
           });

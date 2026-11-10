@@ -404,8 +404,8 @@ test("handoff validation rejects changed source facts, overfull and reordered au
 
 test("a crash before the handoff commit dispatches nothing and reuses no baseline", async () => {
   const { db, authority, claim, arrival } = await fixture();
-  const { sig: _sourceSignature, ...publicFacts } = authority.handoffOperation;
-  const cid = String(await cidForCbor(publicFacts));
+  const signedHandoff = authority.handoffOperation;
+  const cid = String(await cidForCbor(signedHandoff));
   let dispatches = 0;
   let observations = 0;
   const submission = createHandoffSubmission({
@@ -415,7 +415,7 @@ test("a crash before the handoff commit dispatches nothing and reuses no baselin
       },
     },
     directory: {
-      validate: async () => ({ operation: publicFacts, cid }),
+      validate: async () => ({ operation: signedHandoff, cid }),
       submit: async () => {
         dispatches += 1;
       },
@@ -441,11 +441,11 @@ test("a crash before the handoff commit dispatches nothing and reuses no baselin
 
 test("a crash after the handoff commit reuses the saved bytes without re-signing", async () => {
   const { db, arrivals, authority, claim, arrival } = await fixture();
-  const { sig: _sourceSignature, ...publicFacts } = authority.handoffOperation;
-  const cid = String(await cidForCbor(publicFacts));
+  const signedHandoff = authority.handoffOperation;
+  const cid = String(await cidForCbor(signedHandoff));
   const published = [];
   const directory = {
-    validate: async () => ({ operation: publicFacts, cid }),
+    validate: async () => ({ operation: signedHandoff, cid }),
     submit: async (input) => {
       published.push(input);
       throw new Error("lost publication response");
@@ -460,7 +460,7 @@ test("a crash after the handoff commit reuses the saved bytes without re-signing
   );
   assert.equal(outcome.state, "published");
   assert.equal(published.length, 1);
-  assert.deepEqual(published[0].operation, publicFacts);
+  assert.deepEqual(published[0].operation, signedHandoff);
   const saved = await query(
     db,
     "SELECT kind, cid, operation FROM arrival_signed_operations",
@@ -628,7 +628,8 @@ test("watched arrival access stays pending until a binding exists", async () => 
   const now = Math.floor(Date.now() / 1000);
   const handoff = authority.handoffOperation;
   // Canonical observation evidence supplies the full surviving operation, whose
-  // signature the destination move must chain from; the journal keeps only facts.
+  // signature the destination move must chain from; the journal keeps the signed
+  // bytes, while the caller's own observed CID names the unsigned facts.
   const handoffCid = String(await cidForCbor(publicHandoff(authority)));
   // A directory head is the CID of the signed operation, not of its facts.
   const signedHandoffCid = String(await cidForCbor(handoff));
@@ -649,10 +650,7 @@ test("watched arrival access stays pending until a binding exists", async () => 
   const handoffSubmission = createHandoffSubmission({
     arrivals,
     directory: {
-      validate: async () => ({
-        operation: publicHandoff(authority),
-        cid: handoffCid,
-      }),
+      validate: async () => ({ operation: handoff, cid: signedHandoffCid }),
       submit: async () => {},
       observe: async () => ({
         applied: true,
@@ -692,6 +690,7 @@ test("watched arrival access stays pending until a binding exists", async () => 
     }),
   });
   const calls = [];
+  let dispatched;
   const provisioning = createArrivalProvisioning({
     arrivals,
     verifyIncomingAuthorization: verify,
@@ -701,8 +700,8 @@ test("watched arrival access stays pending until a binding exists", async () => 
     },
     plc: {
       signMove: async (input, persist) => {
-        // Wrap the signer so the recorded bytes are the normalized public facts,
-        // which is exactly what the stock PDS receives as `plcOp`.
+        // Wrap the signer so the recorded bytes are the signed operation, which
+        // is exactly what the stock PDS receives as `plcOp`.
         return await signer.signArrivalMove(input, persist);
       },
       observe: async () => ({ headCid: signedHandoffCid, tombstone: false }),
@@ -711,6 +710,7 @@ test("watched arrival access stays pending until a binding exists", async () => 
       createAccount: async (input) => {
         calls.push("create");
         assert.equal(input.did, did);
+        dispatched = input.operation;
         return { did, handle };
       },
       checkAccountStatus: async () => ({
@@ -755,12 +755,23 @@ test("watched arrival access stays pending until a binding exists", async () => 
   // The move was signed over the saved reservation's public key, never a new one.
   const savedMove = await query(
     db,
-    "SELECT operation FROM arrival_signed_operations WHERE kind = 'destination-move'",
+    "SELECT operation, cid FROM arrival_signed_operations WHERE kind = 'destination-move'",
   );
   assert.equal(
     JSON.parse(savedMove[0].operation).verificationMethods.atproto,
     repositoryKey,
   );
+  // The journaled move carries its signature and its CID covers those signed bytes.
+  const journaledMove = JSON.parse(savedMove[0].operation);
+  assert.equal(typeof journaledMove.sig, "string");
+  assert.ok(journaledMove.sig.length > 0);
+  assert.equal(
+    savedMove[0].cid,
+    String(await cidForCbor(journaledMove)),
+    "the journaled CID covers the signed operation, not its unsigned facts",
+  );
+  // The destination receives exactly the signed bytes the journal retains.
+  assert.deepEqual(dispatched, journaledMove);
   const projection = await arrivals.readArrivalAccess(did);
   assert.equal(projection.provisioned, true);
   assert.equal(projection.deactivationObserved, true);

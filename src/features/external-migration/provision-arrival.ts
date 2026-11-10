@@ -236,9 +236,9 @@ export function createArrivalProvisioning({
             repositoryKey: signingKey,
             endpoint: observedSource,
           },
-          async (_signed, facts, cid) => {
-            // The normalized public facts and their CID are recorded unmodified; the
-            // signature wrapper is never persisted.
+          async (signed, _facts, cid) => {
+            // The signed bytes and their CID are recorded together, so a retry
+            // re-dispatches exactly what the destination will publish.
             const recorded = await arrivals.recordSignedOperation(
               owner,
               version,
@@ -247,7 +247,7 @@ export function createArrivalProvisioning({
                 operationId: arrival.operationId,
                 did: arrival.did,
                 repositoryKey: signingKey,
-                operation: facts as Record<string, unknown>,
+                operation: signed as Record<string, unknown>,
                 cid,
               },
             );

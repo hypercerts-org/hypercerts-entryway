@@ -53,7 +53,12 @@ const signFacts = async (tag, overrides = {}) => ({
   ...overrides,
 });
 const signed = async (tag = "a", overrides = {}) => {
-  const operation = await signFacts(tag, overrides);
+  // A PLC signature is public bytes. The journal checks only that a non-empty
+  // string is present; it never verifies the signature cryptographically.
+  const operation = {
+    ...(await signFacts(tag, overrides)),
+    sig: `sig-${tag}`.padEnd(64, "0"),
+  };
   return { operation, cid: String(await cidForCbor(operation)) };
 };
 
@@ -1727,6 +1732,86 @@ test("a changed handoff CID or operation is a conflict and never overwrites the 
       [{ cid: handoff.cid, operation: JSON.stringify(handoff.operation) }],
     );
     assert.equal(await persistedVersion(db, "op-1"), version + 1);
+  } finally {
+    await db.close();
+  }
+});
+
+test("a signed handoff journals its signed bytes and a CID over those bytes", async () => {
+  const { db, arrivals, claim, prepare, allocate } = await fixture();
+  try {
+    const prepared = await prepare();
+    const version = await allocate(prepared.version);
+    const handoff = await signed();
+    const recorded = await arrivals.recordSignedOperation(claim, version, {
+      kind: "handoff",
+      operationId: "op-1",
+      did,
+      ...handoff,
+    });
+    assert.deepEqual(recorded, { kind: "applied", version: version + 1 });
+    const saved = await query(
+      db,
+      "SELECT cid, operation FROM arrival_signed_operations WHERE operation_id = ?",
+      ["op-1"],
+    );
+    assert.equal(saved[0].cid, handoff.cid);
+    const journaled = JSON.parse(saved[0].operation);
+    assert.equal(journaled.sig, handoff.operation.sig);
+    // The stored CID covers the signed bytes, so it can equal a directory head.
+    assert.equal(saved[0].cid, String(await cidForCbor(journaled)));
+  } finally {
+    await db.close();
+  }
+});
+
+test("a journaled operation without a signature is refused", async () => {
+  const { db, arrivals, claim, prepare, allocate } = await fixture();
+  try {
+    const prepared = await prepare();
+    const version = await allocate(prepared.version);
+    const { sig: _signature, ...facts } = (await signed()).operation;
+    await assert.rejects(
+      arrivals.recordSignedOperation(claim, version, {
+        kind: "handoff",
+        operationId: "op-1",
+        did,
+        operation: facts,
+        cid: String(await cidForCbor(facts)),
+      }),
+      { code: "InvalidAccount" },
+    );
+    assert.equal(
+      (await query(db, "SELECT cid FROM arrival_signed_operations")).length,
+      0,
+    );
+    assert.equal(await persistedVersion(db, "op-1"), version);
+  } finally {
+    await db.close();
+  }
+});
+
+test("a signed operation whose CID covers only its unsigned facts is a conflict", async () => {
+  const { db, arrivals, claim, prepare, allocate } = await fixture();
+  try {
+    const prepared = await prepare();
+    const version = await allocate(prepared.version);
+    const { sig: _signature, ...facts } = (await signed()).operation;
+    await assert.rejects(
+      arrivals.recordSignedOperation(claim, version, {
+        kind: "handoff",
+        operationId: "op-1",
+        did,
+        operation: (await signed()).operation,
+        cid: String(await cidForCbor(facts)),
+      }),
+      { code: "OperationConflict" },
+    );
+    assert.equal(
+      (await query(db, "SELECT cid FROM arrival_signed_operations")).length,
+      0,
+    );
+    assert.equal(await persistedVersion(db, "op-1"), version);
   } finally {
     await db.close();
   }

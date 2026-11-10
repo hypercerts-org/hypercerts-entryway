@@ -1254,3 +1254,89 @@ test(
     );
   },
 );
+
+test(
+  "entryway-mode destination refuses an operation without the service rotation key",
+  {
+    skip: !process.env.INCOMING_PUBLIC_MECHANISMS,
+    timeout: reservationBudgetMs + settleTimeoutMs,
+  },
+  async (t) => {
+    const access = await readProjection();
+    const { Secp256k1Keypair } = await import("@atproto/crypto");
+    const phaseBudget = createPhaseBudget(t, {
+      deadlineMs: reservationBudgetMs,
+    });
+    const inbound = createIncomingPublicIo({
+      timeoutMs: requestTimeoutMs,
+      signal: phaseBudget.signal,
+    });
+    t.after(async () => {
+      await inbound.close({ settleTimeoutMs });
+      await phaseBudget.settle();
+    });
+    const baseUrl = access.destinationUrls[0];
+    const xrpc = (method) => `${baseUrl}/xrpc/${method}`;
+    const attempt = async (method, options = {}) => {
+      try {
+        return {
+          status: 200,
+          body: await inbound.call(xrpc(method), {
+            ...options,
+            signal: phaseBudget.child().signal,
+          }),
+        };
+      } catch (error) {
+        if (!(error instanceof ResponseStatusError)) throw error;
+        return { status: error.status, body: error.body };
+      }
+    };
+    // The reservation names the DID; nothing else about the operation is
+    // trusted, so a locally generated rotation key is enough to sign with.
+    const did = `did:plc:${"c".repeat(24)}`;
+    const handle = `unsigned-${did.slice(-8)}.test`;
+    const reserved = await attempt("com.atproto.server.reserveSigningKey", {
+      json: { did },
+    });
+    assert.equal(reserved.status, 200);
+    const repositoryKey = reserved.body.signingKey;
+    assert.match(repositoryKey, /^did:key:/);
+    const rotation = await Secp256k1Keypair.create({ exportable: true });
+    const operations = await plc.signOperation(
+      plc.formatAtprotoOp({
+        signingKey: repositoryKey,
+        handle,
+        pds: baseUrl,
+        rotationKeys: [rotation.did()],
+        prev: null,
+      }),
+      rotation,
+    );
+    assert.equal(typeof operations.sig, "string");
+    await plc.assureValidSig([rotation.did()], operations);
+    const { sig: _stripped, ...unsigned } = operations;
+    const signed = await attempt("com.atproto.server.createAccount", {
+      json: { did, handle, plcOp: operations },
+    });
+    const missing = await attempt("com.atproto.server.createAccount", {
+      json: { did, handle, plcOp: unsigned },
+    });
+    // Control: the properly signed operation is refused as well, because a test
+    // mints its own rotation key and can never hold the PDS's configured
+    // `entryway.plcRotationKey`. The refusal proves the request reaches operation
+    // validation and its 400 is not a transport or routing failure, so this case
+    // is a negative control and proves nothing about accepting Entryway's bytes.
+    assert.equal(signed.status, 400);
+    assert.equal(signed.body?.error, "IncompatibleDidDoc");
+    assert.match(String(signed.body?.message), /rotation key/i);
+    // The unsigned bytes share that refusal, so this case cannot distinguish them
+    // from the signed operation at a stock destination.
+    assert.equal(
+      missing.status,
+      400,
+      "Entryway mode refuses an operation carrying no signature",
+    );
+    assert.equal(missing.body?.error, "IncompatibleDidDoc");
+    assert.match(String(missing.body?.message), /invalid plc operation/i);
+  },
+);

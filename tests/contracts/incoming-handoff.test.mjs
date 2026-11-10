@@ -245,16 +245,16 @@ async function provisioningFixture() {
     },
     source,
   );
-  // The journaled entry keeps the schema discriminator but never the signature.
+  // The caller's observed CID names the unsigned facts of the handoff, while the
+  // journaled bytes are the signed operation the directory head covers.
   const handoffFacts = {
     type: signedSource.type,
     ...sourceFacts,
     rotationKeys: [recovery.did(), source.did(), entryway.did()],
     prev: predecessorCid,
   };
-  // The stored CID covers the normalized public entry, which carries no signature.
   const handoffCid = String(await cidForCbor(handoffFacts));
-  // The directory head covers the signed operation, which includes the signature.
+  // The directory head and the journaled CID both cover the signed operation.
   const signedHandoffCid = String(await cidForCbor(handoff));
   const reservationKey = (
     await Secp256k1Keypair.create({ exportable: true })
@@ -298,8 +298,8 @@ async function provisioningFixture() {
     kind: "handoff",
     operationId: "op-1",
     did,
-    operation: handoffFacts,
-    cid: handoffCid,
+    operation: handoff,
+    cid: signedHandoffCid,
   });
   const signer = await Secp256k1MigrationPlcSigner.fromHex(
     Buffer.from(await entryway.export()).toString("hex"),
@@ -333,6 +333,7 @@ async function provisioningFixture() {
     createFailure: false,
     createCommitted: false,
     deactivateFailure: false,
+    dispatched: null,
   };
   const provisioning = createArrivalProvisioning({
     arrivals,
@@ -351,6 +352,7 @@ async function provisioningFixture() {
     backend: {
       createAccount: async (input) => {
         calls.push("create");
+        state.dispatched = input.operation;
         if (state.createFailure) throw new Error("backend refused creation");
         state.createCommitted = true;
         return { did: input.did, handle: input.handle };
@@ -406,11 +408,14 @@ test("a real signing pass journals the move before creation and returns only a p
     "SELECT operation, cid FROM arrival_signed_operations WHERE kind = 'destination-move'",
   );
   assert.equal(move.length, 1);
-  const facts = JSON.parse(move[0].operation);
-  assert.equal(facts.verificationMethods.atproto, fixture.reservationKey);
-  assert.equal(facts.services.atproto_pds.endpoint, sourceEndpoint);
-  assert.equal(move[0].cid, String(await cidForCbor(facts)));
-  assert.ok(!("sig" in facts));
+  const journaled = JSON.parse(move[0].operation);
+  assert.equal(journaled.verificationMethods.atproto, fixture.reservationKey);
+  assert.equal(journaled.services.atproto_pds.endpoint, sourceEndpoint);
+  assert.equal(move[0].cid, String(await cidForCbor(journaled)));
+  assert.equal(typeof journaled.sig, "string");
+  assert.ok(journaled.sig.length > 0);
+  // The destination receives exactly the journaled signed bytes as its `plcOp`.
+  assert.deepEqual(fixture.state.dispatched, journaled);
   assert.ok(!JSON.stringify(result).includes("Jwt"));
   const projection = await fixture.arrivals.readArrivalAccess(did);
   assert.equal(projection.bound, true);

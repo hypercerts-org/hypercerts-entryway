@@ -2,11 +2,7 @@ import { cidForCbor } from "@atproto/common";
 import { Secp256k1Keypair } from "@atproto/crypto";
 import * as plc from "@did-plc/lib";
 import { PlcError } from "./errors.js";
-import {
-  publicUpdateCandidate,
-  validateHistoryOperation,
-  validateUnsignedOperation,
-} from "./policy.js";
+import { publicUpdateCandidate, validateUnsignedOperation } from "./policy.js";
 
 /** The private rotation key is received only at composition. */
 export class Secp256k1MigrationPlcSigner {
@@ -186,7 +182,7 @@ export class Secp256k1MigrationPlcSigner {
   /** Public arrival move: the observed handoff's own facts are replaced only by
    * the reserved public repository key and destination endpoint. Entryway signs
    * with its rotation authority; the PDS repository private key never enters here.
-   * `persist` journals the public facts and their CID before any dispatch. */
+   * `persist` journals the signed operation and its CID before any dispatch. */
   public async signArrivalMove(
     input: {
       handoffOperation: unknown;
@@ -199,12 +195,12 @@ export class Secp256k1MigrationPlcSigner {
       cid: string,
     ) => Promise<void>,
   ): Promise<{
-    operation: plc.UnsignedOperation;
+    operation: plc.Operation;
     cid: string;
   }> {
     const previous = this.#previous(input.handoffOperation);
     const facts = plc.normalizeOp(previous);
-    let saved: { operation: plc.UnsignedOperation; cid: string } | undefined;
+    let saved: { operation: plc.Operation; cid: string } | undefined;
     await this.#signAuthorizedUpdate(
       previous,
       {
@@ -220,15 +216,10 @@ export class Secp256k1MigrationPlcSigner {
           },
         },
       },
-      async (signed, unsigned) => {
-        // The signed CID covers the signature; the journaled CID covers exactly the
-        // public bytes this method returns, so the caller journals and dispatches
-        // one consistent operation.
-        const { sig: _signature, ...publicFacts } = signed;
-        const operation: plc.UnsignedOperation =
-          validateHistoryOperation(publicFacts);
-        const cid = String(await cidForCbor(operation));
-        saved = { operation, cid };
+      async (signed, unsigned, cid) => {
+        // The signed CID covers the signature, matching the directory head the
+        // destination publishes; the caller journals and dispatches these bytes.
+        saved = { operation: signed, cid };
         await persist(signed, unsigned, cid);
       },
     );
