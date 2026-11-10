@@ -11,7 +11,7 @@ import {
   verifyCommitSig,
   verifyRepoCar,
 } from "@atproto/repo";
-import { parseStockPlcMessage } from "../support/helpers/stock-plc-mailpit.mjs";
+import { waitForStockPlcMessage } from "../support/helpers/stock-plc-mailpit.mjs";
 import {
   ResponseStatusError,
   createIncomingPublicIo,
@@ -147,67 +147,11 @@ const createManagedObservation = ({ fetch, signal }) => {
     },
     readJson: (url, childSignal) =>
       io.call(url, { verb: "GET", signal: childSignal }),
-    async pollStockConfirmation(options, child, { intervalMs = 250 } = {}) {
-      const endpoint = new URL("/api/v1/search", options.baseUrl);
-      endpoint.searchParams.set("query", `to:${options.recipient}`);
-      endpoint.searchParams.set("limit", "50");
-      const excludeIds = new Set(options.excludeIds);
-      const hasRecipient = (message) =>
-        Array.isArray(message.To) &&
-        message.To.some(
-          (item) =>
-            item.Address?.toLowerCase() === options.recipient.toLowerCase(),
-        );
-      for (;;) {
-        if (child.signal.aborted) throw child.signal.reason;
-        const result = await this.readJson(endpoint.href, child.signal);
-        if (!Array.isArray(result.messages))
-          throw new Error("Invalid Mailpit response");
-        const candidates = result.messages.filter(
-          (item) =>
-            typeof item.ID === "string" &&
-            !excludeIds.has(item.ID) &&
-            hasRecipient(item) &&
-            Date.parse(item.Created) >= options.since &&
-            item.Subject === "PLC Update Operation Requested",
-        );
-        if (candidates.length > 1)
-          throw new Error("Ambiguous stock PLC messages");
-        if (candidates.length === 1) {
-          const detail = await this.readJson(
-            new URL(
-              `/api/v1/message/${encodeURIComponent(candidates[0].ID)}`,
-              options.baseUrl,
-            ).href,
-            child.signal,
-          );
-          if (!hasRecipient(detail) || detail.ID !== candidates[0].ID)
-            throw new Error("Invalid Mailpit message boundary");
-          return { token: parseStockPlcMessage(detail), messageId: detail.ID };
-        }
-        await abortableDelay(intervalMs, child.signal);
-      }
-    },
+    pollStockConfirmation: (options, child) =>
+      waitForStockPlcMessage({ ...options, fetch, signal: child.signal }),
     close: (options) => io.close(options),
   };
 };
-
-const abortableDelay = (ms, signal) =>
-  new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      reject(signal.reason);
-      return;
-    }
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(signal.reason);
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
 
 test(
   "managed boundary cancellation reaches the injected transport",

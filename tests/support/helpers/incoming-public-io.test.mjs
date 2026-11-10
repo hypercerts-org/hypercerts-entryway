@@ -112,6 +112,32 @@ const guardedStreamResponse = ({ ready = {} } = {}) => {
   return { response, state };
 };
 
+test("per-call redirect policy reaches the transport without changing its default", async () => {
+  const requests = [];
+  const io = createIncomingPublicIo({
+    fetch: async (url, init) => {
+      requests.push({ init, request: new Request(url, init) });
+      return jsonResponse({ ok: true });
+    },
+  });
+  try {
+    for (const redirect of [undefined, "error", "manual", "follow"]) {
+      assert.deepEqual(
+        await io.call("https://pds.example/xrpc/a", { redirect }),
+        { ok: true },
+      );
+      const received = requests.at(-1);
+      assert.equal(received.request.redirect, redirect ?? "follow");
+      assert.equal(
+        Object.hasOwn(received.init, "redirect"),
+        redirect !== undefined,
+      );
+    }
+  } finally {
+    await io.close();
+  }
+});
+
 test("injected response headers overrun the phase deadline", async () => {
   const stalls = [];
   const io = createIncomingPublicIo({

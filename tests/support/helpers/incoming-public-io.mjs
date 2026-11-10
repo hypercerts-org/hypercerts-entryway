@@ -142,7 +142,7 @@ export const createIncomingPublicIo = ({
 
   const openRequest = async (
     url,
-    { method = "GET", headers = {}, body, signal } = {},
+    { method = "GET", headers = {}, body, signal, redirect } = {},
   ) => {
     assertExternalSignal(signal);
     const controller = new AbortController();
@@ -163,6 +163,7 @@ export const createIncomingPublicIo = ({
         ? {}
         : { body, ...(isReadableStream(body) ? { duplex: "half" } : {}) }),
       signal: composed,
+      ...(redirect === undefined ? {} : { redirect }),
     });
     try {
       const response = await withSignal(fetched, composed);
@@ -320,6 +321,7 @@ export const createIncomingPublicIo = ({
       headers: extra = {},
       signal,
       expect = "json",
+      redirect,
     } = {},
   ) => {
     if (closed) throw new Error("Incoming public I/O is closed");
@@ -335,7 +337,7 @@ export const createIncomingPublicIo = ({
     };
     const body = json !== undefined ? JSON.stringify(json) : bytes;
     return await track(
-      readResponse({ url, method: verb, headers, body, signal }),
+      readResponse({ url, method: verb, headers, body, signal, redirect }),
     );
   };
 
