@@ -20,6 +20,7 @@ export function createClientMetadataFetch({
   const localMetadata = new Set([
     `${localOrigin}/client-metadata.json`,
     `${localOrigin}/client-metadata-secondary.json`,
+    `${localOrigin}/client-metadata-untrusted.json`,
   ]);
   const browserMetadata = config.browserClientMetadataUrl;
   if (browserMetadata) {
