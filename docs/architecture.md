@@ -253,15 +253,17 @@ browser does not remember goes straight to that account's code step, with the
 address masked. A handle or DID hint matching one fresh remembered session is
 provider silent sign-on and redirects without an Entryway page (see below). When
 the provider instead asks for interaction, an unknown hint, a stale remembered
-session, `prompt=create` and `prompt=select_account` from trusted or
-confidential clients still show the sign-in page. The provider stores every prompt except `create` as `consent` for
-untrusted public clients, so `select_account` cannot be detected there. Codes
-sent this way, and re-sends of them, have their own budget of two per account
-per ten minutes, apart from the email form's five per email address. Rule: no
-send a browser with no signed-in session for the account can trigger without
-knowing the email may use the shared budget, so someone who knows only a public
-handle cannot use it up. (A remembered account's "Sign in with an email code"
-button sends under the shared budget; it needs a device session for that DID.)
+session, or `prompt=create` or `prompt=select_account` from a trusted or
+confidential client, the sign-in page is still shown. For untrusted public
+clients the provider stores every prompt except `create` as `consent`, so
+`select_account` cannot be detected there.
+
+Codes sent this way, and re-sends of them, have their own budget of two per
+account per ten minutes. This is separate from the email form's five per email
+address. Rule: a send that a browser without a session for the account can
+trigger without typing the email never uses the shared email budget, so someone
+who knows only a public handle cannot use it up. (A remembered account's "Sign
+in with an email code" button sends under the shared budget; it needs a device session for that DID.)
 Past that budget nothing is sent; the page shows the email form, still bound to
 that account, with a note naming the masked address. Typing the email sends a
 code under the shared budget.
