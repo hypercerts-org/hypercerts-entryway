@@ -100,13 +100,12 @@ case "$command" in
       if (( result != 0 )) && [[ "${KEEP_FAILED_SANDBOX:-0}" == 1 ]]; then
         echo "Preserved project $SANDBOX_PROJECT at $temp" >&2
       else
-        if test -f "$SANDBOX_CHECKOUT/compose.yaml"; then
-          if ! docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" down --volumes --remove-orphans; then
-            echo "Scoped cleanup failed; preserved $temp for project $SANDBOX_PROJECT" >&2
-            (( result != 0 )) || result=1
-            echo "Group exit: $result; reports: $ACCEPTANCE_REPORT_DIR"
-            exit "$result"
-          fi
+        if [[ -f "$SANDBOX_CHECKOUT/compose.yaml" ]] \
+          && ! docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" down --volumes --remove-orphans; then
+          echo "Scoped cleanup failed; preserved $temp for project $SANDBOX_PROJECT" >&2
+          (( result != 0 )) || result=1
+          echo "Group exit: $result; reports: $ACCEPTANCE_REPORT_DIR"
+          exit "$result"
         fi
         rm -rf -- "$temp"
       fi
