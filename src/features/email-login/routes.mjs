@@ -10,6 +10,42 @@ const RESEND_COOLDOWN = 5_000;
 const EMAIL_CODE_LIMIT = 5;
 const AUTOMATIC_CODE_LIMIT = 2;
 const LIMIT_WINDOW = 600_000;
+const REFUSALS = {
+  "flow-limit": [
+    "Code request limit reached",
+    "Too many code requests for this sign-in. Start again later.",
+  ],
+  cooldown: [
+    "Wait before requesting another code",
+    "Wait five seconds before requesting another code.",
+  ],
+  "email-limit": [
+    "Try again later",
+    "Too many codes were requested for this email. Wait ten minutes.",
+  ],
+  "auto-limit": [
+    "Try again later",
+    "Too many codes were sent to this account recently. Enter your email address below to get another.",
+  ],
+};
+// A resend stays on the budget its flow's code was first sent under.
+const codeBudget = (flow, emailValue, options, email, now) => {
+  const automaticDid =
+    emailValue === undefined ? flow.automaticDid : options.automatic?.did;
+  const window = Math.floor(now / LIMIT_WINDOW);
+  return automaticDid
+    ? {
+        automaticDid,
+        key: `auto/${automaticDid}/${window}`,
+        limit: AUTOMATIC_CODE_LIMIT,
+        reason: "auto-limit",
+      }
+    : {
+        key: `${email}/${window}`,
+        limit: EMAIL_CODE_LIMIT,
+        reason: "email-limit",
+      };
+};
 const matchesLoginHint = (flow, account) => matchesFlowHints(account, flow);
 const linkedAccounts = (resolution) => {
   if (resolution?.kind === "single") return [resolution.account];
@@ -42,6 +78,19 @@ export function mountEmailLogin({
     form,
   } = flows;
   const { loginForm, otpForm } = forms;
+  const refusalPage = (res, flow, browser, reason, email) => {
+    const [title, message] = REFUSALS[reason];
+    return pageForFlow(
+      res,
+      title,
+      flow.email
+        ? otpForm(flow, browser, message, email)
+        : // Nothing was sent yet, so there is no code to resend.
+          `<p role="alert">${escapeHtml(message)}</p>${loginForm(flow, browser)}`,
+      flow,
+      429,
+    );
+  };
   // Sends a sign-in code and renders the code page. A send the user did not
   // type the address for spends the account's own small budget, never the
   // email's shared one, so a stranger who knows only a public handle cannot use
@@ -82,18 +131,13 @@ export function mountEmailLogin({
         if (flow.otpRequestCount >= 5) return refuse("flow-limit");
         if (flow.lastOtpSentAt && now - flow.lastOtpSentAt < RESEND_COOLDOWN)
           return refuse("cooldown");
-        const window = Math.floor(now / LIMIT_WINDOW);
-        const automaticDid =
-          emailValue === undefined ? flow.automaticDid : options.automatic?.did;
-        const limitKey = automaticDid
-          ? `auto/${automaticDid}/${window}`
-          : `${email}/${window}`;
-        const count = (await db.get("otp-limits", limitKey)) ?? 0;
-        if (count >= (automaticDid ? AUTOMATIC_CODE_LIMIT : EMAIL_CODE_LIMIT))
-          return refuse(automaticDid ? "auto-limit" : "email-limit");
+        const budget = codeBudget(flow, emailValue, options, email, now);
+        const { automaticDid } = budget;
+        const count = (await db.get("otp-limits", budget.key)) ?? 0;
+        if (count >= budget.limit) return refuse(budget.reason);
         if (flow.email && flow.email !== email)
           await mail.supersedeOtp({ email: flow.email, type: "sign-in" });
-        await db.set("otp-limits", limitKey, count + 1);
+        await db.set("otp-limits", budget.key, count + 1);
         flow.email = email;
         if (automaticDid) flow.automaticDid = automaticDid;
         else delete flow.automaticDid;
@@ -113,35 +157,8 @@ export function mountEmailLogin({
       });
       if (reserved.reason === "auto-limit" && options.automatic)
         return "auto-limit";
-      const refusal = {
-        "flow-limit": [
-          "Code request limit reached",
-          "Too many code requests for this sign-in. Start again later.",
-        ],
-        cooldown: [
-          "Wait before requesting another code",
-          "Wait five seconds before requesting another code.",
-        ],
-        "email-limit": [
-          "Try again later",
-          "Too many codes were requested for this email. Wait ten minutes.",
-        ],
-        "auto-limit": [
-          "Try again later",
-          "Too many codes were sent to this account recently. Enter your email address below to get another.",
-        ],
-      }[reserved.reason];
-      if (refusal)
-        return pageForFlow(
-          res,
-          refusal[0],
-          flow.email
-            ? otpForm(flow, browser, refusal[1], email)
-            : // Nothing was sent yet, so there is no code to resend.
-              `<p role="alert">${escapeHtml(refusal[1])}</p>${loginForm(flow, browser)}`,
-          flow,
-          429,
-        );
+      if (reserved.reason)
+        return refusalPage(res, flow, browser, reserved.reason, email);
       await reserved.dispatch.deliver();
     } catch (error) {
       if (!reserved && !preparingMail) throw error;
