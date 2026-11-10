@@ -78,7 +78,7 @@ export function createSignupForm({ db, config, accounts, fields }) {
         : "";
     const placeholder =
       config.publicHandles?.[0] ?? (suffix ? "alice" : "alice.entryway.test");
-    const handleInput = `<input id="handle" name="handle" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(initialHandle)}" aria-describedby="handle-help" ${locked ? "readonly" : ""} ${config.publicHandles ? 'list="public-handles"' : ""} required>`;
+    const handleInput = `<input id="handle" name="handle" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(initialHandle)}" ${locked ? "readonly" : ""} ${config.publicHandles ? 'list="public-handles"' : ""} aria-describedby="handle-help" required>`;
     const handleField = suffix
       ? `<div style="display:flex;align-items:center;gap:.25rem">${handleInput}<span id="handle-suffix" style="white-space:nowrap">${escapeHtml(suffix)}</span></div>`
       : handleInput;
