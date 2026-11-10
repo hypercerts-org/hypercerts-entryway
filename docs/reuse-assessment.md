@@ -82,14 +82,15 @@ behavior rather than assuming full equivalence. The synthetic migration fixture
 and repository inventory comparison are reuse candidates, not public end-to-end
 qualification or proof of a historical source signature.
 
-One bounded committed qualification run observed a real stock source CAR
+Historical bounded stock-mechanism evidence observed a real stock source CAR
 verification, a nonempty snapshot, two export requests started before a write was
 dispatched (request ordering only, not server-side overlap), an
 Entryway-hosted inactive destination accepting a streamed import, and sequential
 same-DID reservation with placement isolation. That run is bounded by its own
 committed byte and phase budgets and does not establish finality, blob pagination
 or an activation barrier. C4 therefore stays blocked, while C1, C2, C3 and C5 are
-accepted contracts whose callables the downstream plans must still produce; see the
+accepted contracts with dormant preparation, admission and continuation callables,
+not mounted public APIs or complete readiness; see the
 contract gates in
 [incoming migration](incoming-migration.md#contract-qualification-gates-for-implementers).
 

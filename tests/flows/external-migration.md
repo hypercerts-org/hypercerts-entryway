@@ -1,4 +1,4 @@
-# Synthetic external migration
+# External migration testing for contributors
 
 ## Public incoming migration: shared-email test on hold
 
@@ -10,10 +10,15 @@ does not prove this behavior.
 Blocked by [TECH-681 — Implement the public incoming-migration API](https://linear.app/hypercerts/issue/TECH-681/implement-the-public-incoming-migration-api).
 Once that support is available, add the scenario under
 [TECH-682 — Prove independent incoming migration and post-move OAuth](https://linear.app/hypercerts/issue/TECH-682/prove-independent-incoming-migration-and-post-move-oauth),
-following the existing AiaB test conventions. Use two distinct DIDs with the same
-email, migrate through public endpoints with normal ownership proofs, and verify
-that the incoming DID, records and blobs survive while the existing account
-remains unchanged. Do not substitute private fixture calls for public migration.
+following the existing AiaB test conventions. The original shared-email positive
+scenario is not the accepted individual-arrival policy: that path now requires a
+unique destination email. Cover rejection of an already-claimed destination email
+without changing the existing account, then use a distinct verified destination
+email for the eventual public journey. Established whole-server shared-primary-email
+associations remain a separate supported contract. Verify the incoming DID, records
+and blobs through public endpoints with normal ownership proofs. Do not substitute
+private fixture calls or negative controls for the full public migration journey.
+C4 finality/readiness and public exposure remain deferred.
 
 ## Existing synthetic flow
 

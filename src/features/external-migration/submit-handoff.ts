@@ -1,114 +1,290 @@
-import { DomainError } from "../../accounts/errors.js";
 import type { ArrivalTransactor } from "../../database/migration-journal.port.js";
 import type { OperationClaim } from "../../database/operation-ownership.port.js";
-import type { ArrivalHandoffFacts } from "./prepare-arrival.js";
+import { cidForCbor } from "@atproto/common";
+import type * as plc from "@did-plc/lib";
+import { DomainError } from "../../accounts/errors.js";
+import type { OperationOwnership } from "../../accounts/operation-ownership.js";
+import type { ArrivalAggregate } from "./arrival-types.js";
+import {
+  incomingHandoffMethod,
+  incomingCreationMethod,
+  type IncomingMethod,
+  type VerifyIncomingAuthorization,
+} from "./incoming-authorization.js";
+import { parseArrivalRequest } from "./arrival-request.js";
+import { arrivalCodeHash } from "./prepare-arrival.js";
+import { validateIncomingHandoff } from "../../plc/policy.js";
+import { observeIncomingHandoff } from "../../plc/incoming-observation.js";
 
-/** Public observation of one DID's canonical history. This is the only accepted
- * evidence of publication: a dispatch receipt or a signature proves nothing. */
-export interface HandoffObservation {
-  /** True only when the saved signed operation survives in the canonical chain. */
-  readonly applied: boolean;
-  readonly tombstone: boolean;
-  /** True when canonical history diverged without nullifying the saved operation. */
-  readonly diverged: boolean;
-}
-
-export type HandoffOutcome =
-  | { readonly state: "published"; readonly cid: string }
-  | { readonly state: "diverged"; readonly cid: string }
-  | { readonly state: "uncertain"; readonly cid: string };
-
-export interface HandoffSaved {
-  readonly operationId: string;
-  readonly did: string;
-  readonly version: number;
-  readonly expectedPredecessor: unknown;
-  readonly approvedRotationKeys: readonly string[];
-  readonly source: ArrivalHandoffFacts;
-}
-
-/** Untrusted source bytes are validated by the pinned library before anything is
- * recorded. Validation never re-signs: the source signature is the authorization. */
-export function createHandoffSubmission({
+/** Internal composition consumes a trusted browser user separately from the
+ * operation resource. No caller observation or digest can authorize publication. */
+export function createAuthenticatedArrival({
   arrivals,
-  directory,
+  ownership,
+  transact,
+  verify,
+  client,
+  admitCreation,
+  provision,
 }: {
-  readonly arrivals: Pick<ArrivalTransactor, "recordSignedOperation">;
-  readonly directory: {
-    validate(input: {
-      readonly operation: unknown;
-      readonly expectedPredecessor: unknown;
-      readonly approvedRotationKeys: readonly string[];
-      readonly source: ArrivalHandoffFacts;
-    }): Promise<{
-      readonly operation: Record<string, unknown>;
-      readonly cid: string;
-    }>;
-    submit(input: {
-      readonly did: string;
-      readonly operation: Record<string, unknown>;
-      readonly cid: string;
-    }): Promise<void>;
-    observe(did: string): Promise<HandoffObservation>;
-  };
+  arrivals: ArrivalTransactor;
+  ownership: OperationOwnership;
+  transact: <T>(work: () => Promise<T>) => Promise<T>;
+  verify: VerifyIncomingAuthorization;
+  client: plc.Client;
+  provision?: (
+    owner: OperationClaim,
+    aggregate: ArrivalAggregate,
+  ) => Promise<unknown>;
+  admitCreation: (
+    owner: OperationClaim,
+    version: number,
+    input: {
+      ownerUserId: string;
+      facts: import("./arrival-types.js").ArrivalReplayFacts;
+      proof: import("./arrival-types.js").ArrivalAdmissionProof;
+      inviteCode: unknown;
+    },
+  ) => Promise<unknown>;
 }) {
-  /** Dispatch the saved facts directly to the configured directory, then let
-   * observation decide the outcome. A lost response is not a failed publication. */
-  const dispatch = async (
-    did: string,
-    operation: Record<string, unknown>,
-    cid: string,
-  ): Promise<HandoffOutcome> => {
-    try {
-      await directory.submit({ did, operation, cid });
-    } catch {
-      // Classify by canonical observation below, never by the transport result.
-    }
-    const observed = await directory.observe(did);
-    if (observed.tombstone)
+  const read = async (
+    operationId: string,
+    userId: string,
+  ): Promise<ArrivalAggregate> => {
+    const aggregate = await arrivals.readArrivalAggregate(operationId, userId);
+    if (!aggregate || aggregate.arrival.cancelledAt !== null)
+      throw new DomainError("AccountNotFound", 404, "Arrival not found");
+    return aggregate;
+  };
+  const underOwner = async <T>(
+    operationId: string,
+    userId: string,
+    work: (owner: OperationClaim, aggregate: ArrivalAggregate) => Promise<T>,
+  ) => {
+    const initial = await read(operationId, userId);
+    const saved = initial.arrival;
+    return ownership.resumePending(
+      `arrival:${saved.did}`,
+      saved.operationId,
+      {
+        kind: "public-arrival",
+        request: { did: saved.did, handle: saved.handle, userId },
+      },
+      async () => {
+        const owner = ownership.currentClaim;
+        if (!owner)
+          throw new DomainError(
+            "OperationLeaseLost",
+            409,
+            "Arrival owner unavailable",
+          );
+        await ownership.assertActive();
+        return work(owner, await read(operationId, userId));
+      },
+    );
+  };
+  const dispatchSaved = async (
+    owner: OperationClaim,
+    aggregate: ArrivalAggregate,
+  ) => {
+    const saved = aggregate.arrival;
+    const admission = aggregate.admissions.find(
+      (item) => item.method === incomingHandoffMethod,
+    );
+    const handoff = aggregate.signedOperations.find(
+      (item) => item.kind === "handoff",
+    );
+    if (
+      !admission ||
+      !handoff ||
+      admission.userId !== saved.userId ||
+      admission.did !== saved.did ||
+      admission.generation !== saved.generation
+    )
       throw new DomainError(
-        "OperationConflict",
-        409,
-        "The identity is tombstoned; this handoff cannot be published",
+        "AccountMismatch",
+        403,
+        "An accepted saved handoff is required",
       );
-    if (observed.applied) return { state: "published", cid };
-    return {
-      state: observed.diverged ? "diverged" : "uncertain",
-      cid,
-    };
+    const observe = () =>
+      observeIncomingHandoff(
+        client,
+        saved.did,
+        handoff.cid,
+        saved.sourcePlcHead,
+      );
+    await ownership.dispatch(
+      {
+        step: "incoming-handoff",
+        target: client.url,
+        method: incomingHandoffMethod,
+        intent: { did: saved.did, cid: handoff.cid },
+      },
+      {
+        send: async () => {
+          const before = await observe();
+          if (before.canonical) return null;
+          if (before.diverged)
+            throw new DomainError(
+              "OperationRecoveryRequired",
+              409,
+              "Canonical identity changed before handoff dispatch",
+            );
+          await client.sendOperation(
+            saved.did,
+            handoff.operation as unknown as plc.Operation,
+          );
+          return null;
+        },
+        project: () => null,
+        resume: (value) => {
+          if (value !== null)
+            throw new DomainError(
+              "OperationConflict",
+              409,
+              "Invalid handoff receipt",
+            );
+          return null;
+        },
+        observe: async () => {
+          const observed = await observe();
+          return observed.canonical
+            ? { state: "applied" as const, result: null }
+            : {
+                state: observed.diverged
+                  ? ("diverged" as const)
+                  : ("replay-safe" as const),
+              };
+        },
+      },
+    );
+    const observed = await observe();
+    if (!observed.canonical)
+      return {
+        state: observed.diverged
+          ? ("diverged" as const)
+          : ("uncertain" as const),
+        cid: handoff.cid,
+      };
+    const current = await read(saved.operationId, saved.userId);
+    await arrivals.recordCanonicalHandoff(owner, current.arrival.version, {
+      operationId: saved.operationId,
+      did: saved.did,
+      cid: handoff.cid,
+    });
+    return { state: "published" as const, cid: handoff.cid };
   };
   return {
-    async submit(
-      owner: OperationClaim,
-      saved: HandoffSaved,
-      presented: unknown,
-    ): Promise<HandoffOutcome> {
-      const validated = await directory.validate({
-        operation: presented,
-        expectedPredecessor: saved.expectedPredecessor,
-        approvedRotationKeys: saved.approvedRotationKeys,
-        source: saved.source,
-      });
-      const recorded = await arrivals.recordSignedOperation(
-        owner,
-        saved.version,
-        {
-          kind: "handoff",
-          operationId: saved.operationId,
-          did: saved.did,
-          operation: validated.operation,
-          cid: validated.cid,
+    async admit(input: {
+      operationId: string;
+      userId: string;
+      method: IncomingMethod;
+      body: unknown;
+      presentation: unknown;
+      arrivalCode: string;
+    }) {
+      return underOwner(
+        input.operationId,
+        input.userId,
+        async (owner, aggregate) => {
+          const saved = aggregate.arrival;
+          const parsed = parseArrivalRequest(saved, input.method, input.body);
+          const authorization = await verify({
+            presentation: input.presentation,
+            method: input.method,
+            operationId: saved.operationId,
+            requestDigest: parsed.requestDigest,
+            expectedDid: saved.did,
+          });
+          const proof = {
+            codeHash: arrivalCodeHash(input.arrivalCode),
+            codeGeneration: saved.codeGeneration,
+          };
+          // Crypto and directory work finish before the physical admission transaction.
+          const signed =
+            input.method === incomingHandoffMethod
+              ? await validateIncomingHandoff({
+                  operation: parsed.operation,
+                  expectedPredecessor: saved.sourcePredecessor,
+                  approvedRotationKeys: saved.approvedRotationKeys,
+                  source: saved.source,
+                })
+              : null;
+          await transact(async () => {
+            if (input.method === incomingCreationMethod) {
+              await admitCreation(owner, saved.version, {
+                ownerUserId: input.userId,
+                facts: authorization.replayFacts,
+                proof,
+                inviteCode: parsed.inviteCode,
+              });
+            } else {
+              await arrivals.recordArrivalReplay(
+                owner,
+                saved.version,
+                authorization.replayFacts,
+                proof,
+              );
+              const current = await read(saved.operationId, input.userId);
+              await arrivals.recordSignedOperation(
+                owner,
+                current.arrival.version,
+                {
+                  kind: "handoff",
+                  operationId: saved.operationId,
+                  did: saved.did,
+                  operation: signed! as unknown as Record<string, unknown>,
+                  cid: String(await cidForCbor(signed)),
+                },
+              );
+            }
+          });
+          if (input.method === incomingCreationMethod)
+            return {
+              state: "admitted" as const,
+              operationId: saved.operationId,
+            };
+          return dispatchSaved(
+            owner,
+            await read(saved.operationId, input.userId),
+          );
         },
       );
-      if (recorded.kind === "reconciliation-required")
-        throw new DomainError(
-          "OperationRecoveryRequired",
-          409,
-          "The saved handoff requires verified reconciliation",
-        );
-      // Committed bytes only: an accepted or already-settled record both mean the
-      // exact signed operation is durable, and a retry submits those same bytes.
-      return await dispatch(saved.did, validated.operation, validated.cid);
+    },
+    /** Composition continues provisioning from accepted identity without source
+     * credentials; admission-only consumers retain the saved facts. */
+    continueCreation(input: { operationId: string; userId: string }) {
+      return underOwner(
+        input.operationId,
+        input.userId,
+        async (owner, aggregate) => {
+          const accepted = aggregate.admissions.find(
+            (item) => item.method === incomingCreationMethod,
+          );
+          if (
+            !accepted ||
+            accepted.userId !== aggregate.arrival.userId ||
+            accepted.did !== aggregate.arrival.did ||
+            accepted.generation !== aggregate.arrival.generation
+          )
+            throw new DomainError(
+              "AccountMismatch",
+              403,
+              "An accepted saved creation is required",
+            );
+          if (provision) return provision(owner, aggregate);
+          return {
+            operationId: aggregate.arrival.operationId,
+            did: accepted.did,
+            requestDigest: accepted.requestDigest,
+            generation: accepted.generation,
+          };
+        },
+      );
+    },
+    /** Trusted saved-user recovery only; deliberately no public route or new JWT. */
+    continueHandoff(input: { operationId: string; userId: string }) {
+      return underOwner(input.operationId, input.userId, dispatchSaved);
     },
   };
 }

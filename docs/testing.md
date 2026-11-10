@@ -40,7 +40,7 @@ and requires no host dependency install:
 | `./tests/local.sh resilience-profiles`        | Run all three fresh deployment profiles and require complete bounded receipts; see [profile contract](deployment-profiles.md)                                                                            |
 | `./tests/local.sh contracts`                  | Run imported contract scenarios in the test container after up                                                                                                                                           |
 | `./tests/local.sh browser`                    | Run browser scenarios after up                                                                                                                                                                           |
-| `./tests/local.sh incoming-public-mechanisms` | Bounded stock public-mechanism contract test after up: standalone signup, Mailpit, PLC signing, inactive destination and reservation; 12 offline plus 5 live cases, not a migration qualification |
+| `./tests/local.sh incoming-public-mechanisms` | Bounded stock public-mechanism contract test after up: standalone signup, Mailpit, PLC signing, inactive destination and reservation; offline checks plus live-gated cases, not a migration qualification |
 | `./tests/local.sh migration`                  | Fresh synthetic external-source migration, including two Entryway restarts                                                                                                                               |
 | `./tests/local.sh migration-resume`           | Resume a reviewed interrupted fixture; inspect state before using                                                                                                                                        |
 | `./tests/local.sh reverify`                   | Check an already completed migration fixture                                                                                                                                                             |
@@ -92,11 +92,10 @@ read its recipient-bound message from Mailpit, use the token for public signing,
 observe the inactive destination and reservation behavior. The controller applies the
 repository-owned SMTP overlay to pds3 after startup.
 
-Case counts and what they mean. One live-gated test runs two further subcases, so a
-full opt-in run reports more cases than the file declares. The file declares fifteen
-top-level tests: twelve offline and three live-gated. A full opt-in run reports 17
-cases, which is 12 offline plus 5 live. Only those 5 live cases form the public
-qualification.
+For contributors validating this phase, offline request-boundary checks and
+live-gated stock-mechanism cases are separate evidence. A live-gated test may add
+subcases, so report the executed runner's counts rather than treating a historical
+count as a qualification. Negative controls alone do not prove a complete migration.
 
 `tests/local.sh incoming-public-mechanisms` always exports
 `INCOMING_PUBLIC_MECHANISMS=1` for the container, so unsetting the variable does not
@@ -107,10 +106,9 @@ env -u INCOMING_PUBLIC_MECHANISMS -u INCOMING_ACCESS_PATH node --test \
   tests/contracts/incoming-public-mechanisms.test.mjs
 ```
 
-That run reports the three live-gated tests skipped; those skips are not
-qualification. At the time of writing, that native run reports 12 passed and 3
-skipped, which is the offline subset only. A live count is a claim about a sandbox run
-and must not be reported from this document.
+That run skips the live-gated tests; those skips are not qualification. Setting
+`INCOMING_PUBLIC_MECHANISMS=0` still opts in because the gate tests presence; unset
+it as shown. Report live results only from an executed managed sandbox run.
 
 The offline cases cover the managed request boundary and phase budgets. They do not
 prove any public behavior, and no Entryway endpoint or route implements this
@@ -120,17 +118,25 @@ The preflight verifies the signed PLC operation against the source's observed
 rotation keys. The remaining contracts are still open in the
 [contract gates](incoming-migration.md#contract-qualification-gates-for-implementers):
 C4 finality and activation-race closure stay BLOCKED; C1, C2, C3 and C5 are accepted
-contracts whose callables the downstream plans must still produce.
+contracts with dormant internal producers, not public route or readiness completion.
 
-The helper used by this phase has its own focused test,
-`tests/support/helpers/incoming-public-io.test.mjs`. Contract auto-discovery does not
-pick it up, because `tests/support/discover-contracts.mjs` scans only `src` and
-`tests/contracts`. Run it explicitly alongside the phase when validating changes to
-the helper:
-
-```sh
-node --test tests/support/helpers/incoming-public-io.test.mjs
-```
+Contributors qualifying the dormant incoming-arrival composition run
+`./tests/local.sh incoming-arrival-live` after `up`. This creates fresh stock
+source accounts with different source and destination handles, obtains source
+service credentials and Mailpit-confirmed PLC signatures through public APIs,
+and calls the internal preparation/admission/provisioning composition. Destination
+browser proof uses the real Better Auth and mail producers; no identity or arrival
+rows are seeded. The test asserts the saved signed move matches the directory
+head, administrator inspection and deactivation succeed before binding, and the
+destination remains inactive and bound-pending without repeated creation.
+Applied-but-lost creation and deactivation controls first assert that automatic
+retry stays blocked and the owner remains unbound. After the disposable dispatcher
+exits, this command stops and restarts both owned destination PDS workers, then
+approves observe-only recovery in a new dispatcher. Recovery must bind pending
+without another creation or reservation. Run this disruptive phase alone: it
+restarts this project's destination services. This suite does not activate a public
+migration route or close C4. Its private fixture databases and browser recovery
+receipts remain in the owned artifact directory; never publish those receipts.
 
 Use the owned-project cleanup procedure below, including after failures.
 
@@ -250,6 +256,7 @@ npm run test:architecture
 npm run schema:check
 npm run build
 npm run test:unit
+npm run test:incoming-reconciliation
 npm run test:ci-lifecycle
 ```
 
@@ -309,6 +316,42 @@ codes for Docker, assertion and timeout failures, never assertion values. Nested
 profile controllers are not filtered a second time. Raw reports are never uploaded. Inspect
 private reports locally for detailed failures. Lifecycle fixtures use fake Docker
 natively; they do not establish hosted-runner compatibility.
+
+### Development: native incoming checks
+
+Contributors changing incoming test infrastructure run the same stock mail poller
+used by the live phase, its managed I/O helper and the access-projection tests:
+
+```sh
+npm run test:incoming-helpers
+npm run build
+npm run test:unit
+npm run test:incoming-reconciliation
+npm run test:ci-lifecycle
+```
+
+The explicit helper script covers `stock-plc-mailpit.test.mjs`,
+`incoming-public-io.test.mjs` and `tests/atmosphere/project-incoming-access.test.mjs`.
+The native CI checks job runs it separately: helper files are not contract-discovered.
+The unit allowlist includes incoming storage, admission, handoff and composition.
+The separate native CI script `test:incoming-reconciliation` runs fresh-process
+reconciliation with normal Node isolation: the shared unit runner uses
+`--test-isolation=none`, which forked workers inherit and cannot use.
+Reconciliation invokes its child-worker fixture;
+that fixture is not separately discovered or executed twice. No live stock test is
+added to the native unit allowlist.
+
+PostgreSQL cases skipped unless `CONTRACT_DATABASE_BACKEND=postgresql` are an outstanding
+managed validation gate, not a native pass. For the final managed phase, prepare
+and start an owned sandbox, run `./tests/local.sh database-dialects`, then run the
+incoming storage/admission/composition contracts inside its managed
+test container with `CONTRACT_DATABASE_BACKEND=postgresql` and that sandbox's
+`CONTRACT_DATABASE_URL` supplied through the managed environment. The restart
+child fixture is SQLite-specific; it does not establish PostgreSQL restart coverage.
+Run `./tests/local.sh incoming-public-mechanisms` separately
+for stock runtime evidence. Do not invent a host database URL or report these
+commands as executed from native CI alone. Full public journey/readiness remains
+blocked by C4, independently of these checks.
 
 ## Feature tests and operational evidence
 

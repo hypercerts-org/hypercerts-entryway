@@ -34,6 +34,8 @@ CREATE TABLE `accounts` (
 --> statement-breakpoint
 CREATE TABLE `arrival_attempts` (
 	`attempt_binding` text PRIMARY KEY,
+	`ownership_operation_id` text NOT NULL,
+	`attempt_id` text NOT NULL,
 	`operation_id` text NOT NULL,
 	`reason` text NOT NULL,
 	`recorded_at` integer NOT NULL,
@@ -64,10 +66,14 @@ CREATE TABLE `arrival_families` (
 CREATE TABLE `arrival_replay` (
 	`operation_id` text NOT NULL,
 	`method` text NOT NULL,
+	`did` text NOT NULL,
+	`user_id` text NOT NULL,
+	`credential_issuer` text NOT NULL,
+	`credential_jti` text NOT NULL,
 	`request_digest` text NOT NULL,
 	`generation` integer NOT NULL,
 	`accepted_at` integer NOT NULL,
-	CONSTRAINT `arrival_replay_pk` PRIMARY KEY(`operation_id`, `method`, `request_digest`),
+	CONSTRAINT `arrival_replay_pk` PRIMARY KEY(`operation_id`, `method`),
 	CONSTRAINT "arrival_replay_digest" CHECK(length("request_digest") = 64)
 );
 --> statement-breakpoint
@@ -109,6 +115,10 @@ CREATE TABLE `arrivals` (
 	`endpoint` text NOT NULL,
 	`source_plc_head` text NOT NULL,
 	`source_endpoint` text,
+	`canonical_handoff_cid` text,
+	`source_predecessor` text NOT NULL,
+	`source_facts` text NOT NULL,
+	`approved_rotation_keys` text NOT NULL,
 	`version` integer NOT NULL,
 	`generation` integer NOT NULL,
 	`created_at` integer NOT NULL,
@@ -330,6 +340,7 @@ CREATE UNIQUE INDEX `accounts_handle_ci` ON `accounts` (lower("handle"));--> sta
 CREATE INDEX `accounts_pds_status` ON `accounts` (`pds_id`,`status`);--> statement-breakpoint
 CREATE INDEX `arrival_attempt_operation` ON `arrival_attempts` (`operation_id`);--> statement-breakpoint
 CREATE INDEX `arrival_family_operation` ON `arrival_families` (`operation_id`,`revoked_at`);--> statement-breakpoint
+CREATE UNIQUE INDEX `arrival_replay_credential` ON `arrival_replay` (`credential_issuer`,`credential_jti`);--> statement-breakpoint
 CREATE UNIQUE INDEX `arrival_signed_kind_cid` ON `arrival_signed_operations` (`operation_id`,`kind_operation_cid`);--> statement-breakpoint
 CREATE UNIQUE INDEX `arrivals_did_active` ON `arrivals` (`did_root`);--> statement-breakpoint
 CREATE INDEX `arrivals_did` ON `arrivals` (`did`,`created_at`);--> statement-breakpoint

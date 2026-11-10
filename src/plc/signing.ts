@@ -188,6 +188,7 @@ export class Secp256k1MigrationPlcSigner {
       handoffOperation: unknown;
       repositoryKey: string;
       endpoint: string;
+      handle?: string;
     },
     persist: (
       operation: Readonly<plc.Operation>,
@@ -208,6 +209,16 @@ export class Secp256k1MigrationPlcSigner {
           ...facts.verificationMethods,
           atproto: input.repositoryKey,
         },
+        ...(input.handle
+          ? {
+              alsoKnownAs: [
+                `at://${input.handle}`,
+                ...facts.alsoKnownAs.filter(
+                  (alias) => !alias.startsWith("at://"),
+                ),
+              ],
+            }
+          : {}),
         services: {
           ...facts.services,
           atproto_pds: {

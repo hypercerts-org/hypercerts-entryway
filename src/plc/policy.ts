@@ -111,6 +111,21 @@ export function validateUnsignedOperation(
   return op;
 }
 
+/** Incoming handoff preserves existing priority and adds only Entryway's hot
+ * authority last. Genesis ordering must never rewrite an existing identity. */
+export function incomingRotationKeys(
+  current: readonly string[],
+  entrywayKey: string,
+): string[] {
+  const keys = [...current];
+  keys.forEach(publicRotationKey);
+  publicRotationKey(entrywayKey);
+  if (!keys.includes(entrywayKey)) keys.push(entrywayKey);
+  if (keys.length < 2 || keys.length > 5 || new Set(keys).size !== keys.length)
+    return invalid();
+  return keys;
+}
+
 /** Source facts an authority-only handoff must not alter. Comparison is exact
  * and order-sensitive: a reordered rotation list is a different approved list. */
 export interface IncomingSourceFacts {
@@ -138,16 +153,18 @@ export async function validateIncomingHandoff(input: {
   )
     return invalid();
   let candidate: plc.CompatibleOp;
-  let predecessor: plc.UnsignedOperation;
+  let predecessor: plc.Operation;
+  let predecessorCid: string;
   try {
     approved.forEach(publicRotationKey);
-    predecessor = plc.normalizeOp(
-      plc.def.operation.parse(structuredClone(input.expectedPredecessor)),
+    const original = plc.def.compatibleOp.parse(
+      structuredClone(input.expectedPredecessor),
     );
+    predecessorCid = String(await cidForCbor(original));
+    predecessor = plc.normalizeOp(original);
     // The handoff is always the current signed operation form, never legacy v1.
     candidate = plc.def.operation.parse(structuredClone(input.operation));
-    if (candidate.prev !== String(await cidForCbor(predecessor)))
-      return invalid();
+    if (candidate.prev !== predecessorCid) return invalid();
     await plc.assureValidSig([...predecessor.rotationKeys], candidate);
   } catch (error) {
     if (error instanceof PlcError) throw error;
@@ -158,11 +175,13 @@ export async function validateIncomingHandoff(input: {
   for (let index = 0; index < approved.length; index += 1)
     if (facts.rotationKeys[index] !== approved[index]) return invalid();
   if (
-    JSON.stringify(facts.alsoKnownAs) !==
-      JSON.stringify(input.source.alsoKnownAs) ||
-    JSON.stringify(facts.verificationMethods) !==
-      JSON.stringify(input.source.verificationMethods) ||
-    JSON.stringify(facts.services) !== JSON.stringify(input.source.services)
+    !sameSignedOperation(facts.alsoKnownAs, input.source.alsoKnownAs) ||
+    !sameSignedOperation(
+      facts.verificationMethods,
+      input.source.verificationMethods,
+    ) ||
+    !sameSignedOperation(facts.services, input.source.services) ||
+    !sameSignedOperation(candidate, input.operation)
   )
     return invalid();
   return candidate;

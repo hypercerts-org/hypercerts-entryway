@@ -4,6 +4,7 @@ import { Secp256k1Keypair, P256Keypair } from "@atproto/crypto";
 import * as plc from "@did-plc/lib";
 import {
   genesisRotationKeys,
+  incomingRotationKeys,
   publicUpdateCandidate,
 } from "../../dist/src/plc/policy.js";
 
@@ -34,6 +35,27 @@ test("genesis keeps recovery priority and rejects repeated or private references
     { code: "InvalidPlcOperation" },
   );
 });
+test("incoming authority preserves priority, rejects invalid/full lists and never truncates", async () => {
+  const { hot, offline } = await fixture();
+  const source = await Secp256k1Keypair.create();
+  assert.deepEqual(
+    incomingRotationKeys([offline.did(), source.did()], hot.did()),
+    [offline.did(), source.did(), hot.did()],
+  );
+  assert.deepEqual(
+    incomingRotationKeys([hot.did(), offline.did()], hot.did()),
+    [hot.did(), offline.did()],
+  );
+  const full = [offline.did(), source.did()];
+  for (let index = 0; index < 3; index++)
+    full.push((await Secp256k1Keypair.create()).did());
+  for (const keys of [full, ["private"], [source.did(), source.did()]]) {
+    assert.throws(() => incomingRotationKeys(keys, hot.did()), {
+      code: "InvalidPlcOperation",
+    });
+  }
+});
+
 test("updates preserve omission and pinned duplicate behavior, enforce bounds and policy", async () => {
   const { hot, op } = await fixture();
   assert.deepEqual(

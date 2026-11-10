@@ -332,6 +332,9 @@ async function provisioningFixture() {
     pdsId: "pds1",
     endpoint,
     sourcePlcHead: predecessorCid,
+    sourcePredecessor: predecessor,
+    source: sourceFacts,
+    approvedRotationKeys: handoff.rotationKeys,
     codeHash: createHash("sha256")
       .update(`entryway-arrival-code/v1:${code}`)
       .digest("hex"),
@@ -344,6 +347,7 @@ async function provisioningFixture() {
     workerId: "worker-1",
     leaseMs: 120_000,
   });
+  await ownership.bindResource(claim, `arrival:${did}`);
   const intent = await arrivals.recordAllocationIntent(claim, 1, {
     operationId: "op-1",
     did,
@@ -473,7 +477,7 @@ test("a real signing pass journals the move before creation and returns only a p
   assert.equal(move.length, 1);
   const journaled = JSON.parse(move[0].operation);
   assert.equal(journaled.verificationMethods.atproto, fixture.reservationKey);
-  assert.equal(journaled.services.atproto_pds.endpoint, sourceEndpoint);
+  assert.equal(journaled.services.atproto_pds.endpoint, endpoint);
   assert.equal(move[0].cid, String(await cidForCbor(journaled)));
   assert.equal(typeof journaled.sig, "string");
   assert.ok(journaled.sig.length > 0);

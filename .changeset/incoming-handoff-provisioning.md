@@ -2,12 +2,36 @@
 "hypercerts-entryway": minor
 ---
 
-Incoming migration now has the code that turns a prepared arrival into a
+For maintainers assembling the still-dormant incoming flow, this adds the code that turns a prepared arrival into a
 provisioned, still-pending destination. It reserves the destination repository
 key, accepts the source-signed authority handoff, and creates the destination
 account ahead of data transfer. Nothing here is reachable yet: no route is
 mounted, so an operator sees no behaviour change until the public API is
 assembled.
+
+Dormant preparation now checks the destination browser session, origin/CSRF and
+fresh OTP before reserving an enrolled destination. It validates the configured
+PLC history and retains the exact signed predecessor and CID, including legacy
+`create` identities. Existing rotation priority is preserved; the Entryway hot key
+is added only within the protocol limit. This remains preparation evidence, not
+source ownership or activation readiness.
+
+Dormant authenticated admission now verifies the source repository JWT's document
+identity, controller, method, audience and replay identity, with a maximum
+300-second lifetime. Handoff admission and signed public bytes commit together
+before directory dispatch. Lost responses retain the existing isolation/drain
+recovery requirement; saved-owner continuation reuses accepted bytes without a
+new source credential after key cutover. Creation admission reuses registration's
+real invitation producer atomically, without copying raw invite codes into incoming
+journals. Supported creation fields are handle and optional DID, email and invite;
+other stock optional fields are explicitly rejected. Dormant creation continuation
+now uses the saved owner and admission without a new source JWT or arrival code.
+It journals the exact destination move, observes and pauses the backend using
+configured administrator credentials, and atomically binds the pending account
+with invitation completion. Lost creation or pause responses still require
+verified isolation/drain recovery. A published move without a backend stays
+pending without blind creation or fresh key reservation. Public migration
+qualification remains separate work.
 
 What this will mean once it is wired:
 

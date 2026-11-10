@@ -1,13 +1,25 @@
 import { createHash, randomBytes } from "node:crypto";
+import { ensureValidHandle } from "@atproto/syntax";
+import type {
+  BrowserAuthentication,
+  BrowserPrincipal,
+  BrowserRequest,
+} from "../../authentication/port.js";
+import type { createOperationOwnership } from "../../accounts/operation-ownership.js";
+import { incomingRotationKeys } from "../../plc/policy.js";
+import { readIncomingObservation } from "../../plc/incoming-observation.js";
+import type * as plc from "@did-plc/lib";
+import { HttpError } from "../../http/http-error.mjs";
 import { DomainError } from "../../accounts/errors.js";
 import type { ArrivalTransactor } from "../../database/migration-journal.port.js";
 import type { OperationClaim } from "../../database/operation-ownership.port.js";
+import type { ArrivalPreparationAuthority } from "./arrival-types.js";
 import type { ArrivalOutcome } from "./arrival-types.js";
 
 /** Preparation records the verified destination owner and one reservation only
  * after a fresh origin-validated proof. The code is returned once and stored as
  * a hash, so nothing here can recover or log it. */
-export interface ArrivalPreparation {
+export interface ArrivalPreparation extends ArrivalPreparationAuthority {
   readonly operationId: string;
   readonly did: string;
   readonly handle: string;
@@ -116,6 +128,139 @@ export function createArrivalPreparation({
       );
       return settle(result, reservedKey);
     },
+  };
+}
+
+export function createIncomingPreparation({
+  arrivals,
+  ownership,
+  transact,
+  authentication,
+  checkCsrf,
+  loadBrowser,
+  rateLimit,
+  choosePds,
+  plcClient,
+  entrywayKey,
+  entrywayDid,
+  reserveSigningKey,
+}: {
+  arrivals: ArrivalTransactor;
+  ownership: ReturnType<typeof createOperationOwnership>;
+  transact: <T>(operation: () => Promise<T>) => Promise<T>;
+  authentication: BrowserAuthentication;
+  checkCsrf: (request: BrowserRequest, browser: unknown) => void;
+  loadBrowser: (request: BrowserRequest) => Promise<unknown>;
+  rateLimit: (subject: string) => Promise<void>;
+  choosePds: () => { id: string; url: string };
+  plcClient: plc.Client;
+  entrywayKey: string;
+  entrywayDid: string;
+  reserveSigningKey: (request: ReservationRequest) => Promise<string>;
+}) {
+  const reservation = createArrivalPreparation({ arrivals, reserveSigningKey });
+  return async function prepareArrival(
+    request: BrowserRequest,
+    otp: string,
+    input: { did: string; handle: string },
+  ) {
+    const browser = await loadBrowser(request);
+    checkCsrf(request, browser);
+    const principal: BrowserPrincipal | null =
+      await authentication.requireSession(request);
+    const proofRequired = () =>
+      new HttpError(
+        403,
+        "ArrivalProofRequired",
+        "Verify the destination email again",
+      );
+    if (!principal?.emailVerified || !otp) throw proofRequired();
+    await rateLimit(`incoming-prepare:${principal.userId}`);
+    const proof = await authentication.verifySignInCode({
+      email: principal.email,
+      otp,
+    });
+    const identity = proof.ok ? proof.principal : null;
+    if (
+      !identity?.emailVerified ||
+      identity.userId !== principal.userId ||
+      identity.email !== principal.email
+    )
+      throw proofRequired();
+    if (!/^did:plc:[a-z2-7]{24}$/.test(input.did))
+      throw new HttpError(400, "InvalidRequest", "A PLC DID is required");
+    ensureValidHandle(input.handle);
+    const pds = choosePds();
+    return ownership.run(
+      `arrival:${input.did}`,
+      {
+        kind: "public-arrival",
+        request: {
+          did: input.did,
+          handle: input.handle,
+          userId: principal.userId,
+        },
+      },
+      async () => {
+        const claim = ownership.currentClaim;
+        if (!claim)
+          throw new DomainError(
+            "OperationLeaseLost",
+            409,
+            "Arrival owner unavailable",
+          );
+        const observed = await readIncomingObservation(plcClient, input.did);
+        const approvedRotationKeys = incomingRotationKeys(
+          observed.rotationKeys,
+          entrywayKey,
+        );
+        const code = generateArrivalCode();
+        // The pending admission and arrival share one commit: neither release
+        // nor lease takeover may discard ownership of a persisted arrival.
+        const saved = await transact(async () => {
+          const prepared = await arrivals.createArrival({
+            operationId: claim.operationId,
+            did: input.did,
+            handle: input.handle,
+            userId: identity.userId,
+            email: identity.email,
+            pdsId: pds.id,
+            endpoint: pds.url,
+            sourcePredecessor: observed.sourcePredecessor,
+            sourcePlcHead: observed.sourcePlcHead,
+            source: observed.source,
+            approvedRotationKeys,
+            codeHash: code.hash,
+            codeExpiresAt: code.expiresAt,
+          });
+          // A persisted code cannot be recovered or replaced by replaying prepare.
+          if (prepared.codeHash !== code.hash) return recoveryRequired();
+          await ownership.checkpoint("arrival-prepared", {
+            operationId: prepared.operationId,
+            did: prepared.did,
+            pdsId: prepared.pdsId,
+          });
+          return prepared;
+        });
+        const reserved = await reservation.reserve(claim, saved.version, saved);
+        return {
+          operationId: saved.operationId,
+          version: reserved.version,
+          arrivalCode: code.code,
+          expiresAt: code.expiresAt,
+          entrywayDid,
+          sourceEndpoint: observed.source.services.atproto_pds!.endpoint,
+          destinationEndpoint: saved.endpoint,
+          expectedPlcHead: saved.sourcePlcHead,
+          handoff: {
+            ...observed.source,
+            rotationKeys: approvedRotationKeys,
+            prev: saved.sourcePlcHead,
+            type: "plc_operation",
+          },
+        };
+      },
+    );
   };
 }
 

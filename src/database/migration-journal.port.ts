@@ -4,6 +4,10 @@ import type {
 } from "../features/external-migration/types.js";
 import type {
   ArrivalAccess,
+  ArrivalExternalAttempt,
+  ArrivalAggregate,
+  ArrivalAdmissionProof,
+  ArrivalPreparationAuthority,
   ArrivalActivationEvidence,
   ArrivalAllocationIntent,
   ArrivalOutcome,
@@ -56,18 +60,29 @@ export type DestinationPrincipalPort = Pick<
 >;
 
 export interface ArrivalTransactor {
-  createArrival(input: {
-    operationId: string;
-    did: string;
-    userId: string;
-    email: string;
-    handle: string;
-    pdsId: string;
-    endpoint: string;
-    sourcePlcHead: string;
-    codeHash: string;
-    codeExpiresAt: number;
-  }): Promise<ArrivalRecord>;
+  readArrivalAggregate(
+    operationId: string,
+    ownerUserId: string,
+  ): Promise<ArrivalAggregate | null>;
+  recordCanonicalHandoff(
+    owner: OperationClaim,
+    expectedVersion: number,
+    input: { operationId: string; did: string; cid: string },
+  ): Promise<ArrivalOutcome>;
+  createArrival(
+    input: ArrivalPreparationAuthority & {
+      operationId: string;
+      did: string;
+      userId: string;
+      email: string;
+      handle: string;
+      pdsId: string;
+      endpoint: string;
+      sourcePlcHead: string;
+      codeHash: string;
+      codeExpiresAt: number;
+    },
+  ): Promise<ArrivalRecord>;
   /** Selects only this user's live arrival; another owner reads as not found. */
   readArrival(
     operationId: string,
@@ -109,11 +124,24 @@ export interface ArrivalTransactor {
     expectedVersion: number,
     input: ArrivalUncertainAttempt,
   ): Promise<ArrivalOutcome>;
-  /** Exact accepted replay resumes; a changed method, digest or owner fails. */
+  /** Associate a named generic dispatch under this arrival's persisted resource. */
+  associateArrivalAttempt(
+    owner: OperationClaim,
+    expectedVersion: number,
+    input: ArrivalExternalAttempt,
+  ): Promise<ArrivalOutcome>;
+  /** Retire only an associated acknowledged generic receipt, never allocation uncertainty. */
+  settleArrivalAttempt(
+    owner: OperationClaim,
+    expectedVersion: number,
+    input: ArrivalExternalAttempt,
+  ): Promise<ArrivalOutcome>;
+  /** Each method admits one immutable request; exact fenced retries do not mutate. */
   recordArrivalReplay(
     owner: OperationClaim,
     expectedVersion: number,
     facts: ArrivalReplayFacts,
+    proof: ArrivalAdmissionProof,
   ): Promise<ArrivalReplayReuse>;
   /** One fenced transaction: saved user, placement evidence, account and claims. */
   bindProvisionedArrival(input: {

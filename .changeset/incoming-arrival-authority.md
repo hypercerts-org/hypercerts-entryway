@@ -2,13 +2,14 @@
 "hypercerts-entryway": minor
 ---
 
-Incoming migration now has durable storage for a public arrival: an immutable
+For operators initializing fresh state, the database schema now includes durable
+storage for dormant incoming arrivals: an immutable
 `{operation, incoming DID, selected PDS and endpoint}` tuple with the saved
 verified user and email, a hashed 24-hour arrival authorization, conditional
 persistence of the reserved public repository key, and one live arrival per DID
 with completed history retained.
 
-What an operator can observe:
+Storage and shared-claim behavior:
 
 - A destination email used by an individual arrival must be unique. It is no
   longer shared with another identity's claim, reservation or live arrival.
@@ -39,9 +40,19 @@ What an operator can observe:
   idempotent and changes nothing, while a different operation or CID for the same
   kind is a conflict rather than an overwrite. A stale worker records nothing.
   Private key material never enters this table, and no new status value is added.
-- The arrival row carries a nullable source endpoint alongside the source head.
-  Plan 010 sets it when it learns the source endpoint; nothing writes it yet and
-  no reader depends on it.
+- Preparation requires the actual signed source predecessor, its CID, source
+  public facts and approved ordered custody. The original source endpoint is
+  saved from those facts. Signed handoffs and moves must match that authority,
+  their signed CIDs and the saved destination reservation.
+- Accepted admissions are immutable per method and bind the saved principal,
+  DID, request digest, code generation and verified credential issuer and ID.
+  Exact retries under current ownership do not advance the version. Creation
+  admission and invitation reservation can commit together; pending account
+  binding and invitation completion can also commit together. Bearer credentials,
+  arrival codes and invitation codes are not stored in arrival admissions.
+
+Operators must initialize fresh state for the changed database schema. This is
+not a database-upgrade procedure or a qualification of public account migration.
 - Migration-pending access is derived from the current operation, not a new
   account status. An arrival does not gain ordinary access or activation from
   storage alone, and no readiness or completeness claim is made here.

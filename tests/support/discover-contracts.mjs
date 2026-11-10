@@ -3,6 +3,10 @@ import { join, relative, resolve } from "node:path";
 
 const unitContracts = new Set([
   "external-workflow.test.mjs",
+  "incoming-arrival-storage.test.mjs",
+  "incoming-arrival-admission.test.mjs",
+  "incoming-arrival-composition.test.mjs",
+  "incoming-handoff.test.mjs",
   "custody-history.test.mjs",
   "plc-policy.test.mjs",
   "plc-signing.test.mjs",

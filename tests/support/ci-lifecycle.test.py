@@ -128,6 +128,50 @@ esac
         self.assertNotEqual(self.guard(ENTRYWAY_DOCKER_CONTEXT="default").returncode, 0)
         self.assertNotEqual(self.guard(ENTRYWAY_DOCKER_CONTEXT="foreign").returncode, 0)
 
+    def test_incoming_native_coverage_is_explicit_and_unique(self):
+        source = Path(__file__).resolve().parents[2]
+        package = json.loads((source / "package.json").read_text())
+        helpers = ["tests/support/helpers/stock-plc-mailpit.test.mjs",
+                   "tests/support/helpers/incoming-public-io.test.mjs",
+                   "tests/atmosphere/project-incoming-access.test.mjs"]
+        self.assertEqual(package["scripts"]["test:incoming-helpers"].split(),
+                         ["node", "--test", *helpers])
+        workflow = (source / ".github/workflows/ci.yml").read_text()
+        checks = workflow.split("  integration:", 1)[0]
+        for script in ["test:unit", "test:incoming-helpers", "test:incoming-reconciliation"]:
+            self.assertEqual(checks.count(f"run: npm run {script}\n"), 1)
+        discovery = subprocess.run(["node", "--input-type=module", "-e",
+            "import {discoverContracts} from './tests/support/discover-contracts.mjs';"
+            "console.log(JSON.stringify(discoverContracts(undefined,{unit:true})))"],
+            cwd=source, capture_output=True, text=True, check=True)
+        files = json.loads(discovery.stdout)
+        self.assertEqual(len(files), len(set(files)))
+        for name in ["storage", "admission", "handoff", "composition"]:
+            filename = f"incoming-{name}.test.mjs" if name == "handoff" else f"incoming-arrival-{name}.test.mjs"
+            self.assertEqual(files.count(f"tests/contracts/{filename}"), 1)
+        replay = "tests/contracts/incoming-arrival-reconciliation.test.mjs"
+        self.assertNotIn(replay, files)
+        self.assertEqual(package["scripts"]["test:incoming-reconciliation"].split(),
+                         ["node", "--test", replay])
+        self.assertNotIn("tests/contracts/incoming-public-mechanisms.test.mjs", files)
+        for helper in helpers:
+            self.assertNotIn(helper, files)
+        self.assertNotIn("tests/support/helpers/incoming-arrival-restart.mjs", files)
+
+    def test_incoming_live_phase_uses_owned_access_and_real_suite(self):
+        source = Path(__file__).resolve().parents[2]
+        controller = (source / "tests/local.sh").read_text()
+        phase = controller.split("  incoming-public-mechanisms|incoming-arrival-live)", 1)[1].split("    ;;", 1)[0]
+        self.assertIn("require_state", phase)
+        self.assertIn("prepare_incoming_access", phase)
+        self.assertIn('suite=incoming-arrival-live', phase)
+        self.assertIn('INCOMING_PROJECT=$project', phase)
+        self.assertIn('INCOMING_ACCESS_PATH=/run/incoming-access.json', phase)
+        self.assertIn('tests/contracts/$suite.test.mjs', phase)
+        suite = (source / "tests/contracts/incoming-arrival-live.test.mjs").read_text()
+        self.assertIn('creation-lost', suite)
+        self.assertIn('pause-lost', suite)
+
     def test_live_controller_shell_syntax(self):
         source = Path(__file__).resolve().parents[2]
         for script in [source / "tests/local.sh", *sorted((source / "tests/support").glob("*.sh"))]:

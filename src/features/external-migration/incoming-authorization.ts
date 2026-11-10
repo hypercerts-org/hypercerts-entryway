@@ -52,14 +52,24 @@ export function createIncomingAuthorization({
   readonly serviceDid: string;
   readonly readDirectory: (did: string) => Promise<DidDocument>;
 }) {
-  /** A source service JWT names its own DID or a key fragment of it; either way
+  /** A source service JWT names its own DID or its #atproto method; either way
    * the repository verification key is what proves the signature. Legacy
    * `did:key` verification methods are authoritative references, so the key is
    * resolved through the configured directory and never from the token itself. */
   const signingKey = async (issuer: string): Promise<string> => {
     const did = issuer.split("#")[0];
-    if (!did) return rejected();
+    if (!did || (issuer !== did && issuer !== `${did}#atproto`))
+      return rejected();
     const document = await readDirectory(did);
+    const methods = document.verificationMethod?.filter(
+      (method) => method.id === `${did}#atproto` || method.id === "#atproto",
+    );
+    if (
+      document.id !== did ||
+      methods?.length !== 1 ||
+      methods[0]?.controller !== did
+    )
+      return rejected();
     const material = getVerificationMaterial(document, "atproto");
     if (!material || !material.type || !material.publicKeyMultibase)
       return rejected();
@@ -79,6 +89,8 @@ export function createIncomingAuthorization({
     const token = presentation(input.presentation);
     if (!/^[a-f0-9]{64}$/.test(input.requestDigest)) return rejected();
     let subject: string;
+    let credentialIssuer: string;
+    let credentialJti: string;
     try {
       const payload: unknown = await verifyJwt(
         token,
@@ -98,6 +110,8 @@ export function createIncomingAuthorization({
         !claims.jti
       )
         return rejected();
+      credentialIssuer = issuer;
+      credentialJti = claims.jti;
       const issuedAt = claims.iat;
       const expiresAt = claims.exp;
       if (
@@ -107,6 +121,7 @@ export function createIncomingAuthorization({
         !Number.isInteger(expiresAt) ||
         expiresAt <= now ||
         expiresAt <= issuedAt ||
+        expiresAt - issuedAt > 300 ||
         issuedAt > now + 60
       )
         return rejected();
@@ -124,6 +139,8 @@ export function createIncomingAuthorization({
         did: subject,
         method: input.method,
         requestDigest: input.requestDigest,
+        credentialIssuer,
+        credentialJti,
       },
     };
   };
@@ -132,18 +149,3 @@ export function createIncomingAuthorization({
 export type VerifyIncomingAuthorization = ReturnType<
   typeof createIncomingAuthorization
 >;
-
-/** A submit-scoped credential cannot authorize destination creation. */
-export function requireCreationScope(
-  authorization: IncomingAuthorization,
-): IncomingAuthorization {
-  if (authorization.method !== incomingCreationMethod) return rejected();
-  return authorization;
-}
-
-export function requireHandoffScope(
-  authorization: IncomingAuthorization,
-): IncomingAuthorization {
-  if (authorization.method !== incomingHandoffMethod) return rejected();
-  return authorization;
-}

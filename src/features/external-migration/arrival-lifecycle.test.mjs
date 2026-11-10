@@ -19,9 +19,7 @@ import {
   createArrivalPreparation,
   generateArrivalCode,
 } from "../../../dist/src/features/external-migration/prepare-arrival.js";
-import { createHandoffSubmission } from "../../../dist/src/features/external-migration/submit-handoff.js";
 import { createArrivalProvisioning } from "../../../dist/src/features/external-migration/provision-arrival.js";
-import { DomainError } from "../../../dist/src/accounts/errors.js";
 
 const hosts = [
   { id: "pds1", url: "https://pds1.example.test" },
@@ -125,6 +123,9 @@ async function fixture() {
     pdsId: "pds1",
     endpoint,
     sourcePlcHead: String(await cidForCbor(authority.predecessor)),
+    sourcePredecessor: authority.predecessor,
+    source: authority.sourceFacts,
+    approvedRotationKeys: authority.approved,
     codeHash: code.hash,
     codeExpiresAt: Date.now() + day,
   });
@@ -135,6 +136,7 @@ async function fixture() {
     workerId: "worker-1",
     leaseMs: 120_000,
   });
+  await ownership.bindResource(claim, `arrival:${did}`);
   return { db, arrivals, ownership, authority, signer, code, arrival, claim };
 }
 
@@ -229,6 +231,54 @@ test("incoming authorization is scope-, audience-, issuer- and time-bound and co
       keypair: authority.source,
       ...overrides,
     })}`;
+  for (const overrides of [
+    { exp: now + 365 * 86400 },
+    { iat: now + 61, exp: now + 180 },
+    { iss: `${did}#arbitrary` },
+    { keypair: await Secp256k1Keypair.create() },
+  ])
+    await assert.rejects(
+      verify({
+        presentation: await token(overrides),
+        method: "com.atproto.server.createAccount",
+        operationId: "op-1",
+        requestDigest: hash("d"),
+        expectedDid: did,
+      }),
+      { code: "AccountMismatch" },
+    );
+  for (const mutation of ["id", "controller", "method"]) {
+    const document = {
+      id: did,
+      verificationMethod: [
+        {
+          id: `${did}#atproto`,
+          controller: did,
+          type: "EcdsaSecp256k1VerificationKey2019",
+          publicKeyMultibase: authority.source.did(),
+        },
+      ],
+    };
+    if (mutation === "id") document.id = `did:plc:${"b".repeat(24)}`;
+    if (mutation === "controller")
+      document.verificationMethod[0].controller = `did:plc:${"b".repeat(24)}`;
+    if (mutation === "method")
+      document.verificationMethod[0].id = `${did}#other`;
+    const invalidDocument = createIncomingAuthorization({
+      serviceDid,
+      readDirectory: async () => document,
+    });
+    await assert.rejects(
+      invalidDocument({
+        presentation: await token(),
+        method: "com.atproto.server.createAccount",
+        operationId: "op-1",
+        requestDigest: hash("d"),
+        expectedDid: did,
+      }),
+      { code: "AccountMismatch" },
+    );
+  }
   const accepted = await verify({
     presentation: await token(),
     method: "com.atproto.server.createAccount",
@@ -236,7 +286,11 @@ test("incoming authorization is scope-, audience-, issuer- and time-bound and co
     requestDigest: hash("d"),
     expectedDid: did,
   });
+  assert.equal(accepted.replayFacts.credentialIssuer, did);
+  assert.equal(typeof accepted.replayFacts.credentialJti, "string");
   assert.deepEqual(accepted.replayFacts, {
+    credentialIssuer: did,
+    credentialJti: accepted.replayFacts.credentialJti,
     operationId: "op-1",
     did,
     method: "com.atproto.server.createAccount",
@@ -402,138 +456,9 @@ test("handoff validation rejects changed source facts, overfull and reordered au
   });
 });
 
-test("a crash before the handoff commit dispatches nothing and reuses no baseline", async () => {
-  const { db, authority, claim, arrival } = await fixture();
-  const signedHandoff = authority.handoffOperation;
-  const cid = String(await cidForCbor(signedHandoff));
-  let dispatches = 0;
-  let observations = 0;
-  const submission = createHandoffSubmission({
-    arrivals: {
-      recordSignedOperation: async () => {
-        throw new Error("fault before commit");
-      },
-    },
-    directory: {
-      validate: async () => ({ operation: signedHandoff, cid }),
-      submit: async () => {
-        dispatches += 1;
-      },
-      observe: async () => {
-        observations += 1;
-        return { applied: true, tombstone: false, diverged: false };
-      },
-    },
-  });
-  await assert.rejects(
-    submission.submit(claim, savedHandoff(arrival, authority), {
-      operation: authority.handoffOperation,
-    }),
-    /fault before commit/,
-  );
-  assert.equal(dispatches, 0);
-  assert.equal(observations, 0);
-  assert.deepEqual(
-    await query(db, "SELECT * FROM arrival_signed_operations"),
-    [],
-  );
-});
-
-test("a crash after the handoff commit reuses the saved bytes without re-signing", async () => {
-  const { db, arrivals, authority, claim, arrival } = await fixture();
-  const signedHandoff = authority.handoffOperation;
-  const cid = String(await cidForCbor(signedHandoff));
-  const published = [];
-  const directory = {
-    validate: async () => ({ operation: signedHandoff, cid }),
-    submit: async (input) => {
-      published.push(input);
-      throw new Error("lost publication response");
-    },
-    observe: async () => ({ applied: true, tombstone: false, diverged: false }),
-  };
-  const submission = createHandoffSubmission({ arrivals, directory });
-  const outcome = await submission.submit(
-    claim,
-    savedHandoff(arrival, authority),
-    { operation: authority.handoffOperation },
-  );
-  assert.equal(outcome.state, "published");
-  assert.equal(published.length, 1);
-  assert.deepEqual(published[0].operation, signedHandoff);
-  const saved = await query(
-    db,
-    "SELECT kind, cid, operation FROM arrival_signed_operations",
-  );
-  assert.equal(saved.length, 1);
-  assert.equal(saved[0].kind, "handoff");
-  assert.equal(saved[0].cid, cid);
-  // An exact repeat is idempotent and never advances the arrival version.
-  const version = (
-    await query(db, "SELECT version FROM arrivals WHERE operation_id = 'op-1'")
-  )[0].version;
-  const repeat = await submission.submit(
-    claim,
-    { ...savedHandoff(arrival, authority), version },
-    { operation: authority.handoffOperation },
-  );
-  assert.equal(repeat.state, "published");
-  assert.equal(
-    (
-      await query(
-        db,
-        "SELECT version FROM arrivals WHERE operation_id = 'op-1'",
-      )
-    )[0].version,
-    version,
-  );
-  const changed = await plc.signOperation(
-    {
-      ...authority.handoffFacts,
-      alsoKnownAs: [...authority.handoffFacts.alsoKnownAs],
-    },
-    authority.source,
-  );
-  let changedDispatches = 0;
-  const conflicting = createHandoffSubmission({
-    arrivals,
-    directory: {
-      ...directory,
-      validate: async () => {
-        // Saved bytes are immutable: a differently encoded retry conflicts before
-        // it can be journaled or dispatched.
-        throw new DomainError("OperationConflict", 409, "changed handoff");
-      },
-      submit: async () => {
-        changedDispatches += 1;
-      },
-    },
-  });
-  await assert.rejects(
-    conflicting.submit(
-      claim,
-      { ...savedHandoff(arrival, authority), version: arrival.version },
-      { operation: changed },
-    ),
-    { code: "OperationConflict" },
-  );
-  assert.equal(changedDispatches, 0);
-});
-
 function publicHandoff(authority) {
   const { sig: _signature, ...facts } = authority.handoffOperation;
   return facts;
-}
-
-function savedHandoff(arrival, authority) {
-  return {
-    operationId: arrival.operationId,
-    did,
-    version: arrival.version,
-    expectedPredecessor: authority.predecessor,
-    approvedRotationKeys: authority.approved,
-    source: authority.sourceFacts,
-  };
 }
 
 test("provisioning refuses a submit-scoped credential and never creates a destination account", async () => {
@@ -647,27 +572,15 @@ test("watched arrival access stays pending until a binding exists", async () => 
   });
   // The destination move is refused until the source handoff is recorded, so the
   // handoff is published first and its canonical head is the observed predecessor.
-  const handoffSubmission = createHandoffSubmission({
-    arrivals,
-    directory: {
-      validate: async () => ({ operation: handoff, cid: signedHandoffCid }),
-      submit: async () => {},
-      observe: async () => ({
-        applied: true,
-        tombstone: false,
-        diverged: false,
-      }),
-    },
+  // Storage-only lifecycle fixture. Concrete authenticated publication and crash
+  // recovery are exercised by incoming-arrival-composition.test.mjs.
+  await arrivals.recordSignedOperation(claim, reserved.version, {
+    kind: "handoff",
+    operationId: "op-1",
+    did,
+    operation: handoff,
+    cid: signedHandoffCid,
   });
-  const handoffOutcome = await handoffSubmission.submit(
-    claim,
-    {
-      ...savedHandoff({ operationId: "op-1" }, authority),
-      version: reserved.version,
-    },
-    { operation: handoff },
-  );
-  assert.equal(handoffOutcome.state, "published");
   const repositoryKey = (
     await query(db, "SELECT signing_key FROM arrival_reservations")
   )[0].signing_key;

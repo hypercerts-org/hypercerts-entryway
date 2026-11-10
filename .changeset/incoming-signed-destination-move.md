@@ -2,11 +2,11 @@
 "hypercerts-entryway": patch
 ---
 
-Incoming migration now sends the destination PLC move with its signature, so
-destination account creation works against a stock entryway-mode PDS instead of
-being refused as an invalid operation.
+For maintainers assembling dormant incoming migration, destination creation now
+receives the signed PLC move rather than an unsigned variant. This fixes the
+internal payload contract; it does not qualify full stock-PDS migration.
 
-What an operator can observe:
+Internal behavior before public wiring:
 
 - The destination move is journaled and dispatched as the signed operation the
   PLC directory will publish. An interrupted attempt re-dispatches those exact
