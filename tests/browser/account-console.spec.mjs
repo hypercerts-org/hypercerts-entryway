@@ -38,6 +38,11 @@ const accountForm = (p, action) =>
   p.locator(`form[action="/account/${action}"]`);
 const submit = (p, action) =>
   accountForm(p, action).getByRole("button").click();
+// Gated settings live on protected pages opened from a settings button.
+const openManage = async (p, name) => {
+  await p.goto(`${config.issuer}/account`);
+  await p.locator(`a[href^="/account/manage/${name}?"]`).click();
+};
 async function readChallengeId(form) {
   const selector = form.locator('input[name="challengeId"]');
   expect(await selector.count()).toBe(1);
@@ -69,9 +74,11 @@ async function signIn(p, identity, create = false) {
   identity.did = await p.getByTestId("account-did").textContent();
 }
 async function post(p, action, body = {}, extra = {}) {
-  const csrf = await p.locator('input[name="csrf"]').first().inputValue();
+  const form = accountForm(p, action).first();
+  const csrf = await form.locator('input[name="csrf"]').inputValue();
+  const did = await form.locator('input[name="did"]').inputValue();
   return p.request.post(`${config.issuer}/account/${action}`, {
-    form: { csrf, ...body },
+    form: { csrf, did, ...body },
     headers: { origin: config.issuer },
     maxRedirects: 0,
     ...extra,
@@ -114,6 +121,10 @@ test("console binds verified email to one DID and shows no browser bearer creden
   await expect(
     page.getByRole("navigation", { name: "Account sections" }),
   ).toBeVisible();
+  const actionForms = page.locator('form[action^="/account/"]');
+  for (const form of await actionForms.all()) {
+    await expect(form.locator('input[name="did"]')).toHaveValue(alice.did);
+  }
   await page.screenshot({
     path: "artifacts/account-console-overview.png",
     fullPage: true,
@@ -121,6 +132,7 @@ test("console binds verified email to one DID and shows no browser bearer creden
 });
 
 test("backup email requires its visible code and rejects foreign selectors, wrong codes, CSRF, and supplied DIDs", async () => {
+  await openManage(page, "recovery");
   const forged = await post(page, "backup-request", {
     email: backup,
     csrf: "invalid",
@@ -129,9 +141,8 @@ test("backup email requires its visible code and rejects foreign selectors, wron
   expect(readMail(backup)).toBeNull();
 
   const foreignBackup = `other-backup-${run}@example.com`;
-  await otherPage.goto(`${config.issuer}/account`);
-  await otherPage
-    .locator("#recovery")
+  await openManage(otherPage, "recovery");
+  await accountForm(otherPage, "backup-request")
     .getByLabel("Recovery email address")
     .fill(foreignBackup);
   await submit(otherPage, "backup-request");
@@ -140,16 +151,29 @@ test("backup email requires its visible code and rejects foreign selectors, wron
   );
   expect(foreignChallengeId).toBeTruthy();
 
-  await page
-    .locator("#recovery")
+  await accountForm(page, "backup-request")
     .getByLabel("Recovery email address")
     .fill(backup);
-  await accountForm(page, "backup-request").evaluate((form, did) => {
-    const suppliedDid = document.createElement("input");
-    suppliedDid.name = "did";
-    suppliedDid.value = did;
-    form.append(suppliedDid);
-  }, bob.did);
+  await accountForm(page, "backup-request")
+    .locator('input[name="did"]')
+    .evaluate((input, did) => {
+      input.value = did;
+    }, bob.did);
+  await submit(page, "backup-request");
+  await expect(
+    page.getByRole("heading", {
+      name: "Account operation could not be completed",
+    }),
+  ).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText(
+    "not linked to this verified identity",
+  );
+  expect(readMail(backup)).toBeNull();
+
+  await openManage(page, "recovery");
+  await accountForm(page, "backup-request")
+    .getByLabel("Recovery email address")
+    .fill(backup);
   const since = Date.now();
   await submit(page, "backup-request");
   await expect(
@@ -177,6 +201,18 @@ test("backup email requires its visible code and rejects foreign selectors, wron
   expect(wrong.status()).toBe(400);
 
   await page.getByLabel("Recovery email verification code").fill(code);
+  const confirmationForm = accountForm(page, "backup-confirm");
+  const confirmationContext = {
+    csrf: await confirmationForm.locator('input[name="csrf"]').inputValue(),
+    did: await confirmationForm.locator('input[name="did"]').inputValue(),
+    email: await confirmationForm.locator('input[name="email"]').inputValue(),
+    challengeId: await confirmationForm
+      .locator('input[name="challengeId"]')
+      .inputValue(),
+    token: await page
+      .getByLabel("Recovery email verification code")
+      .inputValue(),
+  };
   const confirmation = page.waitForResponse(
     (response) =>
       new URL(response.url()).pathname === "/account/backup-confirm",
@@ -184,20 +220,21 @@ test("backup email requires its visible code and rejects foreign selectors, wron
   await submit(page, "backup-confirm");
   expect((await confirmation).status()).toBe(303);
   await expect(page.locator("#recovery")).toContainText(backup);
-  expect(
-    (
-      await post(page, "backup-confirm", {
-        email: backup,
-        challengeId,
-        token: code,
-      })
-    ).status(),
-  ).toBe(409);
+  const replay = await page.request.post(
+    `${config.issuer}/account/backup-confirm`,
+    {
+      form: confirmationContext,
+      headers: { origin: config.issuer },
+      maxRedirects: 0,
+    },
+  );
+  expect(replay.status()).toBe(409);
   await otherPage.goto(`${config.issuer}/account`);
   await expect(otherPage.locator("#recovery")).not.toContainText(backup);
 });
 
 test("optional password signs out existing sessions and enables actual PDS legacy login", async () => {
+  await openManage(page, "password");
   await accountForm(page, "password-set")
     .getByLabel("New account password")
     .fill(password);
@@ -221,6 +258,7 @@ test("optional password signs out existing sessions and enables actual PDS legac
 
 test("app passwords are displayed once and revocation stops actual PDS login", async () => {
   const name = `Console test ${run}`;
+  await openManage(page, "app-password");
   await accountForm(page, "app-password-create")
     .getByLabel("App password name")
     .fill(name);
@@ -257,9 +295,10 @@ test("app passwords are displayed once and revocation stops actual PDS login", a
 });
 
 test("optional password removal keeps email login and disables password login", async () => {
-  await accountForm(page, "password-remove")
-    .getByLabel("Current password")
-    .fill(password);
+  await openManage(page, "password");
+  await expect(
+    accountForm(page, "password-remove").getByLabel("Current password"),
+  ).toHaveCount(0);
   await submit(page, "password-remove");
   await expect(
     page.getByRole("heading", { name: "Account password removed" }),
@@ -622,7 +661,8 @@ test("backup recovery verifies visible codes with retained selectors for both ma
 });
 
 test("recovery email removal and all-browser sign-out take effect", async () => {
-  const row = page.locator("#recovery li").filter({ hasText: backup });
+  await openManage(page, "recovery");
+  const row = page.locator("li").filter({ hasText: backup });
   await row.getByRole("button", { name: "Remove recovery email" }).click();
   await expect(page.locator("#recovery")).not.toContainText(backup);
   await page.getByRole("button", { name: "Sign out all browsers" }).click();

@@ -18,6 +18,7 @@ export async function createAuthentication({
   provider,
   stores,
   mail,
+  clientRequestsSignupConsentSkip,
 }) {
   let accountSecurity;
   const getAccountSecurity = () => accountSecurity;
@@ -47,12 +48,14 @@ export async function createAuthentication({
   });
   const { consentForm, authenticated } = createConsent({
     db,
+    config,
     provider,
     stores,
     flows,
     accountAccess,
+    clientRequestsSignupConsentSkip,
   });
-  mountEmailLogin({
+  const { startEmailCode } = mountEmailLogin({
     app,
     db,
     authentication,
@@ -82,6 +85,7 @@ export async function createAuthentication({
     flows,
     signupForm,
     authenticated,
+    handleDomain: config.publicHandles ? undefined : config.handleDomains?.[0],
   });
   mountAuthorizationRoutes({
     app,
@@ -91,6 +95,8 @@ export async function createAuthentication({
     flows,
     loginForm: forms.loginForm,
     consentForm,
+    startEmailCode,
+    accountEmail: async (did) => (await accounts.storage.getByDid(did))?.email,
   });
   return {
     ...authentication,

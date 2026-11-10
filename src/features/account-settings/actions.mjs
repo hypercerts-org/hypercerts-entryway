@@ -1,5 +1,10 @@
 import { page } from "../../ui/html.mjs";
-import { field, hidden, nextStep } from "../../ui/account-forms.mjs";
+import {
+  accountUrl,
+  field,
+  hidden,
+  nextStep,
+} from "../../ui/account-forms.mjs";
 
 export function createAccountSettingsActions({
   security,
@@ -8,18 +13,24 @@ export function createAccountSettingsActions({
   console,
 }) {
   return {
-    "backup-request": async ({ res, browser, principal, value }) => {
+    "backup-request": async ({
+      res,
+      browser,
+      principal,
+      accountContext,
+      value,
+    }) => {
       console.needed();
 
       const issued = await security.requestBackupEmailForBrowser(principal, {
         email: value("email"),
       });
-      return nextStep(
-        res,
-        "Verify recovery email",
-        browser.csrf,
-        "backup-confirm",
-        hidden("email", value("email")) +
+      return nextStep(res, {
+        title: "Verify recovery email",
+        csrf: browser.csrf,
+        action: "backup-confirm",
+        contents:
+          hidden("email", value("email")) +
           hidden("challengeId", issued.challengeId ?? "") +
           field(
             "token",
@@ -27,9 +38,10 @@ export function createAccountSettingsActions({
             "text",
             'autocomplete="one-time-code" maxlength="256"',
           ),
-        "Verify recovery email",
-        "Enter the verification code sent to your recovery email.",
-      );
+        button: "Verify recovery email",
+        message: "Enter the verification code sent to your recovery email.",
+        accountContext,
+      });
     },
     "backup-confirm": async ({ principal, value, token }) => {
       console.needed();
@@ -42,16 +54,16 @@ export function createAccountSettingsActions({
       console.needed();
       await security.removeBackupEmail(principal, { email: value("email") });
     },
-    "email-request": async ({ res, browser, principal }) => {
+    "email-request": async ({ res, browser, principal, accountContext }) => {
       console.needed();
 
       const issued = await security.requestEmailUpdateForBrowser(principal);
-      return nextStep(
-        res,
-        "Verify current email",
-        browser.csrf,
-        "email-update",
-        hidden("challengeId", issued.challengeId ?? "") +
+      return nextStep(res, {
+        title: "Verify current email",
+        csrf: browser.csrf,
+        action: "email-update",
+        contents:
+          hidden("challengeId", issued.challengeId ?? "") +
           field(
             "token",
             "Current email verification code",
@@ -59,23 +71,31 @@ export function createAccountSettingsActions({
             'autocomplete="one-time-code" maxlength="256"',
           ) +
           field("email", "New primary email", "email", 'maxlength="320"'),
-        "Verify current email and continue",
-        "A verification code was sent to your current primary email.",
-      );
+        button: "Verify current email and continue",
+        message: "A verification code was sent to your current primary email.",
+        accountContext,
+      });
     },
-    "email-update": async ({ res, browser, principal, value, token }) => {
+    "email-update": async ({
+      res,
+      browser,
+      principal,
+      accountContext,
+      value,
+      token,
+    }) => {
       console.needed();
 
       const issued = await security.updateEmailForBrowser(principal, {
         email: value("email"),
         token: `${value("challengeId")}.${token()}`,
       });
-      return nextStep(
-        res,
-        "Verify new email",
-        browser.csrf,
-        "email-confirm",
-        hidden("challengeId", issued.challengeId ?? "") +
+      return nextStep(res, {
+        title: "Verify new email",
+        csrf: browser.csrf,
+        action: "email-confirm",
+        contents:
+          hidden("challengeId", issued.challengeId ?? "") +
           hidden("email", value("email")) +
           field(
             "token",
@@ -83,9 +103,11 @@ export function createAccountSettingsActions({
             "text",
             'autocomplete="one-time-code" maxlength="256"',
           ),
-        "Confirm new email",
-        "Verify the code sent to your new primary email to complete the change.",
-      );
+        button: "Confirm new email",
+        message:
+          "Verify the code sent to your new primary email to complete the change.",
+        accountContext,
+      });
     },
     "email-confirm": async ({ res, principal, value, token }) => {
       console.needed();
@@ -97,32 +119,29 @@ export function createAccountSettingsActions({
       return page(
         res,
         "Primary email updated",
-        '<p>Your email was changed. Your browser sessions remain signed in for any other linked accounts, but no longer have access to this account.</p><a href="/login">Sign in with your new email</a>',
+        `<p>Your email was changed. Your browser sessions remain signed in for any other linked accounts, but no longer have access to this account.</p><a href="/login">Sign in with your new email</a>`,
       );
     },
-    "password-set": async ({ req, res, principal }) => {
+    "password-set": async ({ req, res, principal, accountContext }) => {
       console.needed();
 
       await security.setPassword(principal, {
         password: String(req.body.password ?? ""),
-        currentPassword: String(req.body.currentPassword ?? "") || undefined,
       });
       return page(
         res,
         "Account password updated",
-        '<p>Your password was updated. Existing sessions and app passwords were revoked.</p><a href="/login">Sign in again</a>',
+        `<p>Your password was updated. Existing sessions and app passwords were revoked.</p><a href="/login">Sign in again</a><p><a href="${accountContext?.did ? accountUrl(accountContext.did) : "/account"}">Return to account settings</a></p>`,
       );
     },
-    "password-remove": async ({ req, res, principal }) => {
+    "password-remove": async ({ res, principal, accountContext }) => {
       console.needed();
 
-      await security.removePassword(principal, {
-        currentPassword: String(req.body.currentPassword ?? "") || undefined,
-      });
+      await security.removePassword(principal);
       return page(
         res,
         "Account password removed",
-        '<p>Email sign-in remains available. Existing sessions and app passwords were revoked.</p><a href="/login">Sign in again</a>',
+        `<p>Email sign-in remains available. Existing sessions and app passwords were revoked.</p><a href="/login">Sign in again</a><p><a href="${accountContext?.did ? accountUrl(accountContext.did) : "/account"}">Return to account settings</a></p>`,
       );
     },
     status: async ({ account, value }) => {

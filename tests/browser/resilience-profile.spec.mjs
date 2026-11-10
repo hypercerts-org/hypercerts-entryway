@@ -435,6 +435,10 @@ test(`fresh deployment profile ${stage}`, async ({ browser }) => {
       await page.goto(`${config.clientUrl}/client`);
       await expect(page.getByTestId("signed-in-did")).toHaveText(identity.did);
       await writeRecord(page, identity, `Profile ${stage} PDS write`);
+      // Each stage runs from a new container address, so the provider rotates
+      // the device session cookie. Replaying the old cookie in a later stage is
+      // treated as session fixation and drops the device's remembered sign-in.
+      await context.storageState({ path: "/profile/browser.json" });
     } else {
       await context.setExtraHTTPHeaders(select(nodes[0]));
       await page.goto(`${config.issuer}/login`);

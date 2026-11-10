@@ -73,6 +73,30 @@ export function createClientMetadataFetch({
   };
 }
 
+/**
+ * Read the ePDS `epds_skip_consent_on_signup` extension from a client's raw
+ * metadata document. The provider's parsed metadata drops unknown fields, so
+ * this fetches the document again through the same restricted fetch. Any
+ * failure answers false, which keeps the consent screen.
+ */
+export function createSignupConsentSkipReader(fetchMetadata) {
+  return async (clientId) => {
+    try {
+      const url = new URL(clientId);
+      if (url.protocol !== "https:") return false;
+      const response = await fetchMetadata(url.href, {
+        headers: { accept: "application/json" },
+        redirect: "error",
+      });
+      if (!response.ok) return false;
+      const metadata = await response.json();
+      return metadata?.epds_skip_consent_on_signup === true;
+    } catch {
+      return false;
+    }
+  };
+}
+
 export async function createOAuth({
   app,
   db,
@@ -128,6 +152,7 @@ export async function createOAuth({
     provider,
     stores,
     mail,
+    clientRequestsSignupConsentSkip: createSignupConsentSkipReader(clientFetch),
   });
   // Mount the supported provider middleware after our authorization page and
   // before any global Express body parser. No provider routers are mutated.

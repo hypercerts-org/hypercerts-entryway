@@ -144,7 +144,7 @@ try {
     creationError = error.name;
   }
   report.initialRecovery = {
-    accountStatus: (await accounts.get(input.email))?.status,
+    accountStatus: (await accounts.storage.listByEmail(input.email))[0]?.status,
     journalPhase: did && (await db.get("operations", `create:${did}`))?.phase,
     error: creationError ?? null,
   };

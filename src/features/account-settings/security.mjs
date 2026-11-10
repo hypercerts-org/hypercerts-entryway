@@ -19,7 +19,6 @@ export function createAccountSettingsSecurity({
     issue,
     commitProof,
     revokeAccount,
-    currentPassword,
     serialized,
   } = proofs;
   const readLoginEmailUsage = async (email) => ({
@@ -248,19 +247,19 @@ export function createAccountSettingsSecurity({
       await authority.removeBackupEmail(row.did, email);
       return {};
     },
-    async setPassword(actor, { password, currentPassword: previous }) {
+    // A recent session is the proof for both password changes; an account
+    // without a password has no current one to give.
+    async setPassword(actor, { password }) {
       const row = await principal(actor, true);
       await db.transact(async () => {
-        await currentPassword(row, previous);
         await legacy.setPassword(row.did, password);
         await revokeAccount(row.did, { credentials: true });
       });
       return { reauthenticationRequired: true };
     },
-    async removePassword(actor, { currentPassword: previous } = {}) {
+    async removePassword(actor) {
       const row = await principal(actor, true);
       await db.transact(async () => {
-        await currentPassword(row, previous);
         await legacy.removePassword(row.did);
         await revokeAccount(row.did, { credentials: true });
       });

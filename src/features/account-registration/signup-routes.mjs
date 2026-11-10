@@ -1,6 +1,7 @@
 import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { HttpError } from "../../http/http-error.mjs";
 import { escapeHtml } from "../../ui/html.mjs";
+import { registrationAccountForEmail } from "./create-account.js";
 async function registrationInput({
   db,
   existing,
@@ -8,6 +9,7 @@ async function registrationInput({
   email,
   body,
   registrationIdentity,
+  handleDomain,
 }) {
   if (existing)
     return {
@@ -23,14 +25,31 @@ async function registrationInput({
   return {
     email,
     recoveryKey: savedIntent?.recoveryKey ?? undefined,
-    handle: String(savedIntent?.handle ?? body.handle ?? "")
-      .trim()
-      .toLowerCase(),
+    handle: savedIntent?.handle
+      ? String(savedIntent.handle).trim().toLowerCase()
+      : withHandleDomain(body.handle, handleDomain),
     pdsId: String(savedIntent?.pdsId ?? body.pdsId ?? ""),
     inviteCode: body.inviteCode,
     registrationIdentity,
   };
 }
+
+// The signup form shows the hosted domain as a fixed suffix, so a bare name
+// (no dot) gets that domain; a full handle is kept as typed.
+function withHandleDomain(value, handleDomain) {
+  const handle = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (!handle || handle.includes(".") || !handleDomain) return handle;
+  return `${handle}.${handleDomain.replace(/^\./, "")}`;
+}
+
+// An OAuth flow ends at the client's redirect_uri, so its form pages must
+// allow that origin as a form-action target (the CSP applies to redirects).
+const clientFormPolicy = (flow) =>
+  flow.requestUri
+    ? { formOrigin: new URL(flow.parameters.redirect_uri).origin }
+    : {};
 
 function matchesRegistrationOwner(owner, session, email) {
   return (
@@ -38,6 +57,37 @@ function matchesRegistrationOwner(owner, session, email) {
     owner.userId === session.userId &&
     owner.email === email
   );
+}
+
+/** A signup started for a requested DID or handle may only create that account. */
+const signupMatchesHints = (flow, existing, input) =>
+  [flow.accountHint, flow.parameters?.login_hint]
+    .filter((hint) => hint != null)
+    .every((hint) => {
+      if (typeof hint !== "string") return false;
+      if (hint.startsWith("did:")) return existing?.did === hint;
+      return input.handle === hint.toLowerCase();
+    });
+
+function assertRegistrationAcquirable(existing, savedIntent, ownerMatches) {
+  if (existing && existing.status !== "provisioning")
+    throw new HttpError(
+      409,
+      "AccountUnavailable",
+      "This account cannot be registered again",
+    );
+  if (savedIntent && !ownerMatches)
+    throw new HttpError(
+      403,
+      "AccountMismatch",
+      "This saved registration belongs to a different verified identity",
+    );
+  if (existing && (!savedIntent || !ownerMatches))
+    throw new HttpError(
+      403,
+      "AccountMismatch",
+      "This account setup cannot be acquired through email sign-in",
+    );
 }
 
 export function mountSignupRoutes({
@@ -49,6 +99,7 @@ export function mountSignupRoutes({
   flows,
   signupForm,
   authenticated,
+  handleDomain,
 }) {
   const { getFlow, pageForFlow, guarded, form } = flows;
   app.post(
@@ -73,7 +124,10 @@ export function mountSignupRoutes({
         email,
         emailVerified: true,
       };
-      const existing = await accounts.get(flow.authEmail);
+      const existing = await registrationAccountForEmail(
+        accounts.storage,
+        flow.authEmail,
+      );
       const savedIntent = await accounts.pendingRegistration(flow.authEmail);
       const savedOwner = savedIntent?.registrationIdentity;
       const ownerMatches = matchesRegistrationOwner(savedOwner, session, email);
@@ -84,37 +138,26 @@ export function mountSignupRoutes({
         );
         return await authenticated(req, res, flow, browser, row, { identity });
       }
-      if (existing && existing.status !== "provisioning")
-        throw new HttpError(
-          409,
-          "AccountUnavailable",
-          "This account cannot be registered again",
-        );
-      if (savedIntent && !ownerMatches)
-        throw new HttpError(
-          403,
-          "AccountMismatch",
-          "This saved registration belongs to a different verified identity",
-        );
-      if (existing && (!savedIntent || !ownerMatches))
-        throw new HttpError(
-          403,
-          "AccountMismatch",
-          "This account setup cannot be acquired through email sign-in",
-        );
+      assertRegistrationAcquirable(existing, savedIntent, ownerMatches);
       const registrationIdentity = savedOwner ?? identity;
+      const input = await registrationInput({
+        db,
+        existing,
+        savedIntent,
+        email: flow.authEmail,
+        body: req.body,
+        registrationIdentity,
+        handleDomain,
+      });
+      if (!signupMatchesHints(flow, existing, input))
+        throw new HttpError(
+          403,
+          "AccountMismatch",
+          "This sign-in can only create the account requested by the application",
+        );
       let row;
       try {
-        row = await accounts.create(
-          await registrationInput({
-            db,
-            existing,
-            savedIntent,
-            email: flow.authEmail,
-            body: req.body,
-            registrationIdentity,
-          }),
-        );
+        row = await accounts.create(input);
       } catch (error) {
         const pending = await accounts.ownership.pendingExternal(
           `email:${flow.authEmail}`,
@@ -129,9 +172,13 @@ export function mountSignupRoutes({
           `<p role="alert">${escapeHtml(message)}</p>${await signupForm(flow, browser)}`,
           flow,
           error.status >= 400 && error.status < 600 ? error.status : 503,
+          clientFormPolicy(flow),
         );
       }
-      await authenticated(req, res, flow, browser, row, { identity });
+      await authenticated(req, res, flow, browser, row, {
+        identity,
+        newAccount: true,
+      });
     }),
   );
 }

@@ -26,7 +26,7 @@ import type {
   NewRow,
   SelectOptions,
 } from "./executor.js";
-import { and, eq, asc, ne, inArray } from "drizzle-orm";
+import { and, eq, asc, lt, ne, inArray } from "drizzle-orm";
 import type { SQLiteTable } from "drizzle-orm/sqlite-core";
 import type { PgTable } from "drizzle-orm/pg-core";
 import { serialize, deserialize } from "./serialization.js";
@@ -620,6 +620,25 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
     },
     async delete(namespace: string, key: unknown) {
       await executor.remove("key_value_state", stateWhere(namespace, key));
+    },
+    /** Delete, in one statement, a namespace's rows whose numeric JSON `field`
+     * is below `cutoff`. Rows without that field are kept. */
+    async deleteStateBefore(namespace: string, field: string, cutoff: number) {
+      if (!/^[A-Za-z][A-Za-z0-9]*$/.test(field))
+        throw new Error("InvalidStateField");
+      const value = tables.key_value_state.value;
+      const jsonPath = `$.${field}`;
+      const stored =
+        backend === "sqlite"
+          ? sql`json_extract(${value}, ${jsonPath})`
+          : sql`(CASE WHEN jsonb_typeof(${value}::jsonb -> ${field}) = 'number' THEN (${value}::jsonb ->> ${field})::numeric END)`;
+      await executor.remove(
+        "key_value_state",
+        and(
+          eq(tables.key_value_state.namespace, namespace),
+          lt(stored, cutoff),
+        )!,
+      );
     },
     async admitServiceCredential({
       did,
