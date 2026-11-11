@@ -9,6 +9,7 @@ import { createPdsAccountClient } from "./pds/account-client.mjs";
 import { ArrivalPdsClient } from "./pds/arrival-client.js";
 import { createIncomingAuthorization } from "./features/external-migration/incoming-authorization.js";
 import { createAuthenticatedArrival } from "./features/external-migration/submit-handoff.js";
+import { readIncomingObservation } from "./plc/incoming-observation.js";
 
 export async function composeIncomingArrival({
   db,
@@ -129,8 +130,34 @@ export async function composeIncomingArrival({
         aggregate.admissions.some(
           (item) => item.method === "com.atproto.server.createAccount",
         )
-      )
+      ) {
+        const move = aggregate.signedOperations.find(
+          (item) => item.kind === "destination-move",
+        );
+        if (aggregate.progress.canonicalHandoffCid === null && !move) {
+          const directory = await readIncomingObservation(
+            accounts.plcClient,
+            aggregate.arrival.did,
+          );
+          const handoff = aggregate.signedOperations.find(
+            (item) => item.kind === "handoff",
+          );
+          if (
+            handoff &&
+            [aggregate.arrival.sourcePlcHead, handoff.cid].includes(
+              directory.sourcePlcHead,
+            )
+          ) {
+            const result = await authenticated.continueHandoff({
+              operationId,
+              userId,
+            });
+            if (result.state !== "published")
+              return { state: "pending", operationId };
+          }
+        }
         return authenticated.continueCreation({ operationId, userId });
+      }
       if (
         aggregate.admissions.some(
           (item) => item.method === "com.atproto.identity.submitPlcOperation",

@@ -10,6 +10,7 @@ import {
 import { parseArrivalRequest } from "../../dist/src/features/external-migration/arrival-request.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { eq } from "drizzle-orm";
 import { Secp256k1Keypair } from "@atproto/crypto";
 import { cidForCbor } from "@atproto/common";
@@ -37,7 +38,7 @@ const email = "destination@example.test";
 const handle = "destination.example.test";
 
 async function fixture(t, mode = "modern", mutation = "", fault = "") {
-  const directory = mkdtempSync("tests/artifacts/arrival-preparation-");
+  const directory = mkdtempSync(join(tmpdir(), "arrival-preparation-"));
   const path = join(directory, "authority.sqlite");
   let db = await openTestDatabase(path);
   t.after(async () => {
@@ -225,7 +226,11 @@ async function fixture(t, mode = "modern", mutation = "", fault = "") {
           db,
           "SELECT * FROM arrival_signed_operations",
         );
-        assert.equal(admissions.length, 1);
+        assert.equal(
+          admissions.filter((item) => item.method === incomingHandoffMethod)
+            .length,
+          1,
+        );
         assert.equal(signed.length, 1);
         assert.deepEqual(JSON.parse(signed[0].operation), operation);
         publicationAttempts.push(structuredClone(operation));
@@ -1027,16 +1032,25 @@ test("verified credential jti cannot admit another incoming method", async (t) =
   assert.equal((await query(f.db, "SELECT * FROM arrival_replay")).length, 1);
 });
 
-async function admitProvisioning(f) {
+async function admitProvisioning(f, interruptHandoff = false) {
   const prepared = await f.prepare();
   const operation = await plc.signOperation(prepared.handoff, f.source);
-  await f.composed.admitIncoming(f.request, {
+  const dispatch = f.ownership.dispatch;
+  if (interruptHandoff)
+    f.ownership.dispatch = async () => {
+      throw new Error("interrupted before handoff dispatch");
+    };
+  const handoff = f.composed.admitIncoming(f.request, {
     operationId: prepared.operationId,
     method: incomingHandoffMethod,
     body: { operation },
     presentation: await f.credential(),
     arrivalCode: prepared.arrivalCode,
   });
+  if (interruptHandoff)
+    await assert.rejects(handoff, /interrupted before handoff dispatch/);
+  else await handoff;
+  f.ownership.dispatch = dispatch;
   const { createInvites } =
     await import("../../dist/src/features/account-registration/invites.mjs");
   const invites = await createInvites({
@@ -1053,6 +1067,141 @@ async function admitProvisioning(f) {
     arrivalCode: prepared.arrivalCode,
   });
   return prepared;
+}
+
+test("reconciliation publishes the accepted unpublished handoff before admitted creation", async (t) => {
+  const f = await fixture(t);
+  const prepared = await admitProvisioning(f, true);
+  const before = await f.arrivals.readArrivalAggregate(
+    prepared.operationId,
+    f.principal.userId,
+  );
+  assert.equal(before.admissions.length, 2);
+  assert.equal(before.progress.canonicalHandoffCid, null);
+  assert.equal(f.audit.at(-1).cid, f.head);
+  assert.equal(f.publicationAttempts.length, 0);
+  assert.equal(
+    (await f.composed.reconcileArrival(f.request, prepared.operationId)).state,
+    "pending",
+  );
+  const after = await f.arrivals.readArrivalAggregate(
+    prepared.operationId,
+    f.principal.userId,
+  );
+  assert.equal(
+    after.progress.canonicalHandoffCid,
+    before.signedOperations[0].cid,
+  );
+  assert.ok(after.progress.provisionedAt);
+  assert.ok(after.progress.deactivatedAt);
+  assert.ok(after.progress.boundAt);
+  assert.deepEqual(after.admissions, before.admissions);
+  assert.deepEqual(f.publicationAttempts, [
+    before.signedOperations[0].operation,
+  ]);
+  assert.equal(f.backendState.creates, 1);
+  assert.equal(f.backendState.pauses, 1);
+  assert.equal(f.reservations(), 1);
+  assert.equal(f.credentialsIssued(), 2);
+  assert.equal(after.signedOperations.length, 2);
+  assert.equal(
+    f.audit.at(-1).cid,
+    after.signedOperations.find((item) => item.kind === "destination-move").cid,
+  );
+});
+
+for (const state of ["divergent", "tombstone", "unavailable"]) {
+  test(`reconciliation with both admissions retains unpublished work when identity is ${state}`, async (t) => {
+    const f = await fixture(t);
+    const prepared = await admitProvisioning(f, true);
+    const before = await f.arrivals.readArrivalAggregate(
+      prepared.operationId,
+      f.principal.userId,
+    );
+    if (state === "unavailable") f.audit[0].cid = "invalid";
+    else {
+      const operation = await plc.signOperation(
+        state === "tombstone"
+          ? { type: "plc_tombstone", prev: f.head }
+          : {
+              ...prepared.handoff,
+              alsoKnownAs: ["at://unrelated.example.test"],
+            },
+        f.source,
+      );
+      f.audit.push({
+        did: f.did,
+        operation,
+        cid: String(await cidForCbor(operation)),
+        nullified: false,
+        createdAt: new Date().toISOString(),
+      });
+    }
+    await assert.rejects(
+      f.composed.reconcileArrival(f.request, prepared.operationId),
+    );
+    assert.deepEqual(
+      await f.arrivals.readArrivalAggregate(
+        prepared.operationId,
+        f.principal.userId,
+      ),
+      before,
+    );
+    assert.equal(f.backendState.creates, 0);
+    assert.equal(f.backendState.pauses, 0);
+    assert.equal(f.publicationAttempts.length, 0);
+    assert.equal(f.reservations(), 1);
+    assert.equal(f.credentialsIssued(), 2);
+  });
+}
+
+for (const mode of ["creation-lost", "pause-lost"]) {
+  test(`reconciliation at the exact destination move preserves ${mode} recovery fencing`, async (t) => {
+    const f = await fixture(t);
+    const prepared = await admitProvisioning(f);
+    f.backendState.mode = mode;
+    await assert.rejects(
+      f.composed.continueCreation(f.request, prepared.operationId),
+    );
+    const before = await f.arrivals.readArrivalAggregate(
+      prepared.operationId,
+      f.principal.userId,
+    );
+    const move = before.signedOperations.find(
+      (item) => item.kind === "destination-move",
+    );
+    assert.equal(f.audit.at(-1).cid, move.cid);
+    await assert.rejects(
+      f.composed.reconcileArrival(f.request, prepared.operationId),
+      { code: "OperationRecoveryRequired" },
+    );
+    const pending = await f.store.pendingExternal(`arrival:${f.did}`);
+    await f.store.approveRecovery({
+      operationId: pending.operationId,
+      externalAttemptId: pending.id,
+      executionAttemptId: pending.executionAttemptId,
+      target: pending.target,
+      dispatcherIsolationReference: "test-dispatcher-isolated",
+      upstreamDrainReference: "test-upstream-drained",
+      action: "observe",
+    });
+    f.backendState.mode = "normal";
+    await f.composed.reconcileArrival(f.request, prepared.operationId);
+    const after = await f.arrivals.readArrivalAggregate(
+      prepared.operationId,
+      f.principal.userId,
+    );
+    assert.ok(after.progress.boundAt);
+    assert.ok(after.progress.deactivatedAt);
+    assert.ok(after.progress.provisionedAt);
+    assert.deepEqual(after.signedOperations, before.signedOperations);
+    assert.equal(f.backendState.creates, 1);
+    assert.equal(f.backendState.pauses, 1);
+    assert.equal(f.publicationAttempts.length, 1);
+    assert.equal(f.reservations(), 1);
+    assert.equal(f.credentialsIssued(), 2);
+    assert.equal(await f.store.pendingExternal(`arrival:${f.did}`), null);
+  });
 }
 
 for (const mode of [

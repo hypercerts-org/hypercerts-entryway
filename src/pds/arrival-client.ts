@@ -79,9 +79,9 @@ async function readPublicJson(
   }
 }
 
-/** Concrete stock PDS transport for one selected destination. It carries no
- * lifecycle-hook or administration credential: ordinary `createAccount` with a
- * caller-signed move, then self-deactivation with the account credential. */
+/** For arrival maintainers: stock transport creates with the saved signed move,
+ * then inspects and pauses through composition's administrator authorization
+ * callbacks without storing an administrator secret on this client. */
 export class ArrivalPdsClient {
   #accountAccess:
     | Promise<{
