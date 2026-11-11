@@ -21,6 +21,6 @@ route change. The added `entryway-browser-client` definition runs this same
 fixture at the private `.internal` URL. It is the client under test, not a
 second product component.
 
-The app uses the pinned dependencies and structure of the included vanilla JS
-OAuth example, adapted from Bluesky's CC0 cookbook commit
+The app uses the pinned dependencies and structure of Atmosphere in a Box's
+vanilla JS OAuth example, adapted from Bluesky's CC0 cookbook commit
 `8eac4b8632a5d128b1df550780a5e2ab30377350`.

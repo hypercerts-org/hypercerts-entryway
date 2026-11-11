@@ -92,3 +92,9 @@ and the required templates are now owned by this repository; earlier spike/repla
 trees are historical provenance, not additional runtime packages.
 Reference PDS behaviour is grounded in Bluesky's source and Entryway tests; no PDS
 fork is part of this repository. See the reuse assessment for source evidence.
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE). Section 4 of the license sets the conditions for redistribution; under section 4(d), a modified version you distribute must include the attribution notices from the [NOTICE](NOTICE) file that pertain to it.
+
+The agent skills in `tests/atmosphere/skills/` are copied from [Atmosphere in a Box](https://tangled.org/kandake.africa/atmosphereinabox), Copyright 2026 Evelyn Osman. The browser OAuth example in `tests/atmosphere/examples/entryway-oauth-web-app/` is adapted from its `examples/vanillajs-oauth-web-app`, and the stack files `tests/atmosphere/stacks/entryway-oauth-web-app.*` and `tests/atmosphere/stacks/entryway-browser-client.*` from its `stacks/vanillajs-oauth-web-app.*`. All of these keep Atmosphere in a Box's Apache-2.0 license.
