@@ -87,16 +87,48 @@ behavior rather than assuming full equivalence. The synthetic migration fixture
 and repository inventory comparison are reuse candidates, not public end-to-end
 qualification or proof of a historical source signature.
 
-One bounded committed qualification run observed a real stock source CAR
+Historical bounded stock-mechanism evidence observed a real stock source CAR
 verification, a nonempty snapshot, two export requests started before a write was
 dispatched (request ordering only, not server-side overlap), an
 Entryway-hosted inactive destination accepting a streamed import, and sequential
 same-DID reservation with placement isolation. That run is bounded by its own
 committed byte and phase budgets and does not establish finality, blob pagination
-or an activation barrier. C4 therefore stays blocked, while C1, C2, C3 and C5 are
-accepted contracts whose callables the downstream plans must still produce; see the
+or an activation barrier. C4 is now an accepted client-managed responsibility
+contract, not a claim that those stronger guarantees were proved. C1–C5 are design contracts; existing
+dormant producers cover preparation, admission and continuation only,
+not mounted public APIs or complete readiness; see the
 contract gates in
 [incoming migration](incoming-migration.md#contract-qualification-gates-for-implementers).
+
+### Client-managed migration design reference
+
+For maintainers implementing incoming migration, the user accepted the Rust-like
+responsibility contract on 2026-11-11: the client transfers and checks its chosen
+records/blobs and chooses when to request activation. Entryway checks authorization,
+identity, binding, backend state and durable ownership, not a final source head or
+exhaustive inventory. Later source writes and missing blobs may not be transferred.
+See [C4](incoming-migration.md#c4-client-managed-migration-contract-accepted) for the
+retained gates and pending runtime qualification.
+
+This decision draws on the reviewed clean upstream revision
+`d95d4993bba24fbf18d7851c24b3466258ae6e63` of
+[atproto-crates](https://tangled.org/ngerakines.me/atproto-crates), not the older
+custody-only pin below. In `crates/atproto-entryway`, `lifecycle.rs:204–289` performs
+identity preflight without inventory certification; `ops/migrate_in` provisions a
+deactivated account without PLC publication. Its client changes PLC after transfer.
+That sequencing is **not** adopted: our unchanged reference PDS requires the
+accepted early cutover, create-active then pause sequence and its recovery guards.
+
+The Rust PDS wizard's approximate count/revision checks and lost-blob acknowledgement
+are client behavior, separate from its Entryway activation gate. Its
+`portal_migrate:6487–6507` places source deactivation after destination activation.
+We adopt client responsibility and that source-deactivation ordering, not a lost-blob
+waiver, autoactivation timer, custom session-revocation endpoint or forwarding proxy.
+The older `02421130930198fcc0c2636bcffd531c748ef9cf` pin was custody provenance only;
+its `crates/atproto-entryway/src/server/accounts.rs:95–100` rejected incoming
+migration and was never evidence of this newer behavior. No Rust runtime code is
+imported by this policy decision; stock-PDS credential and public journey
+qualification remain outstanding, including the existing access-JWT revocation gap.
 
 ## Custody design reference
 

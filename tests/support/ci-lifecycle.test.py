@@ -48,6 +48,55 @@ esac
                                "guard", str(self.root / "tests/support/rootless-docker.sh")],
                               env={**self.env, **environment}, capture_output=True, timeout=15)
 
+    def test_hosted_network_diagnostics_are_bounded_and_payload_free(self):
+        from unittest.mock import patch
+        import contextlib
+        import io
+        import textwrap
+
+        source = Path(__file__).resolve().parents[2]
+        workflow = (source / ".github/workflows/ci.yml").read_text()
+        block = workflow.split("run: &package-network-diagnostics |\n", 1)[1].split("      - name:", 1)[0]
+        shell = textwrap.dedent(block)
+        syntax = subprocess.run(["bash", "-n"], input=shell, text=True, capture_output=True)
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+        script = shell.split("python3 - <<'PYTHON'\n", 1)[1].rsplit("PYTHON", 1)[0]
+        compiled = compile(script, "hosted-network-diagnostics", "exec")
+        self.assertEqual(workflow.count("run: *package-network-diagnostics"), 2)
+        for failed_context in [None, "runner", "container", "build", "timeout"]:
+            calls = []
+
+            def run_probe(command, **options):
+                if command[3:5] == ["rm", "--force"]:
+                    self.assertTrue(command[-1].startswith("hypercerts-entryway-network-probe-"))
+                    return subprocess.CompletedProcess(command, 0)
+                calls.append((command, options))
+                context = ["runner", "container", "build"][len(calls) - 1]
+                if failed_context == "timeout" and context == "container":
+                    raise subprocess.TimeoutExpired(command, options["timeout"])
+                return subprocess.CompletedProcess(command, 7 if context == failed_context else 0)
+
+            output = io.StringIO()
+            with patch("subprocess.run", side_effect=run_probe), contextlib.redirect_stdout(output):
+                with self.assertRaises(SystemExit) as result:
+                    exec(compiled, {})
+            self.assertEqual(result.exception.code, int(failed_context is not None))
+            self.assertEqual(len(calls), 3)
+            for command, options in calls:
+                self.assertEqual(options["timeout"], 55)
+                self.assertNotIn("--network=host", command)
+                self.assertNotIn("--dns", command)
+            self.assertIn("--rm", calls[1][0])
+            self.assertIn("--no-cache", calls[2][0])
+            dockerfile = calls[2][1]["input"]
+            self.assertTrue(dockerfile.startswith("FROM mcr.microsoft.com/playwright:v1.58.2-noble\nRUN node -e "))
+            self.assertNotIn("process.env", dockerfile)
+            self.assertNotIn("rejectUnauthorized", dockerfile)
+            self.assertIn("method: 'HEAD'", calls[0][0][2])
+            if failed_context == "timeout":
+                self.assertIn("context=container exit=124", output.getvalue())
+            self.assertIn("context=build exit=", output.getvalue())
+
     def test_repeated_scoped_cleanup(self):
         for _ in range(2):
             self.assertEqual(self.ownership("cleanup", COMPOSE_PROFILES="unrelated").returncode, 0)
@@ -128,7 +177,7 @@ esac
         self.assertNotEqual(self.guard(ENTRYWAY_DOCKER_CONTEXT="default").returncode, 0)
         self.assertNotEqual(self.guard(ENTRYWAY_DOCKER_CONTEXT="foreign").returncode, 0)
 
-    def test_incoming_helpers_have_explicit_native_coverage(self):
+    def test_incoming_native_coverage_is_explicit_and_unique(self):
         source = Path(__file__).resolve().parents[2]
         package = json.loads((source / "package.json").read_text())
         helpers = ["tests/support/helpers/stock-plc-mailpit.test.mjs",
@@ -136,17 +185,96 @@ esac
                    "tests/atmosphere/project-incoming-access.test.mjs"]
         self.assertEqual(package["scripts"]["test:incoming-helpers"].split(),
                          ["node", "--test", *helpers])
-        checks = (source / ".github/workflows/ci.yml").read_text().split("  integration:", 1)[0]
-        self.assertEqual(checks.count("run: npm run test:incoming-helpers\n"), 1)
+        workflow = (source / ".github/workflows/ci.yml").read_text()
+        checks = workflow.split("  integration:", 1)[0]
+        for script in ["test:unit", "test:incoming-helpers", "test:incoming-reconciliation"]:
+            self.assertEqual(checks.count(f"run: npm run {script}\n"), 1)
         discovery = subprocess.run(["node", "--input-type=module", "-e",
             "import {discoverContracts} from './tests/support/discover-contracts.mjs';"
             "console.log(JSON.stringify(discoverContracts(undefined,{unit:true})))"],
             cwd=source, capture_output=True, text=True, check=True)
         files = json.loads(discovery.stdout)
         self.assertEqual(len(files), len(set(files)))
+        for name in ["storage", "admission", "handoff", "composition"]:
+            filename = f"incoming-{name}.test.mjs" if name == "handoff" else f"incoming-arrival-{name}.test.mjs"
+            self.assertEqual(files.count(f"tests/contracts/{filename}"), 1)
+        replay = "tests/contracts/incoming-arrival-reconciliation.test.mjs"
+        self.assertNotIn(replay, files)
+        self.assertEqual(package["scripts"]["test:incoming-reconciliation"].split(),
+                         ["node", "--test", replay])
+        self.assertNotIn("tests/contracts/incoming-public-mechanisms.test.mjs", files)
         for helper in helpers:
             self.assertNotIn(helper, files)
-        self.assertNotIn("tests/contracts/incoming-public-mechanisms.test.mjs", files)
+        self.assertNotIn("tests/support/helpers/incoming-arrival-restart.mjs", files)
+
+    def test_contract_runner_isolates_reconciliation_and_preserves_failures(self):
+        source = Path(__file__).resolve().parents[2]
+        for directory in ["src", "tests/contracts"]:
+            (self.root / directory).mkdir(parents=True, exist_ok=True)
+        for filename in ["run-contracts.mjs", "discover-contracts.mjs"]:
+            shutil.copy(source / "tests/support" / filename, self.root / "tests/support" / filename)
+        (self.root / "tests/contracts/account-access.test.mjs").write_text('''
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {appendFileSync} from 'node:fs';
+test('shared batch', () => {
+  appendFileSync('executed', 'shared\\n');
+  assert.ok(process.execArgv.includes('--test-isolation=none'));
+  assert.notEqual(process.env.FAIL_SUITE, 'shared');
+});
+''')
+        (self.root / "tests/contracts/incoming-arrival-reconciliation.test.mjs").write_text('''
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {appendFileSync} from 'node:fs';
+import {fork} from 'node:child_process';
+test('fresh batch', async () => {
+  appendFileSync('executed', 'fresh\\n');
+  assert.ok(!process.execArgv.includes('--test-isolation=none'));
+  const flags = await new Promise((resolve, reject) => {
+    const child = fork('./worker.mjs', {silent: true});
+    let received;
+    child.on('message', value => { received = value; });
+    child.on('error', reject);
+    child.on('exit', code => code === 0 ? resolve(received) : reject(Error(`WorkerExit:${code}`)));
+  });
+  assert.ok(!flags.includes('--test-isolation=none'));
+  assert.notEqual(process.env.FAIL_SUITE, 'fresh');
+});
+''')
+        (self.root / "worker.mjs").write_text('process.send(process.execArgv);')
+        for failed in ["", "shared", "fresh"]:
+            with self.subTest(failed=failed):
+                result = subprocess.run(["node", "tests/support/run-contracts.mjs"], cwd=self.root,
+                                        env={**self.env, "FAIL_SUITE": failed},
+                                        capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 1 if failed else 0, result.stdout + result.stderr)
+                executed = self.root / "executed"
+                self.assertEqual(executed.read_text().splitlines(), ["shared", "fresh"])
+                executed.unlink()
+                for report, title in [("contracts-junit.xml", "shared batch"),
+                                      ("contracts-reconciliation-junit.xml", "fresh batch")]:
+                    self.assertIn(title, (self.root / "artifacts" / report).read_text())
+        result = subprocess.run(["node", "tests/support/run-contracts.mjs", "--unit"], cwd=self.root,
+                                env={**self.env, "FAIL_SUITE": "fresh"},
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.root / "executed").read_text().splitlines(), ["shared"])
+        self.assertIn('shared batch', (self.root / "artifacts/unit-junit.xml").read_text())
+
+    def test_incoming_live_phase_uses_owned_access_and_real_suite(self):
+        source = Path(__file__).resolve().parents[2]
+        controller = (source / "tests/local.sh").read_text()
+        phase = controller.split("  incoming-public-mechanisms|incoming-arrival-live)", 1)[1].split("    ;;", 1)[0]
+        self.assertIn("require_state", phase)
+        self.assertIn("prepare_incoming_access", phase)
+        self.assertIn('suite=incoming-arrival-live', phase)
+        self.assertIn('INCOMING_PROJECT=$project', phase)
+        self.assertIn('INCOMING_ACCESS_PATH=/run/incoming-access.json', phase)
+        self.assertIn('tests/contracts/$suite.test.mjs', phase)
+        suite = (source / "tests/contracts/incoming-arrival-live.test.mjs").read_text()
+        self.assertIn('creation-lost', suite)
+        self.assertIn('pause-lost', suite)
 
     def test_live_controller_shell_syntax(self):
         source = Path(__file__).resolve().parents[2]

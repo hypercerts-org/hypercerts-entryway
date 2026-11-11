@@ -15,7 +15,7 @@ command=${1:-help}
 mkdir -p "$artifacts"
 # Phase identity comes from the controller, never from a command or request body.
 case "$command" in
-  fresh|fresh-group|prepare|up|contracts|database-contracts|database-dialects|resilience-profiles|database-profile|browser|incoming-public-mechanisms|migration|migration-resume|resilience|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|all|down|status|help) ;;
+  fresh|fresh-group|prepare|up|contracts|database-contracts|database-dialects|resilience-profiles|database-profile|browser|incoming-public-mechanisms|incoming-arrival-live|migration|migration-resume|resilience|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|all|down|status|help) ;;
   *) echo 'code=UNKNOWN_PHASE'; exit 2 ;;
 esac
 printf 'phase=%s status=started\n' "$command"
@@ -201,10 +201,19 @@ case "$command" in
     prepare_incoming_access
     browser 2>&1 | tee "$artifacts/browser.log" | python3 "$root/scripts/ci-summary.py"
     ;;
-  incoming-public-mechanisms)
+  incoming-public-mechanisms|incoming-arrival-live)
     require_state
     prepare_incoming_access
-    compose run --rm --no-deps --volume "$sandbox/incoming-access.json:/run/incoming-access.json:ro" -e INCOMING_ACCESS_PATH=/run/incoming-access.json -e "INCOMING_PROJECT=$project" -e INCOMING_PUBLIC_MECHANISMS=1 browser node --test tests/contracts/incoming-public-mechanisms.test.mjs
+    suite=incoming-public-mechanisms
+    if [[ "$command" == incoming-arrival-live ]]; then suite=incoming-arrival-live; fi
+    compose run --rm --no-deps --volume "$sandbox/incoming-access.json:/run/incoming-access.json:ro" -e INCOMING_ACCESS_PATH=/run/incoming-access.json -e "INCOMING_PROJECT=$project" -e INCOMING_PUBLIC_MECHANISMS=1 browser node --test "tests/contracts/$suite.test.mjs"
+    if [[ "$command" == incoming-arrival-live ]]; then
+      # The disposable dispatcher exited above; stop both owned target workers
+      # before permitting observation of either uncertain applied effect.
+      compose stop pds1 pds2
+      compose up -d --wait pds1 pds2
+      compose run --rm --no-deps --volume "$sandbox/incoming-access.json:/run/incoming-access.json:ro" -e INCOMING_ACCESS_PATH=/run/incoming-access.json -e "INCOMING_PROJECT=$project" -e INCOMING_PUBLIC_MECHANISMS=1 -e INCOMING_RECOVERY=1 -e INCOMING_DISPATCHER_EXIT_REFERENCE=owned-dispatcher-container-exited-0-and-removed -e INCOMING_UPSTREAM_DRAIN_REFERENCE=owned-pds1-pds2-stopped-then-healthy browser node --test --test-name-pattern='stock applied' tests/contracts/incoming-arrival-live.test.mjs
+    fi
     ;;
   migration)
     require_state

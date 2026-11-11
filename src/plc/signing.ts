@@ -179,6 +179,64 @@ export class Secp256k1MigrationPlcSigner {
       persist,
     );
   }
+  /** Public arrival move: the observed handoff's own facts are replaced only by
+   * the reserved public repository key and destination endpoint. Entryway signs
+   * with its rotation authority; the PDS repository private key never enters here.
+   * `persist` journals the signed operation and its CID before any dispatch. */
+  public async signArrivalMove(
+    input: {
+      handoffOperation: unknown;
+      repositoryKey: string;
+      endpoint: string;
+      handle?: string;
+    },
+    persist: (
+      operation: Readonly<plc.Operation>,
+      facts: Readonly<plc.UnsignedOperation>,
+      cid: string,
+    ) => Promise<void>,
+  ): Promise<{
+    operation: plc.Operation;
+    cid: string;
+  }> {
+    const previous = this.#previous(input.handoffOperation);
+    const facts = plc.normalizeOp(previous);
+    let saved: { operation: plc.Operation; cid: string } | undefined;
+    await this.#signAuthorizedUpdate(
+      previous,
+      {
+        verificationMethods: {
+          ...facts.verificationMethods,
+          atproto: input.repositoryKey,
+        },
+        ...(input.handle
+          ? {
+              alsoKnownAs: [
+                `at://${input.handle}`,
+                ...facts.alsoKnownAs.filter(
+                  (alias) => !alias.startsWith("at://"),
+                ),
+              ],
+            }
+          : {}),
+        services: {
+          ...facts.services,
+          atproto_pds: {
+            type: "AtprotoPersonalDataServer",
+            endpoint: input.endpoint,
+          },
+        },
+      },
+      async (signed, unsigned, cid) => {
+        // The signed CID covers the signature, matching the directory head the
+        // destination publishes; the caller journals and dispatches these bytes.
+        saved = { operation: signed, cid };
+        await persist(signed, unsigned, cid);
+      },
+    );
+    if (!saved) throw new PlcError("InvalidPlcOperation", "Move not signed");
+    return saved;
+  }
   public async signMigrationMove(
     input: {
       workflowId: string;

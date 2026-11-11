@@ -1,7 +1,7 @@
 # Data model, identity custody and migration
 
 Status: current storage facts plus accepted domain contracts and implementation gaps.
-Incoming migration design updated: 2026-11-04.
+Incoming migration design updated: 2026-11-11.
 See [architecture](architecture.md) for domain ownership and [delivery reference](delivery-plan.md) for delivery gates.
 
 ## 1. Account identity and ownership
@@ -85,18 +85,18 @@ The table below records current storage, not the full approved target. Internal
 refactoring does not require upgrading existing databases; public account migration
 and existing ePDS deployment conversion remain separate requirements.
 
-| State                                  | Domain or system owner              | Current representation                                                |
-| -------------------------------------- | ----------------------------------- | --------------------------------------------------------------------- |
-| Account identity and status            | Accounts                            | `accounts`, keyed by DID                                              |
-| Login identity binding                 | Accounts                            | `account_bindings`, unique DID and nonunique Better Auth user           |
+| State                                  | Domain or system owner              | Current representation                                                                                                                                                                   |
+| -------------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Account identity and status            | Accounts                            | `accounts`, keyed by DID                                                                                                                                                                 |
+| Login identity binding                 | Accounts                            | `account_bindings`, unique DID and nonunique Better Auth user                                                                                                                            |
 | Email and handle claims                | Accounts                            | Primary claims may repeat across DIDs and coexist with a pending primary-email change; backup claims cannot overlap primary claims, and backup and pending claims are mutually exclusive |
-| Verified browser identity and sessions | Access / Better Auth adapter        | Better Auth-owned tables                                              |
-| Device-to-account membership           | Access                              | Indexed provider membership by DID and device ID                      |
-| Clients, grants and protocol state     | Access / OAuth provider adapter     | Provider stores, partly using namespaced JSON storage                 |
-| Current placement                      | PDS fleet, exposed through Accounts | `pds_id` in the account row; static configuration supplies hosts      |
-| Transfer progress                      | PDS fleet workflow                  | Legacy operation store and newer versioned workflow/checkpoint tables |
-| Public custody evidence                | Identity                            | Import-time custody inventory; not a complete key lifecycle registry  |
-| Repository, blobs and repository key   | Hosting PDS                         | Reference PDS-managed storage                                         |
+| Verified browser identity and sessions | Access / Better Auth adapter        | Better Auth-owned tables                                                                                                                                                                 |
+| Device-to-account membership           | Access                              | Indexed provider membership by DID and device ID                                                                                                                                         |
+| Clients, grants and protocol state     | Access / OAuth provider adapter     | Provider stores, partly using namespaced JSON storage                                                                                                                                    |
+| Current placement                      | PDS fleet, exposed through Accounts | `pds_id` in the account row; static configuration supplies hosts                                                                                                                         |
+| Transfer progress                      | PDS fleet workflow                  | Legacy operation store and newer versioned workflow/checkpoint tables                                                                                                                    |
+| Public custody evidence                | Identity                            | Import-time custody inventory; not a complete key lifecycle registry                                                                                                                     |
+| Repository, blobs and repository key   | Hosting PDS                         | Reference PDS-managed storage                                                                                                                                                            |
 
 The database boundary stores account authority, browser authentication, OAuth
 state, mail and workflow journals in one selected database: `account-authority.sqlite`
@@ -409,6 +409,20 @@ destination credentials. A bound migration-pending account is not active and
 cannot bypass guarded activation or ordinary-access restrictions. This differs
 from the current fixture's post-transfer binding and does not change existing
 signup activation semantics. Implementation and public qualification remain open.
+
+The user accepted the [C4 client-managed contract](incoming-migration.md#c4-client-managed-migration-contract-accepted)
+on 2026-11-11, replacing the former Entryway final-source/inventory certification
+and global verification-to-activation write-barrier requirement. The client owns
+record/blob transfer, checks its chosen transferred state and requests activation
+when it chooses; concurrent/later source writes and unavailable blobs may be absent.
+Counts, zero missing blobs and completion flags are diagnostics/intent, never
+source ownership or independent completeness proof. Entryway still checks authorized
+intent, canonical PLC endpoint/key/rotation custody/handle, expected placement,
+saved-user binding, backend state and durable ownership on every pending activation
+path. Uncertain writes retain isolation/drain recovery and idempotent journals.
+Source deactivation follows confirmed destination activation as a client action.
+This decision changes neither early cutover nor the access-JWT revocation gap;
+credential lifecycle, public integration and runtime qualification remain pending.
 
 Tools may implement an Entryway-specific public journey; no particular tool is
 mandatory or assumed compatible. Arrival-code expiry does not release uncertain
