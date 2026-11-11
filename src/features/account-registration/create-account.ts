@@ -15,7 +15,10 @@ import { xrpc } from "../../pds/client.mjs";
 
 import type { AuthorityDatabase } from "../../database/connection.js";
 import type { AccountRow } from "../../accounts/types.js";
-import type { AccountTransactor } from "../../database/accounts.port.js";
+import type {
+  AccountReader,
+  AccountTransactor,
+} from "../../database/accounts.port.js";
 import type { createOperationOwnership } from "../../accounts/operation-ownership.js";
 import type { Secp256k1MigrationPlcSigner } from "../../plc/signing.js";
 interface ProvisionPolicy {
@@ -58,7 +61,6 @@ interface Context {
   plcClient: plc.Client;
   observeCustody?(did: string): Promise<unknown>;
   storage: AccountTransactor;
-  get(id: string): Promise<AccountRow | null>;
   save(row: AccountRow): Promise<void>;
   claimHandle(handle: string, did: string): Promise<void>;
   validateHandle(handle: string, did?: string): Promise<void>;
@@ -92,6 +94,28 @@ function notFound(error: unknown): boolean {
     error.status === 404
   );
 }
+/**
+ * Return the only account registered to an email, or null.
+ *
+ * Registration allows one account per email (TECH-733). Shared emails exist
+ * only from migration or joining, so they can neither be registered again nor
+ * resumed as a pending signup. Call this only after the mailbox is verified,
+ * because the conflict confirms that the email already has an account.
+ */
+export async function registrationAccountForEmail(
+  storage: Pick<AccountReader, "listByEmail">,
+  email: string,
+): Promise<AccountRow | null> {
+  const rows = await storage.listByEmail(email);
+  if (rows.length > 1)
+    throw new HttpError(
+      409,
+      "AccountExists",
+      "This email already has an account",
+    );
+  return rows[0] ?? null;
+}
+
 /** Assemble DID provisioning using custody storage on the same database/fence.
  * Persist exact genesis before PDS dispatch and resume it after interruption.
  * Only classified evidence outages permit activation with a durable refresh
@@ -104,7 +128,6 @@ export function createRegistration({
   plcClient,
   observeCustody,
   storage,
-  get,
   save,
   claimHandle,
   validateHandle,
@@ -462,7 +485,7 @@ export function createRegistration({
     inviteCode,
     registrationIdentity,
   }: ProvisionInput): Promise<AccountRow> => {
-    let row = await get(email);
+    let row = await registrationAccountForEmail(storage, email);
     await assertEmailAvailable(email, row);
     if (row) {
       assertSameRegistration(row, { handle, pdsId, recoveryKey });

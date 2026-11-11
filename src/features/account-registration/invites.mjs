@@ -47,7 +47,12 @@ export async function createInvites({ db, config, accounts }) {
         const original = await db.get("entryway:invites", reserved.code);
         if (!original || original.disabled)
           fail("InvalidInviteCode", "Invite code is invalid");
-        if (reserved.did && (await accounts.get(email))?.did !== reserved.did)
+        if (
+          reserved.did &&
+          !(await accounts.storage.listByEmail(email)).some(
+            ({ did }) => did === reserved.did,
+          )
+        )
           fail(
             "InvalidInviteCode",
             "The invitation was already used by another account",

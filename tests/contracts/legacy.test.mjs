@@ -62,10 +62,12 @@ async function fixture(t, { persistent = false } = {}) {
   const rows = [alice, bob];
   const accounts = {
     get(id) {
-      return (
-        rows.find((row) => [row.did, row.email, row.handle].includes(id)) ??
-        null
-      );
+      return rows.find((row) => [row.did, row.handle].includes(id)) ?? null;
+    },
+    storage: {
+      async listByEmail(email) {
+        return rows.filter((row) => row.email === email);
+      },
     },
     plcClient: {
       async getDocument(did) {
