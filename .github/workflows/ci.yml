@@ -79,6 +79,72 @@ jobs:
           test "$DOCKER_CONTEXT" = default
           docker --context default compose version
           deno --version
+      - name: Diagnose hosted package network
+        continue-on-error: true
+        timeout-minutes: 3
+        run: &package-network-diagnostics |
+          # CI maintainers: compare runner, container and fresh build networking.
+          python3 - <<'PYTHON'
+          import subprocess
+          import uuid
+
+          probe = r"""
+          const dns = require('node:dns').promises;
+          const http = require('node:http');
+          const https = require('node:https');
+          (async () => {
+            for (const host of ['archive.ubuntu.com', 'security.ubuntu.com', 'deb.nodesource.com']) {
+              try {
+                await Promise.race([dns.lookup(host), new Promise((_, reject) => setTimeout(() => reject({code: 'DNS_TIMEOUT'}), 5000).unref())]);
+                console.log('dns host=' + host + ' status=resolved');
+              } catch (error) {
+                console.log('dns host=' + host + ' code=' + (error.code || 'DNS_FAILED'));
+                process.exitCode = 1;
+              }
+            }
+            for (const url of ['http://archive.ubuntu.com/ubuntu/dists/noble/InRelease', 'https://archive.ubuntu.com/ubuntu/dists/noble/InRelease', 'http://security.ubuntu.com/ubuntu/dists/noble-security/InRelease', 'https://security.ubuntu.com/ubuntu/dists/noble-security/InRelease', 'https://deb.nodesource.com/node_24.x/dists/nodistro/InRelease']) {
+              await new Promise(resolve => {
+                const request = (url.startsWith('https:') ? https : http).request(url, {method: 'HEAD'}, response => {
+                  console.log('http url=' + url + ' status=' + response.statusCode);
+                  if (response.statusCode < 200 || response.statusCode >= 400) process.exitCode = 1;
+                  response.destroy();
+                  resolve();
+                });
+                const timer = setTimeout(() => request.destroy(Object.assign(new Error(), {code: 'PROBE_TIMEOUT'})), 5000);
+                request.on('close', () => clearTimeout(timer));
+                request.on('error', error => {
+                  console.log('http url=' + url + ' code=' + (error.code || 'REQUEST_FAILED'));
+                  process.exitCode = 1;
+                  resolve();
+                });
+                request.end();
+              });
+            }
+          })();
+          """
+          image = 'mcr.microsoft.com/playwright:v1.58.2-noble'
+          probe = ' '.join(probe.splitlines())
+          container = 'hypercerts-entryway-network-probe-' + uuid.uuid4().hex
+          commands = [
+              ('runner', ['node', '-e', probe], None),
+              ('container', ['docker', '--context', 'default', 'run', '--rm', '--name', container, '--entrypoint', 'node', image, '-e', probe], None),
+              ('build', ['docker', '--context', 'default', 'build', '--no-cache', '--progress=plain', '-'],
+               'FROM ' + image + '\nRUN node -e ' + "'" + probe.replace("'", "'\"'\"'") + "'\n"),
+          ]
+          failed = False
+          for label, command, dockerfile in commands:
+              print('network-probe context=' + label + ' status=started', flush=True)
+              try:
+                  result = subprocess.run(command, input=dockerfile, text=True, timeout=55)
+                  status = result.returncode
+              except subprocess.TimeoutExpired:
+                  status = 124
+                  if label == 'container':
+                      subprocess.run(['docker', '--context', 'default', 'rm', '--force', container], timeout=10, check=True)
+              print('network-probe context=' + label + ' exit=' + str(status), flush=True)
+              failed = failed or status != 0
+          raise SystemExit(int(failed))
+          PYTHON
       - name: Register owned project before provisioning
         run: |
           python3 scripts/ci-ownership.py init "$CI_OWNERSHIP_MANIFEST"
@@ -151,6 +217,10 @@ jobs:
           test "$DOCKER_CONTEXT" = default
           docker --context default compose version
           deno --version
+      - name: Diagnose hosted package network
+        continue-on-error: true
+        timeout-minutes: 3
+        run: *package-network-diagnostics
       - name: Register owned project before provisioning
         run: |
           python3 scripts/ci-ownership.py init "$CI_OWNERSHIP_MANIFEST"
@@ -199,6 +269,10 @@ jobs:
           test "$DOCKER_CONTEXT" = default
           docker --context default compose version
           deno --version
+      - name: Diagnose hosted package network
+        continue-on-error: true
+        timeout-minutes: 3
+        run: *package-network-diagnostics
       - name: Register owned project before provisioning
         run: |
           python3 scripts/ci-ownership.py init "$CI_OWNERSHIP_MANIFEST"

@@ -48,6 +48,54 @@ esac
                                "guard", str(self.root / "tests/support/rootless-docker.sh")],
                               env={**self.env, **environment}, capture_output=True, timeout=15)
 
+    def test_hosted_network_diagnostics_are_bounded_and_payload_free(self):
+        from unittest.mock import patch
+        import contextlib
+        import io
+        import textwrap
+
+        source = Path(__file__).resolve().parents[2]
+        workflow = (source / ".github/workflows/ci.yml").read_text()
+        block = workflow.split("run: &package-network-diagnostics |\n", 1)[1].split("      - name:", 1)[0]
+        shell = textwrap.dedent(block)
+        syntax = subprocess.run(["bash", "-n"], input=shell, text=True, capture_output=True)
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+        script = shell.split("python3 - <<'PYTHON'\n", 1)[1].rsplit("PYTHON", 1)[0]
+        self.assertEqual(workflow.count("run: *package-network-diagnostics"), 2)
+        for failed_context in [None, "runner", "container", "build", "timeout"]:
+            calls = []
+
+            def run_probe(command, **options):
+                if command[3:5] == ["rm", "--force"]:
+                    self.assertTrue(command[-1].startswith("hypercerts-entryway-network-probe-"))
+                    return subprocess.CompletedProcess(command, 0)
+                calls.append((command, options))
+                context = ["runner", "container", "build"][len(calls) - 1]
+                if failed_context == "timeout" and context == "container":
+                    raise subprocess.TimeoutExpired(command, options["timeout"])
+                return subprocess.CompletedProcess(command, 7 if context == failed_context else 0)
+
+            output = io.StringIO()
+            with patch("subprocess.run", side_effect=run_probe), contextlib.redirect_stdout(output):
+                with self.assertRaises(SystemExit) as result:
+                    exec(compile(script, "hosted-network-diagnostics", "exec"), {})
+            self.assertEqual(result.exception.code, int(failed_context is not None))
+            self.assertEqual(len(calls), 3)
+            for command, options in calls:
+                self.assertEqual(options["timeout"], 55)
+                self.assertNotIn("--network=host", command)
+                self.assertNotIn("--dns", command)
+            self.assertIn("--rm", calls[1][0])
+            self.assertIn("--no-cache", calls[2][0])
+            dockerfile = calls[2][1]["input"]
+            self.assertTrue(dockerfile.startswith("FROM mcr.microsoft.com/playwright:v1.58.2-noble\nRUN node -e "))
+            self.assertNotIn("process.env", dockerfile)
+            self.assertNotIn("rejectUnauthorized", dockerfile)
+            self.assertIn("method: 'HEAD'", calls[0][0][2])
+            if failed_context == "timeout":
+                self.assertIn("context=container exit=124", output.getvalue())
+            self.assertIn("context=build exit=", output.getvalue())
+
     def test_repeated_scoped_cleanup(self):
         for _ in range(2):
             self.assertEqual(self.ownership("cleanup", COMPOSE_PROFILES="unrelated").returncode, 0)
