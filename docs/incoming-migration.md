@@ -608,14 +608,14 @@ Errors. Each code is stable and mapped explicitly, and no message carries a secr
 
 Replay. `prepare` with the same verified user, DID and handle is idempotent and
 returns the same saved operation while that operation is still actionable. A changed
-DID or handle for the user is a conflict, not a second arrival. A cancelled operation
-is retained as history and is not reused: once its reservations are released the same
-user may prepare that DID and handle again, which starts a new operation rather than
-resurrecting the cancelled one. `cancel` is idempotent and returns the already
-cancelled state.
-Partial success is reported explicitly: a cancellation that cannot release remote
-obligations returns `OperationRecoveryRequired` with the arrival still saved, never a
-success.
+DID or handle for the user is a conflict, not a second arrival. Cancellation is safe
+only at the internal pre-intent seam, before any persisted allocation or signed
+handoff and with unchanged canonical PLC state and no remote obligation. A cancelled
+operation is retained as history; `cancel` is idempotent for that state. Preparation
+already persists an allocation intent, so a prepared arrival cannot be cancelled to
+release reservations or start a replacement arrival. It returns
+`OperationRecoveryRequired` with the arrival still saved. No abandonment,
+remote-release or reversal path is defined here.
 
 Standard XRPC bodies keep their shapes and carry the arrival code in the proposed
 `Entryway-Arrival-Code` header at `com.atproto.identity.submitPlcOperation` and
@@ -827,8 +827,8 @@ migration qualification; reproof requires a fresh managed sandbox run:
 - Source CAR exports verified against the observed repository key, including a
   nonempty snapshot. Two export requests were started before a write was dispatched,
   which shows request ordering only and does not establish server-side overlap. The
-  case asserts a CAR size limit and per-phase budgets; withholding the final client
-  byte does not establish universal finality.
+  case asserts a CAR size limit and per-phase budgets. The withheld final client
+  byte belongs to the separate destination import case below, not source export.
 - Source snapshot capture, signature verification and record inventory comparison are
   qualified only within those budgets for that snapshot.
 - Inactive destination: an Entryway-hosted inactive destination accepted a streamed
