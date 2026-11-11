@@ -53,6 +53,15 @@ export type DatabaseConfiguration =
  * Reentrant helpers inherit only the active transaction executor, never a pool.
  * The better-sqlite3 transaction(callback) API is never given an async callback. */
 const sqliteStartup = new Map<string, Promise<void>>();
+/** True when PostgreSQL (possibly wrapped by Drizzle as `cause`) reported a
+ * FATAL or PANIC error, which ends the backend session. */
+const isFatalPostgresError = (error: unknown): boolean => {
+  for (let current = error; current instanceof Error; current = current.cause) {
+    const severity = (current as { severity?: unknown }).severity;
+    if (severity === "FATAL" || severity === "PANIC") return true;
+  }
+  return false;
+};
 export async function openDatabase(configuration: DatabaseConfiguration) {
   if (configuration.backend !== "sqlite" || configuration.path === ":memory:")
     return connectDatabase(configuration);
@@ -212,6 +221,15 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
     };
     runConnection = async (operation) => {
       const client = await pool.connect();
+      // pg-pool detaches its idle error listener while a client is checked out.
+      // A backend that dies mid-checkout (for example after a FATAL reply, when
+      // the socket closes later) would otherwise emit an unhandled 'error' and
+      // crash the process. Record it and discard the client on release.
+      let broken: Error | undefined;
+      const onError = (error: Error) => {
+        broken = error;
+      };
+      client.on("error", onError);
       const orm = postgresDrizzle({ client });
       const current: Context = {
         backend: "postgresql",
@@ -241,9 +259,15 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
       };
       try {
         return await context.run(current, () => operation(current));
+      } catch (error) {
+        // A FATAL reply ends the backend, but pg keeps the client queryable
+        // until the socket closes. Do not return it to the idle pool.
+        if (isFatalPostgresError(error)) broken ??= error as Error;
+        throw error;
       } finally {
         current.active = false;
-        client.release();
+        client.off("error", onError);
+        client.release(broken);
       }
     };
     closeDriver = () => pool.end();
