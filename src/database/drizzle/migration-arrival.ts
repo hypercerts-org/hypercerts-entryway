@@ -637,7 +637,11 @@ export function createArrivalStorage(
         if (!owner || owner.active === 0 || owner.did !== did) return null;
         if (saved.expires_at <= (await db.databaseTime())) return null;
         if (saved.generation !== owner.generation) return null;
-        return arrivalRecord(owner, undefined, saved);
+        return arrivalRecord(
+          owner,
+          await reservation(saved.operation_id),
+          saved,
+        );
       });
     },
 

@@ -19,10 +19,15 @@ Storage and shared-claim behavior:
   24 hours after issue. The ceiling is enforced when the code is written and again
   by a database constraint, so a reissued or shortened lifetime cannot exceed a
   day and code expiry does not release destination reservations or erase progress.
-- A saved public key is immutable for its arrival. A second reservation returning
-  a different key, a stale worker, an uncertain response or a changed DID, host or
-  endpoint retains `OperationRecoveryRequired`; nothing silently reallocates or
-  switches placement.
+- A saved public key is immutable for its arrival and is included when a valid
+  arrival code resolves the saved arrival. Reservation-result validation checks
+  the expected version and owner first: stale versions return `OperationConflict`
+  and lost ownership returns `OperationLeaseLost`. With current ownership and
+  version, saved allocation uncertainty returns `OperationRecoveryRequired` before
+  tuple comparison; otherwise a changed DID, host or endpoint is
+  `OperationConflict`. A different key for the unchanged tuple returns
+  `reconciliation-required` with reason `saved-key-differs`. Nothing silently
+  reallocates or switches placement.
 - Cancellation releases local reservations only when the arrival recorded no
   allocation at all. The allocation intent is saved before the destination host is
   asked for a signing key, so a recorded intent whose key is not yet known already

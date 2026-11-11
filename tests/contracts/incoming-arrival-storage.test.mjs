@@ -489,6 +489,13 @@ test("arrival code rotation invalidates the previous generation and cannot redir
       null,
     );
     await allocate(rotatedAgain.version);
+    const consumed = await arrivals.consumeArrivalCode({
+      codeHash: hash("c"),
+      did,
+      method: "com.atproto.server.createAccount",
+    });
+    assert.equal(consumed.signingKey, reservedKey.did());
+    assert.deepEqual(consumed, await arrivals.readArrival("op-1", "user-a"));
     assert.equal((await arrivals.readArrival("op-1", "user-a")).generation, 3);
     assert.equal(
       (await arrivals.readArrival("op-1", "user-a")).signingKey,
@@ -2203,6 +2210,46 @@ test("signed operations must match their CID and carry no private material", asy
       0,
     );
     assert.equal(await persistedVersion(db, "op-1"), version);
+  } finally {
+    await db.close();
+  }
+});
+
+test("signed journal rejects privateKey on otherwise valid signed authority without writes", async () => {
+  const { db, arrivals, claim, prepare, allocate } = await fixture();
+  try {
+    const version = await allocate((await prepare()).version);
+    const handoff = await signed();
+    await plc.assureValidSig([sourceKey.did()], handoff.operation);
+    const before = await claimSnapshot(db);
+    await assert.rejects(
+      arrivals.recordSignedOperation(claim, version, {
+        kind: "handoff",
+        operationId: "op-1",
+        did,
+        ...handoff,
+        operation: {
+          ...handoff.operation,
+          privateKey: "rejected-fixture-value",
+        },
+      }),
+      {
+        code: "InvalidAccount",
+        message: "Signed public facts never carry private material",
+      },
+    );
+    assert.deepEqual(await claimSnapshot(db), before);
+    assert.equal(await persistedVersion(db, "op-1"), version);
+    assert.equal((await db.read("arrival_signed_operations")).length, 0);
+    assert.deepEqual(
+      await arrivals.recordSignedOperation(claim, version, {
+        kind: "handoff",
+        operationId: "op-1",
+        did,
+        ...handoff,
+      }),
+      { kind: "applied", version: version + 1 },
+    );
   } finally {
     await db.close();
   }

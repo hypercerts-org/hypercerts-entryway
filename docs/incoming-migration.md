@@ -625,9 +625,10 @@ derived from the current operation and never stored as a permanent imported-acco
 category. Account status values remain `provisioning`, `active`, `deactivated` and
 `deleted` as enforced at `src/accounts/rules.ts:19-39`; no new status value is added.
 
-Pending projection. Existing evidence is `hasPendingExternalMigration` at
-`src/database/drizzle/account-storage.ts:631-641`, true while any migration
-reservation is not complete. The proposed richer projection is owned by plan 009:
+Pending projection. `hasPendingExternalMigration` in
+`src/database/drizzle/account-storage.ts` checks both incomplete migration
+reservations and active incoming arrivals whose completion checkpoint is absent.
+The richer arrival projection is owned by plan 009:
 
 ```text
 readArrivalAccess(did) -> {operationId, version, did, userId, pdsId, provisioned,
