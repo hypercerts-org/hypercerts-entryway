@@ -61,6 +61,7 @@ esac
         syntax = subprocess.run(["bash", "-n"], input=shell, text=True, capture_output=True)
         self.assertEqual(syntax.returncode, 0, syntax.stderr)
         script = shell.split("python3 - <<'PYTHON'\n", 1)[1].rsplit("PYTHON", 1)[0]
+        compiled = compile(script, "hosted-network-diagnostics", "exec")
         self.assertEqual(workflow.count("run: *package-network-diagnostics"), 2)
         for failed_context in [None, "runner", "container", "build", "timeout"]:
             calls = []
@@ -78,7 +79,7 @@ esac
             output = io.StringIO()
             with patch("subprocess.run", side_effect=run_probe), contextlib.redirect_stdout(output):
                 with self.assertRaises(SystemExit) as result:
-                    exec(compile(script, "hosted-network-diagnostics", "exec"), {})
+                    exec(compiled, {})
             self.assertEqual(result.exception.code, int(failed_context is not None))
             self.assertEqual(len(calls), 3)
             for command, options in calls:

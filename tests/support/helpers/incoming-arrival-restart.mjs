@@ -52,6 +52,8 @@ const stop = async (boundary) => {
       remote.crashLeaseExpiresAt = expires;
     });
   }
+  assert.ok(process.channel);
+  process.channel.ref();
   process.send({ boundary, pid: process.pid });
   await new Promise(() => {});
 };
@@ -377,8 +379,17 @@ const snapshot = async () => {
 // No persisted deadlines or fence checks are bypassed to make takeover possible.
 if (phase !== "initial") {
   const expires = load().crashLeaseExpiresAt;
-  while (expires && (await db.databaseTime()) <= expires)
-    await new Promise((resolve) => setTimeout(resolve, 25));
+  const deadline = performance.now() + 10000;
+  let expired = !expires;
+  for (
+    let poll = 0;
+    poll < 400 && !expired && performance.now() < deadline;
+    poll++
+  ) {
+    expired = (await db.databaseTime()) > expires;
+    if (!expired) await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  if (!expired) throw new Error("FixtureLeaseClockTimeout");
 }
 try {
   if (phase === "initial") {

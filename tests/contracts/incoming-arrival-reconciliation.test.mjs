@@ -4,6 +4,7 @@ import { fork } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
 
 const helper = new URL(
   "../support/helpers/incoming-arrival-restart.mjs",
@@ -33,7 +34,14 @@ const pendingCuts = new Set([
   "tombstone",
   "uncertain",
 ]);
-function worker(directory, phase, cut, kill = false, observationDelay = 0) {
+function worker(
+  directory,
+  phase,
+  cut,
+  kill = false,
+  observationDelay = 0,
+  killDelay = 0,
+) {
   return new Promise((resolve, reject) => {
     const child = fork(
       helper,
@@ -44,23 +52,45 @@ function worker(directory, phase, cut, kill = false, observationDelay = 0) {
     );
     let message;
     let stderr = "";
+    let killTimer;
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       reject(new Error(`WorkerTimeout:${phase}:${cut}`));
     }, 20000);
-    child.stderr.on("data", (chunk) => {
+    const onStderr = (chunk) => {
       stderr += chunk;
-    });
-    child.on("error", reject);
-    child.on("message", (value) => {
+    };
+    child.stderr.on("data", onStderr);
+    const onError = (error) => {
+      clearTimeout(timer);
+      clearTimeout(killTimer);
+      reject(error);
+    };
+    child.once("error", onError);
+    const onMessage = (value) => {
       message = value;
       if (kill) {
         assert.equal(value.boundary, cut);
-        child.kill("SIGKILL");
+        killTimer = setTimeout(() => {
+          try {
+            assert.equal(child.exitCode, null);
+            assert.equal(child.signalCode, null);
+            process.kill(child.pid, 0);
+            assert.equal(child.kill("SIGKILL"), true);
+          } catch (error) {
+            child.kill("SIGKILL");
+            reject(error);
+          }
+        }, killDelay);
       }
-    });
-    child.on("exit", (code, signal) => {
+    };
+    child.on("message", onMessage);
+    child.once("close", (code, signal) => {
       clearTimeout(timer);
+      clearTimeout(killTimer);
+      child.removeListener("error", onError);
+      child.removeListener("message", onMessage);
+      child.stderr.removeListener("data", onStderr);
       if ((kill && signal !== "SIGKILL") || (!kill && code !== 0))
         return reject(
           new Error(
@@ -73,6 +103,54 @@ function worker(directory, phase, cut, kill = false, observationDelay = 0) {
     });
   });
 }
+test("lease polling requires database expiry and bounds a stalled clock", async (t) => {
+  const source = readFileSync(helper, "utf8");
+  const polling = source.slice(
+    source.indexOf('if (phase !== "initial") {'),
+    source.indexOf("\ntry {"),
+  );
+  for (const advancing of [false, true]) {
+    await t.test(advancing ? "advancing clock" : "stalled clock", async () => {
+      let reads = 0;
+      let waits = 0;
+      let elapsed = 0;
+      const context = {
+        phase: "resume",
+        load: () => ({ crashLeaseExpiresAt: 100 }),
+        db: {
+          databaseTime: async () => {
+            reads++;
+            return advancing && reads === 3 ? 101 : 100;
+          },
+        },
+        performance: { now: () => elapsed },
+        setTimeout: (resolve, milliseconds) => {
+          assert.equal(milliseconds, 25);
+          waits++;
+          elapsed += milliseconds;
+          resolve();
+        },
+        resumed: false,
+      };
+      const result = runInNewContext(
+        `(async () => { ${polling}\nresumed = true; })()`,
+        context,
+      );
+      if (advancing) {
+        await result;
+        assert.equal(context.resumed, true);
+        assert.equal(reads, 3);
+        assert.equal(waits, 2);
+      } else {
+        await assert.rejects(result, { message: "FixtureLeaseClockTimeout" });
+        assert.equal(context.resumed, false);
+        assert.equal(reads, 400);
+        assert.equal(waits, 400);
+        assert.equal(elapsed, 10000);
+      }
+    });
+  }
+});
 for (const cut of [...cases, "divergent", "tombstone", "uncertain"]) {
   test(
     `fresh-process arrival reconciliation after ${cut}`,
@@ -80,7 +158,7 @@ for (const cut of [...cases, "divergent", "tombstone", "uncertain"]) {
     async (t) => {
       const directory = mkdtempSync(join(tmpdir(), "incoming-restart-"));
       t.after(() => rmSync(directory, { recursive: true, force: true }));
-      const stopped = await worker(directory, "initial", cut, true);
+      const stopped = await worker(directory, "initial", cut, true, 0, 250);
       writeFileSync(
         join(directory, "stopped.json"),
         JSON.stringify({
