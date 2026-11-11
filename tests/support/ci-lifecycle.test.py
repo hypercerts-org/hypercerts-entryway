@@ -158,6 +158,61 @@ esac
             self.assertNotIn(helper, files)
         self.assertNotIn("tests/support/helpers/incoming-arrival-restart.mjs", files)
 
+    def test_contract_runner_isolates_reconciliation_and_preserves_failures(self):
+        source = Path(__file__).resolve().parents[2]
+        for directory in ["src", "tests/contracts"]:
+            (self.root / directory).mkdir(parents=True, exist_ok=True)
+        for filename in ["run-contracts.mjs", "discover-contracts.mjs"]:
+            shutil.copy(source / "tests/support" / filename, self.root / "tests/support" / filename)
+        (self.root / "tests/contracts/account-access.test.mjs").write_text('''
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {appendFileSync} from 'node:fs';
+test('shared batch', () => {
+  appendFileSync('executed', 'shared\\n');
+  assert.ok(process.execArgv.includes('--test-isolation=none'));
+  assert.notEqual(process.env.FAIL_SUITE, 'shared');
+});
+''')
+        (self.root / "tests/contracts/incoming-arrival-reconciliation.test.mjs").write_text('''
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {appendFileSync} from 'node:fs';
+import {fork} from 'node:child_process';
+test('fresh batch', async () => {
+  appendFileSync('executed', 'fresh\\n');
+  assert.ok(!process.execArgv.includes('--test-isolation=none'));
+  const flags = await new Promise((resolve, reject) => {
+    const child = fork('./worker.mjs', {silent: true});
+    let received;
+    child.on('message', value => { received = value; });
+    child.on('error', reject);
+    child.on('exit', code => code === 0 ? resolve(received) : reject(Error(`WorkerExit:${code}`)));
+  });
+  assert.ok(!flags.includes('--test-isolation=none'));
+  assert.notEqual(process.env.FAIL_SUITE, 'fresh');
+});
+''')
+        (self.root / "worker.mjs").write_text('process.send(process.execArgv);')
+        for failed in ["", "shared", "fresh"]:
+            with self.subTest(failed=failed):
+                result = subprocess.run(["node", "tests/support/run-contracts.mjs"], cwd=self.root,
+                                        env={**self.env, "FAIL_SUITE": failed},
+                                        capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 1 if failed else 0, result.stdout + result.stderr)
+                executed = self.root / "executed"
+                self.assertEqual(executed.read_text().splitlines(), ["shared", "fresh"])
+                executed.unlink()
+                for report, title in [("contracts-junit.xml", "shared batch"),
+                                      ("contracts-reconciliation-junit.xml", "fresh batch")]:
+                    self.assertIn(title, (self.root / "artifacts" / report).read_text())
+        result = subprocess.run(["node", "tests/support/run-contracts.mjs", "--unit"], cwd=self.root,
+                                env={**self.env, "FAIL_SUITE": "fresh"},
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.root / "executed").read_text().splitlines(), ["shared"])
+        self.assertIn('shared batch', (self.root / "artifacts/unit-junit.xml").read_text())
+
     def test_incoming_live_phase_uses_owned_access_and_real_suite(self):
         source = Path(__file__).resolve().parents[2]
         controller = (source / "tests/local.sh").read_text()
