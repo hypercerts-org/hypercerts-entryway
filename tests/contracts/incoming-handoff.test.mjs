@@ -105,6 +105,87 @@ test("destination access tokens name the PDS as audience and keep the at+jwt typ
   assert.equal(claims.exp - claims.iat, 60);
 });
 
+test("invalid signing keys stay unused by reservation and administrator calls", async () => {
+  const client = new ArrivalPdsClient({
+    endpoint,
+    did,
+    pdsDid: destinationDid(endpoint),
+    issuer: serviceDid,
+    jwtJwk: {},
+  });
+  const reservationKey = (await Secp256k1Keypair.create()).did();
+  await serving(
+    async (url) => {
+      if (url.pathname.endsWith("reserveSigningKey"))
+        return Response.json({ signingKey: reservationKey });
+      if (url.pathname.endsWith("getAccountInfo"))
+        return Response.json({
+          did,
+          handle,
+          indexedAt: new Date().toISOString(),
+        });
+      return Response.json({});
+    },
+    async () => {
+      assert.equal(await client.reserveSigningKey(did), reservationKey);
+      assert.deepEqual(await client.getAccountInfo(() => "Basic admin"), {
+        did,
+        handle,
+        deactivated: false,
+      });
+      await client.pauseAccount(() => "Basic admin");
+      await new Promise((resolve) => setImmediate(resolve));
+    },
+  );
+  const { requests } = await serving(
+    async () => assert.fail("Invalid signing key must not reach fetch"),
+    async () => {
+      const failures = await Promise.allSettled([
+        client.checkAccountStatus(did),
+        client.deactivateAccount(did),
+      ]);
+      for (const failure of failures) {
+        assert.equal(failure.status, "rejected");
+        assert.equal(failure.reason.message, "InvalidIssuerSigningKey");
+      }
+      assert.equal(failures[0].reason, failures[1].reason);
+      await assert.rejects(client.checkAccountStatus(did), {
+        message: "InvalidIssuerSigningKey",
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+    },
+  );
+  assert.equal(requests.length, 0);
+});
+
+test("account signer is cached across concurrent and subsequent token requests", async () => {
+  const signingJwk = jwk();
+  const client = new ArrivalPdsClient({
+    endpoint,
+    did,
+    pdsDid: destinationDid(endpoint),
+    issuer: serviceDid,
+    jwtJwk: signingJwk,
+  });
+  const { requests } = await serving(
+    async () => Response.json({ activated: false }),
+    async () => {
+      await Promise.all([
+        client.checkAccountStatus(did),
+        client.checkAccountStatus(did),
+      ]);
+      signingJwk.kty = "invalid";
+      await client.checkAccountStatus(did);
+    },
+  );
+  assert.equal(requests.length, 3);
+  for (const { init } of requests) {
+    const token = new Headers(init.headers).get("authorization").slice(7);
+    assert.equal(decodeJwt(token).aud, destinationDid(endpoint));
+    assert.equal(decodeJwt(token).iss, serviceDid);
+  }
+});
+
 test("a stock reservation HTTP error, malformed body or unsupported key is refused", async () => {
   const client = new ArrivalPdsClient({
     endpoint,

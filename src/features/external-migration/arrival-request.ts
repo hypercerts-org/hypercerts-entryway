@@ -28,7 +28,7 @@ export function canonicalArrivalValue(value: unknown): unknown {
   )
     return Object.fromEntries(
       Object.keys(value)
-        .sort()
+        .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0))
         .map((key) => [
           key,
           canonicalArrivalValue((value as Record<string, unknown>)[key]),

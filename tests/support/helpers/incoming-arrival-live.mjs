@@ -15,6 +15,22 @@ import { createSmtpMailTransport } from "../../../dist/src/mail/smtp.js";
 import { waitForMailpitCode } from "./mailpit.mjs";
 import { waitForStockPlcMessage } from "./stock-plc-mailpit.mjs";
 
+export async function discardAppliedArrivalResponse({
+  fault,
+  method,
+  response,
+  discarded,
+}) {
+  const matchesFault =
+    (fault === "creation-lost" &&
+      method === "com.atproto.server.createAccount") ||
+    (fault === "pause-lost" &&
+      method === "com.atproto.admin.updateSubjectStatus");
+  if (discarded || !response.ok || !matchesFault) return false;
+  await response.arrayBuffer();
+  return true;
+}
+
 // Contributors qualifying dormant composition use normal proof producers here;
 // no identity, arrival, or authentication rows are inserted by the harness.
 export async function qualifyIncomingArrival(t, fault = "normal") {
@@ -286,15 +302,14 @@ export async function qualifyIncomingArrival(t, fault = "normal") {
     if (String(url).startsWith(prepared.destinationEndpoint)) {
       const binding = await storage.getVerifiedBinding(source.did);
       calls.push({ method, status: response.status, bound: Boolean(binding) });
-      const discardMethod =
-        fault === "creation-lost"
-          ? "com.atproto.server.createAccount"
-          : fault === "pause-lost"
-            ? "com.atproto.admin.updateSubjectStatus"
-            : null;
-      if (!discarded && method === discardMethod && response.ok) {
-        // Drain the real response before discarding it; preserve the remote effect.
-        await response.arrayBuffer();
+      if (
+        await discardAppliedArrivalResponse({
+          fault,
+          method,
+          response,
+          discarded,
+        })
+      ) {
         discarded = true;
         throw new Error("Controlled applied response discard");
       }

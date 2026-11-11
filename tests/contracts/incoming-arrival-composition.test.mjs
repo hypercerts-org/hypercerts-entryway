@@ -813,6 +813,38 @@ test("fresh bodies have semantic server digests and reject unsupported fields", 
     parseArrivalRequest(saved, incomingHandoffMethod, { operation: candidate })
       .requestDigest;
   assert.equal(digest(operation), digest(reversed));
+  const keys = [
+    "\uffff",
+    "\ue000",
+    "\ud800\udc00",
+    "\ud800",
+    "é",
+    "e\u0301",
+    "a",
+    "Z",
+  ];
+  const nested = Object.fromEntries(
+    keys.map((key) => [key, ["first", "second"]]),
+  );
+  const reordered = Object.fromEntries(Object.entries(nested).reverse());
+  const parsed = parseArrivalRequest(saved, incomingHandoffMethod, {
+    operation: { nested },
+  });
+  assert.deepEqual(Object.keys(parsed.operation.nested), [
+    "Z",
+    "a",
+    "e\u0301",
+    "é",
+    "\ud800",
+    "\ud800\udc00",
+    "\ue000",
+    "\uffff",
+  ]);
+  assert.equal(digest({ nested }), digest({ nested: reordered }));
+  assert.notEqual(
+    digest({ nested }),
+    digest({ nested: { ...nested, Z: ["second", "first"] } }),
+  );
   assert.notEqual(
     digest(operation),
     digest({

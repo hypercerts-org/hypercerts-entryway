@@ -83,9 +83,11 @@ async function readPublicJson(
  * lifecycle-hook or administration credential: ordinary `createAccount` with a
  * caller-signed move, then self-deactivation with the account credential. */
 export class ArrivalPdsClient {
-  readonly #accountAccess: Promise<{
-    sign: (did: string) => Promise<string>;
-  }>;
+  #accountAccess:
+    | Promise<{
+        sign: (did: string) => Promise<string>;
+      }>
+    | undefined;
   public constructor(
     private readonly options: {
       readonly endpoint: string;
@@ -100,11 +102,6 @@ export class ArrivalPdsClient {
         throw new TypeError(
           "A destination service DID and issuer are required",
         );
-    this.#accountAccess = createTargetAccessTokenSigner({
-      privateJwk: options.jwtJwk,
-      issuer: options.issuer,
-      audience: options.pdsDid,
-    });
   }
   /** Configured administrator credentials stay in composition's signing closure. */
   public async getAccountInfo(
@@ -173,6 +170,11 @@ export class ArrivalPdsClient {
    * verifier from `verifyEntrywayServiceJwt`, which serves `createAccount` and
    * `reserveSigningKey` and requires `typ: "JWT"`; those rules do not apply here. */
   async #accessToken(did: string): Promise<string> {
+    this.#accountAccess ??= createTargetAccessTokenSigner({
+      privateJwk: this.options.jwtJwk,
+      issuer: this.options.issuer,
+      audience: this.options.pdsDid,
+    });
     return await (await this.#accountAccess).sign(did);
   }
   /** Stock reservation is unauthenticated and echoes neither DID nor host: the
