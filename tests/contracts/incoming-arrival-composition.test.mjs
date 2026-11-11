@@ -300,7 +300,16 @@ async function fixture(t, mode = "modern", mutation = "", fault = "") {
         )
       )[0];
       assert.deepEqual(body.plcOp, JSON.parse(recorded.operation));
+      assert.equal((await arrivals.readArrivalAccess(did)).bound, false);
+      assert.equal(body.handle, handle);
+      assert.equal(body.did, did);
+      assert.equal(body.plcOp.verificationMethods.atproto, repository.did());
+      assert.equal(body.plcOp.services.atproto_pds.endpoint, endpoint);
+      assert.equal(typeof body.plcOp.sig, "string");
+      assert.ok(body.plcOp.sig.length > 0);
       backendState.exactMove = body.plcOp;
+      if (backendState.mode === "creation-rejected")
+        return Response.json({ error: "InvalidRequest" }, { status: 400 });
       if (backendState.mode !== "unchanged-head")
         audit.push({
           did,
@@ -326,6 +335,9 @@ async function fixture(t, mode = "modern", mutation = "", fault = "") {
         subject: { $type: "com.atproto.admin.defs#repoRef", did },
         deactivated: { applied: true },
       });
+      assert.equal((await arrivals.readArrivalAccess(did)).bound, false);
+      if (backendState.mode === "pause-rejected")
+        return Response.json({ error: "InvalidRequest" }, { status: 400 });
       backendState.deactivated = true;
       if (backendState.mode === "pause-lost")
         throw new Error("pause response lost");
@@ -902,6 +914,35 @@ test("authenticated creation uses real invitation producer atomically without st
   );
 });
 
+test("composed creation rejects a submit-scoped credential before admission or destination effects", async (t) => {
+  const f = await fixture(t);
+  const prepared = await f.prepare();
+  const before = await f.arrivals.readArrivalAggregate(
+    prepared.operationId,
+    f.principal.userId,
+  );
+  await assert.rejects(
+    f.composed.admitIncoming(f.request, {
+      operationId: prepared.operationId,
+      method: incomingCreationMethod,
+      body: { handle },
+      presentation: await f.credential(incomingHandoffMethod),
+      arrivalCode: prepared.arrivalCode,
+    }),
+    { code: "AccountMismatch" },
+  );
+  assert.deepEqual(
+    await f.arrivals.readArrivalAggregate(
+      prepared.operationId,
+      f.principal.userId,
+    ),
+    before,
+  );
+  assert.equal(f.backendState.creates, 0);
+  assert.equal(f.backendState.pauses, 0);
+  assert.equal(f.publicationAttempts.length, 0);
+});
+
 test("handoff journal failure rolls admission back before any dispatch", async (t) => {
   const f = await fixture(t);
   const prepared = await f.prepare();
@@ -986,6 +1027,8 @@ for (const mode of [
   "normal",
   "creation-lost",
   "pause-lost",
+  "creation-rejected",
+  "pause-rejected",
   "published-absent",
   "network",
   "malformed",
@@ -1000,8 +1043,29 @@ for (const mode of [
       f.composed.continueCreation(f.request, prepared.operationId);
     if (mode === "normal") {
       const result = await continuation();
+      assert.deepEqual(Object.keys(result).sort(), [
+        "operationId",
+        "state",
+        "version",
+      ]);
       assert.equal(result.state, "pending");
+      assert.equal((await f.arrivals.readArrivalAccess(f.did)).complete, false);
+      const aggregate = await f.arrivals.readArrivalAggregate(
+        prepared.operationId,
+        f.principal.userId,
+      );
+      const move = aggregate.signedOperations.find(
+        (item) => item.kind === "destination-move",
+      );
+      assert.deepEqual(move.operation, f.backendState.exactMove);
+      assert.equal(move.cid, String(await cidForCbor(move.operation)));
+      assert.equal(
+        move.operation.prev,
+        aggregate.signedOperations.find((item) => item.kind === "handoff").cid,
+      );
+      assert.equal(f.audit.at(-1).cid, move.cid);
       assert.deepEqual(await continuation(), result);
+      assert.equal(f.reservations(), 1);
       assert.equal(f.backendState.creates, 1);
       assert.equal(f.backendState.pauses, 1);
       assert.equal(f.backendState.exactMove.alsoKnownAs[0], `at://${handle}`);
@@ -1022,6 +1086,18 @@ for (const mode of [
         ).reservation.uncertainReason,
         null,
       );
+      if (["creation-rejected", "pause-rejected"].includes(mode)) {
+        const projection = await f.arrivals.readArrivalAccess(f.did);
+        assert.equal(projection.provisioned, false);
+        assert.equal(projection.deactivationObserved, false);
+        const aggregate = await f.arrivals.readArrivalAggregate(
+          prepared.operationId,
+          f.principal.userId,
+        );
+        assert.equal(aggregate.signedOperations.length, 2);
+        assert.equal(f.backendState.creates, 1);
+        assert.equal(f.backendState.pauses, mode === "pause-rejected" ? 1 : 0);
+      }
       if (["creation-lost", "pause-lost"].includes(mode)) {
         await assert.rejects(continuation(), {
           code: "OperationRecoveryRequired",

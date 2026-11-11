@@ -12,14 +12,12 @@ import {
 import { createAccountStorage } from "../../../dist/src/database/drizzle/account-storage.js";
 import { createArrivalStorage } from "../../../dist/src/database/drizzle/migration-arrival.js";
 import { createOperationOwnershipStore } from "../../../dist/src/database/drizzle/operation-ownership.js";
-import { Secp256k1MigrationPlcSigner } from "../../../dist/src/plc/signing.js";
 import { validateIncomingHandoff } from "../../../dist/src/plc/policy.js";
 import { createIncomingAuthorization } from "../../../dist/src/features/external-migration/incoming-authorization.js";
 import {
   createArrivalPreparation,
   generateArrivalCode,
 } from "../../../dist/src/features/external-migration/prepare-arrival.js";
-import { createArrivalProvisioning } from "../../../dist/src/features/external-migration/provision-arrival.js";
 
 const hosts = [
   { id: "pds1", url: "https://pds1.example.test" },
@@ -110,9 +108,6 @@ async function fixture() {
   const ownership = createOperationOwnershipStore(db);
   await verifiedUser(db, userId, email);
   const authority = await sourceAuthority();
-  const signer = await Secp256k1MigrationPlcSigner.fromHex(
-    Buffer.from(await authority.entryway.export()).toString("hex"),
-  );
   const code = generateArrivalCode();
   const arrival = await arrivals.createArrival({
     operationId: "op-1",
@@ -137,7 +132,7 @@ async function fixture() {
     leaseMs: 120_000,
   });
   await ownership.bindResource(claim, `arrival:${did}`);
-  return { db, arrivals, ownership, authority, signer, code, arrival, claim };
+  return { db, arrivals, ownership, authority, code, arrival, claim };
 }
 
 test("preparation journals the allocation intent before reserving and persists the public key", async () => {
@@ -454,254 +449,4 @@ test("handoff validation rejects changed source facts, overfull and reordered au
   await assert.rejects(validate({ operation: reordered }), {
     code: "InvalidPlcOperation",
   });
-});
-
-function publicHandoff(authority) {
-  const { sig: _signature, ...facts } = authority.handoffOperation;
-  return facts;
-}
-
-test("provisioning refuses a submit-scoped credential and never creates a destination account", async () => {
-  const { db, arrivals, authority, claim, code } = await fixture();
-  const now = Math.floor(Date.now() / 1000);
-  const store = createOperationOwnershipStore(db);
-  const created = [];
-  const verify = createIncomingAuthorization({
-    serviceDid,
-    readDirectory: async () => ({
-      "@context": ["https://www.w3.org/ns/did/v1"],
-      id: did,
-      verificationMethod: [
-        {
-          id: `${did}#atproto`,
-          type: "EcdsaSecp256k1VerificationKey2019",
-          controller: did,
-          publicKeyMultibase: authority.source.did(),
-        },
-      ],
-    }),
-  });
-  const preparation = createArrivalPreparation({
-    arrivals,
-    reserveSigningKey: async () =>
-      (await Secp256k1Keypair.create({ exportable: true })).did(),
-  });
-  const reserved = await preparation.reserve(claim, 1, {
-    operationId: "op-1",
-    did,
-    pdsId: "pds1",
-    endpoint,
-    signingKey: null,
-  });
-  const provisioning = createArrivalProvisioning({
-    arrivals,
-    verifyIncomingAuthorization: verify,
-    invitation: {
-      reserve: async () => {},
-      complete: async () => {},
-    },
-    plc: {
-      signMove: async () => {
-        throw new Error("must not sign");
-      },
-      observe: async () => ({ headCid: "", tombstone: false }),
-    },
-    backend: {
-      createAccount: async (input) => {
-        created.push(input);
-        return { did: input.did, handle: input.handle };
-      },
-      checkAccountStatus: async () => ({ activated: true }),
-      deactivateAccount: async () => {},
-    },
-  });
-  void store;
-  const submitScoped = `Bearer ${await createServiceJwt({
-    iss: did,
-    aud: serviceDid,
-    lxm: "com.atproto.identity.submitPlcOperation",
-    iat: now,
-    exp: now + 120,
-    keypair: authority.source,
-  })}`;
-  await assert.rejects(
-    provisioning.provision(claim, {
-      operationId: "op-1",
-      admission: submitScoped,
-      arrivalCode: code.code,
-      invitationCode: undefined,
-      handle,
-      requestDigest: hash("e"),
-      observedHandoff: {
-        did,
-        operation: authority.handoffFacts,
-        cid: "bafyreiaaaa",
-      },
-    }),
-    { code: "AccountMismatch" },
-  );
-  assert.equal(reserved.version, 3);
-  assert.deepEqual(created, []);
-  assert.deepEqual(
-    await query(db, "SELECT * FROM arrival_signed_operations"),
-    [],
-  );
-});
-
-test("watched arrival access stays pending until a binding exists", async () => {
-  const { db, arrivals, authority, claim, code } = await fixture();
-  const now = Math.floor(Date.now() / 1000);
-  const handoff = authority.handoffOperation;
-  // Canonical observation evidence supplies the full surviving operation, whose
-  // signature the destination move must chain from; the journal keeps the signed
-  // bytes, while the caller's own observed CID names the unsigned facts.
-  const handoffCid = String(await cidForCbor(publicHandoff(authority)));
-  // A directory head is the CID of the signed operation, not of its facts.
-  const signedHandoffCid = String(await cidForCbor(handoff));
-  const preparation = createArrivalPreparation({
-    arrivals,
-    reserveSigningKey: async () =>
-      (await Secp256k1Keypair.create({ exportable: true })).did(),
-  });
-  const reserved = await preparation.reserve(claim, 1, {
-    operationId: "op-1",
-    did,
-    pdsId: "pds1",
-    endpoint,
-    signingKey: null,
-  });
-  // The destination move is refused until the source handoff is recorded, so the
-  // handoff is published first and its canonical head is the observed predecessor.
-  // Storage-only lifecycle fixture. Concrete authenticated publication and crash
-  // recovery are exercised by incoming-arrival-composition.test.mjs.
-  await arrivals.recordSignedOperation(claim, reserved.version, {
-    kind: "handoff",
-    operationId: "op-1",
-    did,
-    operation: handoff,
-    cid: signedHandoffCid,
-  });
-  const repositoryKey = (
-    await query(db, "SELECT signing_key FROM arrival_reservations")
-  )[0].signing_key;
-  const signer = await Secp256k1MigrationPlcSigner.fromHex(
-    Buffer.from(await authority.entryway.export()).toString("hex"),
-  );
-  const verify = createIncomingAuthorization({
-    serviceDid,
-    readDirectory: async () => ({
-      "@context": ["https://www.w3.org/ns/did/v1"],
-      id: did,
-      verificationMethod: [
-        {
-          id: `${did}#atproto`,
-          type: "EcdsaSecp256k1VerificationKey2019",
-          controller: did,
-          publicKeyMultibase: authority.source.did(),
-        },
-      ],
-    }),
-  });
-  const calls = [];
-  let dispatched;
-  const provisioning = createArrivalProvisioning({
-    arrivals,
-    verifyIncomingAuthorization: verify,
-    invitation: {
-      reserve: async () => calls.push("invite-reserve"),
-      complete: async () => calls.push("invite-complete"),
-    },
-    plc: {
-      signMove: async (input, persist) => {
-        // Wrap the signer so the recorded bytes are the signed operation, which
-        // is exactly what the stock PDS receives as `plcOp`.
-        return await signer.signArrivalMove(input, persist);
-      },
-      observe: async () => ({ headCid: signedHandoffCid, tombstone: false }),
-    },
-    backend: {
-      createAccount: async (input) => {
-        calls.push("create");
-        assert.equal(input.did, did);
-        dispatched = input.operation;
-        return { did, handle };
-      },
-      checkAccountStatus: async () => ({
-        activated: calls.includes("deactivate") === false,
-      }),
-      deactivateAccount: async () => {
-        calls.push("deactivate");
-      },
-    },
-  });
-  const result = await provisioning.provision(claim, {
-    admission: `Bearer ${await createServiceJwt({
-      iss: did,
-      aud: serviceDid,
-      lxm: "com.atproto.server.createAccount",
-      iat: now,
-      exp: now + 120,
-      keypair: authority.source,
-    })}`,
-    operationId: "op-1",
-    arrivalCode: code.code,
-    invitationCode: undefined,
-    handle,
-    requestDigest: hash("f"),
-    observedHandoff: { did, operation: handoff, cid: handoffCid },
-  });
-  assert.equal(result.state, "pending");
-  assert.deepEqual(calls, [
-    "invite-reserve",
-    "create",
-    "deactivate",
-    "invite-complete",
-  ]);
-  const signed = await query(
-    db,
-    "SELECT kind, cid FROM arrival_signed_operations ORDER BY kind",
-  );
-  assert.deepEqual(
-    signed.map((row) => row.kind),
-    ["destination-move", "handoff"],
-  );
-  // The move was signed over the saved reservation's public key, never a new one.
-  const savedMove = await query(
-    db,
-    "SELECT operation, cid FROM arrival_signed_operations WHERE kind = 'destination-move'",
-  );
-  assert.equal(
-    JSON.parse(savedMove[0].operation).verificationMethods.atproto,
-    repositoryKey,
-  );
-  // The journaled move carries its signature and its CID covers those signed bytes.
-  const journaledMove = JSON.parse(savedMove[0].operation);
-  assert.equal(typeof journaledMove.sig, "string");
-  assert.ok(journaledMove.sig.length > 0);
-  assert.equal(
-    savedMove[0].cid,
-    String(await cidForCbor(journaledMove)),
-    "the journaled CID covers the signed operation, not its unsigned facts",
-  );
-  // The destination receives exactly the signed bytes the journal retains.
-  assert.deepEqual(dispatched, journaledMove);
-  // A stock entryway-mode PDS compares the move's `atproto_pds.endpoint` to its
-  // own public URL (validateAtprotoData) and refuses an operation naming any
-  // other host. The move must therefore name the destination, not the source.
-  assert.equal(
-    journaledMove.services.atproto_pds.endpoint,
-    endpoint,
-    "the destination move names the selected destination PDS",
-  );
-  assert.notEqual(
-    journaledMove.services.atproto_pds.endpoint,
-    sourceEndpoint,
-    "the destination move must not retain the source endpoint",
-  );
-  const projection = await arrivals.readArrivalAccess(did);
-  assert.equal(projection.provisioned, true);
-  assert.equal(projection.deactivationObserved, true);
-  assert.equal(projection.bound, true);
-  assert.equal(projection.complete, false);
-  assert.ok(!JSON.stringify(result).includes("accessJwt"));
 });
