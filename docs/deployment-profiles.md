@@ -91,7 +91,12 @@ header is test machinery, not a production routing or fleet API.
 Every profile exercises fresh Mailpit signup, returning OTP/session use,
 independent-client OAuth and direct PDS reads/writes. The PostgreSQL replica case
 crosses observed boot IDs for OTP completion, session use, code consumption,
-refresh/replay and revocation. Concurrent cold client initialization retains the
+refresh/replay and revocation. A separate shared-email OAuth sign-in alternates
+nodes: code request on one, code verification on the other, account choice on the
+first and consent on the second. It requires each step's responses to name the
+selected node's boot ID, then checks the session DID, token audience and an
+account-scoped write. A chooser submission for a DID bound to another email is
+refused on both nodes. Concurrent cold client initialization retains the
 same public metadata keys across nodes. Safe attempt receipts associate actual
 application work with its boot identity; private keys and credentials stay in
 private volumes.

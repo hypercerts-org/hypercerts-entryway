@@ -38,13 +38,18 @@ repair reject a normalized destination claimed by another DID; moving an existin
 shared account to an unused email leaves sibling claims and bindings unchanged.
 Authorized migration finalization may add a DID binding beside an unbound account
 with the same email, without binding that sibling. The post-verification chooser
-and joining-PDS association import remain unimplemented; the resolver returns
+is implemented for established bindings: email OTP precedes disclosure, and the
+selected binding is re-read before the original authorization continues. The
+joining-PDS association import remains unimplemented; the resolver returns
 `selection-required` and no DID is selected by email alone.
 
-Preserved MJS remains outside strict TypeScript coverage. Complete ePDS consent and
-freshness parity, production email delivery across the XRPC surface, fleet
-placement/drain/retirement, repeatable migration history and public-protocol
-migration still require work. Valid empty repositories and actual create-then-
+Preserved MJS remains outside strict TypeScript coverage. Remembered OAuth device
+authentication now requires email OTP after seven days and keeps the selected
+account and OAuth `login_hint` binding through flow restart. Configured local
+public and confidential client flows have verified hint, freshness and consent
+behavior. Full ePDS production consent/freshness parity, production email
+delivery across the XRPC surface, fleet placement/drain/retirement, repeatable
+migration history and public-protocol migration still require work. Valid empty repositories and actual create-then-
 deactivate/PLC ordering must be covered by the complete migration contract.
 See [implementation limits](implementation-assessment.md#known-limits) for unresolved
 moderation, credential lifetime and production qualification.
@@ -146,7 +151,7 @@ checks and outstanding requirements.
 | `next-spike/app/test/oauth-lifecycle.spec.mjs:161`            | Recorded unresolved freshness/identity case |
 | `next-spike/app/src/infra/mail/smtp-transport.ts:9`           | Sandbox transport                           |
 | `next-spike/app/tsconfig.json:19`                             | MJS excluded from strict typing             |
-| `ePDS/features/consent-screen.feature:50`                     | Required returning-user consent behaviour   |
+| `ePDS/features/consent-screen.feature:50`                     | Returning-user consent skip; not provided   |
 | `ePDS/features/session-reuse-bugs.feature:183`                | Required reauthentication behaviour         |
 
 The sibling ePDS harness is a model for orchestration and isolation, not proof

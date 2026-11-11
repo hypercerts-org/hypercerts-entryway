@@ -1,6 +1,26 @@
 import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { FLOW_LIFETIME } from "../../http/browser-flow.mjs";
+import { escapeHtml } from "../../ui/html.mjs";
+import { hidden } from "../../ui/forms.mjs";
 import { authorizationRedirect } from "./redirect.mjs";
+import {
+  completeAuthorization,
+  flowBindsAnotherAccount,
+} from "./complete-authorization.mjs";
+import { matchesAuthorizationHint } from "../../accounts/rules.js";
+import { accountEmailSchema } from "../../accounts/input-schema.js";
+
+// PAR accepts only a handle or DID as login_hint, so email-first clients put
+// the email on this redirect URL instead. Only exactly one value that passes
+// the account email schema is used, and only its normalized form; anything
+// else is ignored so the raw query value is never reflected.
+function redirectEmailHint(params) {
+  const values = params.getAll("login_hint");
+  if (values.length !== 1) return null;
+  const parsed = accountEmailSchema.safeParse(values[0]);
+  return parsed.success ? parsed.data : null;
+}
+
 export function mountAuthorizationRoutes({
   app,
   db,
@@ -9,16 +29,63 @@ export function mountAuthorizationRoutes({
   flows,
   loginForm,
   consentForm,
+  startEmailCode,
+  accountEmail,
 }) {
   const {
     newFlow,
     getFlow,
     loadBrowser,
+    fields,
     checkCsrf,
     pageForFlow,
     guarded,
     form,
   } = flows;
+  const rememberedLoginForm = (flow, browser, account) =>
+    `<div class="account"><strong>${escapeHtml(account.handle ?? account.did)}</strong><br><small>${escapeHtml(account.did)}</small><form method="post" action="/auth/remembered-login">${fields(flow, browser)}${hidden("did", account.did)}<button>Sign in with an email code</button></form></div>`;
+  const canRedirectToSelectedAccount = async (deviceId, did, hint) => {
+    if (typeof hint !== "string" || !hint) return false;
+    const matches = (
+      await provider.accountManager.listDeviceAccounts(deviceId)
+    ).filter(
+      ({ account }) =>
+        !account.deactivated &&
+        matchesAuthorizationHint(account, undefined, hint),
+    );
+    return matches.length === 1 && matches[0].account.did === did;
+  };
+  const authorizationPage = (res, browser, flow, result) => {
+    const sessions =
+      result.parameters.prompt === "create"
+        ? []
+        : result.sessions.filter(
+            (session) =>
+              !session.account.deactivated &&
+              matchesAuthorizationHint(
+                session.account,
+                flow.accountHint,
+                result.parameters.login_hint,
+              ),
+          );
+    const freshChoices = sessions
+      .filter((session) => !session.loginRequired)
+      .map(({ account }) => consentForm(flow, browser, account))
+      .join("");
+    const reauthenticationChoices = sessions
+      .filter((session) => session.loginRequired)
+      .map(({ account }) => rememberedLoginForm(flow, browser, account))
+      .join("");
+    const choices = freshChoices + reauthenticationChoices;
+    return pageForFlow(
+      res,
+      "Sign in to authorize",
+      `${choices}${choices ? "<p>Or use another account:</p>" : ""}${loginForm(flow, browser)}`,
+      flow,
+      200,
+      { formOrigin: new URL(flow.parameters.redirect_uri).origin },
+    );
+  };
   app.get(
     "/oauth/authorize",
     guarded(async (req, res) => {
@@ -54,23 +121,15 @@ export function mountAuthorizationRoutes({
         clientName: result.client.metadata.client_name,
         parameters: result.parameters,
       });
-      const sessions =
-        result.parameters.prompt === "create"
-          ? []
-          : result.sessions.filter(
-              (s) => !s.loginRequired && !s.account.deactivated,
-            );
-      const choices = sessions
-        .map(({ account }) => consentForm(flow, browser, account))
-        .join("");
-      pageForFlow(
-        res,
-        "Sign in to authorize",
-        `${choices}${choices ? "<p>Or use another account:</p>" : ""}${loginForm(flow, browser)}`,
-        flow,
-        200,
-        { formOrigin: new URL(flow.parameters.redirect_uri).origin },
-      );
+      // A handle/DID hint from PAR is the binding account constraint; an email
+      // hint never overrides it and never selects or restricts an account.
+      const emailHint =
+        result.parameters.login_hint == null &&
+        result.parameters.prompt !== "none"
+          ? redirectEmailHint(params)
+          : null;
+      if (emailHint) return await startEmailCode(res, flow, browser, emailHint);
+      authorizationPage(res, browser, flow, result);
     }),
   );
   app.post(
@@ -97,41 +156,126 @@ export function mountAuthorizationRoutes({
         throw new InvalidRequestError(
           "This sign-in is still active. Continue with the current page.",
         );
+      const request = await provider.requestManager.get(
+        expired.requestUri,
+        browser.deviceId,
+        expired.clientId,
+      );
+      if (
+        expired.authDid &&
+        expired.accountHint &&
+        expired.authDid !== expired.accountHint
+      )
+        throw new InvalidRequestError(
+          "This sign-in changed its selected account",
+        );
+      const selectedDid = expired.authDid ?? expired.accountHint;
+      if (selectedDid) {
+        const selected = await provider.accountManager.getAccount(selectedDid);
+        if (
+          !matchesAuthorizationHint(
+            selected.account,
+            selectedDid,
+            request.parameters.login_hint,
+          )
+        )
+          throw new InvalidRequestError(
+            "This authorization request no longer matches the selected account",
+          );
+      }
       const result = await provider.authorize(
         { client_id: expired.clientId, request_uri: expired.requestUri },
         browser,
       );
-      if ("redirect" in result)
+      if ("redirect" in result) {
+        // The fast-path result contains a code but not its DID. Verify the exact
+        // provider hint candidate before returning a restarted flow's redirect.
+        if (
+          selectedDid &&
+          !(await canRedirectToSelectedAccount(
+            browser.deviceId,
+            selectedDid,
+            request.parameters.login_hint,
+          ))
+        )
+          throw new InvalidRequestError(
+            "This authorization cannot be safely restarted for the selected account",
+          );
         return authorizationRedirect(
           res,
           result.issuer,
           result.parameters,
           result.redirect,
         );
+      }
       const flow = await newFlow(browser, {
         requestUri: result.requestUri,
         clientId: result.client.id,
         clientName: result.client.metadata.client_name,
         parameters: result.parameters,
+        ...(selectedDid ? { accountHint: selectedDid } : {}),
       });
       await db.delete("auth-flows", expired.id);
-      const sessions =
-        result.parameters.prompt === "create"
-          ? []
-          : result.sessions.filter(
-              (session) =>
-                !session.loginRequired && !session.account.deactivated,
-            );
-      const choices = sessions
-        .map(({ account }) => consentForm(flow, browser, account))
-        .join("");
+      return authorizationPage(res, browser, flow, result);
+    }),
+  );
+  app.post(
+    "/auth/remembered-login",
+    form,
+    guarded(async (req, res) => {
+      const { flow, browser } = await getFlow(req, res);
+      if (!flow.requestUri || flow.authEmail || flow.authDid || flow.authUserId)
+        throw new InvalidRequestError(
+          "This sign-in choice has already been used",
+        );
+      const request = await provider.requestManager.get(
+        flow.requestUri,
+        browser.deviceId,
+        flow.clientId,
+      );
+      const did = req.body?.did;
+      if (typeof did !== "string" || !did)
+        throw new InvalidRequestError("Choose a remembered account to sign in");
+      const session = await provider.accountManager.getDeviceAccount(
+        browser.deviceId,
+        did,
+      );
+      if (
+        !session ||
+        session.account.deactivated ||
+        !matchesAuthorizationHint(
+          session.account,
+          flow.accountHint,
+          request.parameters.login_hint,
+        ) ||
+        (!provider.checkLoginRequired(session) &&
+          request.parameters.prompt !== "login")
+      )
+        throw new InvalidRequestError(
+          "Sign in to the account requested by this application",
+        );
+      const selectedFlow = await newFlow(browser, {
+        requestUri: flow.requestUri,
+        clientId: flow.clientId,
+        clientName: flow.clientName,
+        parameters: request.parameters,
+        accountHint: did,
+      });
+      await db.delete("auth-flows", flow.id);
+      // The account is already chosen, so send its code without asking for the
+      // address. The page masks it: this browser never typed it.
+      const email = await accountEmail(did);
+      if (email)
+        return await startEmailCode(res, selectedFlow, browser, email, {
+          maskEmail: true,
+        });
       return pageForFlow(
         res,
         "Sign in to authorize",
-        `${choices}${choices ? "<p>Or use another account:</p>" : ""}${loginForm(flow, browser)}`,
-        flow,
+        loginForm(selectedFlow, browser),
+        selectedFlow,
         200,
-        { formOrigin: new URL(flow.parameters.redirect_uri).origin },
+        { formOrigin: new URL(selectedFlow.parameters.redirect_uri).origin },
       );
     }),
   );
@@ -164,32 +308,28 @@ export function mountAuthorizationRoutes({
       );
       if (
         !session ||
+        !matchesAuthorizationHint(
+          session.account,
+          flow.accountHint,
+          request.parameters.login_hint,
+        ) ||
         provider.checkLoginRequired(session) ||
-        (request.parameters.prompt === "login" && flow.authDid !== did)
+        flowBindsAnotherAccount(flow, did, request)
       )
         throw new InvalidRequestError("Sign in to this account first");
       const client = await provider.clientManager.getClient(flow.clientId);
-      const code = await provider.requestManager.setAuthorized(
-        flow.requestUri,
+      await completeAuthorization({
+        db,
+        config,
+        provider,
+        refreshFlow: flows.refreshFlow,
+        res,
+        flow,
+        browser,
         client,
-        session.account,
-        browser.deviceId,
-        browser.deviceMetadata,
-      );
-      const granted = new Set(
-        session.authorizedClients.get(flow.clientId)?.authorizedScopes ?? [],
-      );
-      for (const scope of request.parameters.scope?.split(" ") ?? [])
-        granted.add(scope);
-      await provider.accountManager.setAuthorizedClient(
-        session.account,
-        client,
-        {
-          authorizedScopes: [...granted],
-        },
-      );
-      await db.delete("auth-flows", flow.id);
-      authorizationRedirect(res, config.issuer, request.parameters, { code });
+        request,
+        deviceAccount: session,
+      });
     }),
   );
 }

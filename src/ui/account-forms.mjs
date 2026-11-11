@@ -2,10 +2,28 @@ import { page, escapeHtml as esc } from "./html.mjs";
 
 export const hidden = (name, value) =>
   `<input type="hidden" name="${esc(name)}" value="${esc(value)}">`;
+export const accountUrl = (did) => `/account?did=${encodeURIComponent(did)}`;
+// A protected settings page opens its form only for a recent session; see
+// "Confirm it's you" in docs/architecture.md.
+export const manageUrl = (name, did) =>
+  `/account/manage/${name}?did=${encodeURIComponent(did)}`;
+export const manageLink = (name, label, accountContext) =>
+  `<p><a class="button" href="${esc(manageUrl(name, accountContext.did))}">${esc(label)}</a></p>`;
+const accountContextFields = (context) =>
+  context?.did ? hidden("did", context.did) : "";
+const formAction = (action) =>
+  action.startsWith("/") ? action : `/account/${action}`;
 export const field = (name, label, type = "text", attributes = "") =>
   `<label>${esc(label)}<input name="${esc(name)}" type="${type}" ${attributes} required></label>`;
-export const form = (action, csrf, contents, button, extra = "") =>
-  `<form method="post" action="${action.startsWith("/") ? action : `/account/${action}`}" ${extra}>${hidden("csrf", csrf)}${contents}<button>${esc(button)}</button></form>`;
+export const form = (
+  action,
+  csrf,
+  contents,
+  button,
+  accountContext,
+  extra = "",
+) =>
+  `<form method="post" action="${formAction(action)}" ${extra}>${hidden("csrf", csrf)}${accountContextFields(accountContext)}${contents}<button>${esc(button)}</button></form>`;
 export const stamp = (value) => {
   const date = new Date(value);
   return Number.isFinite(date.getTime())
@@ -18,9 +36,12 @@ export const rows = (items, render, empty) =>
   items.length
     ? `<ul class="settings-list">${items.map((item) => `<li>${render(item)}</li>`).join("")}</ul>`
     : `<p class="muted">${empty}</p>`;
-export const nextStep = (res, title, csrf, action, contents, button, message) =>
+export const nextStep = (
+  res,
+  { title, csrf, action, contents, button, message, accountContext },
+) =>
   page(
     res,
     title,
-    `<p role="status">${esc(message)}</p>${form(action, csrf, contents, button)}<a href="/account">Return to account settings</a>`,
+    `<p role="status">${esc(message)}</p>${form(action, csrf, contents, button, accountContext)}<a href="${accountContext?.did ? accountUrl(accountContext.did) : "/account"}">Return to account settings</a>`,
   );

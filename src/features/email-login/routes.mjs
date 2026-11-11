@@ -1,8 +1,28 @@
 import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { accountEmailSchema } from "../../accounts/input-schema.js";
 import { ChangedFlowIntentError } from "../../http/browser-flow.mjs";
-import { page } from "../../ui/html.mjs";
+import { matchesAuthorizationHint } from "../../accounts/rules.js";
+import { escapeHtml, page } from "../../ui/html.mjs";
 const RESEND_COOLDOWN = 5_000;
+const loginHints = (flow) =>
+  [flow.accountHint, flow.parameters?.login_hint].filter(
+    (hint) => hint != null,
+  );
+const matchesLoginHint = (flow, account) =>
+  matchesAuthorizationHint(account, ...loginHints(flow));
+const linkedAccounts = (resolution) => {
+  if (resolution?.kind === "single") return [resolution.account];
+  if (resolution?.kind === "selection-required") return resolution.accounts;
+  return [];
+};
+
+// A trusted client can skip consent after signup, so submitting this page may
+// redirect straight to the client's redirect_uri. The CSP applies to that
+// redirect, so the page must allow the client's origin as a form-action target.
+const clientFormPolicy = (flow) =>
+  flow.requestUri
+    ? { formOrigin: new URL(flow.parameters.redirect_uri).origin }
+    : {};
 export function mountEmailLogin({
   app,
   db,
@@ -28,7 +48,7 @@ export function mountEmailLogin({
     form,
   } = flows;
   const { loginForm, otpForm } = forms;
-  const sendCode = async (res, flow, browser, emailValue) => {
+  const sendCode = async (res, flow, browser, emailValue, options = {}) => {
     let email;
     let reserved;
     let preparingMail = false;
@@ -45,21 +65,35 @@ export function mountEmailLogin({
         if (!input.success)
           throw new InvalidRequestError("Enter a valid email address");
         email = input.data;
+        // A new address takes the caller's masking choice; a resend keeps the
+        // flow's. The choice applies only once the request is accepted: a
+        // refused request still holds the earlier address, so it stays masked
+        // if either that address or the requested one was masked.
+        const requestedMask =
+          emailValue === undefined
+            ? flow.maskEmail
+            : options.maskEmail === true;
+        const refuse = (reason) => {
+          flow.maskEmail = Boolean(flow.maskEmail || requestedMask);
+          return { reason };
+        };
         const now = Date.now();
-        if (flow.otpRequestCount >= 5) return { reason: "flow-limit" };
+        if (flow.otpRequestCount >= 5) return refuse("flow-limit");
         if (flow.lastOtpSentAt && now - flow.lastOtpSentAt < RESEND_COOLDOWN)
-          return { reason: "cooldown" };
+          return refuse("cooldown");
         const limitKey = `${email}/${Math.floor(now / 600_000)}`;
         const count = (await db.get("otp-limits", limitKey)) ?? 0;
-        if (count >= 5) return { reason: "email-limit" };
+        if (count >= 5) return refuse("email-limit");
         if (flow.email && flow.email !== email)
           await mail.supersedeOtp({ email: flow.email, type: "sign-in" });
         await db.set("otp-limits", limitKey, count + 1);
         flow.email = email;
+        flow.maskEmail = Boolean(requestedMask);
         flow.otpRequestCount = (flow.otpRequestCount ?? 0) + 1;
         flow.lastOtpSentAt = now;
         delete flow.authDid;
         delete flow.authEmail;
+        delete flow.authUserId;
         await save(flow);
         // Verification and outbox queue belong to this reservation. The returned
         // dispatcher performs SMTP only after the outer transaction commits.
@@ -86,7 +120,10 @@ export function mountEmailLogin({
         return pageForFlow(
           res,
           refusal[0],
-          otpForm(flow, browser, refusal[1], email),
+          flow.email
+            ? otpForm(flow, browser, refusal[1], email)
+            : // Nothing was sent yet, so there is no code to resend.
+              `<p role="alert">${escapeHtml(refusal[1])}</p>${loginForm(flow, browser)}`,
           flow,
           429,
         );
@@ -112,7 +149,17 @@ export function mountEmailLogin({
     "/login",
     guarded(async (req, res) => {
       const browser = await loadBrowser(req, res);
-      const flow = await newFlow(browser);
+      const requestedDid = req.query?.did;
+      if (
+        requestedDid !== undefined &&
+        (typeof requestedDid !== "string" ||
+          requestedDid.length > 255 ||
+          !requestedDid.startsWith("did:"))
+      )
+        throw new InvalidRequestError("Invalid requested account for sign-in");
+      const flow = await newFlow(browser, {
+        ...(requestedDid ? { accountHint: requestedDid } : {}),
+      });
       page(res, "Sign in", loginForm(flow, browser));
     }),
   );
@@ -163,13 +210,52 @@ export function mountEmailLogin({
         )
           throw new InvalidRequestError("Email verification did not complete");
         let resolution;
+        let verifiedFlow;
+        let selectionAccounts;
+        let hintMismatch = false;
         await db.transact(async () => {
-          await readCurrentIntent(flow, browser);
+          const current = await readCurrentIntent(flow, browser);
           resolution = await getAccountSecurity()?.assertLoginEmail(identity);
+          if (resolution?.kind === "selection-required") {
+            selectionAccounts = resolution.accounts.filter((account) =>
+              matchesLoginHint(current, account),
+            );
+            if (
+              loginHints(current).length > 0 &&
+              selectionAccounts.length === 0
+            ) {
+              hintMismatch = true;
+              return;
+            }
+            current.authEmail = identity.email.toLowerCase();
+            current.authUserId = identity.userId;
+            await save(current);
+            verifiedFlow = current;
+          } else if (
+            resolution?.kind === "single" &&
+            !matchesLoginHint(current, resolution.account)
+          ) {
+            hintMismatch = true;
+          } else if (
+            resolution?.kind === "unbound" &&
+            loginHints(current).some(
+              (hint) => typeof hint === "string" && hint.startsWith("did:"),
+            )
+          ) {
+            hintMismatch = true;
+          }
         });
         // Rotate the provider's browser session after successful identity verification.
         const rotated = await loadBrowser(req, res, true);
         const verifiedEmail = identity.email.toLowerCase();
+        if (hintMismatch)
+          return pageForFlow(
+            res,
+            "Account not linked",
+            `<p role="alert">Your verified email is not linked to the requested account. Use the email associated with that account.</p>${loginForm(flow, rotated)}`,
+            flow,
+            403,
+          );
         if (resolution?.kind === "account-requires-repair")
           return pageForFlow(
             res,
@@ -195,16 +281,28 @@ export function mountEmailLogin({
             return current;
           });
           response.commitCookies(res);
-          return pageForFlow(res, "Create your account", body, current);
-        }
-        if (resolution.kind === "selection-required")
           return pageForFlow(
             res,
-            "Account selection required",
-            '<p role="alert">This verified identity is linked to multiple accounts. Account selection is not available yet.</p>',
-            flow,
-            409,
+            "Create your account",
+            body,
+            current,
+            200,
+            clientFormPolicy(current),
           );
+        }
+        if (resolution.kind === "selection-required") {
+          response.commitCookies(res);
+          return pageForFlow(
+            res,
+            "Choose an account",
+            forms.accountSelectionForm(
+              verifiedFlow,
+              rotated,
+              selectionAccounts,
+            ),
+            verifiedFlow,
+          );
+        }
         await authenticated(req, res, flow, rotated, resolution.account, {
           identity,
           commitCookies: () => response.commitCookies(res),
@@ -221,6 +319,82 @@ export function mountEmailLogin({
       }
     }),
   );
+  // The flow keeps authUserId until consent is approved or denied, so the
+  // verified browser identity can change its choice before granting access.
+  const requireChooserIdentity = async (req, flow) => {
+    const session = await authentication.requireSession(req);
+    if (
+      !flow.authEmail ||
+      !flow.authUserId ||
+      session?.emailVerified !== true ||
+      session.userId !== flow.authUserId ||
+      session.email.toLowerCase() !== flow.authEmail
+    )
+      throw new InvalidRequestError("Verified sign-in session expired");
+    return {
+      userId: session.userId,
+      email: session.email.toLowerCase(),
+      emailVerified: true,
+    };
+  };
+  app.post(
+    "/auth/choose",
+    form,
+    guarded(async (req, res) => {
+      const { flow, browser } = await getFlow(req, res);
+      const identity = await requireChooserIdentity(req, flow);
+      const resolution = await getAccountSecurity()?.assertLoginEmail(identity);
+      if (resolution?.kind !== "selection-required")
+        throw new InvalidRequestError("No other linked account is available");
+      return pageForFlow(
+        res,
+        "Choose an account",
+        forms.accountSelectionForm(
+          flow,
+          browser,
+          resolution.accounts.filter((account) =>
+            matchesLoginHint(flow, account),
+          ),
+        ),
+        flow,
+      );
+    }),
+  );
+  app.post(
+    "/auth/select",
+    form,
+    guarded(async (req, res) => {
+      const { flow, browser } = await getFlow(req, res);
+      const identity = await requireChooserIdentity(req, flow);
+      const selectedDid = String(req.body.did ?? "");
+      let current;
+      let selected;
+      await db.transact(async () => {
+        current = await readCurrentIntent(flow, browser);
+        if (
+          current.authEmail !== identity.email ||
+          current.authUserId !== identity.userId
+        )
+          throw new InvalidRequestError(
+            "This account choice is no longer valid",
+          );
+        const resolution =
+          await getAccountSecurity()?.assertLoginEmail(identity);
+        selected = linkedAccounts(resolution).find(
+          (account) =>
+            account.did === selectedDid && matchesLoginHint(current, account),
+        );
+        if (!selected)
+          throw new InvalidRequestError(
+            "The selected account is not linked to this verified identity",
+          );
+      });
+      await authenticated(req, res, current, browser, selected, {
+        identity,
+        fromChooser: true,
+      });
+    }),
+  );
   app.post(
     "/auth/logout",
     form,
@@ -232,4 +406,7 @@ export function mountEmailLogin({
       res.redirect(303, "/login");
     }),
   );
+  // Lets authorization start the same rate-limited code send as the email
+  // form when a client supplies an email login_hint on the redirect URL.
+  return { startEmailCode: sendCode };
 }

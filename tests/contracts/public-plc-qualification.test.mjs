@@ -25,6 +25,7 @@ test(
       const page = await browser.newPage();
       const identity = await createAccount(page, "custody");
       const password = `Public qualification ${randomUUID()}!`;
+      await page.getByRole("link", { name: "Set account password" }).click();
       const form = page.locator('form[action="/account/password-set"]');
       await form.getByLabel("New account password").fill(password);
       await form.getByRole("button").click();

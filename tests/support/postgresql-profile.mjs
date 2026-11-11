@@ -94,7 +94,10 @@ try {
     });
     const verified = await request("/auth/verify", { ...form, otp: code });
     assert.equal(verified.status, 303);
-    assert.equal(verified.headers.get("location"), "/account");
+    assert.equal(
+      verified.headers.get("location"),
+      `/account?did=${encodeURIComponent(account.did)}`,
+    );
     state.binding = await storage.getVerifiedBinding(account.did);
     assert.ok(state.binding?.userId);
     state.sessionIds = (await db.read("session")).map((row) => row.id).sort();
