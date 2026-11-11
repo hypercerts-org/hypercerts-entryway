@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { createSharedEmailPair } from "./support/email-chooser-fixture.mjs";
 import {
+  assertOAuthSubjectAndWrite,
   beginAuthorization,
   config,
   consentForm,
@@ -36,28 +37,6 @@ async function reachChooser(page) {
   ).toBeVisible();
 }
 
-async function assertOAuthSubjectAndWrite(page, account) {
-  const response = await page.request.get(
-    `${config.clientUrl}/client/session?client=primary`,
-  );
-  expect(response.ok(), await response.text()).toBeTruthy();
-  const current = await response.json();
-  // The OAuth client session DID is the subject returned by the token exchange.
-  expect(current.did).toBe(account.did);
-  const pds = config.pds.find(({ id }) => id === account.pdsId);
-  expect(new URL(current.tokenInfo.aud).href).toBe(new URL(pds.url).href);
-
-  const write = await page.request.post(`${config.clientUrl}/client/write`, {
-    headers: { origin: config.clientUrl, "x-csrf-token": current.csrf },
-    data: {
-      client: "primary",
-      text: `Account chooser write ${account.pdsId} ${runId}`,
-    },
-  });
-  expect(write.ok(), await write.text()).toBeTruthy();
-  expect((await write.json()).uri).toContain(`at://${account.did}/`);
-}
-
 // Each DID completes its own journey in a fresh context, so a regression that
 // only breaks consent, token subject or writes for one binding still fails.
 for (const which of ["first", "second"]) {
@@ -91,7 +70,9 @@ for (const which of ["first", "second"]) {
       });
       expect(replay.status()).toBe(400);
       expect(await replay.text()).toContain("This sign-in has expired");
-      await assertOAuthSubjectAndWrite(page, chosen);
+      await assertOAuthSubjectAndWrite(page, chosen, {
+        text: `Account chooser write ${chosen.pdsId} ${runId}`,
+      });
     } finally {
       await context.close();
     }
