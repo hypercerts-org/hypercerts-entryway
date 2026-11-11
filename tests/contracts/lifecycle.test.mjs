@@ -507,3 +507,38 @@ test(
     assert.equal(await db.probe(500), true);
   },
 );
+
+test(
+  "PostgreSQL checked-out client failure is contained and later authority reads recover",
+  postgresOnly,
+  async (t) => {
+    const configuration = await testDatabaseConfiguration();
+    const db = await openDatabase(configuration);
+    const admin = new pg.Client({ connectionString: configuration.url });
+    await admin.connect();
+    t.after(async () => {
+      await admin.end();
+      await db.close();
+    });
+    await db.set("checkout-recovery", "value", "retained");
+    // Terminate the backend while its client is checked out by a transaction,
+    // and wait until the backend is gone so its socket closure is observed
+    // before the transaction ends.
+    const transaction = db.transact(async () => {
+      const [{ pid }] = await query(db, "SELECT pg_backend_pid() AS pid");
+      await admin.query("SELECT pg_terminate_backend($1)", [pid]);
+      for (;;) {
+        const { rows } = await admin.query(
+          "SELECT 1 FROM pg_stat_activity WHERE pid = $1",
+          [pid],
+        );
+        if (rows.length === 0) break;
+        await new Promise((done) => setTimeout(done, 5));
+      }
+      await new Promise((done) => setTimeout(done, 50));
+    });
+    await assert.rejects(transaction);
+    assert.equal(await db.get("checkout-recovery", "value"), "retained");
+    assert.equal(await db.probe(500), true);
+  },
+);
