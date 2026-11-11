@@ -48,6 +48,7 @@ and requires no host dependency install:
 | `./tests/local.sh resilience-profiles` | Run all three fresh deployment profiles and require complete bounded receipts; see [profile contract](deployment-profiles.md)                                                                            |
 | `./tests/local.sh contracts`           | Run imported contract scenarios in the test container after up                                                                                                                                           |
 | `./tests/local.sh browser`             | Run browser scenarios after up                                                                                                                                                                           |
+| `./tests/local.sh incoming-public-mechanisms` | Bounded stock public-mechanism contract test after up: standalone signup, Mailpit, PLC signing, inactive destination and reservation; 12 offline plus 5 live cases, not a migration qualification |
 | `./tests/local.sh migration`           | Fresh synthetic external-source migration, including two Entryway restarts                                                                                                                               |
 | `./tests/local.sh migration-resume`    | Resume a reviewed interrupted fixture; inspect state before using                                                                                                                                        |
 | `./tests/local.sh reverify`            | Check an already completed migration fixture                                                                                                                                                             |
@@ -76,6 +77,60 @@ Review `resilience.json` and per-phase reports if interrupted. See
 | `SANDBOX_CHECKOUT`      | Explicit runtime checkout location for controlled use |
 | `SANDBOX_PROJECT`       | Explicit owned project name                           |
 | `ACCEPTANCE_REPORT_DIR` | Report directory override                             |
+
+For operators running browser scenarios or the public-mechanism qualification phase,
+the controller refreshes and validates sandbox access and writes a private allowlisted
+`incoming-access.json` in the owned sandbox. It mounts that file read-only at
+`/run/incoming-access.json` in the browser container and sets `INCOMING_ACCESS_PATH`.
+The qualification phase additionally sets `INCOMING_PROJECT`; ordinary browser runs
+do not. `all` and `fresh` inherit the projection through the browser phase; they do
+not run the qualification phase.
+
+`incoming-public-mechanisms` runs the contract test directly in the browser container
+with `node --test`, not a Playwright spec:
+
+```sh
+./tests/local.sh incoming-public-mechanisms
+```
+
+After `up`, that one command runs every case in
+`tests/contracts/incoming-public-mechanisms.test.mjs`. The live cases create a unique
+account on the standalone PDS, request a PLC confirmation through its public API,
+read its recipient-bound message from Mailpit, use the token for public signing, and
+observe the inactive destination and reservation behavior. The controller applies the
+repository-owned SMTP overlay to pds3 after startup.
+
+Case counts and what they mean. One live-gated test runs two further subcases, so a
+full opt-in run reports more cases than the file declares. The file declares fifteen
+top-level tests: twelve offline and three live-gated. A full opt-in run reports 17
+cases, which is 12 offline plus 5 live. Only those 5 live cases form the public
+qualification.
+
+`tests/local.sh incoming-public-mechanisms` always exports
+`INCOMING_PUBLIC_MECHANISMS=1` for the container, so unsetting the variable does not
+turn that command into an offline run. To run only the offline cases natively, use:
+
+```sh
+env -u INCOMING_PUBLIC_MECHANISMS -u INCOMING_ACCESS_PATH node --test \
+  tests/contracts/incoming-public-mechanisms.test.mjs
+```
+
+That run reports the three live-gated tests skipped; those skips are not
+qualification. At the time of writing, that native run reports 12 passed and 3
+skipped, which is the offline subset only. A live count is a claim about a sandbox run
+and must not be reported from this document.
+
+The offline cases cover the managed request boundary and phase budgets. They do not
+prove any public behavior, and no Entryway endpoint or route implements this
+migration: the contract test consumes stock PDS APIs, not Entryway handlers.
+
+The preflight verifies the signed PLC operation against the source's observed
+rotation keys. The remaining contracts are still open in the
+[contract gates](incoming-migration.md#contract-qualification-gates-for-implementers):
+C4 finality and activation-race closure stay BLOCKED; C1, C2, C3 and C5 are accepted
+contracts whose callables the downstream plans must still produce.
+
+Use the owned-project cleanup procedure below, including after failures.
 
 Runtime configuration uses `SERVICE_CONFIG_PATH` (default `./.runtime/config.json`).
 `DATABASE_BACKEND` selects SQLite or PostgreSQL and `DEPLOYMENT_MODE` selects the
@@ -254,13 +309,31 @@ profile controllers are not filtered a second time. Raw reports are never upload
 private reports locally for detailed failures. Lifecycle fixtures use fake Docker
 natively; they do not establish hosted-runner compatibility.
 
+### Development: native incoming helper checks
+
+Contributors changing incoming test infrastructure run the stock mail poller,
+managed I/O helper and access-projection tests explicitly:
+
+```sh
+npm run test:incoming-helpers
+```
+
+This script runs `tests/support/helpers/stock-plc-mailpit.test.mjs`,
+`tests/support/helpers/incoming-public-io.test.mjs` and
+`tests/atmosphere/project-incoming-access.test.mjs`. Native CI runs the script in
+its own step. Contract discovery does not include these helper files, and the
+live stock-mechanism suite is not part of the native unit allowlist.
+
 ## Feature tests and operational evidence
 
 Contract discovery executes both `tests/contracts/*.test.mjs` and recursively
 co-located `src/features/**/*.test.mjs`, once and sorted, with a shared JUnit report.
-Run browser before contracts in a fresh project: real contracts require the
-verified account created by the browser journey. Pure diagnostic unit runs use
-`npm run test:unit` natively and do not need that fixture.
+It does not discover helper tests under `tests/support`, so run those explicitly with
+`node --test` when a helper changes. See the rule in
+`tests/support/discover-contracts.mjs`. Run browser before contracts in a fresh
+project: real contracts require the verified account created by the browser journey.
+Pure diagnostic unit runs use `npm run test:unit` natively and do not need that
+fixture.
 Browser email-proof tests must obtain the recipient's visible code from Mailpit
 message content; reading the database outbox's full token hides missing challenge
 context. Verify the hidden selector is retained and that wrong codes or selectors

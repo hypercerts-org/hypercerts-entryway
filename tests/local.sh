@@ -9,17 +9,19 @@ export SANDBOX_CHECKOUT="$sandbox" SANDBOX_PROJECT="$project" ACCEPTANCE_REPORT_
 [[ "$project" =~ ^hypercerts-entryway(-[a-z0-9_-]+)?$ ]] || { echo "Invalid Entryway project name" >&2; exit 2; }
 mkdir -p "$sandbox"
 cd "$sandbox"
+sandbox=$PWD
+export SANDBOX_CHECKOUT="$sandbox"
 command=${1:-help}
 mkdir -p "$artifacts"
 # Phase identity comes from the controller, never from a command or request body.
 case "$command" in
-  fresh|fresh-group|prepare|up|contracts|database-contracts|database-dialects|resilience-profiles|database-profile|browser|migration|migration-resume|resilience|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|all|down|status|help) ;;
+  fresh|fresh-group|prepare|up|contracts|database-contracts|database-dialects|resilience-profiles|database-profile|browser|incoming-public-mechanisms|migration|migration-resume|resilience|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|all|down|status|help) ;;
   *) echo 'code=UNKNOWN_PHASE'; exit 2 ;;
 esac
 printf 'phase=%s status=started\n' "$command"
 trap 'result=$?; printf "phase=%s status=finished exit=%s\n" "$command" "$result"' EXIT
 source "$root/tests/support/rootless-docker.sh"
-compose() { docker --context "$DOCKER_CONTEXT" compose --project-name "$project" -f "$sandbox/compose.yaml" "$@"; }
+compose() { docker --context "$DOCKER_CONTEXT" compose --project-name "$project" -f "$sandbox/compose.yaml" -f "$root/tests/atmosphere/stacks/incoming-source-mail.yaml" "$@"; }
 guard_project() {
   node --input-type=module - "$sandbox/state/manifest.json" "$project" <<'JS'
 import { readFileSync } from 'node:fs'
@@ -32,7 +34,33 @@ require_state() {
   test -f state/manifest.json && test -f compose.yaml || { echo 'Run ./tests/local.sh prepare first' >&2; exit 2; }
   guard_project
 }
-browser() { compose run --rm --no-deps browser npx --no-install playwright test --config tests/playwright.config.mjs "$@"; }
+prepare_incoming_access() {
+  local routes temporary
+  routes=$(node --input-type=module - "$root/tests/sandbox.json" "$root/tests/atmosphere/stacks/hypercerts-entryway.definition.json" "$root/tests/atmosphere/stacks/entryway-fixtures.definition.json" <<'JS'
+import { readFileSync } from 'node:fs'
+const [manifest, entryway, fixtures] = process.argv.slice(2).map(path => JSON.parse(readFileSync(path, 'utf8')))
+const source = manifest.pds.filter(pds => pds.id === 'pds3')
+if (source.length !== 1 || source[0].hostname !== new URL(source[0].url).hostname) throw new Error('Invalid configured standalone PDS')
+function route(definition, id, service) {
+  const matches = definition.routes.filter(item => item.id === id && item.service === service)
+  if (matches.length !== 1 || !matches[0].host || matches[0].hostname) throw new Error('Invalid configured route')
+  return `https://${matches[0].host}.${manifest.domain}`
+}
+console.log([source[0].url, route(entryway, 'entryway', 'entryway'), route(entryway, 'cluster1', 'pds1'), route(entryway, 'cluster2', 'pds2'), manifest.plc, route(fixtures, 'mailpit', 'mail-capture')].join(' '))
+JS
+  ) || return
+  local -a origins
+  read -r -a origins <<< "$routes"
+  deno task sandbox access --json > "$sandbox/access.json"
+  node "$root/tests/atmosphere/validate-access.mjs" "$sandbox/access.json" "$project"
+  temporary=$(mktemp "$sandbox/.incoming-access.XXXXXX")
+  if ! node "$root/tests/atmosphere/project-incoming-access.mjs" "$sandbox/access.json" "$project" "${origins[@]}" > "$temporary"; then
+    rm -f -- "$temporary"
+    return 1
+  fi
+  mv -f -- "$temporary" "$sandbox/incoming-access.json"
+}
+browser() { compose run --rm --no-deps --volume "$sandbox/incoming-access.json:/run/incoming-access.json:ro" -e INCOMING_ACCESS_PATH=/run/incoming-access.json browser npx --no-install playwright test --config tests/playwright.config.mjs "$@"; }
 external_browser() { local phase=$1; compose run --rm --no-deps -e "EXTERNAL_PHASE=$phase" browser npx --no-install playwright test --config tests/external.playwright.config.mjs 2>&1 | tee "$artifacts/external-browser-$phase.log" | python3 "$root/scripts/ci-summary.py"; }
 migration_command() { compose exec -T entryway node tests/support/external-migration.mjs "$@"; }
 case "$command" in
@@ -101,7 +129,7 @@ case "$command" in
         echo "Preserved project $SANDBOX_PROJECT at $temp" >&2
       else
         if [[ -f "$SANDBOX_CHECKOUT/compose.yaml" ]] \
-          && ! docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" down --volumes --remove-orphans; then
+          && ! docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" -f "$root/tests/atmosphere/stacks/incoming-source-mail.yaml" down --volumes --remove-orphans; then
           echo "Scoped cleanup failed; preserved $temp for project $SANDBOX_PROJECT" >&2
           (( result != 0 )) || result=1
           echo "Group exit: $result; reports: $ACCEPTANCE_REPORT_DIR"
@@ -141,6 +169,7 @@ case "$command" in
       compose up -d --wait entryway-postgres
     fi
     deno task sandbox up --build
+    compose up -d --wait --no-deps pds3
     compose build test browser
     deno task sandbox access --json > "$sandbox/access.json"
     node "$root/tests/atmosphere/validate-access.mjs" "$sandbox/access.json" "$project"
@@ -169,7 +198,13 @@ case "$command" in
     ;;
   browser)
     require_state
+    prepare_incoming_access
     browser 2>&1 | tee "$artifacts/browser.log" | python3 "$root/scripts/ci-summary.py"
+    ;;
+  incoming-public-mechanisms)
+    require_state
+    prepare_incoming_access
+    compose run --rm --no-deps --volume "$sandbox/incoming-access.json:/run/incoming-access.json:ro" -e INCOMING_ACCESS_PATH=/run/incoming-access.json -e "INCOMING_PROJECT=$project" -e INCOMING_PUBLIC_MECHANISMS=1 browser node --test tests/contracts/incoming-public-mechanisms.test.mjs
     ;;
   migration)
     require_state
@@ -249,7 +284,7 @@ case "$command" in
     deno task sandbox status
     ;;
   *)
-    echo 'Usage: ./tests/local.sh fresh|fresh-group <steps...>|prepare|up|browser|contracts|database-contracts|database-profile|resilience-profiles|migration|migration-resume|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience|all|status|down'
+    echo 'Usage: ./tests/local.sh fresh|fresh-group <steps...>|prepare|up|browser|incoming-public-mechanisms|contracts|database-contracts|database-profile|resilience-profiles|migration|migration-resume|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience|all|status|down'
     echo 'all requires a fresh project fixture; down retains state and volumes. No implicit reset.'
     ;;
 esac

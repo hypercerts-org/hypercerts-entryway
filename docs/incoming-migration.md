@@ -92,7 +92,10 @@ sequenceDiagram
     end
 
     Browser->>Entryway: 1. Verify email with OTP and prepare arrival
-    Entryway->>Destination: Reserve repository signing key
+    Entryway->>Entryway: Persist arrival, DID and selected PDS allocation intent
+    Entryway->>Destination: POST reserveSigningKey with incoming DID (no auth)
+    Destination-->>Entryway: Public signingKey; private key stays on PDS
+    Entryway->>Entryway: Persist validated key with same arrival, DID and PDS
     Entryway-->>Browser: Arrival code and public preparation facts
     Browser->>Tool: Explicit user handoff of arrival code
 
@@ -107,6 +110,7 @@ sequenceDiagram
     Tool->>Source: Obtain fresh createAccount-scoped service JWT
     Source-->>Tool: Creation authorization
     Tool->>Entryway: 3. Create account with arrival code and admission fields
+    Note over Entryway,Destination: Entryway rotation authority signs move containing PDS public key
     Entryway->>Destination: Create with Entryway-signed destination move
     Destination->>PLC: Publish destination move
     Note over Destination,PLC: Identity cutover happens BEFORE data import
@@ -190,10 +194,30 @@ handle, and confirms the migration. Entryway checks email uniqueness and atomica
 records the verified user ID, email/handle reservations, selected PDS, source PLC
 head and key facts, approved custody configuration and operation ID.
 
-Entryway journals the allocation obligation before reserving a repository signing
-key on the selected PDS through its existing contract. The preparation response
-contains arrival authorization, the Entryway service DID, explicit source and
-destination endpoints, the expected PLC predecessor and public handoff configuration.
+The storage work in plan 009 must persist the allocation intent, including the
+operation/arrival ID, incoming DID and selected PDS identity and endpoint. Only then
+does plan 010 dispatch, through the plan 012 outbound wire adapter, the
+unauthenticated public request whose result plan 009 then persists:
+
+```http
+POST /xrpc/com.atproto.server.reserveSigningKey
+Content-Type: application/json
+
+{"did":"<incoming DID>"}
+```
+
+The response is `{"signingKey":"<public did:key>"}`. Although the upstream DID
+field is optional, Entryway must supply the admitted DID and validate the public
+key. Plan 009 must persist that result against the same immutable tuple; a changed
+DID, PDS or key cannot overwrite it. Plan 010 uses that saved key for destination
+creation and plan 011 checks the expected public identity and readiness. These
+consumer interfaces are specified in [C2](#c2-persisted-arrival-contract-accepted)
+and not implemented.
+
+The private repository key remains on the selected PDS. Reservation is not source
+ownership proof. The preparation response contains arrival authorization, the
+Entryway service DID, explicit source and destination endpoints, the expected PLC
+predecessor and public handoff configuration.
 
 A supplied DID or reservation does not establish account ownership. Source proof
 is required separately, and admission rate limits bound reservation abuse.
@@ -248,9 +272,11 @@ when applicable, and arrival-code header. A submit-scoped JWT cannot authorize
 creation.
 
 Entryway matches the supplied facts to the saved arrival and applies invitation
-policy before backend creation. It signs and journals the destination PLC operation
-with the reserved repository key, target endpoint and approved destination custody.
-The selected PDS receives that operation in its stock creation request, publishes
+policy before backend creation. It journals a destination PLC operation containing
+the reserved public repository key in `verificationMethods.atproto`, the target
+endpoint and approved destination custody. Entryway signs that operation with its
+PLC rotation authority, not the PDS repository private key. The selected PDS consumes
+its local private reservation during stock creation, publishes
 the identity move and creates the account active.
 
 ### 4. Deactivation, binding and migration access
@@ -306,6 +332,8 @@ Counts, a client completion boolean, or zero missing blobs on an empty destinati
 are insufficient evidence. Valid empty and blob-free source repositories are
 accepted when integrity checks agree. The exact public source/destination evidence
 mechanism remains unresolved; synthetic snapshot assertions do not establish it.
+[C4](#c4-completeness-contract-blocked) records the qualified behavior and its
+limits, and the decision that stays open.
 
 All activation paths for pending arrivals share this readiness gate. Entryway
 journals activation, invokes the lifecycle hook, observes the outcome and atomically
@@ -343,12 +371,31 @@ After cutover, recovery no longer requires a source-key JWT because that key is 
 longer the current repository verification key. Replacement credentials recover a
 lost response without repeating account provisioning.
 
+### Reservation uncertainty
+
+The inspected stock PDS implementation can return the same saved public key for
+sequential calls with the same DID on the same PDS. Its read/generate/write sequence
+is not an atomic concurrent-reservation guarantee, nor a promise of indefinite
+retention. A lost response or failed local persistence requires bounded
+same-DID/same-PDS reconciliation under the current operation owner; an uncertain
+remote write cannot be made safe merely by lease expiry. Do not switch placement,
+blindly allocate again after creation, or overwrite a different recorded key.
+The upstream reservation contract exposes no expiry or cancel API. Successful
+creation attempts remote reservation cleanup on a best-effort, nonfatal basis;
+a subsequent reservation is not a safe way to recover the used key. Local
+cancellation does not remove remote private material. The exact retry and fencing
+contract is specified in [C2](#c2-persisted-arrival-contract-accepted)
+and [C5](#c5-dispatch-and-recovery-contract-accepted).
+
 ### Cancellation
 
-Abandoned arrivals are not automatically deleted. Before handoff dispatch,
-cancellation can release reservations only after checking for remote obligations
-and changed PLC state. Once publication is possible, observed or uncertain, the
-arrival and reservations remain available for reconciliation.
+Abandoned arrivals are not automatically deleted. Cancellation can release local
+state only before any allocation intent is persisted, and even then only after
+checking for remote obligations and changed PLC state. Preparation persists the
+allocation intent before it asks the destination for a signing key, so an arrival
+that reached preparation already has a reservation row and cannot be released. Once
+publication is possible, observed or uncertain, the arrival and reservations remain
+available for reconciliation.
 
 Deleting local state cannot remove published Entryway authority. Reversal requires
 an authorized PLC operation; it is not an expiry side effect. The
@@ -367,6 +414,400 @@ and release of conflicting work.
 
 Recovery records retain public custody evidence and safe operation identifiers.
 Reports exclude OTPs, arrival codes, bearer tokens and private keys.
+
+## Contract qualification gates for implementers
+
+These are delivery contracts for implementers, not implemented APIs. Where a contract
+names a callable signature, no such callable exists in the repository yet; the owning
+plan must produce it. Where this guide says a behavior is qualified, that means a
+bounded committed test observed the stated stock behavior. It does not mean Entryway
+exposes, accepts or gates it.
+
+Read each gate as a producer/consumer handoff. A contract becomes usable by
+downstream code only when this section states both the exact call shape and the
+failure behavior, and a maintainer accepts it per case. C1, C2, C3 and C5 are
+**ACCEPTED**; the maintainer decisions behind them are recorded inline as M1 to M4.
+C4 remains **BLOCKED** on the named maintainer decision described below.
+
+Source and destination versions stay distinct. The upstream facts here are
+inspection of pinned PDS 0.5.36, and the standalone qualification source is the
+separately pinned 0.5.34 image. No contract may treat the two as interchangeable.
+
+### Existing policy these contracts reuse
+
+Contracts below cite existing repository policy rather than inventing limits. A
+consumer must use these named producers, not restate the numbers.
+
+| Policy | Existing producer | Limit |
+| --- | --- | --- |
+| Destination OTP proof | `src/authentication/better-auth.mjs:22-27` | Eight digits, 600-second code lifetime, five attempts, digest-only storage |
+| Extra challenge proof and budget | `src/accounts/challenges.mjs:22-29,36-45` | Default five requests per 600-second bucket per purpose and subject; code digest expires after 600 seconds |
+| Login rate limit | `src/features/email-login/xrpc-routes.mjs:28` | 60 requests per IP |
+| Signup and create rate limits | `src/features/account-registration/xrpc-routes.mjs:61,68` | 30 requests per IP each |
+| Reservation rate limit | `src/plc/xrpc-routes.mjs:7` | 30 requests per IP |
+| Password-reset rate limit | `src/features/account-recovery/xrpc-routes.mjs:7` | 30 requests per IP |
+| Pending-operation block | `src/accounts/primitives.mjs:78-87` | 409 `MigrationPending` while any migration is not complete |
+
+The accepted 24-hour arrival code lifetime is a reservation lifetime for one
+arrival. It is not an OTP freshness window and does not extend any proof above.
+
+### C1 wire and admission contract (ACCEPTED)
+
+Owner: plan 010 prepares and manages arrival lifecycle; plan 012 owns the wire
+adapter. Consumers: the browser pages in plans 010 and 012, and the migration tool
+through the standard XRPC bodies.
+
+Proposed Entryway-only POST surfaces. These are Entryway extensions, not AT Protocol
+methods. They never accept or export browser cookies on behalf of a tool.
+
+| Path | Request body | Response |
+| --- | --- | --- |
+| `/incoming/prepare` | `{did, handle}` | `{operationId, version, arrivalCode, expiresAt, entrywayDid, sourceEndpoint, destinationEndpoint, expectedPlcHead, handoff}` |
+| `/incoming/renew` | `{operationId, expectedVersion}` | `{operationId, version, arrivalCode, expiresAt}` |
+| `/incoming/cancel` | `{operationId, expectedVersion}` | `{operationId, version, state}` |
+| `/incoming/recover` | `{operationId, expectedVersion}` | Standard tracked credential fields, only after C3 prerequisites |
+
+Authentication per surface:
+
+- All four require a normalized verified browser principal. `prepare` additionally
+  requires a fresh destination OTP proof and CSRF protection.
+- `prepare` derives the saved user and email from that verified proof. The body never
+  supplies an email or a user.
+- `renew`, `cancel` and `recover` select only the saved arrival bound to that user. A
+  different user receives the same not-found shape as an unknown operation, so the
+  response cannot confirm that another user's operation exists.
+- `recover` is refused until C3 prerequisites hold. Before cutover it must not accept
+  source authority as a substitute for the saved binding.
+
+Secret response handling. `arrivalCode` is returned once to the browser and only its
+hash is stored. Secret responses set `Cache-Control: no-store` and are excluded from
+logs, URLs, metric labels and error messages. Renewal issues a new code and
+generation and invalidates the previous code for authentication; the previous code
+must fail with the expired error rather than a distinct replay signal.
+
+A lost preparation response leaves the caller holding nothing usable, because the
+saved hash cannot reproduce the code. Recovery is `renew` from a fresh destination
+proof: it issues a new code and generation for the same arrival and invalidates the
+previous code, so no second arrival is created. Renewal is refused once the arrival is
+provisioned, and the caller resumes through `recover` from C3 instead.
+
+Errors. Each code is stable and mapped explicitly, and no message carries a secret.
+
+| Condition | Error code | HTTP status |
+| --- | --- | --- |
+| Body fails schema | `InvalidRequest` | 400 |
+| Missing or stale OTP proof | `ArrivalProofRequired` | 403 |
+| Unknown arrival or verified principal does not own it | `AccountNotFound` | 404 |
+| Saved arrival is no longer actionable | `ArrivalExpired` | 409 |
+| `expectedVersion` differs from the saved version | `OperationConflict` | 409 |
+| Concurrent work for the DID is admitted | `OperationPending` | 409 |
+| Per-IP or per-subject budget exhausted | `RateLimitExceeded` | 429 |
+| Dispatch state makes cancellation unsafe | `OperationRecoveryRequired` | 409 |
+
+Replay. `prepare` with the same verified user, DID and handle is idempotent and
+returns the same saved operation while that operation is still actionable. A changed
+DID or handle for the user is a conflict, not a second arrival. Cancellation is safe
+only at the internal pre-intent seam, before any persisted allocation or signed
+handoff and with unchanged canonical PLC state and no remote obligation. A cancelled
+operation is retained as history; `cancel` is idempotent for that state. Preparation
+already persists an allocation intent, so a prepared arrival cannot be cancelled to
+release reservations or start a replacement arrival. It returns
+`OperationRecoveryRequired` with the arrival still saved. No abandonment,
+remote-release or reversal path is defined here.
+
+Standard XRPC bodies keep their shapes and carry the arrival code in the proposed
+`Entryway-Arrival-Code` header at `com.atproto.identity.submitPlcOperation` and
+`com.atproto.server.createAccount`. The arrival code never substitutes for
+`inviteCode`, and invitation policy is unchanged.
+
+Callables. Plan 010 owns the first three and plan 011 owns the last:
+
+```text
+prepareArrival(principal, proof, {did, handle}) -> prepared arrival
+renewArrival(principal, proof, {operationId, expectedVersion}) -> renewed arrival
+cancelArrival(principal, proof, {operationId, expectedVersion})
+  -> cancelled or reconciliation-required
+recoverArrival(principal, proof, {operationId, expectedVersion})
+  -> standard tracked credential fields
+```
+
+Accepted decision M1 (budgets). Arrival wiring reuses the existing limits in
+[existing policy](#existing-policy-these-contracts-reuse) and adds no new numeric
+budget. Reservation requests keep the existing 30-per-IP limit in
+`src/plc/xrpc-routes.mjs:7`. Preparation and renewal use the existing challenge
+producer in `src/accounts/challenges.mjs:22-29`, which is five requests per
+600-second bucket per purpose and subject. A consumer must call that producer rather
+than restate or retune these numbers.
+
+### C2 persisted arrival contract (ACCEPTED)
+
+Owner: plan 010 produces the reservation result and plan 009 owns conditional
+persistence. Consumers: 010 for destination creation signing and 011 for readiness.
+Both consume the immutable tuple already defined in
+[arrival preparation](#1-arrival-preparation).
+
+Required persistence order. Intent is durable before any network call, and the
+validated result is durable against that same tuple:
+
+1. Persist allocation intent: operation/arrival ID, incoming DID, selected PDS ID and
+   endpoint, saved verified user ID and email.
+2. Plan 010 dispatches the unauthenticated `reserveSigningKey` request with the
+   incoming DID and validates a public `did:key`.
+3. Persist the validated public key against the same operation, DID and PDS.
+
+Callables, all owned by plan 009. Each returns a new version or a stable
+outcome, and none overwrites an already-saved tuple member.
+
+```text
+recordAllocationIntent(tx, owner, expectedVersion, {operationId, did, pdsId, endpoint})
+recordReservationResult(tx, owner, expectedVersion, {operationId, did, pdsId, endpoint, signingKey})
+retainUncertainAttempt(tx, owner, expectedVersion, attemptBinding)
+```
+
+Binding rules these calls must enforce:
+
+- The tuple `{operationId, did, pdsId, endpoint}` is immutable after intent. A
+  mismatched DID, PDS or host is a conflict and must not overwrite it.
+- An already-saved `signingKey` cannot change. A second reservation returning a
+  different key is `OperationRecoveryRequired`, not an update.
+- Every call runs under the current claim and expected version. A stale owner,
+  attempt or fence returns a stable conflict and writes nothing.
+
+Prohibitions the implementation must preserve:
+
+- No network call belongs inside a database transaction. Intent and result are
+  separate fenced transactions around the external call.
+- Reconciliation may not race a live or possibly delayed reservation. Sequential
+  same-DID retry observed in the bounded run is not concurrency fencing.
+- Do not switch placement, reallocate blindly after creation, or treat a new public
+  key as proof that the earlier allocation was unapplied.
+
+Existing seams to extend rather than replace: the checkpoint and external-ready
+assertions at `src/accounts/operation-ownership.ts:436-450` (`store.checkpoint`,
+`store.assertExternalReady`, `store.assertActive`) and the validated
+`signingKeyResult` projection at `src/accounts/operation-ownership.ts:471-491`. The
+working producer pattern is `src/pds/migration-client.ts:203-227`, which journals
+step `external-target-key` with intent `{did}` and projects only the validated public
+key. Its `observe` reports `replay-safe` for an isolated and drained allocation and
+never claims that the earlier allocation was unapplied.
+
+Reconciliation after response loss. The same-DID, same-PDS case is the only supported
+path: the current operation owner re-reads the saved attempt, and an isolated and
+drained allocation may allocate again. Any uncertain or divergent result retains
+`OperationRecoveryRequired` until the operator recovery in
+[shared operations](shared-operations.md#supported-operator-recovery) applies.
+
+Accepted decision M2 (retry). Existing operator isolation and drain evidence is
+sufficient for an arrival reservation. Automatic retry is permitted only for the
+worker that still owns the live operation and whose fence is current, and only after
+it has re-read the saved attempt and confirmed that no other dispatch is in flight.
+Every other case retains `OperationRecoveryRequired`. A worker may not retry after
+lease expiry, after losing ownership, or on behalf of another worker, and no caller
+may promote the sequential same-DID observation into a concurrency guarantee.
+
+### C3 lifecycle and credential contract (ACCEPTED)
+
+Owner: plan 009 owns the atomic association, binding, claims and checkpoint writes.
+Plans 011 and 012 consume the projection, guard and credential interfaces below.
+
+Order: create active, observe deactivation, atomically bind as pending, then issue
+tracked credentials. Pending is an operation condition, not an account class. It is
+derived from the current operation and never stored as a permanent imported-account
+category. Account status values remain `provisioning`, `active`, `deactivated` and
+`deleted` as enforced at `src/accounts/rules.ts:19-39`; no new status value is added.
+
+Pending projection. Existing evidence is `hasPendingExternalMigration` at
+`src/database/drizzle/account-storage.ts:631-641`, true while any migration
+reservation is not complete. The proposed richer projection is owned by plan 009:
+
+```text
+readArrivalAccess(did) -> {operationId, version, did, userId, pdsId, provisioned,
+                           deactivationObserved, bound, complete, unresolvedAttempt}
+```
+
+Every field derives from saved records. `complete` is true only when the activation
+checkpoint is complete and is never inferred from account status alone.
+
+Shared guard. Proposed predicate, owned jointly by 009 and the composition root:
+
+```text
+requireArrivalAction(projection, action) -> allowed, or a stable refusal
+```
+
+It must reject ordinary OAuth authorization, account management and unguarded
+activation while an arrival is pending, and it must not block read-only diagnosis.
+The existing partial precedent is `assertNoMigration` at
+`src/accounts/primitives.mjs:78-87`, consumed by handle change
+(`src/features/handle-change/change-handle.ts:73,127`), account deletion
+(`src/features/account-deletion/delete-account.mjs:16`) and account status change
+(`src/features/account-settings/change-status.mjs:16`). It is not applied to OAuth
+authorization today.
+
+Activation must invoke the same readiness operation on every path: the browser
+action, the Entryway XRPC route and the stock backend callback. The current Entryway
+route at `src/features/account-settings/xrpc-routes.mjs:29-48` calls
+`accounts.setStatus` and does not run arrival readiness.
+
+Stock backend behavior the guard must account for, from the pinned 0.5.36 inspection.
+Package-relative paths below are under
+`node_modules/@atproto/pds/dist/api/com/atproto/`:
+
+- Stock activation delegates to Entryway when configured. The installed
+  `@atproto/pds` `server/activateAccount.js:14-24` forwards the Entryway passthrough
+  headers and performs no local activation, so delegation inherits Entryway's
+  readiness gate rather than bypassing it.
+- Stock import and blob upload check takedown, not deactivation. The installed
+  `repo/importRepo.js:13-19` and `repo/uploadBlob.js:7` use `checkTakedown: true`
+  with the `ACCESS_FULL` access scope. A deactivated destination therefore stays
+  writable to a valid backend bearer, which is intentional for transfer.
+- A standard backend bearer is not a migration-only credential. Access tokens use
+  the backend audience with stock PDS scope (`com.atproto.access` and app-password
+  scopes) as issued by `src/oauth/legacy-credentials.mjs:9-14,233-250`. There is no
+  universal migration-only permission, and this contract must not promise one.
+
+Credential interfaces. Proposed extensions of the tracked legacy credentials in
+`src/oauth/legacy-credentials.mjs:307-326,406-439`, owned by plan 011:
+
+```text
+issueArrivalSession(owner, expectedVersion, arrivalId)
+refreshArrivalSession(refreshCredential)
+recoverArrivalSession(principal, freshProof, arrivalId, expectedVersion)
+```
+
+Rules: no issuance before observed provisioning, observed deactivation and saved-user
+binding. Token return follows the committed association and never precedes it.
+Existing refresh replay and revocation semantics remain: a replayed refresh
+invalidates the family (`src/oauth/legacy-credentials.mjs:400-405`), and a family
+bound to another PDS DID is rejected (`src/oauth/legacy-credentials.mjs:466-467`),
+without revoking that family.
+After cutover, recovery does not require a source-key JWT, and no contract may
+require one.
+
+Saved-user recovery after cutover is distinct from source JWT authorization before
+it. Recovery uses the saved verified user binding and never an email match alone.
+
+Accepted decision M3 (recovery families). `recoverArrivalSession` revokes every prior
+refresh family for that arrival in the same committed association that issues the new
+one. Earlier families cannot be refreshed afterwards. Revoking local family state
+does not revoke stateless stock-PDS access tokens already issued, so already-issued
+access tokens remain usable until they expire. Entryway must state that gap wherever
+it describes recovery rather than implying full revocation.
+
+The destination permission and callback runtime proof also remains unrun; authoring
+the guard contract does not qualify it.
+
+### C4 completeness contract (BLOCKED)
+
+Plan 011 readiness and plan 012 exposure stay blocked. Named blocker: no supported
+mechanism yet provides authenticated historical source key and head binding, a
+complete source and destination inventory, all missing-blob pages, and a barrier that
+prevents writes between verification and activation. The named maintainer decision is
+which finality and mutation-serialization guarantee to adopt.
+
+Historical qualification and its limits. An earlier bounded run, recorded as
+`d29515b` in the original repair history rather than an ancestor of this stack,
+reported the following stock source and inactive destination behaviors within its
+explicit byte and phase budgets. These are historical observations, not a current
+verification result or full migration qualification; reproof requires a fresh
+managed sandbox run:
+
+- Source CAR exports verified against the observed repository key, including a
+  nonempty snapshot. Two export requests were started before a write was dispatched,
+  which shows request ordering only and does not establish server-side overlap. The
+  case asserts a CAR size limit and per-phase budgets. The withheld final client
+  byte belongs to the separate destination import case below, not source export.
+- Source snapshot capture, signature verification and record inventory comparison are
+  qualified only within those budgets for that snapshot.
+- Inactive destination: an Entryway-hosted inactive destination accepted a streamed
+  import and destination readback, within the observed limits. Withholding the final
+  client byte does not establish server receipt of the prefix or universal finality.
+- Reservation: sequential same-DID retry and placement isolation only.
+
+What remains unqualified: blob retention across pages, pagination of a mutable
+missing-blob set, a consistent export under concurrent writes, and any write barrier
+between verification and activation. The stock export reads one root and then pages
+blocks (`node_modules/@atproto/pds/dist/actor-store/repo/sql-repo-reader.js:68-90`), so
+a read is not a consistent snapshot under writes, and the missing-blob set can change
+between pages. A callback guard alone does not fence an in-flight import or write.
+
+Forbidden resolutions: a private freeze, trusting the client's completion summary, an
+arbitrary quiet period, a PDS patch, or a data-plane proxy. Absence of a convenience
+endpoint is not proof of impossibility.
+
+Inputs C4 must still define once the decision is made: how the final source snapshot
+is agreed, how later source changes invalidate prior readiness, and whether source
+availability or source-supplied authorization is required after cutover. Empty and
+blob-free repositories remain valid inputs.
+
+### C5 dispatch and recovery contract (ACCEPTED)
+
+Owner: plans 009 to 012 share one owner/fence and observation contract. The only
+callable seam today is the generic dispatch at
+`src/accounts/operation-ownership.ts:265-328`, consumed as `ownership.dispatch` by the
+migration client above and by account primitives at
+`src/accounts/primitives.mjs:20-29`.
+
+Owner value. Every physical write transaction checks this owner with the lease and
+expected version:
+
+```text
+owner = {operationId, workerId, executionAttemptId, fence}
+```
+
+Callables:
+
+```text
+beginExternalAttempt(tx, owner, expectedVersion, {target, method, publicIntent}) -> attemptId
+recordExternalObservation(tx, owner, expectedVersion, {attemptId, outcome, evidence})
+reconcileAcceptedOperation(owner, {operationId, requestDigest}) -> exact saved facts
+```
+
+These callables extend the existing `ownership.dispatch` seam rather than creating a
+second dispatch path, and plans 009 to 012 reconcile its `beginExternal` and
+`acknowledgeExternal` store calls instead of duplicating them.
+
+Rules:
+
+- `beginExternalAttempt` returns an immutable attempt ID. The persisted descriptor is
+  step, target, method and public intent digest only. It never stores credentials,
+  proof codes or raw response bodies, matching `ExternalAttemptInput` at
+  `src/database/operation-ownership.port.ts:27-32`.
+- `recordExternalObservation` accepts typed public evidence only. Outcomes distinguish
+  acknowledged, definitively rejected, uncertain and divergent. A status match does
+  not drain an earlier request.
+- `reconcileAcceptedOperation` resumes the exact saved facts. It never signs or sends
+  a new operation, and a changed request digest is a conflict.
+- Caller authorization is separate from continuation. Exact durable accepted replay
+  after JWT expiry or key cutover is continuation, not fresh authorization. A lost
+  credential uses saved-user recovery from C3.
+
+Uncertainty and recovery. Any interruption after the dispatch marker requires
+dispatch-source isolation and drain, which is why lease expiry alone may not permit a
+new remote write. The existing operator path is
+[shared operations](shared-operations.md#supported-operator-recovery): trusted
+isolation and drain attestations, an `observe` to `retry-if-safe` upgrade, and a fresh
+fenced execution that observes remote state before acknowledging. It is a candidate
+reuse for public arrival, not automatic coverage.
+
+Cancellation safe point. Cancellation releases local reservations only before any
+allocation intent is persisted, and only when no remote obligation exists and the
+canonical PLC state is unchanged. Because preparation persists the allocation intent
+before dispatching the reservation, a prepared arrival always carries a reservation
+row and stays pending for reconciliation rather than being released. Once publication
+is possible, observed or uncertain, custody and admission are retained.
+
+Partial outcomes. A partial PLC publication with an absent backend stays pending
+unless an explicitly reviewed repair applies; the managed migration exact-head repair
+must not be extrapolated to public arrival. Activation response loss retains its
+attempt until exact completion or drain evidence permits reconciliation.
+
+Accepted decision M4 (repair permission). The affected user may resume the exact
+accepted operation at any time; that continuation never creates new authority and
+always replays the saved signed facts. An operator may additionally reconcile a
+partial outcome, but only with canonical observation evidence recorded for that
+attempt. Lease expiry alone authorizes no repair and permits no new remote write, and
+no automatic repair exists. A repair whose evidence is missing, uncertain or
+divergent retains `OperationRecoveryRequired`.
 
 ## Related documentation
 

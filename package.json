@@ -30,6 +30,7 @@
     "changeset": "changeset",
     "changeset:check": "changeset status",
     "version-packages": "changeset version && npm install --package-lock-only --ignore-scripts --offline --no-audit --no-fund",
+    "test:incoming-helpers": "node --test tests/support/helpers/stock-plc-mailpit.test.mjs tests/support/helpers/incoming-public-io.test.mjs tests/atmosphere/project-incoming-access.test.mjs",
     "test:ci-lifecycle": "python3 tests/support/ci-lifecycle.test.py"
   },
   "dependencies": {

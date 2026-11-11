@@ -128,6 +128,26 @@ esac
         self.assertNotEqual(self.guard(ENTRYWAY_DOCKER_CONTEXT="default").returncode, 0)
         self.assertNotEqual(self.guard(ENTRYWAY_DOCKER_CONTEXT="foreign").returncode, 0)
 
+    def test_incoming_helpers_have_explicit_native_coverage(self):
+        source = Path(__file__).resolve().parents[2]
+        package = json.loads((source / "package.json").read_text())
+        helpers = ["tests/support/helpers/stock-plc-mailpit.test.mjs",
+                   "tests/support/helpers/incoming-public-io.test.mjs",
+                   "tests/atmosphere/project-incoming-access.test.mjs"]
+        self.assertEqual(package["scripts"]["test:incoming-helpers"].split(),
+                         ["node", "--test", *helpers])
+        checks = (source / ".github/workflows/ci.yml").read_text().split("  integration:", 1)[0]
+        self.assertEqual(checks.count("run: npm run test:incoming-helpers\n"), 1)
+        discovery = subprocess.run(["node", "--input-type=module", "-e",
+            "import {discoverContracts} from './tests/support/discover-contracts.mjs';"
+            "console.log(JSON.stringify(discoverContracts(undefined,{unit:true})))"],
+            cwd=source, capture_output=True, text=True, check=True)
+        files = json.loads(discovery.stdout)
+        self.assertEqual(len(files), len(set(files)))
+        for helper in helpers:
+            self.assertNotIn(helper, files)
+        self.assertNotIn("tests/contracts/incoming-public-mechanisms.test.mjs", files)
+
     def test_live_controller_shell_syntax(self):
         source = Path(__file__).resolve().parents[2]
         for script in [source / "tests/local.sh", *sorted((source / "tests/support").glob("*.sh"))]:
