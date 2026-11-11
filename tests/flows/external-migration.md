@@ -18,7 +18,19 @@ email for the eventual public journey. Established whole-server shared-primary-e
 associations remain a separate supported contract. Verify the incoming DID, records
 and blobs through public endpoints with normal ownership proofs. Do not substitute
 private fixture calls or negative controls for the full public migration journey.
-C4 finality/readiness and public exposure remain deferred.
+C4 is the accepted client-managed design as of 2026-11-11, not completed runtime
+qualification. Public exposure, tracked credential lifecycle and guarded activation
+remain unimplemented. For release, exercise a full stock-PDS client journey with
+records/blobs, valid empty and blob-free repositories, integrity checks of the
+chosen transferred state and interrupted/lost-response recovery. Test authorized
+activation and refusals on every pending-arrival entrypoint, retaining canonical
+identity/custody, placement, saved-user binding, backend and durable-owner gates.
+Concurrent/later source writes and unavailable blobs may be absent; sample integrity
+assertions are not Entryway certification of a final head or exhaustive inventory.
+Counts, zero missing blobs and client intent never replace source ownership proof.
+The client deactivates the source only after confirmed destination activation;
+there is no automatic deletion or new blanket loss acknowledgement. The synthetic
+freeze below remains fixture behavior, not a public migration prerequisite.
 
 ## Existing synthetic flow
 

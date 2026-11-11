@@ -177,6 +177,17 @@ binds login and may use a different address from the source. Whole-PDS joining
 imports established DID/email associations. Neither route adds a bespoke ownership
 proof or permits email matching alone to establish DID authority.
 
+The [incoming migration contract](incoming-migration.md#c4-client-managed-migration-contract-accepted)
+was updated by user decision on 2026-11-11: the client owns record/blob transfer,
+checking its chosen state and choosing when to request activation. Entryway guards
+authorized activation using canonical identity/custody, placement, saved-user binding,
+backend state and durable operation ownership. It does not certify a final source
+head or full inventory, or provide a global verification-to-activation write barrier.
+Concurrent/later source writes and missing blobs may not transfer. Early PLC cutover,
+create-active then pause, pending-account guards and isolation/drain recovery remain
+required. This is design acceptance, not completion of credentials, mounted public
+routes or stock-PDS public journey/recovery qualification.
+
 The architecture checker resolves real imports, including TS/MJS aliases, dynamic
 imports and require. It rejects extra ports, raw SQL/SMTP/Better Auth access outside
 owned boundaries, feature-internal imports, runtime cycles and impure rule modules.

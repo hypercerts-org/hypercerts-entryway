@@ -115,10 +115,15 @@ prove any public behavior, and no Entryway endpoint or route implements this
 migration: the contract test consumes stock PDS APIs, not Entryway handlers.
 
 The preflight verifies the signed PLC operation against the source's observed
-rotation keys. The remaining contracts are still open in the
-[contract gates](incoming-migration.md#contract-qualification-gates-for-implementers):
-C4 finality and activation-race closure stay BLOCKED; C1, C2, C3 and C5 are accepted
-contracts with dormant internal producers, not public route or readiness completion.
+rotation keys. The [contract gates](incoming-migration.md#contract-qualification-gates-for-implementers)
+record accepted C1–C5 design contracts, including the C4 client-managed decision
+accepted on 2026-11-11. The client owns transfer, checks its chosen transferred
+state and chooses when to request activation; Entryway does not certify a final
+source snapshot, exhaustive inventories or a global verification-to-activation
+write barrier. Counts, zero missing blobs and client intent do not replace source
+ownership proof. Tracked credentials, guarded activation, public exposure and full
+runtime qualification remain pending; dormant internal producers do not complete
+those gates.
 
 Contributors qualifying the dormant incoming-arrival composition run
 `./tests/local.sh incoming-arrival-live` after `up`. This creates fresh stock
@@ -135,8 +140,10 @@ exits, this command stops and restarts both owned destination PDS workers, then
 approves observe-only recovery in a new dispatcher. Recovery must bind pending
 without another creation or reservation. Run this disruptive phase alone: it
 restarts this project's destination services. This suite does not activate a public
-migration route or close C4. Its private fixture databases and browser recovery
-receipts remain in the owned artifact directory; never publish those receipts.
+migration route or qualify the accepted C4 client-managed journey, tracked
+credentials or guarded activation. Its private fixture databases and browser
+recovery receipts remain in the owned artifact directory; never publish those
+receipts.
 
 Use the owned-project cleanup procedure below, including after failures.
 
@@ -350,8 +357,16 @@ test container with `CONTRACT_DATABASE_BACKEND=postgresql` and that sandbox's
 child fixture is SQLite-specific; it does not establish PostgreSQL restart coverage.
 Run `./tests/local.sh incoming-public-mechanisms` separately
 for stock runtime evidence. Do not invent a host database URL or report these
-commands as executed from native CI alone. Full public journey/readiness remains
-blocked by C4, independently of these checks.
+commands as executed from native CI alone. Full public journey and guarded
+activation qualification remain pending, independently of these checks. Follow the
+[accepted C4 contract](incoming-migration.md#c4-client-managed-migration-contract-accepted)
+and [public journey coverage](../tests/flows/external-migration.md#public-incoming-migration-shared-email-test-on-hold):
+exercise records/blobs, valid empty and blob-free repositories, integrity of the
+chosen transferred state, authorization and refusal across every pending-arrival
+activation entrypoint, and interrupted/lost-response recovery. Preserve canonical
+identity/custody, placement, saved-user binding, backend-state and durable-owner
+checks; do not require the abandoned final-source certification or global write
+barrier as a prerequisite.
 
 ## Feature tests and operational evidence
 

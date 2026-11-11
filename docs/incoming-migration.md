@@ -1,11 +1,13 @@
 # How incoming account migration works
 
-**Status:** accepted design, November 4, 2026; not yet implemented or qualified.
+**Status:** accepted design, updated November 11, 2026 for the client-managed
+migration contract; implementation and public runtime qualification remain pending.
 
 Incoming migration moves an existing account from an external PDS to a PDS behind
-Entryway. The account keeps its DID and data. Its hosting endpoint, repository
-signing key and destination login binding change. The behavior described below is
-the accepted design identified above.
+Entryway. The account keeps its DID; the migration client transfers its records
+and blobs and checks the transferred state. Entryway does not certify data
+completeness. The hosting endpoint, repository signing key and destination login
+binding change. The behavior described below is the accepted design identified above.
 
 ## Why Entryway migration differs from standalone PDS migration
 
@@ -46,8 +48,8 @@ The protocol accounts for four considerations:
 - **Availability:** identity cutover precedes data import. The destination is briefly
   active before deactivation, so provisioning is not an atomic inactive operation.
 - **Data integrity:** the client retains the original source endpoint after cutover,
-  transfers a consistent repository snapshot and blobs, and catches up source changes.
-  Destination activation depends on verified completeness, not identity cutover alone.
+  exports/imports records and blobs, checks its chosen transferred state and decides
+  when to request activation. Entryway does not certify universal data completeness.
 - **Recovery:** PLC publication, backend creation and local binding are separate
   writes. Durable operation state preserves ownership and progress when responses
   are lost or only part of the sequence succeeds.
@@ -66,8 +68,8 @@ The following stages describe observable account state, not database status valu
 | 2. Authority handed off         | Source hosting remains unchanged; Entryway has authorized rotation authority              | Destination creation is eligible after canonical PLC observation                  |
 | 3. Destination created          | PLC points to the destination with its repository key                                     | Backend account is initially active                                               |
 | 4. Destination paused and bound | Destination is deactivated; verified user and DID are bound locally                       | Migration credentials allow transfer while ordinary Entryway access is restricted |
-| 5. Data transferred             | Repository and blobs are copied and source changes caught up                              | Account remains migration-pending until readiness checks pass                     |
-| 6. Destination activated        | Identity, binding and data checks pass; destination is active                             | Normal destination access becomes available; the client deactivates the source    |
+| 5. Data transferred             | Client transfers and checks its chosen repository/blob state                              | Account remains pending until authorized activation and safety checks pass        |
+| 6. Destination activated        | Authorized intent, identity, binding and backend checks pass; destination is active       | Normal destination access becomes available; the client deactivates the source    |
 
 ### Sequence diagram
 
@@ -126,12 +128,11 @@ sequenceDiagram
     Source-->>Tool: Repository and blobs
     Tool->>Destination: Import directly using migration credentials
     Destination-->>Tool: Transfer status
-    Note over Tool,Destination: Catch up source changes using pinned PDS endpoints
+    Note over Tool,Destination: Client checks chosen transferred state; later source writes may be absent
 
     Tool->>Entryway: 6. Request guarded activation
     Entryway->>Entryway: Verify canonical identity, binding and backend readiness
-    Entryway->>Entryway: Verify final repository integrity and all missing-blob pages
-    Note over Entryway,Destination: Identity cutover alone does not establish data completeness
+    Note over Tool,Entryway: Authorized client chooses activation; Entryway does not certify final inventory
     Entryway->>Destination: Activate only after all readiness checks pass
     Destination-->>Entryway: Observe active state
     Entryway->>Entryway: Atomically complete activation checkpoint
@@ -144,7 +145,7 @@ sequenceDiagram
 | Component       | Responsibility                                                                                                     |
 | --------------- | ------------------------------------------------------------------------------------------------------------------ |
 | Browser         | Verify the destination email through OTP and hand arrival authorization to the tool                                |
-| Migration tool  | Obtain source authorization, coordinate public requests and transfer user data                                     |
+| Migration tool  | Obtain source authorization, transfer/check chosen data and choose when to request activation                      |
 | Entryway        | Admit arrivals, bind accounts, validate and publish PLC operations, provision the destination and guard activation |
 | Source PDS      | Authenticate the source account, authorize PLC signing and serve source data                                       |
 | Destination PDS | Store repository and blobs; keep its private repository signing key; apply supported lifecycle operations          |
@@ -308,10 +309,14 @@ Both data endpoints remain pinned for the transfer. DID resolution now points at
 the destination; retaining the original source endpoint keeps source exports
 addressed to the correct PDS.
 
-The client maintains a consistent source snapshot and catches up changes as
-necessary. Application preferences may use their own public endpoints; they do
-not prove repository completeness. The flow relies on public transfer endpoints,
-not private fixture freezing or access to source signing credentials.
+The client owns export/import, record and blob transfer, checking its chosen
+transferred state and deciding when to request activation. Concurrent or later
+source writes and unavailable blobs may not be transferred. The client must make
+these limits clear, without presenting activation as Entryway certification of a
+final source head or full inventory. This decision adds no blanket loss
+acknowledgement or new wizard policy. Application preferences may use their own
+public endpoints; they do not prove repository completeness. Transfer uses public
+endpoints, not private source freezing or access to source signing credentials.
 
 Backend deactivation and Entryway's pending-state guards restrict ordinary use.
 Pending accounts are blocked from ordinary Entryway OAuth authorization, account
@@ -321,28 +326,30 @@ permissions of reachable backend endpoints remain an interoperability considerat
 
 ### 6. Readiness checks and activation
 
-Before activation, Entryway independently verifies:
+Activation requires intent from an authorized client or the saved verified user
+under the existing C1/C3 permissions, not an unauthenticated completion claim.
+Entryway independently checks canonical PLC identity, destination endpoint,
+reserved repository key, approved rotation custody and handle; expected placement,
+saved-user binding, backend state and durable operation ownership must agree.
+Unresolved external writes retain the C5 isolation/drain and recovery requirements.
 
-- Canonical PLC state, destination endpoint and expected keys.
-- Destination placement, binding, backend readiness and unresolved operation state.
-- Repository contents against the agreed final source snapshot.
-- Every page of missing-blob results.
+The client, not Entryway, checks the chosen transferred records and blobs. Counts,
+zero missing blobs and a client completion flag can be diagnostics or intent, but
+are neither independent completeness proof nor source-ownership/identity
+authorization. Entryway provides no global verification-to-activation write barrier.
+Valid empty and blob-free repositories remain supported.
+[C4](#c4-client-managed-migration-contract-accepted) records this accepted replacement
+for the former stronger completeness guarantee, not satisfaction of that guarantee.
 
-Counts, a client completion boolean, or zero missing blobs on an empty destination
-are insufficient evidence. Valid empty and blob-free source repositories are
-accepted when integrity checks agree. The exact public source/destination evidence
-mechanism remains unresolved; synthetic snapshot assertions do not establish it.
-[C4](#c4-completeness-contract-blocked) records the qualified behavior and its
-limits, and the decision that stays open.
+Every activation path for a pending arrival must share the same authorization and
+safety gate. Entryway journals activation under current ownership, invokes the
+lifecycle hook, observes the outcome and atomically completes its checkpoint.
+Lost responses retain uncertain attempts until supported reconciliation is safe;
+identity cutover or backend status alone cannot complete the operation.
 
-All activation paths for pending arrivals share this readiness gate. Entryway
-journals activation, invokes the lifecycle hook, observes the outcome and atomically
-completes local activation with its checkpoint. Identity-only activation is
-insufficient because cutover precedes data import.
-
-The client deactivates the source after the destination is ready. Source deletion
-is separate and is not scheduled automatically. Post-move login, OAuth, refresh
-and direct PDS access remain part of independent interoperability qualification.
+The client deactivates the source only after confirmed destination activation.
+Source deletion is separate and is not scheduled automatically. Post-move login,
+OAuth, refresh and direct PDS access remain independent interoperability work.
 
 ## Recovery and operation ownership
 
@@ -439,7 +446,8 @@ response. Failed or lost allocation responses retain the saved placement and
 obligation. Replaying preparation cannot recover a stored code; continuation must
 use the saved arrival lifecycle rather than allocate another placement. These
 checks establish preparation state, not source DID ownership, repository finality
-or activation readiness. C4 and public exposure remain deferred.
+or activation readiness. C4 design is accepted; activation implementation and
+public exposure remain deferred.
 
 ### Development: authenticated admission and saved continuation
 
@@ -513,7 +521,7 @@ These associations do not mark or clear repository-allocation uncertainty.
 Binding the saved user and completing the invitation share one database transaction.
 A bound pending retry returns `{state: "pending", operationId, version}` without
 remote effects. No public route, transfer credential or activation is added. Exhaustive
-crash/rehydration qualification, C4 finality and public migration qualification remain
+crash/rehydration qualification, activation implementation and public migration qualification remain
 deferred.
 
 ## Contract qualification gates for implementers
@@ -521,15 +529,16 @@ deferred.
 These are delivery contracts for implementers, not public APIs. The development
 sections above identify the dormant callables already produced; signatures below
 remain contract targets unless explicitly linked to those implementations. Accepted
-C1, C2, C3 and C5 decisions do not imply public exposure or completed readiness.
+C1–C5 decisions do not imply public exposure or completed readiness.
 Bounded stock-mechanism tests do not establish that Entryway exposes, accepts or
 gates a complete migration.
 
 Read each gate as a producer/consumer handoff. A contract becomes usable by
 downstream code only when this section states both the exact call shape and the
-failure behavior, and a maintainer accepts it per case. C1, C2, C3 and C5 are
-**ACCEPTED**; the maintainer decisions behind them are recorded inline as M1 to M4.
-C4 remains **BLOCKED** on the named maintainer decision described below.
+failure behavior, and a maintainer accepts it per case. C1–C5 are **ACCEPTED**
+design contracts; M1–M4 retain their existing meanings. The user accepted the C4
+client-managed responsibility decision on 2026-11-11. Design acceptance does not
+complete plan 011 credentials/activation or plan 012 public integration and qualification.
 
 Source and destination versions stay distinct. The upstream facts here are
 inspection of pinned PDS 0.5.36, and the standalone qualification source is the
@@ -595,16 +604,16 @@ provisioned, and the caller resumes through `recover` from C3 instead.
 
 Errors. Each code is stable and mapped explicitly, and no message carries a secret.
 
-| Condition                                        | Error code                  | HTTP status |
-| ------------------------------------------------ | --------------------------- | ----------- |
-| Body fails schema                                | `InvalidRequest`            | 400         |
-| Missing or stale OTP proof                       | `ArrivalProofRequired`      | 403         |
+| Condition                                                | Error code                  | HTTP status |
+| -------------------------------------------------------- | --------------------------- | ----------- |
+| Body fails schema                                        | `InvalidRequest`            | 400         |
+| Missing or stale OTP proof                               | `ArrivalProofRequired`      | 403         |
 | Unknown operation or verified principal is not its owner | `AccountNotFound`           | 404         |
-| Saved arrival is no longer actionable            | `ArrivalExpired`            | 409         |
-| `expectedVersion` differs from the saved version | `OperationConflict`         | 409         |
-| Concurrent work for the DID is admitted          | `OperationPending`          | 409         |
-| Per-IP or per-subject budget exhausted           | `RateLimitExceeded`         | 429         |
-| Dispatch state makes cancellation unsafe         | `OperationRecoveryRequired` | 409         |
+| Saved arrival is no longer actionable                    | `ArrivalExpired`            | 409         |
+| `expectedVersion` differs from the saved version         | `OperationConflict`         | 409         |
+| Concurrent work for the DID is admitted                  | `OperationPending`          | 409         |
+| Per-IP or per-subject budget exhausted                   | `RateLimitExceeded`         | 429         |
+| Dispatch state makes cancellation unsafe                 | `OperationRecoveryRequired` | 409         |
 
 Replay. `prepare` with the same verified user, DID and handle is idempotent and
 returns the same saved operation while that operation is still actionable. A changed
@@ -811,13 +820,37 @@ it describes recovery rather than implying full revocation.
 The destination permission and callback runtime proof also remains unrun; authoring
 the guard contract does not qualify it.
 
-### C4 completeness contract (BLOCKED)
+### C4 client-managed migration contract (ACCEPTED)
 
-Plan 011 readiness and plan 012 exposure stay blocked. Named blocker: no supported
-mechanism yet provides authenticated historical source key and head binding, a
-complete source and destination inventory, all missing-blob pages, and a barrier that
-prevents writes between verification and activation. The named maintainer decision is
-which finality and mutation-serialization guarantee to adopt.
+Accepted user decision, 2026-11-11: adopt the Rust-like client-managed responsibility
+contract. This explicitly replaces the former requirement for Entryway to certify
+an agreed final source snapshot, exhaustive record/blob inventories and a global
+verification-to-activation mutation barrier. It does not establish that the old
+stronger guarantee was met. Implementation and runtime qualification are pending.
+
+The client/tool exports and imports, transfers records and blobs, checks its chosen
+transferred state and chooses when to request activation. Concurrent or later source
+writes and unavailable blobs may be absent from that transfer. Counts, a zero
+missing-blob result or a client completion flag are diagnostics/intent only, not
+independent proof or a replacement for source ownership and identity authorization.
+No historical final-source attestation or source-admin freeze is a prerequisite.
+
+Entryway retains C1/C3 activation permissions and the identity, canonical PLC,
+endpoint, reserved-key, rotation-custody, handle, placement, saved-user binding,
+backend-state and current durable-owner checks described in
+[activation](#6-readiness-checks-and-activation). All pending activation paths share
+that gate. C5 journals, idempotent continuation, lost-response uncertainty and
+isolation/drain recovery are unchanged; client-managed data does not excuse unsafe
+external writes. Source deactivation is the client's action after confirmed
+destination activation, never automatic deletion.
+
+Owners and handoffs: plan 008 maintains this policy and stock-mechanism qualification;
+009 supplies existing durable arrival/projection/attempt APIs; 010 supplies the
+actual dormant `composeIncomingArrival` preparation/admission/continuation flow;
+011 must integrate tracked credentials and guarded activation; 012 must mount and
+qualify the public consumers. This decision adds no wire field, namespace, fictional
+source-attestation producer or optional future evidence schema. Any missing concrete
+activation adapter contract must be declared by its owner before implementation.
 
 Bounded stock-mechanism evidence and its limits. The committed tests exercise the
 following source and inactive-destination behaviors within explicit byte and phase
@@ -836,21 +869,26 @@ migration qualification; reproof requires a fresh managed sandbox run:
   client byte does not establish server receipt of the prefix or universal finality.
 - Reservation: sequential same-DID retry and placement isolation only.
 
-What remains unqualified: blob retention across pages, pagination of a mutable
+Limitations of those observations: blob retention across pages, pagination of a mutable
 missing-blob set, a consistent export under concurrent writes, and any write barrier
 between verification and activation. The stock export reads one root and then pages
 blocks (`node_modules/@atproto/pds/dist/actor-store/repo/sql-repo-reader.js:68-90`), so
 a read is not a consistent snapshot under writes, and the missing-blob set can change
 between pages. A callback guard alone does not fence an in-flight import or write.
 
-Forbidden resolutions: a private freeze, trusting the client's completion summary, an
-arbitrary quiet period, a PDS patch, or a data-plane proxy. Absence of a convenience
-endpoint is not proof of impossibility.
+These remain limitations, not blockers requiring the abandoned certification
+mechanism. They do not change the client's responsibility for its chosen transfer.
 
-Inputs C4 must still define once the decision is made: how the final source snapshot
-is agreed, how later source changes invalidate prior readiness, and whether source
-availability or source-supplied authorization is required after cutover. Empty and
-blob-free repositories remain valid inputs.
+Release qualification still needs a full supported public client journey on stock
+PDS: records and blobs, valid empty/blob-free repositories, integrity assertions for
+the chosen transferred state, activation authorization across every entrypoint and
+bounded interrupted/lost-response recovery. Sample assertions demonstrate those
+scenarios; they do not certify all source data or all concurrent writes.
+
+Only the responsibility contract is adopted from Rust. Entryway's accepted early
+PLC cutover, create-active then pause, pending-backend guards and recovery ordering
+remain unchanged. No Rust autoactivation timer, custom session-revocation endpoint,
+forwarding proxy, lost-blob waiver, PDS fork or new wizard policy is adopted.
 
 ### C5 dispatch and recovery contract (ACCEPTED)
 
