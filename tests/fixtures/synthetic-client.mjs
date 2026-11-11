@@ -3,6 +3,7 @@ import express from "express";
 import {
   JoseKey,
   NodeOAuthClient,
+  isExpectedSessionError,
   requestLocalLock,
 } from "@atproto/oauth-client-node";
 import { escapeHtml, page } from "../../src/ui/html.mjs";
@@ -110,12 +111,23 @@ export async function mountClient({ app, config, db }) {
   const metadataPaths = {
     primary: "/client-metadata.json",
     secondary: "/client-metadata-secondary.json",
+    untrusted: "/client-metadata-untrusted.json",
   };
   const callbackPaths = {
     primary: "/client/callback",
     secondary: "/client/callback/secondary",
+    untrusted: "/client/callback/untrusted",
   };
-  for (const id of ["primary", "secondary"]) {
+  const clientNames = {
+    primary: "Hypercerts test client",
+    secondary: "Hypercerts second test client",
+    untrusted: "Hypercerts untrusted test client",
+  };
+  // ePDS signup consent skip opt-in. The sandbox trusts primary and secondary
+  // (OAUTH_TRUSTED_CLIENTS), so secondary skips consent on signup, untrusted
+  // opts in without trust and must still show it, and primary does not opt in.
+  const skipsConsentOnSignup = new Set(["secondary", "untrusted"]);
+  for (const id of Object.keys(metadataPaths)) {
     const jwk = await db.transact(async () => {
       const stored = await db.get("client:keys", id);
       if (stored) return stored;
@@ -134,10 +146,7 @@ export async function mountClient({ app, config, db }) {
     clients[id] = new NodeOAuthClient({
       clientMetadata: {
         client_id: `${origin}${metadataPaths[id]}`,
-        client_name:
-          id === "primary"
-            ? "Hypercerts test client"
-            : "Hypercerts second test client",
+        client_name: clientNames[id],
         client_uri: `${origin}/`,
         redirect_uris: [`${origin}${callbackPaths[id]}`],
         scope: DEFAULT_SCOPE,
@@ -249,11 +258,12 @@ export async function mountClient({ app, config, db }) {
   });
   const formFields = (browser, id) =>
     hidden("csrf", browser.csrf) + hidden("client", id);
-  const render = (res, browser, id, data = null) =>
+  const render = (res, browser, id, data = null, notice = "") =>
     page(
       res,
       data ? "Signed in" : "Hypercerts test client",
       `
+    ${notice ? `<p role="status">${escapeHtml(notice)}</p>` : ""}
     <p>Application: <strong>${escapeHtml(id)}</strong></p>
     ${
       data
@@ -263,7 +273,7 @@ export async function mountClient({ app, config, db }) {
     <form method="post" action="/client/logout">${formFields(browser, id)}<button class="secondary">Sign out of application</button></form>`
         : ""
     }
-    <form method="get" action="/client/login"><label for="identifier">Handle, DID or authorization server</label><input id="identifier" name="identifier" value="${escapeHtml(config.issuer)}" required><label for="client">Application</label><select id="client" name="client"><option value="primary"${id === "primary" ? " selected" : ""}>Primary client</option><option value="secondary"${id === "secondary" ? " selected" : ""}>Second client</option></select><button>${data ? "Sign in again" : "Sign in"}</button></form>
+    <form method="get" action="/client/login"><label for="identifier">Handle, DID or authorization server</label><input id="identifier" name="identifier" value="${escapeHtml(config.issuer)}" required><label for="email">Email (optional, with an authorization server)</label><input id="email" name="email" type="email" autocomplete="email"><label for="client">Application</label><select id="client" name="client"><option value="primary"${id === "primary" ? " selected" : ""}>Primary client</option><option value="secondary"${id === "secondary" ? " selected" : ""}>Second client</option></select><button>${data ? "Sign in again" : "Sign in"}</button></form>
     <p><a href="${escapeHtml(config.issuer)}/account">Manage entryway account</a> · <a href="/client?client=${id === "primary" ? "secondary" : "primary"}">Open other application</a></p>
   `,
       200,
@@ -277,7 +287,12 @@ export async function mountClient({ app, config, db }) {
           "Access-Control-Allow-Origin": "*",
           "Cache-Control": "public, max-age=60",
         })
-        .json(clients[id].clientMetadata),
+        .json({
+          ...clients[id].clientMetadata,
+          ...(skipsConsentOnSignup.has(id)
+            ? { epds_skip_consent_on_signup: true }
+            : {}),
+        }),
     );
   }
   router.get(
@@ -286,14 +301,29 @@ export async function mountClient({ app, config, db }) {
       const browser = await readBrowser(req, res, true);
       const id = clientId(req, browser);
       const did = browser.subjects[id];
-      const data = did
-        ? await sessionData({
-            session: await clients[id].restore(did),
-            browser,
-            id,
-          })
-        : null;
-      render(res, browser, id, data);
+      if (!did) return render(res, browser, id);
+      let session;
+      try {
+        session = await clients[id].restore(did);
+      } catch (error) {
+        // A revoked session (e.g. after a password change) can never be
+        // restored; forget it so the home page does not fail on every visit.
+        // Other failures, such as an authorization-server 5xx during refresh,
+        // may be temporary, so they surface and keep the saved session.
+        if (!isExpectedSessionError(error)) throw error;
+        delete browser.subjects[id];
+        await db.set("client:browsers", browser.id, browser);
+        return render(
+          res,
+          browser,
+          id,
+          null,
+          "Your previous session ended. Sign in again.",
+        );
+      }
+      // A failed PDS read after a successful restore may be temporary, so it
+      // surfaces as an error and keeps the saved session for the next visit.
+      render(res, browser, id, await sessionData({ session, browser, id }));
     }),
   );
   router.get(
@@ -303,9 +333,12 @@ export async function mountClient({ app, config, db }) {
       const id = clientId(req, browser);
       const identifier = req.query.identifier ?? config.issuer;
       const scope = req.query.scope ?? DEFAULT_SCOPE;
+      const email = req.query.email || undefined;
       if (
         typeof identifier !== "string" ||
         identifier.length > 512 ||
+        (email !== undefined &&
+          (typeof email !== "string" || email.length > 254)) ||
         typeof scope !== "string" ||
         scope.length > 4096
       )
@@ -331,6 +364,9 @@ export async function mountClient({ app, config, db }) {
           scope,
           ...(prompt ? { prompt } : {}),
         });
+        // PAR rejects an email login_hint, so email-first sign-in carries it on
+        // the authorization redirect only.
+        if (email) url.searchParams.set("login_hint", email);
         res.redirect(303, url.href);
       } catch (error) {
         await db.delete("client:flows", appState);
@@ -341,7 +377,10 @@ export async function mountClient({ app, config, db }) {
   router.get(
     Object.values(callbackPaths),
     route(async (req, res) => {
-      const id = req.path === callbackPaths.secondary ? "secondary" : "primary";
+      const id =
+        Object.keys(callbackPaths).find(
+          (key) => callbackPaths[key] === req.path,
+        ) ?? "primary";
       const browser = await readBrowser(req, res);
       const params = new URL(req.originalUrl, origin).searchParams;
       const state = params.get("state");

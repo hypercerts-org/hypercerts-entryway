@@ -23,6 +23,7 @@ export async function createAccounts({
   ownership = createOperationOwnership({
     store: createOperationOwnershipStore(db),
     workerId,
+    ...config.operationLease,
   }),
 }) {
   const plcSigner = await Secp256k1MigrationPlcSigner.fromHex(

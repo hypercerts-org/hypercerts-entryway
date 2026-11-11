@@ -183,16 +183,23 @@ owned boundaries, feature-internal imports, runtime cycles and impure rule modul
 
 ## 5. Login and application authorization
 
-The sequence shows the target sign-in journey for existing associated accounts,
-not a claim of ePDS parity today.
-The approved sign-in policy verifies email before resolving established DID
-bindings, then requires an explicit choice if more than one is associated. The
-schema supports repeated primary-email claims and multiple DID bindings per
-verified user; the joining-PDS association import and interactive chooser remain
-unimplemented. The resolver returns `selection-required` and does not choose a DID
-from email alone; see [account identity](data-custody.md#1-account-identity-and-ownership).
-Proof freshness and consent remain separate policy decisions. Public and
-confidential clients both need acceptance coverage.
+The sequence shows the implemented phase-one sign-in path for established
+bindings, not complete ePDS parity. Email OTP is verified before bindings are
+resolved; zero or one associated DID retains the existing path, while multiple
+bindings render an explicit chooser. The joining-PDS association import remains
+unimplemented, so an association not present as an Entryway binding is not
+eligible for sign-in. The resolver returns `selection-required` and never chooses
+from an email match alone; see [account identity](data-custody.md#1-account-identity-and-ownership).
+A remembered device is fresh for seven days; stale device authentication returns
+to email OTP for the selected DID. The authentication check revalidates the live
+DID binding before refreshing that DID's device membership. Account-console
+sensitive actions keep their separate ten-minute rule on the Better Auth session,
+which a confirmation by email code can renew ([Confirm it's you](#confirm-its-you)).
+Client trust is one Entryway-wide list, and the only consent bypass is the
+opt-in [signup consent skip](#client-trust-and-signup-consent-skip). Configured local public
+and confidential client flows have verified hint acceptance, seven-day
+freshness and consent behavior. Full ePDS production consent/freshness parity
+remains outstanding.
 
 ```mermaid
 %%{init: {"theme":"base","themeVariables":{"primaryTextColor":"#172B4D","lineColor":"#45556C","actorBkg":"#DBEAFE","actorBorder":"#315582","actorTextColor":"#172B4D","signalColor":"#45556C","signalTextColor":"#172B4D","noteBkgColor":"#FFF1D6","noteTextColor":"#172B4D","noteBorderColor":"#8A5A2B","activationBkgColor":"#EDE9FE","activationBorderColor":"#65538A","fontFamily":"Arial"}}}%%
@@ -230,18 +237,129 @@ sequenceDiagram
 
 The Better Auth session proves the email identity; it does not itself select or
 authenticate a DID. Only established bindings are eligible for account choice;
-matching an email cannot add authority over an unbound DID. The current resolver
-returns `selection-required` when multiple bindings are found, but no chooser or
-continuation path is implemented. Security-revocation flows invalidate all Better
+matching an email cannot add authority over an unbound DID. The email chooser is
+distinct from the existing OAuth device-account picker: it appears only after OTP
+verification and binds the pending flow to that verified browser identity.
+Submission re-reads current bindings, requires a bound DID, and limits consent to
+the chosen DID while preserving the original PAR, client and requested scope.
+Until consent is approved or denied, the same verified session may choose a
+different bound DID from the consent page; consent then applies only to the
+latest choice. Stale selected accounts re-enter the existing visible email-OTP flow. The
+provider request's `login_hint` and any selected-account hint both remain binding
+across authentication and flow restart; current account binding is checked before
+device membership is refreshed. Existing consent behavior remains unchanged. Security-revocation flows invalidate all Better
 Auth sessions for a DID's shared user. Ordinary verified email changes instead
 preserve sessions on the previous user while atomically moving only the selected
 DID binding to the verified destination user; sessions are not migrated to that
-user. OAuth and account data remain DID-scoped. Preserve the original client
-request and authorization context through verification and any future choice.
+user. OAuth and account data remain DID-scoped.
+
+### Client trust and signup consent skip
+
+Entryway is the authorization server for every PDS behind it, so client trust is
+one Entryway-wide list. A PDS's own `PDS_OAUTH_TRUSTED_CLIENTS` is not consulted.
+When neither `OAUTH_TRUSTED_CLIENTS` nor `trustedClientIds` in the service config
+file is set, only the primary client (`<clientUrl>/client-metadata.json`) is
+trusted. Setting `OAUTH_TRUSTED_CLIENTS` replaces both, so list every client that
+must stay trusted, including the primary one; an empty value trusts no client.
+
+A newly created account skips consent (ePDS parity) only when the client is
+trusted and the client's metadata document contains `"epds_skip_consent_on_signup": true`. As in ePDS,
+`prompt=consent` does not override that opt-in. If checking the skip fails,
+including a metadata read failure, consent is shown instead. A failure while
+issuing the authorization code itself happens after the sign-in is claimed, so
+the user restarts from the app.
+A skip records the granted scopes. Returning accounts keep the stock provider
+consent policy.
+
+| Setting                     | Values and behavior                                                                                                        |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `OAUTH_TRUSTED_CLIENTS`     | Comma-separated https client metadata URLs; replaces the config-file list and the primary-client default; `""` trusts none |
+
+Invalid values fail startup with `InvalidOAuthClientPolicy` and never echo the value.
 
 Confidential clients also supply client authentication where required.
 The account page distinguishes ending a browser session, forgetting device membership,
 and revoking application access. Revocation effects must be explicit, including outstanding access-token lifetime.
+
+Account settings use request-carried DID selection. A verified identity with one
+binding keeps the existing direct path; with multiple bindings, `GET /account`
+shows a chooser and does not select one implicitly. `POST /account/select`
+checks CSRF, rechecks the live binding, then
+redirects to `/account?did=<selected-DID>`. The query value is untrusted and
+is revalidated with `accountAccess.requireBoundAccount` on every selected page
+request. Every settings action carries the DID; duplicate or conflicting
+selectors are rejected. The DID does not persist selection authority: tabs
+remain independent, while a revoked session or unbound DID cannot reuse an old
+form or fall through to a sibling account. Settings and email proofs use only the selected DID. No account
+schema or persistent selection state is added.
+
+### Confirm it's you
+
+Sensitive account-console actions need a recent browser session: one that signed
+in, or last confirmed it's you, within ten minutes (`isRecent` in the shared
+security primitives). Every action needs one unless `noRecentLogin` exempts it,
+so a new action is protected by default.
+
+| Rule                   | Actions                                                                                                                                                                                             | Why                                                                                                                                                                                                                                                                                                            |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Needs a recent session | `password-set`, `password-remove`, `app-password-create`, `backup-request`, `backup-confirm`, `backup-remove`, `status`, `migration-confirm`                                                        | The others have no proof of their own: a backup email can recover the account, an app password is a long-lived credential and `status` can deactivate or reactivate the account. `migration-confirm` contacts the target PDS before it checks its code, and continuing a saved migration checks no code at all |
+| Own primary-email code | `email-request`, `email-update`, `email-confirm`, `delete`, `delete-confirm`, `migration-request`                                                                                                   | Each flow requires a code sent to the primary email before anything changes, the same proof a confirmation asks for                                                                                                                                                                                            |
+| Never asks             | Viewing the settings page, `handle`, `revoke`, `grant-revoke`, `oauth-session-revoke`, `legacy-session-revoke`, `browser-session-revoke`, `browsers-revoke`, `device-revoke`, `app-password-revoke` | Revocations only reduce access. An OAuth app with the handle permission can already change the handle                                                                                                                                                                                                          |
+
+A flow that sends its own primary-email code skips the recent-session check,
+so the user enters one code rather than a confirmation code followed by the
+flow's own code:
+
+```mermaid
+flowchart TD
+  A[User chooses an action] --> B{Sends its own<br/>primary-email code?}
+  B -- yes --> F[Enter the flow's code]
+  B -- no --> C{Never asks?}
+  C -- yes --> G[Change is made]
+  C -- no --> D{Signed in or confirmed<br/>within ten minutes?}
+  D -- yes --> G
+  D -- no --> E[Confirm it's you:<br/>enter a reconfirm code]
+  E --> G
+  F --> G
+```
+
+Changing or removing a password does not ask for the current password: a
+passwordless account has none, and the recent session is the proof. Deletion
+still asks for the password of an account that has one.
+
+The settings page shows each gated change as a button, such as "Change account
+password" or "Manage recovery email". The check runs when the user chooses a
+change, not when the settings page loads, so a page left open still asks at the
+right time. Each button opens a protected page,
+`GET /account/manage/<page>` (`password`, `app-password`, `recovery`,
+`status`), mounted with `mountProtectedPage`. A recent session sees the form at
+once. Any other session sees "Confirm it's you" with a "Send code" button;
+opening the page sends nothing.
+
+- `POST /account/confirm/start` emails a one-use eight-digit `reconfirm` code to
+  the primary email. It accepts only a mounted page name or `settings` as the
+  return target.
+- `POST /account/confirm` checks the code, records the confirmation and redirects
+  to the protected page, where the user makes the change.
+- A gated change submitted after the window (for example, a form left open) is
+  not made. The console answers `403` with the same "Send code" step, pointing
+  back to the page that owns the action; `migration-confirm`, which no page
+  declares, returns to account settings. Nothing the user typed is stored or replayed.
+- A confirmation lasts ten minutes and belongs to its Better Auth session;
+  signing out or revoking the session ends it. No other proof counts as one.
+- Each protected page declares the gated actions it owns
+  (`mountProtectedPage(name, { actions, render })`); a stale submission returns
+  to that page.
+- Multi-node deployments need synchronized clocks: a confirmation time recorded
+  ahead of the node that checks it does not count, and the user is asked again.
+- The code expires after ten minutes and allows five guesses. "Send a new code"
+  replaces it, and a newer request from another tab supersedes it.
+- Another session, user or account gets `InvalidToken` without spending guesses.
+- Every code, including re-sends, uses the existing five-per-ten-minutes mailbox
+  budget.
+- The challenge carries only the session, user and return page. Direct callers
+  of the security primitives still get `403 ReauthenticationRequired`. No
+  schema, secret or setting is added.
 
 ## 6. PDS integration and fleet lifecycle
 
@@ -315,8 +433,9 @@ Reuse provider wiring, OTP integration, atomic account/DID invariants, indexed d
 PDS call sequences, journals, branding, mail ports and regression scenarios.
 Keep shared contracts narrow while features own their operation bodies.
 
-Still required: joining-PDS association import and post-verification chooser,
-ePDS consent/freshness parity, complete XRPC adapters, production email delivery,
+Still required: joining-PDS association import, full ePDS production
+consent/freshness parity, complete XRPC adapters,
+production email delivery,
 operator onboarding and fleet lifecycle, implementation of the approved custody
 model and public-protocol migration. The [Drizzle database boundary](database.md) provides asynchronous authority
 transactions. [Shared operation ownership](shared-operations.md) implements durable

@@ -53,6 +53,7 @@ const safeCodes = new Set([
   "ReauthenticationRequired",
   "RepoNotFound",
   "SchemaConflict",
+  "ScopeMissingError",
   "SourceChanged",
   "TargetAccountExists",
   "TargetNotReady",

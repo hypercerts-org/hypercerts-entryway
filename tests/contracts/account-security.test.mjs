@@ -22,6 +22,7 @@ import { createAccountSecurity } from "../../dist/src/compose-account-security.m
 import { createAccountStorage } from "../../dist/src/database/drizzle/account-storage.js";
 import { createMailFeature } from "../../dist/src/mail/create-mail.js";
 import { createMailOutbox } from "../../dist/src/database/drizzle/mail-outbox.js";
+import { createOtpMessage } from "../../dist/src/mail/templates.js";
 
 async function fixture(t, { initialLogin = true } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "entryway-account-security-"));
@@ -64,7 +65,7 @@ async function fixture(t, { initialLogin = true } = {}) {
     async get(identifier) {
       return (
         (await storage.getByDid(identifier)) ??
-        (await storage.getByEmail(identifier))
+        (await storage.getByHandle(identifier))
       );
     },
     async list() {
@@ -130,7 +131,7 @@ async function fixture(t, { initialLogin = true } = {}) {
     assert.equal(response.status, 200);
     const identity = response.principal;
     // This fixture explicitly establishes existing-account ownership; production sign-in only reads it.
-    const existing = await accounts.get(email);
+    const [existing] = await storage.listByEmail(email);
     if (existing)
       await createAccountAuthority({ db, accounts }).bindVerifiedIdentity({
         did: existing.did,
@@ -142,7 +143,7 @@ async function fixture(t, { initialLogin = true } = {}) {
     response.commitCookies({ append: (_name, value) => cookies.push(value) });
     const cookie = cookies.map((value) => value.split(";")[0]).join("; ");
     const session = await f.oauth.requireSession({ headers: { cookie } });
-    const row = await accounts.get(email);
+    const [row] = await storage.listByEmail(email);
     return {
       cookie,
       user: { id: identity.userId, email: identity.email },
@@ -194,6 +195,35 @@ async function bindSiblingToSharedEmail(f, sharedUserId) {
   return sibling;
 }
 
+test("shared-email password reset and login answer like an unknown email", async (t) => {
+  const f = await fixture(t);
+  const sibling = await bindSiblingToSharedEmail(f, f.login.user.id);
+  const password = "a long shared-email password";
+  await f.legacy.setPassword(f.alice.did, password);
+  await f.legacy.setPassword(sibling.did, password);
+  const resetChallenges = async () =>
+    (await f.db.list("security:challenges")).filter(
+      ({ value }) => value.purpose === "password-reset",
+    ).length;
+  const challengesBefore = await resetChallenges();
+
+  for (const email of [f.alice.email, "unknown@example.com"])
+    assert.deepEqual(await f.security.requestPasswordReset({ email }), {});
+  assert.equal(await resetChallenges(), challengesBefore);
+
+  for (const identifier of [f.alice.email, "unknown@example.com"])
+    await assert.rejects(f.legacy.createSession({ identifier, password }), {
+      status: 401,
+      error: "AuthenticationRequired",
+    });
+  // Each shared DID remains reachable through its own identifier.
+  for (const { did, handle } of [f.alice, sibling])
+    assert.equal(
+      (await f.legacy.createSession({ identifier: handle, password })).did,
+      did,
+    );
+});
+
 test("login validation requires repair for an email-matched account without a binding", async (t) => {
   const f = await fixture(t, { initialLogin: false });
   await f.accounts.save({ ...f.alice, emailVerified: false });
@@ -242,7 +272,7 @@ test("login validation leaves a genuinely new verified email available for signu
   assert.deepEqual(await f.security.assertLoginEmail(response.principal), {
     kind: "unbound",
   });
-  assert.equal(await f.accounts.get(email), null);
+  assert.deepEqual(await f.accounts.storage.listByEmail(email), []);
 });
 
 test("account authorization rechecks the persisted Better Auth verification state", async (t) => {
@@ -1160,7 +1190,7 @@ test("removing a backup invalidates recovery already advanced to replacement-ema
   assert.equal((await f.accounts.get(f.alice.did)).email, f.alice.email);
 });
 
-test("password reset works for passwordless accounts and revokes sessions; settings require current password", async (t) => {
+test("password reset works for passwordless accounts and revokes sessions; settings removal needs no current password", async (t) => {
   const f = await fixture(t);
   assert.deepEqual(
     await f.security.requestPasswordReset({ email: "unknown@example.com" }),
@@ -1187,15 +1217,8 @@ test("password reset works for passwordless accounts and revokes sessions; setti
     },
   );
   const login = await f.signIn(f.alice.email);
-  await assert.rejects(
-    f.security.removePassword(login.actor, {
-      currentPassword: "wrong password",
-    }),
-    { error: "InvalidPassword" },
-  );
-  await f.security.removePassword(login.actor, {
-    currentPassword: "newly chosen strong password",
-  });
+  // A recent session is the proof; the current password is not asked for.
+  await f.security.removePassword(login.actor);
   assert.equal(await f.legacy.hasPassword(f.alice.did), false);
   assert.equal(
     await f.oauth.requireSession({ headers: { cookie: login.cookie } }),
@@ -1564,16 +1587,21 @@ test("password reset cannot issue current authority to a former primary email af
     release = resolve;
   });
   const get = f.accounts.get;
+  const storage = f.accounts.storage;
+  const listByEmail = storage.listByEmail;
   let pause = true;
-  f.accounts.get = async (identifier) => {
-    const row = await get(identifier);
-    if (pause && identifier === oldEmail) {
+  storage.listByEmail = async (email) => {
+    const rows = await listByEmail(email);
+    if (pause && email === oldEmail) {
       pause = false;
       entered();
       await continueRequest;
     }
-    return row;
+    return rows;
   };
+  t.after(() => {
+    storage.listByEmail = listByEmail;
+  });
   // Snapshot the mail projection so even a newly sent unusable code is noticed.
   const oldMail = await f.db.get("outbox", oldEmail);
   const pending = f.security.requestPasswordReset({ email: oldEmail });
@@ -1778,4 +1806,501 @@ test("stale saved deletion authorization cannot manufacture another deletion adm
   assert.deepEqual(await f.db.read("authority_operations"), operations);
   assert.equal(calls, 1);
   assert.equal((await f.accounts.get(f.alice.did)).status, "deleted");
+});
+
+// "Confirm it's you": a browser session signed in more than ten minutes ago proves
+// its mailbox again by email code instead of signing in again.
+const staleActor = (actor) => ({
+  ...actor,
+  authenticatedAt: new Date(Date.now() - 601_000),
+});
+const returnTo = { returnTo: "recovery" };
+async function beginConfirmation(
+  f,
+  actor,
+  input = returnTo,
+  email = f.alice.email,
+) {
+  const { challengeId } = await f.security.beginReconfirm(actor, input);
+  const token = (await f.db.get("outbox", email)).token;
+  assert.equal(token.split(".")[0], challengeId);
+  return { challengeId, token };
+}
+const completed = (actor, page = "recovery") => ({
+  did: actor.did,
+  returnTo: page,
+});
+async function editChallenge(f, id, change) {
+  const row = await f.db.get("security:challenges", id);
+  await f.db.set("security:challenges", id, change(row));
+}
+
+test("a browser session is recent for ten minutes after sign-in or a confirmation by email code", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  assert.equal(await f.security.isRecent(f.actor), true);
+  assert.equal(await f.security.isRecent(stale), false);
+  assert.equal(
+    await f.security.isRecent({
+      ...f.actor,
+      authenticatedAt: new Date(Date.now() + 60_000),
+    }),
+    false,
+    "a future-dated sign-in is never recent",
+  );
+  for (const kind of ["oauth", "legacy", "admin"])
+    assert.equal(
+      await f.security.isRecent({
+        did: f.alice.did,
+        kind,
+        authenticatedAt: new Date(),
+      }),
+      false,
+    );
+  // Direct callers keep the same refusal and error code; nothing is bypassed.
+  // For password changes it is the only check, since no current password is asked.
+  await assert.rejects(
+    f.security.requestBackupEmail(stale, { email: "backup@example.com" }),
+    { status: 403, error: "ReauthenticationRequired" },
+  );
+  await assert.rejects(
+    f.security.setPassword(stale, { password: "a stale replacement password" }),
+    { status: 403, error: "ReauthenticationRequired" },
+  );
+  await assert.rejects(f.security.removePassword(stale), {
+    status: 403,
+    error: "ReauthenticationRequired",
+  });
+
+  const { token } = await beginConfirmation(f, stale);
+  assert.equal(
+    await f.security.isRecent(stale),
+    false,
+    "a sent code is not a confirmation",
+  );
+  await f.security.completeReconfirm(stale, token);
+  assert.equal(await f.security.isRecent(stale), true);
+  assert.equal(
+    await f.security.isRecent(stale, Date.now() + 590_000),
+    true,
+    "the confirmation lasts ten minutes",
+  );
+  assert.equal(await f.security.isRecent(stale, Date.now() + 610_000), false);
+  assert.equal(
+    await f.security.isRecent({
+      ...stale,
+      authenticatedAt: new Date(Date.now() + 60_000),
+    }),
+    true,
+    "a future-dated sign-in does not hide a valid confirmation",
+  );
+  // principal(actor, true) applies the identical rule to every direct caller.
+  await f.security.requestBackupEmail(stale, { email: "backup@example.com" });
+});
+
+test("a confirmation code returns its page once, stores no code and records the confirmation", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  const { challengeId, token } = await beginConfirmation(f, stale, {
+    returnTo: "password",
+  });
+  const [, code] = token.split(".");
+  const stored = await f.db.get("security:challenges", challengeId);
+  assert.equal(stored.purpose, "reconfirm");
+  assert.equal(stored.did, f.alice.did);
+  assert.equal(stored.email, f.alice.email);
+  assert.deepEqual(
+    stored.data,
+    { sessionId: stale.sessionId, userId: stale.userId, returnTo: "password" },
+    "the challenge carries who asked and where to return, nothing typed",
+  );
+  assert.ok(!JSON.stringify(stored).includes(code), "the code is not stored");
+  assert.equal((await f.db.get("outbox", f.alice.email)).type, "reconfirm");
+
+  assert.deepEqual(
+    await f.security.completeReconfirm(stale, token),
+    completed(stale, "password"),
+  );
+  assert.ok((await f.db.get("security:challenges", challengeId)).consumedAt);
+  await assert.rejects(f.security.completeReconfirm(stale, token), {
+    error: "InvalidToken",
+  });
+
+  // A confirmation that can no longer make any session recent is pruned on write.
+  await f.db.set("account:reconfirm", "ended-session", {
+    userId: f.login.user.id,
+    at: Date.now() - 601_000,
+  });
+  await f.db.set("account:reconfirm", "other-live-session", {
+    userId: f.login.user.id,
+    at: Date.now() - 1_000,
+  });
+  const next = await beginConfirmation(f, stale);
+  await f.security.completeReconfirm(stale, next.token);
+  assert.equal(await f.db.get("account:reconfirm", "ended-session"), null);
+  assert.equal(
+    (await f.db.get("account:reconfirm", "other-live-session")).userId,
+    f.login.user.id,
+    "a confirmation that still makes its session recent is kept",
+  );
+  assert.equal(
+    (await f.db.get("account:reconfirm", stale.sessionId)).userId,
+    f.login.user.id,
+  );
+});
+
+test("a confirmation code is unusable once it is used, superseded or expired", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+
+  const first = await beginConfirmation(f, stale);
+  const second = await beginConfirmation(f, stale);
+  await assert.rejects(f.security.completeReconfirm(stale, first.token), {
+    error: "InvalidToken",
+  });
+  await assert.rejects(f.security.resendReconfirm(stale, first.challengeId), {
+    error: "InvalidToken",
+  });
+
+  await editChallenge(f, second.challengeId, (row) => ({
+    ...row,
+    expiresAt: Date.now() - 1,
+  }));
+  await assert.rejects(f.security.completeReconfirm(stale, second.token), {
+    error: "ExpiredToken",
+  });
+  await assert.rejects(f.security.resendReconfirm(stale, second.challengeId), {
+    error: "ExpiredToken",
+  });
+  assert.equal(await f.security.isRecent(stale), false);
+
+  const third = await beginConfirmation(f, stale);
+  await f.security.completeReconfirm(stale, third.token);
+  await assert.rejects(f.security.resendReconfirm(stale, third.challengeId), {
+    error: "InvalidToken",
+  });
+});
+
+test("another session or person is told nothing about an expired code", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  const other = staleActor((await f.signIn(f.alice.email)).actor);
+  const bob = staleActor((await f.signIn(f.bob.email)).actor);
+  const { challengeId, token } = await beginConfirmation(f, stale);
+  await editChallenge(f, challengeId, (row) => ({
+    ...row,
+    expiresAt: Date.now() - 1,
+  }));
+  const refused = async () => {
+    for (const actor of [other, bob]) {
+      await assert.rejects(f.security.completeReconfirm(actor, token), {
+        error: "InvalidToken",
+      });
+      await assert.rejects(f.security.resendReconfirm(actor, challengeId), {
+        error: "InvalidToken",
+      });
+    }
+  };
+
+  // Only the requesting session learns that the code expired.
+  await assert.rejects(f.security.completeReconfirm(stale, token), {
+    error: "ExpiredToken",
+  });
+  await refused();
+});
+
+test("completing and re-sending classify a late attempt the same way", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  const { challengeId, token } = await beginConfirmation(f, stale);
+  // An account security change voids outstanding codes.
+  const version = (await f.db.get("security:versions", f.alice.did)) ?? 0;
+  await f.db.set("security:versions", f.alice.did, version + 1);
+  await assert.rejects(f.security.completeReconfirm(stale, token), {
+    error: "InvalidToken",
+  });
+  await assert.rejects(f.security.resendReconfirm(stale, challengeId), {
+    error: "InvalidToken",
+  });
+  // Expiry is reported before the void by both.
+  await editChallenge(f, challengeId, (row) => ({
+    ...row,
+    expiresAt: Date.now() - 1,
+  }));
+  await assert.rejects(f.security.completeReconfirm(stale, token), {
+    error: "ExpiredToken",
+  });
+  await assert.rejects(f.security.resendReconfirm(stale, challengeId), {
+    error: "ExpiredToken",
+  });
+});
+
+test("a confirmation record counts only for the session's own user", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  await f.db.set("account:reconfirm", stale.sessionId, {
+    userId: "another-user",
+    at: Date.now(),
+  });
+  assert.equal(await f.security.isRecent(stale), false);
+  await f.db.set("account:reconfirm", stale.sessionId, {
+    userId: stale.userId,
+    at: Date.now(),
+  });
+  assert.equal(await f.security.isRecent(stale), true);
+});
+
+test("two concurrent completions with the same valid code succeed exactly once", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  const { token } = await beginConfirmation(f, stale);
+  const results = await Promise.allSettled([
+    f.security.completeReconfirm(stale, token),
+    f.security.completeReconfirm(stale, token),
+  ]);
+  const won = results.filter(({ status }) => status === "fulfilled");
+  assert.equal(won.length, 1);
+  assert.deepEqual(won[0].value, completed(stale));
+  const lost = results.find(({ status }) => status === "rejected");
+  assert.equal(lost.reason.error, "InvalidToken");
+  assert.equal(await f.security.isRecent(stale), true);
+});
+
+test("a confirmation code belongs to its session: another session or person is refused without spending guesses", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  const { challengeId, token } = await beginConfirmation(f, stale);
+  const [, code] = token.split(".");
+  const wrong = code === "00000000" ? "11111111" : "00000000";
+
+  // The same person on another browser session cannot complete or re-send it.
+  const other = staleActor((await f.signIn(f.alice.email)).actor);
+  assert.notEqual(other.sessionId, stale.sessionId);
+  for (const guess of [code, wrong, wrong, wrong, wrong, wrong, wrong])
+    await assert.rejects(
+      f.security.completeReconfirm(other, `${challengeId}.${guess}`),
+      { status: 400, error: "InvalidToken" },
+    );
+  await assert.rejects(f.security.resendReconfirm(other, challengeId), {
+    error: "InvalidToken",
+  });
+  assert.equal(await f.security.isRecent(other), false);
+  assert.equal(
+    (await f.db.get("security:challenges", challengeId)).attempts,
+    0,
+  );
+
+  // Another person is refused for their own account and for this one.
+  const bob = staleActor((await f.signIn(f.bob.email)).actor);
+  await assert.rejects(f.security.completeReconfirm(bob, token), {
+    error: "InvalidToken",
+  });
+  await assert.rejects(
+    f.security.completeReconfirm({ ...bob, did: f.alice.did }, token),
+    { error: "AccountMismatch" },
+  );
+  await assert.rejects(
+    f.security.beginReconfirm({ ...bob, did: f.alice.did }, returnTo),
+    { error: "AccountMismatch" },
+  );
+  assert.equal(await f.security.isRecent(bob), false);
+
+  // The requesting session is unaffected by every attempt above.
+  assert.deepEqual(
+    await f.security.completeReconfirm(stale, token),
+    completed(stale),
+  );
+});
+
+test("a confirmation code belongs to its account when a verified email is shared", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  const sibling = await bindSiblingToSharedEmail(f, f.login.user.id);
+  const siblingActor = { ...stale, did: sibling.did };
+  const ours = await beginConfirmation(f, stale);
+  const [, oursCode] = ours.token.split(".");
+  const wrong = oursCode === "00000000" ? "11111111" : "00000000";
+  // The other account is refused without spending this account's guesses.
+  for (const guess of [oursCode, wrong, wrong, wrong, wrong, wrong, wrong])
+    await assert.rejects(
+      f.security.completeReconfirm(
+        siblingActor,
+        `${ours.challengeId}.${guess}`,
+      ),
+      { error: "InvalidToken" },
+    );
+  assert.equal(
+    (await f.db.get("security:challenges", ours.challengeId)).attempts,
+    0,
+  );
+  await assert.rejects(
+    f.security.resendReconfirm(siblingActor, ours.challengeId),
+    { error: "InvalidToken" },
+  );
+  // Each account has its own live code; neither consumes or supersedes the other.
+  const theirs = await beginConfirmation(f, siblingActor);
+  assert.deepEqual(
+    await f.security.completeReconfirm(siblingActor, theirs.token),
+    completed(siblingActor),
+  );
+  assert.deepEqual(
+    await f.security.completeReconfirm(stale, ours.token),
+    completed(stale),
+  );
+});
+
+test("a failed confirmation never makes a session recent: wrong codes stop at five and expired codes are refused", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+
+  const expired = await beginConfirmation(f, stale);
+  await editChallenge(f, expired.challengeId, (row) => ({
+    ...row,
+    expiresAt: Date.now() - 1,
+  }));
+  await assert.rejects(f.security.completeReconfirm(stale, expired.token), {
+    error: "ExpiredToken",
+  });
+
+  const guessed = await beginConfirmation(f, stale);
+  const [selector, code] = guessed.token.split(".");
+  const wrong = code === "00000000" ? "11111111" : "00000000";
+  for (let attempt = 0; attempt < 5; attempt++)
+    await assert.rejects(
+      f.security.completeReconfirm(stale, `${selector}.${wrong}`),
+      { error: "InvalidToken" },
+    );
+  await assert.rejects(f.security.completeReconfirm(stale, guessed.token), {
+    error: "InvalidToken",
+  });
+  for (const malformed of ["", "not-a-selector.12345678", `${selector}.1.2`])
+    await assert.rejects(f.security.completeReconfirm(stale, malformed), {
+      error: "InvalidToken",
+    });
+  assert.equal(await f.security.isRecent(stale), false);
+  await assert.rejects(
+    f.security.requestBackupEmail(stale, { email: "backup@example.com" }),
+    { error: "ReauthenticationRequired" },
+  );
+});
+
+test("sending a new confirmation code replaces the earlier one and keeps its page", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  const first = await beginConfirmation(f, stale, { returnTo: "status" });
+  const resent = await f.security.resendReconfirm(stale, first.challengeId);
+  const secondToken = (await f.db.get("outbox", f.alice.email)).token;
+  assert.notEqual(resent.challengeId, first.challengeId);
+  assert.equal(secondToken.split(".")[0], resent.challengeId);
+  await assert.rejects(f.security.completeReconfirm(stale, first.token), {
+    error: "InvalidToken",
+  });
+  assert.deepEqual(
+    await f.security.completeReconfirm(stale, secondToken),
+    completed(stale, "status"),
+  );
+  // A used code has nothing left to re-send.
+  await assert.rejects(f.security.resendReconfirm(stale, resent.challengeId), {
+    error: "InvalidToken",
+  });
+});
+
+test("new confirmation codes share the mailbox request limit", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  let { challengeId } = await beginConfirmation(f, stale);
+  for (let sent = 1; sent < 5; sent++)
+    challengeId = (await f.security.resendReconfirm(stale, challengeId))
+      .challengeId;
+  await assert.rejects(f.security.resendReconfirm(stale, challengeId), {
+    status: 429,
+    error: "RateLimitExceeded",
+  });
+  // The refused request left the latest code usable.
+  const token = (await f.db.get("outbox", f.alice.email)).token;
+  assert.equal(token.split(".")[0], challengeId);
+  assert.deepEqual(
+    await f.security.completeReconfirm(stale, token),
+    completed(stale),
+  );
+});
+
+test("revoking or ending a session makes its confirmation useless", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  const { token } = await beginConfirmation(f, stale);
+  await f.security.completeReconfirm(stale, token);
+  await f.security.requestBackupEmail(stale, { email: "backup@example.com" });
+
+  await f.security.revokeAccount(f.alice.did);
+  await assert.rejects(
+    f.security.requestBackupEmail(stale, { email: "other@example.com" }),
+    { status: 401, error: "AuthenticationRequired" },
+  );
+  await assert.rejects(f.security.beginReconfirm(stale, returnTo), {
+    status: 401,
+  });
+  // A later session starts from its own sign-in time; it inherits nothing.
+  const later = staleActor((await f.signIn(f.alice.email)).actor);
+  assert.notEqual(later.sessionId, stale.sessionId);
+  assert.equal(await f.security.isRecent(later), false);
+  await assert.rejects(
+    f.security.requestBackupEmail(later, { email: "other@example.com" }),
+    { status: 403, error: "ReauthenticationRequired" },
+  );
+});
+
+test("confirmation requests are validated and only browser sessions can confirm", async (t) => {
+  const f = await fixture(t);
+  const stale = staleActor(f.actor);
+  for (const invalid of [
+    undefined,
+    {},
+    { returnTo: "Not A Page" },
+    { returnTo: "https://evil.example" },
+    { returnTo: "/account" },
+    { returnTo: 1 },
+    { ...returnTo, fields: { password: "kept" } },
+  ])
+    await assert.rejects(f.security.beginReconfirm(stale, invalid), {
+      status: 400,
+      error: "InvalidRequest",
+    });
+  for (const actor of [
+    { did: f.alice.did, kind: "oauth", authenticatedAt: new Date() },
+    { did: f.alice.did, kind: "legacy", authenticatedAt: new Date() },
+  ]) {
+    await assert.rejects(f.security.beginReconfirm(actor, returnTo), {
+      status: 403,
+      error: "Forbidden",
+    });
+    await assert.rejects(f.security.completeReconfirm(actor, "x.12345678"), {
+      status: 403,
+      error: "Forbidden",
+    });
+  }
+  await assert.rejects(f.security.beginReconfirm(undefined, returnTo), {
+    status: 401,
+  });
+  await assert.rejects(
+    f.security.beginReconfirm({ ...stale, userId: "attacker" }, returnTo),
+    { error: "AccountMismatch" },
+  );
+  assert.equal(
+    (await f.db.list("security:challenges")).filter(
+      ({ value }) => value.purpose === "reconfirm",
+    ).length,
+    0,
+    "refused requests issue no code",
+  );
+});
+
+test("the confirmation email names its purpose and keeps the code format", () => {
+  const message = createOtpMessage(
+    "alice@example.com",
+    "12345678",
+    "reconfirm",
+  );
+  assert.match(message.text, /^Use 12345678 to confirm it's you\. /);
+  assert.match(message.html, /Use this code to confirm it's you\./);
 });

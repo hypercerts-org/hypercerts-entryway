@@ -8,13 +8,16 @@ import { createServiceJwt } from "@atproto/xrpc-server";
 import * as plc from "@did-plc/lib";
 import { createLegacy } from "../../dist/src/oauth/legacy-credentials.mjs";
 import { mountXrpc } from "../../dist/src/compose-protocol.mjs";
+import { refuseOAuthAccountMethod } from "../../dist/src/http/protocol-authentication.mjs";
+import { ScopePermissionsTransition } from "@atproto/oauth-scopes";
 import {
   testDatabaseConfiguration,
   query,
 } from "../support/database-fixture.mjs";
 import { openDatabase } from "../../dist/src/database/connection.js";
+import { createOAuthStores } from "../../dist/src/database/drizzle/oauth-stores.mjs";
 
-async function fixture(t) {
+async function fixture(t, { oauth = {} } = {}) {
   const databaseConfiguration = await testDatabaseConfiguration();
   const db = await openDatabase(databaseConfiguration);
   t.after(async () => await db.close());
@@ -68,15 +71,17 @@ async function fixture(t) {
   const ownership = createOperationOwnership({
     store: createOperationOwnershipStore(db),
   });
+  const statusChanges = [];
   const accounts = {
     ownership,
+    async setStatus(did, status) {
+      statusChanges.push({ did, status });
+    },
     serialized: (did, operation, intent) =>
       ownership.accountStep(did, intent, operation),
     get(id) {
       return (
-        [alice, bob].find((row) =>
-          [row.did, row.email, row.handle].includes(id),
-        ) ?? null
+        [alice, bob].find((row) => [row.did, row.handle].includes(id)) ?? null
       );
     },
     plcClient: {
@@ -96,6 +101,7 @@ async function fixture(t) {
   );
   const adminCalls = [];
   const security = {
+    async revokeAccount() {},
     adminUpdatePassword(actor, body) {
       adminCalls.push({ actor, body });
       return {};
@@ -112,7 +118,7 @@ async function fixture(t) {
     accounts,
     legacy,
     security,
-    oauth: {},
+    oauth,
     protocolOperations: {},
   });
   const invoke = (name, { method = "post", body, authorization } = {}) =>
@@ -155,6 +161,7 @@ async function fixture(t) {
     invoke,
     service,
     adminCalls,
+    statusChanges,
   };
 }
 
@@ -379,4 +386,123 @@ test("mounted credential mutation commits before a contending reset which revoke
   await assert.rejects(legacy.verifyAccess(session.accessJwt), {
     error: "ExpiredToken",
   });
+});
+
+test("OAuth account refusals match the stock PDS error names and messages", () => {
+  const granted = (...scopes) =>
+    new ScopePermissionsTransition(["atproto", ...scopes]);
+  const refusal = (method, permissions = granted()) => {
+    const error = refuseOAuthAccountMethod(method, permissions);
+    return (
+      error && {
+        status: error.status,
+        error: error.error,
+        message: error.message,
+      }
+    );
+  };
+
+  for (const method of ["requestEmailUpdate", "updateEmail"])
+    assert.deepEqual(refusal(method, granted("account:email?action=manage")), {
+      status: 403,
+      error: "Forbidden",
+      message:
+        "Use the account manager interface to update email address associated with an account",
+    });
+  for (const method of [
+    "requestAccountDelete",
+    "createAppPassword",
+    "revokeAppPassword",
+  ])
+    assert.deepEqual(refusal(method, granted("identity:*")), {
+      status: 403,
+      error: "Forbidden",
+      message: "OAuth credentials are not supported for this endpoint",
+    });
+
+  assert.deepEqual(
+    refusal("activateAccount", granted("account:status?action=manage")),
+    {
+      status: 403,
+      error: "Forbidden",
+      message:
+        "Account reactivation is not available with OAuth credentials. Sign in to your account management page to reactivate.",
+    },
+  );
+
+  // A missing permission names the scope the app must request.
+  assert.deepEqual(refusal("updateHandle"), {
+    status: 403,
+    error: "ScopeMissingError",
+    message: 'Missing required scope "identity:handle"',
+  });
+  assert.equal(refusal("signPlcOperation").error, "ScopeMissingError");
+  assert.equal(refusal("confirmEmail").error, "ScopeMissingError");
+  assert.deepEqual(refusal("deactivateAccount"), {
+    status: 403,
+    error: "ScopeMissingError",
+    message: 'Missing required scope "account:status?action=manage"',
+  });
+
+  // Granted permissions and always-allowed methods pass.
+  assert.equal(refusal("getSession"), null);
+  assert.equal(refusal("updateHandle", granted("identity:handle")), null);
+  assert.equal(refusal("signPlcOperation", granted("identity:*")), null);
+  assert.equal(
+    refusal("confirmEmail", granted("account:email?action=manage")),
+    null,
+  );
+  assert.equal(
+    refusal("deactivateAccount", granted("account:status?action=manage")),
+    null,
+  );
+});
+
+// Only signature, audience and expiry come from the provider here; the stored
+// token rows are real, so revocation goes through the production store.
+async function oauthFixture(t) {
+  let payload;
+  const oauth = {
+    provider: {
+      nextDpopNonce: () => "nonce",
+      authenticateRequest: async () => payload,
+    },
+  };
+  const f = await fixture(t, { oauth });
+  oauth.stores = createOAuthStores(f.db, f.accounts, f.config);
+  const token = async (jti, did = f.alice.did) => {
+    await oauth.stores.createToken(jti, { did }, null);
+    payload = {
+      sub: f.alice.did,
+      jti,
+      iat: Math.floor(Date.now() / 1000),
+      scope: "atproto account:status?action=manage",
+    };
+  };
+  const deactivate = () =>
+    f.invoke("server.deactivateAccount", {
+      authorization: "DPoP access-token",
+      body: {},
+    });
+  return { ...f, stores: oauth.stores, token, deactivate };
+}
+
+test("an unrevoked OAuth token with the status permission can deactivate", async (t) => {
+  const f = await oauthFixture(t);
+  await f.token("live-token");
+  assert.deepEqual(await f.deactivate(), {});
+  assert.deepEqual(f.statusChanges, [
+    { did: f.alice.did, status: "deactivated" },
+  ]);
+});
+
+test("a revoked OAuth token cannot call Entryway account methods before it expires", async (t) => {
+  const f = await oauthFixture(t);
+  await f.token("revoked-token");
+  await f.stores.deleteToken("revoked-token");
+  await assert.rejects(f.deactivate(), {
+    status: 401,
+    error: "InvalidToken",
+  });
+  assert.deepEqual(f.statusChanges, []);
 });

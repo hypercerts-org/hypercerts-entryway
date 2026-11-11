@@ -64,7 +64,11 @@ test("deleted bound account gets no browser session and no reactivation prompt",
 test("deactivated bound account keeps its session and reactivation path", async () => {
   const { authenticated, pages, linked } = consentFor("deactivated");
   assert.equal(await sign(authenticated, "deactivated"), 1);
-  assert.deepEqual(linked, []);
+  // The reactivation link opens the account console, which requires this
+  // browser's fresh device membership for the selected DID.
+  assert.deepEqual(linked, [
+    { deviceId: "browser", did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa" },
+  ]);
   assert.equal(pages[0].statusCode, 403);
   assert.match(pages[0].body, /reactivate/);
 });

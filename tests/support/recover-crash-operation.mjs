@@ -8,6 +8,11 @@ import { query } from "./database-inspection.mjs";
 const run = process.argv[2];
 assert.match(run ?? "", /^[a-z0-9-]+$/);
 const prefix = `/app/artifacts/crash-${run}`;
+// One crash mode keeps the 120-second default; the other proves the same
+// recovery with a short configured lease so the run does not idle twice.
+const leaseMs = Number(process.env.CRASH_LEASE_MS ?? 120000);
+assert.ok(Number.isSafeInteger(leaseMs) && leaseMs >= 5000);
+const recoveryBoundMs = leaseMs + 30000;
 const isolation = JSON.parse(
   await readFile(`${prefix}-isolation.json`, "utf8"),
 );
@@ -52,8 +57,8 @@ try {
     lastLease = Number(row.lease_expires_at);
     if (!row.worker_id || lastLease < (await db.databaseTime())) break;
     assert.ok(
-      Date.now() - started < 150000,
-      "Default 120-second claim did not expire within the declared 150-second recovery bound",
+      Date.now() - started < recoveryBoundMs,
+      `${leaseMs}ms claim did not expire within the declared ${recoveryBoundMs}ms recovery bound`,
     );
     await delay(250);
   }
@@ -77,7 +82,7 @@ await writeFile(
   `${prefix}-recovery-authorized`,
   JSON.stringify({
     approved: true,
-    defaultLeaseMs: 120000,
+    leaseMs,
     lastLeaseExpiresAt: lastLease,
     waitMs: Date.now() - started,
     isolation,
@@ -87,7 +92,7 @@ console.log(
   JSON.stringify({
     status: "recovery-authorized",
     did,
-    defaultLeaseMs: 120000,
+    leaseMs,
     waitMs: Date.now() - started,
   }),
 );
