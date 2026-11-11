@@ -96,6 +96,15 @@ export function createAccountAuthority({ db, accounts }) {
     } = {},
   ) => {
     email = normalizeEmail(email);
+    const arrival = await db.read("arrivals", {
+      where: and(
+        eq(t.arrivals.active, 1),
+        eq(sql`lower(${t.arrivals.email})`, email),
+      ),
+      limit: 1,
+    });
+    if (arrival.length > 0)
+      throw fail(409, "EmailNotAvailable", "This email address cannot be used");
     const isCurrentEmail = normalizeEmail((await account(did)).email) === email;
     let existing = await claims(email);
     for (const pending of existing.filter(

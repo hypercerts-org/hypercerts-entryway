@@ -1,3 +1,6 @@
+import { Secp256k1Keypair } from "@atproto/crypto";
+import { cidForCbor } from "@atproto/common";
+import * as plc from "@did-plc/lib";
 import {
   query,
   failureTrigger,
@@ -6,6 +9,7 @@ import {
 } from "../support/database-fixture.mjs";
 import { createSecurityPrimitives } from "../../dist/src/accounts/security-primitives.mjs";
 import { createAccountAccess } from "../../dist/src/accounts/account-access.mjs";
+import { createArrivalStorage } from "../../dist/src/database/drizzle/migration-arrival.js";
 import { createAccountAuthority } from "../../dist/src/database/drizzle/account-authority.mjs";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
@@ -1806,6 +1810,87 @@ test("stale saved deletion authorization cannot manufacture another deletion adm
   assert.deepEqual(await f.db.read("authority_operations"), operations);
   assert.equal(calls, 1);
   assert.equal((await f.accounts.get(f.alice.did)).status, "deleted");
+});
+
+test("active arrivals reject email availability, pending, backup and final authority changes atomically", async (t) => {
+  const f = await fixture(t);
+  const email = "arrival@example.com";
+  const userId = await f.accounts.storage.ensureVerifiedEmailUser(email);
+  // Preparation only reads account authority; all writes below use the real helper.
+  const preparing = createArrivalStorage(f.db, f.config.pds, {
+    readAccount: (did) => f.accounts.storage.getByDid(did),
+    readBinding: (did) => f.accounts.storage.getVerifiedBinding(did),
+  });
+  const sourceKey = await Secp256k1Keypair.create();
+  const hotKey = await Secp256k1Keypair.create();
+  const sourcePredecessor = await plc.signOperation(
+    plc.formatAtprotoOp({
+      signingKey: sourceKey.did(),
+      handle: "incoming.entryway.atmosbox.test",
+      pds: "https://source.example.test",
+      rotationKeys: [sourceKey.did()],
+      prev: null,
+    }),
+    sourceKey,
+  );
+  await preparing.createArrival({
+    operationId: "authority-arrival",
+    did: "did:plc:incomingauthority",
+    userId,
+    email,
+    handle: "incoming.entryway.atmosbox.test",
+    pdsId: "pds1",
+    endpoint: f.config.pds[0].url,
+    sourcePlcHead: String(await cidForCbor(sourcePredecessor)),
+    sourcePredecessor,
+    source: {
+      services: sourcePredecessor.services,
+      verificationMethods: sourcePredecessor.verificationMethods,
+      alsoKnownAs: sourcePredecessor.alsoKnownAs,
+    },
+    approvedRotationKeys: [sourceKey.did(), hotKey.did()],
+    codeHash: "a".repeat(64),
+    codeExpiresAt: Date.now() + 60_000,
+  });
+  assert.ok(await preparing.readArrival("authority-arrival", userId));
+  const authority = createAccountAuthority({ db: f.db, accounts: f.accounts });
+  const snapshot = async () => ({
+    accounts: await f.db.read("accounts"),
+    claims: await f.db.read("email_claims"),
+    bindings: await f.db.read("account_bindings"),
+    users: await f.db.read("user"),
+    sessions: await f.db.read("session"),
+    state: await f.db.read("key_value_state"),
+    arrivals: await f.db.read("arrivals"),
+  });
+  for (const write of [
+    () => authority.assertEmailAvailable(" ARRIVAL@EXAMPLE.COM ", f.alice.did),
+    () =>
+      authority.reservePendingEmail({
+        did: f.alice.did,
+        email,
+        recovery: false,
+        expiresAt: Date.now() + 60_000,
+      }),
+    () => authority.addBackupEmail(f.alice.did, email),
+    ...[false, true].map(
+      (verified) => () =>
+        authority.commitEmailChange({
+          did: f.alice.did,
+          email,
+          recovery: false,
+          verified,
+          previousEmail: f.alice.email,
+        }),
+    ),
+  ]) {
+    const before = await snapshot();
+    await assert.rejects(
+      write,
+      (error) => (error.error ?? error.code) === "EmailNotAvailable",
+    );
+    assert.deepEqual(await snapshot(), before);
+  }
 });
 
 // "Confirm it's you": a browser session signed in more than ten minutes ago proves

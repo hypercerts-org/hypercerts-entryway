@@ -562,7 +562,16 @@ outcome, and none overwrites an already-saved tuple member.
 recordAllocationIntent(tx, owner, expectedVersion, {operationId, did, pdsId, endpoint})
 recordReservationResult(tx, owner, expectedVersion, {operationId, did, pdsId, endpoint, signingKey})
 retainUncertainAttempt(tx, owner, expectedVersion, attemptBinding)
+recordSignedOperation(tx, owner, expectedVersion, {operationId, did, kind, operation, cid})
 ```
+
+`recordSignedOperation` journals a signed public PLC operation before it is
+dispatched, where `kind` is `handoff` or `destination-move`. The CID must match the
+normalized operation bytes, a destination move cannot be recorded before its
+handoff, and private key material is rejected. Repeating the same operation and CID
+for a kind is idempotent and does not advance the version; a different operation or
+CID for that kind is a conflict. A caller holding the pre-record version may receive
+`already-settled`, so it must not treat that version as a fresh baseline.
 
 Binding rules these calls must enforce:
 
@@ -616,9 +625,10 @@ derived from the current operation and never stored as a permanent imported-acco
 category. Account status values remain `provisioning`, `active`, `deactivated` and
 `deleted` as enforced at `src/accounts/rules.ts:19-39`; no new status value is added.
 
-Pending projection. Existing evidence is `hasPendingExternalMigration` at
-`src/database/drizzle/account-storage.ts:631-641`, true while any migration
-reservation is not complete. The proposed richer projection is owned by plan 009:
+Pending projection. `hasPendingExternalMigration` in
+`src/database/drizzle/account-storage.ts` checks both incomplete migration
+reservations and active incoming arrivals whose completion checkpoint is absent.
+The richer arrival projection is owned by plan 009:
 
 ```text
 readArrivalAccess(did) -> {operationId, version, did, userId, pdsId, provisioned,

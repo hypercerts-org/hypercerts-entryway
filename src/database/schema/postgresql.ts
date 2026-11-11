@@ -174,6 +174,189 @@ export const migration_reservations = table(
     ),
   ],
 );
+// Immutable arrival tuple and secret-safe lifecycle; only its hash reaches
+// arrival_code. did_root retains one active arrival per DID while completed
+// rows become history. active is 1 for a live, admitted arrival.
+export const arrivals = table(
+  "arrivals",
+  {
+    operation_id: text("operation_id").primaryKey(),
+    did: text("did").notNull(),
+    did_root: text("did_root"),
+    active: integer("active").notNull(),
+    user_id: text("user_id").notNull(),
+    email: text("email").notNull(),
+    handle: text("handle").notNull(),
+    pds_id: text("pds_id").notNull(),
+    endpoint: text("endpoint").notNull(),
+    source_plc_head: text("source_plc_head").notNull(),
+    source_endpoint: text("source_endpoint"),
+    canonical_handoff_cid: text("canonical_handoff_cid"),
+    source_predecessor: text("source_predecessor").notNull(),
+    source_facts: text("source_facts").notNull(),
+    approved_rotation_keys: text("approved_rotation_keys").notNull(),
+    version: count("version").notNull(),
+    generation: count("generation").notNull(),
+    created_at: count("created_at").notNull(),
+    updated_at: count("updated_at").notNull(),
+    cancelled_at: count("cancelled_at"),
+    provisioned_at: count("provisioned_at"),
+    deactivated_at: count("deactivated_at"),
+    bound_at: count("bound_at"),
+    activation_method: text("activation_method"),
+    activation_at: count("activation_at"),
+    completed_at: count("completed_at"),
+  },
+  (t) => [
+    uniqueIndex("arrivals_did_active").on(t.did_root),
+    index("arrivals_did").on(t.did, t.created_at),
+    index("arrivals_user").on(t.user_id, t.created_at),
+    index("arrivals_email").on(sql`lower(${t.email})`),
+    uniqueIndex("arrivals_handle_active")
+      .on(sql`lower(${t.handle})`)
+      .where(
+        sql`${t.did_root} IS NOT NULL AND ${t.cancelled_at} IS NULL AND ${t.provisioned_at} IS NULL`,
+      ),
+    index("arrivals_handle").on(sql`lower(${t.handle})`, t.created_at),
+    check("arrival_active", sql`${t.active} IN (0, 1)`),
+    check(
+      "arrival_tuple",
+      sql`(${t.active} = 1 AND ${t.did_root} = ${t.did}) OR (${t.active} = 0 AND ${t.did_root} IS NULL)`,
+    ),
+    check(
+      "arrival_cancel",
+      sql`(${t.cancelled_at} IS NULL) OR (${t.cancelled_at} IS NOT NULL AND ${t.active} = 0)`,
+    ),
+    check(
+      "arrival_bound",
+      sql`(${t.bound_at} IS NULL) OR (${t.bound_at} IS NOT NULL AND ${t.deactivated_at} IS NOT NULL)`,
+    ),
+    check(
+      "arrival_complete",
+      sql`(${t.completed_at} IS NULL) OR (${t.completed_at} IS NOT NULL AND ${t.bound_at} IS NOT NULL AND ${t.activation_method} IS NOT NULL)`,
+    ),
+  ],
+);
+export const arrival_code = table(
+  "arrival_code",
+  {
+    operation_id: text("operation_id")
+      .primaryKey()
+      .references(() => arrivals.operation_id),
+    code_hash: text("code_hash").notNull(),
+    generation: count("generation").notNull(),
+    issued_at: count("issued_at").notNull(),
+    expires_at: count("expires_at").notNull(),
+  },
+  (t) => [
+    check("arrival_code_lifetime", sql`${t.expires_at} > ${t.issued_at}`),
+    check(
+      "arrival_code_ceiling",
+      sql`${t.expires_at} <= ${t.issued_at} + 86400000`,
+    ),
+  ],
+);
+export const arrival_reservations = table(
+  "arrival_reservations",
+  {
+    operation_id: text("operation_id")
+      .primaryKey()
+      .references(() => arrivals.operation_id),
+    signing_key: text("signing_key"),
+    uncertain_reason: text("uncertain_reason"),
+    uncertain_at: count("uncertain_at"),
+    recorded_at: count("recorded_at"),
+  },
+  (t) => [
+    check(
+      "arrival_reservation_evidence",
+      sql`(${t.uncertain_reason} IS NULL AND ${t.uncertain_at} IS NULL) OR (${t.uncertain_reason} IS NOT NULL AND ${t.uncertain_at} IS NOT NULL)`,
+    ),
+    check(
+      "arrival_reservation_key",
+      sql`(${t.signing_key} IS NULL) OR ${t.signing_key} LIKE 'did:key:z%'`,
+    ),
+  ],
+);
+// Signed public PLC bytes for one arrival and signature kind. Private keys never
+// reach this table; an operation or CID is immutable once recorded.
+export const arrival_signed_operations = table(
+  "arrival_signed_operations",
+  {
+    operation_id: text("operation_id")
+      .notNull()
+      .references(() => arrivals.operation_id),
+    kind: text("kind").notNull(),
+    did: text("did").notNull(),
+    cid: text("cid").notNull(),
+    operation: text("operation").notNull(),
+    kind_operation_cid: text("kind_operation_cid").notNull(),
+    recorded_at: count("recorded_at").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.operation_id, t.kind] }),
+    uniqueIndex("arrival_signed_kind_cid").on(
+      t.operation_id,
+      t.kind_operation_cid,
+    ),
+    check(
+      "arrival_signed_kind",
+      sql`${t.kind} IN ('handoff','destination-move')`,
+    ),
+    check("arrival_signed_did", sql`${t.did} LIKE 'did:%'`),
+    check("arrival_signed_cid", sql`${t.cid} LIKE 'baf%'`),
+  ],
+);
+export const arrival_replay = table(
+  "arrival_replay",
+  {
+    operation_id: text("operation_id").notNull(),
+    method: text("method").notNull(),
+    did: text("did").notNull(),
+    user_id: text("user_id").notNull(),
+    credential_issuer: text("credential_issuer").notNull(),
+    credential_jti: text("credential_jti").notNull(),
+    request_digest: text("request_digest").notNull(),
+    generation: count("generation").notNull(),
+    accepted_at: count("accepted_at").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.operation_id, t.method] }),
+    uniqueIndex("arrival_replay_credential").on(
+      t.credential_issuer,
+      t.credential_jti,
+    ),
+    check("arrival_replay_digest", sql`length(${t.request_digest}) = 64`),
+  ],
+);
+export const arrival_attempts = table(
+  "arrival_attempts",
+  {
+    attempt_binding: text("attempt_binding").primaryKey(),
+    ownership_operation_id: text("ownership_operation_id").notNull(),
+    attempt_id: text("attempt_id").notNull(),
+    operation_id: text("operation_id")
+      .notNull()
+      .references(() => arrivals.operation_id),
+    reason: text("reason").notNull(),
+    recorded_at: count("recorded_at").notNull(),
+    fence: count("fence").notNull(),
+  },
+  (t) => [index("arrival_attempt_operation").on(t.operation_id)],
+);
+export const arrival_families = table(
+  "arrival_families",
+  {
+    family_id: text("family_id").primaryKey(),
+    operation_id: text("operation_id")
+      .notNull()
+      .references(() => arrivals.operation_id),
+    pds_id: text("pds_id").notNull(),
+    created_at: count("created_at").notNull(),
+    revoked_at: count("revoked_at"),
+  },
+  (t) => [index("arrival_family_operation").on(t.operation_id, t.revoked_at)],
+);
 export const key_value_state = table(
   "key_value_state",
   {

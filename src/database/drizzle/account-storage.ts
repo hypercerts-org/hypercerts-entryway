@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ne, or, sql } from "drizzle-orm";
 import {
   assertAccountShape,
   assertBindingMatchesAccount,
@@ -187,6 +187,38 @@ export function createAccountStorage(
       return null;
     return { userId: user.id, email: user.email, authenticatedAt };
   };
+  const assertNoActiveArrival = async (
+    email: string,
+    did?: string,
+    handle?: string,
+  ) => {
+    const arrivals = await db.read("arrivals", {
+      where: and(
+        eq(t.arrivals.active, 1),
+        or(
+          eq(sql`lower(${t.arrivals.email})`, normalizeEmail(email)),
+          did ? eq(t.arrivals.did, did) : undefined,
+          handle
+            ? eq(sql`lower(${t.arrivals.handle})`, handle.trim().toLowerCase())
+            : undefined,
+        ),
+      ),
+    });
+    if (arrivals.some((arrival) => arrival.did === did))
+      throw new DomainError(
+        "IdentityConflict",
+        409,
+        "Identity has a pending arrival",
+      );
+    if (arrivals.some((arrival) => arrival.email === normalizeEmail(email)))
+      throw new DomainError(
+        "EmailNotAvailable",
+        409,
+        "Email address is reserved",
+      );
+    if (arrivals.length > 0)
+      throw new DomainError("HandleNotAvailable", 409, "Handle is reserved");
+  };
   const reserveEmail = async (
     email: string,
     did: string,
@@ -195,6 +227,7 @@ export function createAccountStorage(
   ) =>
     db.transact(async () => {
       email = normalizeEmail(email);
+      await assertNoActiveArrival(email, did);
       const [claims, reservations] = await Promise.all([
         db.read("email_claims", {
           where: eq(sql`lower(${t.email_claims.email})`, email),
@@ -242,6 +275,18 @@ export function createAccountStorage(
   const reserveHandle = async (handle: string, did: string) =>
     db.transact(async () => {
       handle = handle.trim().toLowerCase();
+      const arrival = await one(
+        "arrivals",
+        and(
+          eq(t.arrivals.active, 1),
+          or(
+            eq(sql`lower(${t.arrivals.handle})`, handle),
+            eq(t.arrivals.did, did),
+          ),
+        )!,
+      );
+      if (arrival)
+        throw new DomainError("HandleNotAvailable", 409, "Handle is reserved");
       const external = await one(
         "migration_reservations",
         eq(t.migration_reservations.handle, handle),
@@ -281,6 +326,7 @@ export function createAccountStorage(
     assertPds(row);
     try {
       await db.transact(async () => {
+        await assertNoActiveArrival(row.email, row.did, row.handle);
         const previous = (
           await db.read("accounts", {
             orderBy: [desc(t.accounts.sequence)],
@@ -309,6 +355,7 @@ export function createAccountStorage(
     assertPds(row);
     try {
       await db.transact(async () => {
+        await assertNoActiveArrival(row.email, row.did, row.handle);
         const previous = await getByDid(row.did);
         if (!previous)
           throw new DomainError("AccountNotFound", 404, "Account not found");
@@ -499,6 +546,7 @@ export function createAccountStorage(
           "Recent verified owner session required",
         );
       const email = normalizeEmail(owner.email);
+      await assertNoActiveArrival(email, input.did, input.handle);
       const [emailClaims, emailReservations] = await Promise.all([
         db.read("email_claims", {
           where: eq(sql`lower(${t.email_claims.email})`, email),
@@ -618,14 +666,24 @@ export function createAccountStorage(
       );
     },
     async hasPendingExternalMigration(did) {
-      return Boolean(
-        await one(
+      const [adopting, arrival] = await Promise.all([
+        one(
           "migration_reservations",
           and(
             eq(t.migration_reservations.did, did),
             ne(t.migration_reservations.state, "complete"),
           )!,
         ),
+        one(
+          "arrivals",
+          and(eq(t.arrivals.did, did), eq(t.arrivals.active, 1))!,
+        ),
+      ]);
+      return Boolean(adopting || arrival);
+    },
+    async hadPublishedPlcOperation(did) {
+      return Boolean(
+        await one("custody_operations", eq(t.custody_operations.did, did)),
       );
     },
     async listAccounts() {
@@ -659,7 +717,7 @@ export function createAccountStorage(
         and(eq(t.handle_claims.handle, handle), eq(t.handle_claims.did, did))!,
       );
     },
-    async finalizeImportedAccount(input) {
+    async bindProvisionedArrival(input) {
       return db.transact(async () => {
         const reservation = await one(
           "migration_reservations",
@@ -735,7 +793,7 @@ export function createAccountStorage(
         return row;
       });
     },
-    async activateImportedAccount(input) {
+    async activateBoundArrival(input) {
       return db.transact(async () => {
         const reservation = await one(
           "migration_reservations",

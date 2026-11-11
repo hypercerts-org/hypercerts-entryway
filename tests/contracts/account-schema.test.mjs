@@ -406,7 +406,7 @@ test("authorized migration can share an email with an unbound DID and roll back 
       "synthetic binding failure",
     );
     await assert.rejects(
-      storage.finalizeImportedAccount({
+      storage.bindProvisionedArrival({
         workflowId: incoming.workflowId,
         did: incoming.did,
         userId: ownerId,
@@ -425,7 +425,7 @@ test("authorized migration can share an email with an unbound DID and roll back 
     });
     await removeFailureTrigger(db, "reject_import_binding", "account_bindings");
 
-    const imported = await storage.finalizeImportedAccount({
+    const imported = await storage.bindProvisionedArrival({
       workflowId: incoming.workflowId,
       did: incoming.did,
       userId: ownerId,
@@ -693,7 +693,7 @@ test("synthetic imported DID binds only a recent verified owner then activates a
     );
     await assert.rejects(
       async () =>
-        await storage.finalizeImportedAccount({
+        await storage.bindProvisionedArrival({
           workflowId: reservation.workflowId,
           did: alice.did,
           userId: "wrong",
@@ -706,7 +706,7 @@ test("synthetic imported DID binds only a recent verified owner then activates a
     );
     await assert.rejects(
       async () =>
-        await storage.finalizeImportedAccount({
+        await storage.bindProvisionedArrival({
           workflowId: reservation.workflowId,
           did: alice.did,
           userId: "owner",
@@ -717,7 +717,7 @@ test("synthetic imported DID binds only a recent verified owner then activates a
         }),
       (error) => error.code === "IdentityConflict",
     );
-    const placed = await storage.finalizeImportedAccount({
+    const placed = await storage.bindProvisionedArrival({
       workflowId: reservation.workflowId,
       did: alice.did,
       userId: "owner",
@@ -741,7 +741,7 @@ test("synthetic imported DID binds only a recent verified owner then activates a
       [hosted.did, alice.did],
     );
     assert.equal(await storage.hasPendingExternalMigration(alice.did), true);
-    const active = await storage.activateImportedAccount({
+    const active = await storage.activateBoundArrival({
       workflowId: reservation.workflowId,
       did: alice.did,
       userId: "owner",
@@ -750,7 +750,7 @@ test("synthetic imported DID binds only a recent verified owner then activates a
     assert.equal(await storage.hasPendingExternalMigration(alice.did), false);
     assert.equal(
       (
-        await storage.activateImportedAccount({
+        await storage.activateBoundArrival({
           workflowId: reservation.workflowId,
           did: alice.did,
           userId: "owner",
