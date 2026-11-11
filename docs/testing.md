@@ -122,16 +122,6 @@ rotation keys. The remaining contracts are still open in the
 C4 finality and activation-race closure stay BLOCKED; C1, C2, C3 and C5 are accepted
 contracts whose callables the downstream plans must still produce.
 
-The helper used by this phase has its own focused test,
-`tests/support/helpers/incoming-public-io.test.mjs`. Contract auto-discovery does not
-pick it up, because `tests/support/discover-contracts.mjs` scans only `src` and
-`tests/contracts`. Run it explicitly alongside the phase when validating changes to
-the helper:
-
-```sh
-node --test tests/support/helpers/incoming-public-io.test.mjs
-```
-
 Use the owned-project cleanup procedure below, including after failures.
 
 Runtime configuration uses `SERVICE_CONFIG_PATH` (default `./.runtime/config.json`).
@@ -309,6 +299,21 @@ codes for Docker, assertion and timeout failures, never assertion values. Nested
 profile controllers are not filtered a second time. Raw reports are never uploaded. Inspect
 private reports locally for detailed failures. Lifecycle fixtures use fake Docker
 natively; they do not establish hosted-runner compatibility.
+
+### Development: native incoming helper checks
+
+Contributors changing incoming test infrastructure run the stock mail poller,
+managed I/O helper and access-projection tests explicitly:
+
+```sh
+npm run test:incoming-helpers
+```
+
+This script runs `tests/support/helpers/stock-plc-mailpit.test.mjs`,
+`tests/support/helpers/incoming-public-io.test.mjs` and
+`tests/atmosphere/project-incoming-access.test.mjs`. Native CI runs the script in
+its own step. Contract discovery does not include these helper files, and the
+live stock-mechanism suite is not part of the native unit allowlist.
 
 ## Feature tests and operational evidence
 

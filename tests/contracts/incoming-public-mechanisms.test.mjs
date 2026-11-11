@@ -831,7 +831,7 @@ test(
     );
 
     await t.test(
-      "nonempty source snapshots and bounded export-write overlap",
+      "nonempty source snapshots and export-before-write request ordering",
       { timeout: exportBudgetMs + settleTimeoutMs },
       async (child) => {
         const owner = createPhasedClient(child, { deadlineMs: exportBudgetMs });

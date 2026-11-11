@@ -48,6 +48,8 @@ jobs:
         run: npm run build
       - name: test:unit
         run: npm run test:unit
+      - name: test:incoming-helpers
+        run: npm run test:incoming-helpers
       - name: test:ci-lifecycle
         run: npm run test:ci-lifecycle
   integration:

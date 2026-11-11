@@ -497,7 +497,7 @@ Errors. Each code is stable and mapped explicitly, and no message carries a secr
 | --- | --- | --- |
 | Body fails schema | `InvalidRequest` | 400 |
 | Missing or stale OTP proof | `ArrivalProofRequired` | 403 |
-| Verified principal does not own the arrival | `AccountMismatch` | 403 |
+| Unknown arrival or verified principal does not own it | `AccountNotFound` | 404 |
 | Saved arrival is no longer actionable | `ArrivalExpired` | 409 |
 | `expectedVersion` differs from the saved version | `OperationConflict` | 409 |
 | Concurrent work for the DID is admitted | `OperationPending` | 409 |
@@ -506,14 +506,14 @@ Errors. Each code is stable and mapped explicitly, and no message carries a secr
 
 Replay. `prepare` with the same verified user, DID and handle is idempotent and
 returns the same saved operation while that operation is still actionable. A changed
-DID or handle for the user is a conflict, not a second arrival. A cancelled operation
-is retained as history and is not reused: once its reservations are released the same
-user may prepare that DID and handle again, which starts a new operation rather than
-resurrecting the cancelled one. `cancel` is idempotent and returns the already
-cancelled state.
-Partial success is reported explicitly: a cancellation that cannot release remote
-obligations returns `OperationRecoveryRequired` with the arrival still saved, never a
-success.
+DID or handle for the user is a conflict, not a second arrival. Cancellation is safe
+only at the internal pre-intent seam, before any persisted allocation or signed
+handoff and with unchanged canonical PLC state and no remote obligation. A cancelled
+operation is retained as history; `cancel` is idempotent for that state. Preparation
+already persists an allocation intent, so a prepared arrival cannot be cancelled to
+release reservations or start a replacement arrival. It returns
+`OperationRecoveryRequired` with the arrival still saved. No abandonment,
+remote-release or reversal path is defined here.
 
 Standard XRPC bodies keep their shapes and carry the arrival code in the proposed
 `Entryway-Arrival-Code` header at `com.atproto.identity.submitPlcOperation` and
@@ -687,7 +687,8 @@ Rules: no issuance before observed provisioning, observed deactivation and saved
 binding. Token return follows the committed association and never precedes it.
 Existing refresh replay and revocation semantics remain: a replayed refresh
 invalidates the family (`src/oauth/legacy-credentials.mjs:400-405`), and a family
-bound to another PDS DID is revoked (`src/oauth/legacy-credentials.mjs:466-467`).
+bound to another PDS DID is rejected (`src/oauth/legacy-credentials.mjs:466-467`),
+without revoking that family.
 After cutover, recovery does not require a source-key JWT, and no contract may
 require one.
 
@@ -712,16 +713,18 @@ complete source and destination inventory, all missing-blob pages, and a barrier
 prevents writes between verification and activation. The named maintainer decision is
 which finality and mutation-serialization guarantee to adopt.
 
-What is qualified, and its limits. The accepted bounded run on this revision
-(`d29515b`) reported the following stock source and inactive destination behaviors,
-within the limits those committed tests declare. These are bounded observations from
-that run, not guarantees, and reproof requires a fresh sandbox run:
+Historical qualification and its limits. An earlier bounded run, recorded as
+`d29515b` in the original repair history rather than an ancestor of this stack,
+reported the following stock source and inactive destination behaviors within its
+explicit byte and phase budgets. These are historical observations, not a current
+verification result or full migration qualification; reproof requires a fresh
+managed sandbox run:
 
 - Source CAR exports verified against the observed repository key, including a
   nonempty snapshot. Two export requests were started before a write was dispatched,
   which shows request ordering only and does not establish server-side overlap. The
-  case asserts a CAR size limit and per-phase budgets; withholding the final client
-  byte does not establish universal finality.
+  case asserts a CAR size limit and per-phase budgets. The withheld final client
+  byte belongs to the separate destination import case below, not source export.
 - Source snapshot capture, signature verification and record inventory comparison are
   qualified only within those budgets for that snapshot.
 - Inactive destination: an Entryway-hosted inactive destination accepted a streamed
