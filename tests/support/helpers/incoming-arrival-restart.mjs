@@ -24,7 +24,7 @@ import { verifiedUser, query } from "../database-inspection.mjs";
 
 // Contributors testing recovery run this as a child, never as an application server.
 // Only generated fixture signing material is private to this temporary directory.
-const [directory, phase, cut] = process.argv.slice(2);
+const [directory, phase, cut, observationDelay = "0"] = process.argv.slice(2);
 const journalPath = join(directory, "remote.json");
 const save = (value) =>
   writeFileSync(journalPath, JSON.stringify(value), { mode: 0o600 });
@@ -35,8 +35,23 @@ const change = (work) => {
   save(value);
   return value;
 };
+let stopping = false;
+let takeoverReady = false;
 const stop = async (boundary) => {
-  if (phase !== "initial" || cut !== boundary) return;
+  if (phase !== "initial" || cut !== boundary || stopping) return;
+  stopping = true;
+  const claim = load().lastClaim;
+  const operation = (
+    await query(db, "SELECT * FROM authority_operations")
+  ).find((row) => row.id === claim.operationId);
+  // Contributors shorten only the stopped owner's lease through the real store.
+  // Active fixture work otherwise uses the production lease budget.
+  if (operation.state === "running" && operation.worker_id === claim.workerId) {
+    const expires = await store.renew(claim, 300);
+    change((remote) => {
+      remote.crashLeaseExpiresAt = expires;
+    });
+  }
   process.send({ boundary, pid: process.pid });
   await new Promise(() => {});
 };
@@ -129,12 +144,12 @@ store.acquire = async (...args) => {
   change((remote) => {
     remote.lastClaim = claim;
   });
+  if (takeoverReady) await stop("lease-takeover");
   return claim;
 };
 const ownership = createOperationOwnership({
   store,
   heartbeatMs: 0,
-  leaseMs: 300,
 });
 const signer = await Secp256k1MigrationPlcSigner.fromHex(initialRemote.hot);
 const originalSign = signer.signArrivalMove.bind(signer);
@@ -194,6 +209,9 @@ class ControlledObservationOutage extends Error {
 const client = {
   url: "https://plc.example.test",
   getAuditableLog: async () => {
+    await new Promise((resolve) =>
+      setTimeout(resolve, Number(observationDelay)),
+    );
     if (phase === "resume-unexpected")
       throw new TypeError("UnexpectedObservationFailure");
     if (phase === "resume-unexpected-coded")
@@ -355,6 +373,13 @@ const snapshot = async () => {
             ?.atproto,
   };
 };
+// Use the database's actual lease clock, including in the fresh recovery process.
+// No persisted deadlines or fence checks are bypassed to make takeover possible.
+if (phase !== "initial") {
+  const expires = load().crashLeaseExpiresAt;
+  while (expires && (await db.databaseTime()) <= expires)
+    await new Promise((resolve) => setTimeout(resolve, 25));
+}
 try {
   if (phase === "initial") {
     const prepared = await composed.prepareArrival({}, "fixture-proof", {
@@ -419,12 +444,11 @@ try {
       });
     }
     await stop(
-      cut === "lease-takeover"
-        ? "lease-takeover"
-        : ["divergent", "tombstone", "uncertain"].includes(cut)
-          ? cut
-          : "creation-admitted",
+      ["divergent", "tombstone", "uncertain"].includes(cut)
+        ? cut
+        : "creation-admitted",
     );
+    takeoverReady = cut === "lease-takeover";
     await composed.continueCreation({}, prepared.operationId);
     if (cut === "actor-during-sign")
       throw new Error("ActorRaceUnexpectedSuccess");
@@ -545,6 +569,10 @@ try {
     }
     if (cut === "lease-takeover") {
       const old = before.claim;
+      const replacement = load().lastClaim;
+      assert.equal(replacement.operationId, old.operationId);
+      assert.ok(replacement.fence > old.fence);
+      assert.notEqual(replacement.attemptId, old.attemptId);
       await assert.rejects(store.assertActive(old), {
         code: "OperationLeaseLost",
       });

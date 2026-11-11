@@ -33,11 +33,15 @@ const pendingCuts = new Set([
   "tombstone",
   "uncertain",
 ]);
-function worker(directory, phase, cut, kill = false) {
+function worker(directory, phase, cut, kill = false, observationDelay = 0) {
   return new Promise((resolve, reject) => {
-    const child = fork(helper, [directory, phase, cut], {
-      stdio: ["ignore", "pipe", "pipe", "ipc"],
-    });
+    const child = fork(
+      helper,
+      [directory, phase, cut, String(observationDelay)],
+      {
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
+      },
+    );
     let message;
     let stderr = "";
     const timer = setTimeout(() => {
@@ -87,8 +91,6 @@ for (const cut of [...cases, "divergent", "tombstone", "uncertain"]) {
         }),
         { mode: 0o600 },
       );
-      // A bounded fixture lease expires naturally; no persisted lease edits.
-      await new Promise((resolve) => setTimeout(resolve, 350));
       const inspected = await worker(directory, "inspect", cut);
       const checkpoint = inspected.snapshot;
       assert.ok(checkpoint.aggregate);
@@ -157,7 +159,22 @@ for (const cut of [...cases, "divergent", "tombstone", "uncertain"]) {
         assert.ok(aggregate.progress.boundAt);
         assert.equal(checkpoint.bindings.length, 1);
       }
-      const recovered = await worker(directory, "resume", cut);
+      if (cut === "lease-takeover") {
+        const crashedOwner = checkpoint.operations.find(
+          (operation) => operation.id === checkpoint.claim.operationId,
+        );
+        assert.equal(crashedOwner.state, "running");
+        assert.equal(crashedOwner.worker_id, checkpoint.claim.workerId);
+        assert.equal(crashedOwner.fence, checkpoint.claim.fence);
+      }
+      // Regress the old 300 ms unrenewed lease under a controlled slow observation.
+      const recovered = await worker(
+        directory,
+        "resume",
+        cut,
+        false,
+        cut === "creation-response-lost" ? 400 : 0,
+      );
       assert.notEqual(stopped.pid, recovered.pid);
       assert.notEqual(inspected.pid, recovered.pid);
       const after = recovered.snapshot;
@@ -300,7 +317,6 @@ for (const [phase, cut, marker] of [
       }),
       { mode: 0o600 },
     );
-    await new Promise((resolve) => setTimeout(resolve, 350));
     await assert.rejects(worker(directory, phase, cut), (error) => {
       assert.match(
         error.message,
