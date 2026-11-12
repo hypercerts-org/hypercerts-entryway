@@ -10,6 +10,7 @@ import type {
   ArrivalPreparationAuthority,
   ArrivalActivationEvidence,
   ArrivalAllocationIntent,
+  ArrivalCredentialFamily,
   ArrivalOutcome,
   ArrivalPlacementEvidence,
   ArrivalRecord,
@@ -189,4 +190,10 @@ export interface ArrivalTransactor {
     operationId: string;
     expectedVersion: number;
   }): Promise<ArrivalOutcome>;
+  /** Read-only: tracked families for one arrival, including revoked ones. */
+  readArrivalFamilies(
+    operationId: string,
+  ): Promise<readonly ArrivalCredentialFamily[]>;
+  /** Read-only: the arrival a family is tracked against, or null if untracked. */
+  readArrivalFamily(familyId: string): Promise<ArrivalCredentialFamily | null>;
 }

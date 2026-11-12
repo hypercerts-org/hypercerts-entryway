@@ -412,21 +412,23 @@ export async function createLegacy({ db, config, accounts }) {
     }
     return { family };
   };
-  const refreshSession = async (input) => {
+  // `resolve` supplies the account for one family. Ordinary refresh requires a
+  // live account; migration-tracked refresh supplies its own pending-arrival checks.
+  const refreshWith = async (input, resolve) => {
     const payload = await parseToken(input, "refresh");
     const initial = await transaction(async () => await refreshFamily(payload));
     if (initial.error) throw initial.error;
-    const account = await currentAccount(initial.family);
+    const account = await resolve.account(initial.family);
     const timestamp = now();
     const nextId = identifier();
     const [details, tokens] = await Promise.all([
-      sessionDetails(account),
+      resolve.details(account),
       tokensFor(initial.family, nextId, timestamp),
     ]);
     const committed = await transaction(async () => {
       const current = await refreshFamily(payload);
       if (current.error) return current;
-      await currentAccount(current.family);
+      await resolve.account(current.family);
       await set("refresh", payload.jti, {
         ...(await get("refresh", payload.jti)),
         usedAt: timestamp,
@@ -446,6 +448,11 @@ export async function createLegacy({ db, config, accounts }) {
     if (committed.error) throw committed.error;
     return { ...details, ...tokens };
   };
+  const refreshSession = async (input) =>
+    await refreshWith(input, {
+      account: currentAccount,
+      details: sessionDetails,
+    });
   const deleteSession = async (input) => {
     const payload = await parseToken(input, "refresh", { allowExpired: true });
     await transaction(async () => {
@@ -610,7 +617,83 @@ export async function createLegacy({ db, config, accounts }) {
         throw new HttpError(404, "SessionNotFound", "Session not found");
       await invalidateFamily(family, "account-session-revoked");
     });
+  // Migration-tracked families (incoming arrivals). These helpers never decide
+  // whether an arrival may hold credentials and never open their own association:
+  // the arrival feature calls them inside the one transaction that also records
+  // the family against its arrival, so a family cannot persist untracked.
+  const arrivalSessions = {
+    /** Signs a first family for a bound-pending account. Persists nothing, so a
+     * failed later step leaves no usable family and no token ever leaves. */
+    async prepare({ did, pdsId }) {
+      const pds = config.pds.find((candidate) => candidate.id === pdsId);
+      if (!pds)
+        throw new HttpError(
+          403,
+          "AccountUnavailable",
+          "Account PDS is unavailable",
+        );
+      const timestamp = now();
+      const family = {
+        id: identifier(),
+        did,
+        pdsDid: pds.did,
+        scope: LEGACY_SCOPES.access,
+        currentJti: identifier(),
+        createdAt: timestamp,
+        lastRefreshedAt: timestamp,
+        expiresAt: timestamp + REFRESH_SECONDS,
+      };
+      return {
+        familyId: family.id,
+        family,
+        tokens: await tokensFor(family, family.currentJti, timestamp),
+      };
+    },
+    /** Must run inside the caller's authority transaction. */
+    async persist({ family }) {
+      await set("sessions", family.id, family);
+      await set("refresh", family.currentJti, {
+        familyId: family.id,
+        did: family.did,
+        expiresAt: family.expiresAt,
+      });
+    },
+    /** Must run inside the caller's authority transaction. */
+    async revoke(familyIds, reason) {
+      for (const id of familyIds)
+        await invalidateFamily(await get("sessions", id), reason);
+    },
+    /** Stateless token checks plus a live family, without any account-status
+     * rule. Exact subject, PDS audience, type and main-access scope are required;
+     * app-password scopes are never an arrival credential. */
+    async readAccess(input) {
+      const payload = await parseToken(input, "access");
+      if (payload.exp <= now()) throw revoked();
+      const family = await get("sessions", payload.sid);
+      if (!familyActive(family)) throw revoked();
+      if (
+        family.did !== payload.sub ||
+        family.pdsDid !== payload.aud ||
+        family.scope !== payload.scope ||
+        payload.scope !== LEGACY_SCOPES.access ||
+        family.appPasswordId !== undefined
+      )
+        throw invalid();
+      return { familyId: family.id, did: family.did, pdsDid: family.pdsDid };
+    },
+    /** Verifies a refresh credential's signature, type, audience and shape only. */
+    async readRefresh(input) {
+      const payload = await parseToken(input, "refresh");
+      return { familyId: payload.sid, did: payload.sub };
+    },
+    /** Replay and rotation follow the ordinary rules; `account` and `details`
+     * replace the live-account check with the caller's pending-arrival checks. */
+    async refresh(input, resolve) {
+      return await refreshWith(input, resolve);
+    },
+  };
   return {
+    arrivalSessions,
     setPassword,
     removePassword,
     hasPassword,

@@ -793,6 +793,18 @@ export function createAccountStorage(
         return row;
       });
     },
+    async activatePlacedAccount(did) {
+      await db.transact(async () => {
+        const row = await getByDid(did);
+        if (!row || row.status !== "provisioning")
+          throw new DomainError(
+            "IdentityConflict",
+            409,
+            "Placed account is not pending activation",
+          );
+        await saveAccount({ ...row, status: "active" });
+      });
+    },
     async activateBoundArrival(input) {
       return db.transact(async () => {
         const reservation = await one(

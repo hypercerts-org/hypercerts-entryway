@@ -142,6 +142,18 @@ export class ArrivalPdsClient {
     };
   }
   public async pauseAccount(authorization: () => string): Promise<void> {
+    await this.#setDeactivated(authorization, true);
+  }
+  /** The existing lifecycle hook with `applied: false`; stock `activateAccount`
+   * delegates to Entryway, so this administrator call is the one backend effect
+   * of guarded activation. */
+  public async activateAccount(authorization: () => string): Promise<void> {
+    await this.#setDeactivated(authorization, false);
+  }
+  async #setDeactivated(
+    authorization: () => string,
+    applied: boolean,
+  ): Promise<void> {
     const method = "com.atproto.admin.updateSubjectStatus";
     const response = await fetch(this.#url(method), {
       method: "POST",
@@ -154,7 +166,7 @@ export class ArrivalPdsClient {
           $type: "com.atproto.admin.defs#repoRef",
           did: this.options.did,
         },
-        deactivated: { applied: true },
+        deactivated: { applied },
       }),
       redirect: "error",
       signal: AbortSignal.timeout(30_000),

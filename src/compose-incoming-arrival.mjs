@@ -11,12 +11,15 @@ import { createIncomingAuthorization } from "./features/external-migration/incom
 import { createArrivalLifecycle } from "./features/external-migration/manage-arrival.js";
 import { createAuthenticatedArrival } from "./features/external-migration/submit-handoff.js";
 import { readIncomingObservation } from "./plc/incoming-observation.js";
+import { createArrivalCredentials } from "./features/external-migration/arrival-credentials.js";
+import { createArrivalActivation } from "./features/external-migration/activate-arrival.js";
 
 export async function composeIncomingArrival({
   db,
   arrivals,
   config,
   accounts,
+  legacy,
   authentication,
   browserFlow,
 }) {
@@ -27,6 +30,36 @@ export async function composeIncomingArrival({
     accounts,
   });
   const { choosePds } = await createPdsAccountClient({ config, accounts });
+  const placement = (pdsId) => config.pds.find((pds) => pds.id === pdsId);
+  const arrivalBackend = (saved) => {
+    const pds = choosePds(saved.pdsId);
+    if (pds.url !== saved.endpoint)
+      throw new DomainError(
+        "OperationConflict",
+        409,
+        "Arrival placement changed",
+      );
+    const transport = new ArrivalPdsClient({
+      endpoint: saved.endpoint,
+      did: saved.did,
+      pdsDid: pds.did,
+      issuer: config.serviceDid,
+      jwtJwk: config.jwtJwk,
+    });
+    const authorization = () =>
+      `Basic ${Buffer.from(`admin:${pds.adminPassword}`).toString("base64")}`;
+    return {
+      inspect: () => transport.getAccountInfo(authorization),
+      create: (operation) =>
+        transport.createAccount({
+          did: saved.did,
+          handle: saved.handle,
+          operation,
+        }),
+      pause: () => transport.pauseAccount(authorization),
+      activate: () => transport.activateAccount(authorization),
+    };
+  };
   const prepareArrival = createIncomingPreparation({
     arrivals,
     ownership: accounts.ownership,
@@ -41,7 +74,12 @@ export async function composeIncomingArrival({
     entrywayDid: config.serviceDid,
     reserveSigningKey: ({ did, pdsId, endpoint }) => {
       const pds = choosePds(pdsId);
-      if (pds.url !== endpoint) throw new Error("Arrival placement changed");
+      if (pds.url !== endpoint)
+        throw new DomainError(
+          "OperationConflict",
+          409,
+          "Arrival placement changed",
+        );
       return new ArrivalPdsClient({
         endpoint,
         did,
@@ -73,30 +111,7 @@ export async function composeIncomingArrival({
       client: accounts.plcClient,
       signer: accounts.plcSigner,
       bindPending: admission.bindPending,
-      backend: (saved) => {
-        const pds = choosePds(saved.pdsId);
-        if (pds.url !== saved.endpoint)
-          throw new Error("Arrival placement changed");
-        const transport = new ArrivalPdsClient({
-          endpoint: saved.endpoint,
-          did: saved.did,
-          pdsDid: pds.did,
-          issuer: config.serviceDid,
-          jwtJwk: config.jwtJwk,
-        });
-        const authorization = () =>
-          `Basic ${Buffer.from(`admin:${pds.adminPassword}`).toString("base64")}`;
-        return {
-          inspect: () => transport.getAccountInfo(authorization),
-          create: (operation) =>
-            transport.createAccount({
-              did: saved.did,
-              handle: saved.handle,
-              operation,
-            }),
-          pause: () => transport.pauseAccount(authorization),
-        };
-      },
+      backend: arrivalBackend,
     }),
     verify: createIncomingAuthorization({
       serviceDid: config.serviceDid,
@@ -118,9 +133,55 @@ export async function composeIncomingArrival({
       );
     return principal.userId;
   };
+  const credentials = createArrivalCredentials({
+    arrivals,
+    ownership: accounts.ownership,
+    transact: (work) => db.transact(work),
+    signer: legacy.arrivalSessions,
+    readAccount: (did) => accounts.storage.getByDid(did),
+    readBinding: (did) => accounts.storage.getVerifiedBinding(did),
+    readDocument: (did) => accounts.plcClient.getDocument(did),
+    placement,
+    authentication,
+    checkCsrf: browserFlow.checkCsrf,
+    loadBrowser: browserFlow.loadBrowser,
+    rateLimit,
+  });
+  const activation = createArrivalActivation({
+    arrivals,
+    ownership: accounts.ownership,
+    receipts: createOperationOwnershipStore(db),
+    transact: (work) => db.transact(work),
+    plcClient: accounts.plcClient,
+    accounts: {
+      getByDid: (did) => accounts.storage.getByDid(did),
+      getVerifiedBinding: (did) => accounts.storage.getVerifiedBinding(did),
+    },
+    placement,
+    backend: arrivalBackend,
+    authorizeAccess: credentials.identifyArrivalAccess,
+    authentication,
+    checkCsrf: browserFlow.checkCsrf,
+    loadBrowser: browserFlow.loadBrowser,
+    rateLimit,
+  });
   return {
     ...admission,
     prepareArrival,
+    // Tracked migration credentials and the one guarded activation. Dormant:
+    // plan 012 injects these into routes, XRPC and the stock callback.
+    issueArrivalSession: async (request, operationId, expectedVersion) =>
+      credentials.issueArrivalSession(
+        await savedUser(request),
+        operationId,
+        expectedVersion,
+      ),
+    issueCreationSession: credentials.issueCreationSession,
+    refreshArrivalSession: credentials.refreshArrivalSession,
+    recoverArrivalSession: credentials.recoverArrivalSession,
+    authorizeArrivalAccess: credentials.authorizeArrivalAccess,
+    activateArrivalAsUser: activation.activateArrivalAsUser,
+    activateArrivalWithCredential: activation.activateArrivalWithCredential,
     renewArrival: lifecycle.renew,
     cancelArrival: lifecycle.cancel,
     admitIncoming: async (request, input) =>
