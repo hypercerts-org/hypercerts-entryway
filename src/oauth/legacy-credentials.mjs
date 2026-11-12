@@ -663,6 +663,13 @@ export async function createLegacy({ db, config, accounts }) {
       for (const id of familyIds)
         await invalidateFamily(await get("sessions", id), reason);
     },
+    /** Signature, type, issuer and audience only, tolerating expiry: names the
+     * family a genuine credential claims, so the caller can tell whether it is
+     * tracked before any strict check. It authorizes nothing and writes nothing. */
+    async readFamily(input, kind) {
+      const payload = await parseToken(input, kind, { allowExpired: true });
+      return { familyId: payload.sid, did: payload.sub };
+    },
     /** Stateless token checks plus a live family, without any account-status
      * rule. Exact subject, PDS audience, type and main-access scope are required;
      * app-password scopes are never an arrival credential. */

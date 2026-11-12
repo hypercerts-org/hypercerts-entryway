@@ -727,8 +727,16 @@ pending owner decision.
 
 `refreshSession` and `activateAccount` now perform one arrival lookup before the
 ordinary route, and fall through on `InvalidToken` or `ArrivalExpired`; that
-fall-through design is a pending owner decision. A finished arrival's family is an
-ordinary session: its committed activation result is returned only while the local
+fall-through design is a pending owner decision. The lookup happens only after the
+credential's signature is verified (expiry tolerated), so a genuine credential is
+judged "tracked or not" before its expiry or revocation is judged. An ordinary
+credential that is expired, revoked, replayed or untracked always reaches the
+ordinary route, which alone decides its answer and any replay handling; the arrival
+path writes nothing for it. While its arrival is unfinished, a tracked family that
+is revoked or expired keeps the incoming `ExpiredToken` refusal, since the ordinary
+route does not serve a pending account. A finished arrival's family is an ordinary
+session: once it is expired or revoked, `activateAccount` falls through and the
+ordinary route refuses it. Its committed activation result is returned only while the local
 account is still `active`, and once the user deactivates it, `activateAccount`
 reaches the ordinary route. With the header present these never fall through to hosted or managed movement, so
 an invalid incoming credential is refused, not rerouted. Without it, and for any

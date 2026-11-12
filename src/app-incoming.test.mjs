@@ -3,6 +3,7 @@ import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { once } from "node:events";
 import http from "node:http";
 import test from "node:test";
+import { SignJWT, importJWK } from "jose";
 import { Secp256k1Keypair } from "@atproto/crypto";
 import { openTestDatabase } from "../tests/support/database-fixture.mjs";
 import { createApp } from "../dist/src/app.mjs";
@@ -92,7 +93,20 @@ async function application(t) {
       request.on("error", reject);
       request.end(json === undefined ? undefined : JSON.stringify(json));
     });
-  return { call };
+  const sign = async (typ, claims, issuedAt = Math.floor(Date.now() / 1000)) =>
+    new SignJWT({
+      scope: "com.atproto.access",
+      sid: randomBytes(32).toString("base64url"),
+      ...claims,
+    })
+      .setProtectedHeader({ alg: "ES256K", typ })
+      .setSubject("did:plc:ordinaryaccount")
+      .setIssuer(issuer)
+      .setJti(randomBytes(32).toString("base64url"))
+      .setIssuedAt(issuedAt)
+      .setExpirationTime(issuedAt + (typ === "at+jwt" ? 300 : 3600))
+      .sign(await importJWK(jwtJwk, "ES256K"));
+  return { call, config, sign };
 }
 
 test("through the real application, requests without an incoming selector keep the ordinary routes", async (t) => {
@@ -158,4 +172,41 @@ test("through the real application, the browser surfaces are registered and gate
   });
   assert.equal(crossSite.status, 400);
   assert.equal(crossSite.body.error, "InvalidRequest");
+});
+
+test("through the real application, a genuine but untracked expired or revoked credential gets the ordinary route's answer", async (t) => {
+  const { call, config, sign } = await application(t);
+  const stale = Math.floor(Date.now() / 1000) - 3600;
+  const access = {
+    aud: config.pds[0].did,
+  };
+  const refresh = { aud: config.serviceDid, scope: "com.atproto.refresh" };
+  const ordinary = {};
+  for (const [name, path, jwt] of [
+    ["expired access", "activateAccount", await sign("at+jwt", access, stale)],
+    ["unknown-family access", "activateAccount", await sign("at+jwt", access)],
+    [
+      "expired refresh",
+      "refreshSession",
+      await sign("refresh+jwt", refresh, stale),
+    ],
+    [
+      "unknown-family refresh",
+      "refreshSession",
+      await sign("refresh+jwt", refresh),
+    ],
+  ]) {
+    const response = await call(`/xrpc/com.atproto.server.${path}`, {
+      headers: { authorization: `Bearer ${jwt}` },
+    });
+    ordinary[name] = [response.status, response.body.error];
+  }
+  // Statuses are the ordinary handlers' own, observed without the incoming
+  // handlers: activation answers 401 (never the incoming 400 ExpiredToken).
+  assert.deepEqual(ordinary, {
+    "expired access": [401, "InvalidToken"],
+    "unknown-family access": [401, "InvalidToken"],
+    "expired refresh": [400, "ExpiredToken"],
+    "unknown-family refresh": [400, "InvalidToken"],
+  });
 });

@@ -563,6 +563,38 @@ test("after completion the committed result answers only while the account is ac
   assert.equal(refreshed.status, 418);
 });
 
+test("after completion an expired or revoked session of the migrated family is the ordinary route's to refuse", async (t) => {
+  const { f, h, session } = await created(t);
+  const bearer = { authorization: `Bearer ${session.accessJwt}` };
+  assert.equal((await h.call(activatePath, { headers: bearer })).status, 200);
+  const ordinary = { ordinary: "server.activateAccount" };
+  // Ordinary deactivation revokes the session family in the legacy store only.
+  const { sid } = JSON.parse(
+    Buffer.from(session.accessJwt.split(".")[1], "base64url").toString(),
+  );
+  await f.legacy.arrivalSessions.revoke([sid], "test");
+  const revoked = await h.call(activatePath, { headers: bearer });
+  assert.equal(revoked.status, 418);
+  assert.deepEqual(revoked.json, ordinary);
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  t.mock.timers.tick(6 * 60 * 1000);
+  const expired = await h.call(activatePath, { headers: bearer });
+  assert.equal(expired.status, 418);
+  assert.deepEqual(expired.json, ordinary);
+  assert.equal(f.backendState.activations, 1);
+});
+
+test("after completion an expired session of the migrated family alone falls through", async (t) => {
+  const { f, h, session } = await created(t);
+  const bearer = { authorization: `Bearer ${session.accessJwt}` };
+  assert.equal((await h.call(activatePath, { headers: bearer })).status, 200);
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  t.mock.timers.tick(6 * 60 * 1000);
+  const expired = await h.call(activatePath, { headers: bearer });
+  assert.equal(expired.status, 418);
+  assert.equal(f.backendState.activations, 1);
+});
+
 test("a cross-origin post spends no browser budget", async (t) => {
   const f = await fixture(t);
   const h = await incomingHttp(t, f);
@@ -631,4 +663,108 @@ test("a completed arrival is not reported on a repeat prepare", async (t) => {
   assert.equal(repeat.status >= 400, true);
   assert.equal(repeat.json.operationId, undefined);
   assert.equal(repeat.text.includes(prepared.operationId), false);
+});
+
+/** A family in the shared legacy store that no arrival tracks: what an
+ * ordinary hosted account's session looks like to the incoming handlers. */
+async function ordinaryFamily(f) {
+  const minted = await f.legacy.arrivalSessions.prepare({
+    did: f.did,
+    pdsId: f.config.pds[0].id,
+  });
+  await f.legacy.arrivalSessions.persist(minted);
+  return minted;
+}
+const familyRow = (f, id) => f.db.get("legacy:sessions", id);
+const refreshRow = async (f, token) =>
+  f.db.get(
+    "legacy:refresh",
+    JSON.parse(Buffer.from(token.split(".")[1], "base64url")).jti,
+  );
+
+test("activateAccount leaves an ordinary credential to the ordinary route in any condition", async (t) => {
+  const { f, h } = await created(t);
+  const ordinary = await ordinaryFamily(f);
+  const call = (jwt) =>
+    h.call(activatePath, { headers: { authorization: `Bearer ${jwt}` } });
+  assert.equal((await call(ordinary.tokens.accessJwt)).status, 418);
+  // Revoked family: the live regression answered 400 instead of the ordinary 401.
+  await f.legacy.arrivalSessions.revoke([ordinary.familyId], "test");
+  assert.deepEqual((await call(ordinary.tokens.accessJwt)).json, {
+    ordinary: "server.activateAccount",
+  });
+  // Expired access token of a live family.
+  const live = await ordinaryFamily(f);
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  t.mock.timers.tick(6 * 60 * 1000);
+  assert.deepEqual((await call(live.tokens.accessJwt)).json, {
+    ordinary: "server.activateAccount",
+  });
+  assert.equal(f.backendState.activations, 0);
+});
+
+test("activateAccount still refuses a tracked arrival credential whose family is expired", async (t) => {
+  const { f, h, session } = await created(t);
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  t.mock.timers.tick(6 * 60 * 1000);
+  const response = await h.call(activatePath, {
+    headers: { authorization: `Bearer ${session.accessJwt}` },
+  });
+  assert.equal(response.status, 400);
+  assert.equal(response.json.error, "ExpiredToken");
+  assert.equal(f.backendState.activations, 0);
+});
+
+test("refreshSession leaves ordinary revoked, expired and replayed refresh tokens untouched for the ordinary route", async (t) => {
+  const { f, h } = await created(t);
+  const call = (jwt) =>
+    h.call(refreshPath, { headers: { authorization: `Bearer ${jwt}` } });
+  const ordinaryAnswer = { ordinary: "server.refreshSession" };
+  // Replayed: the arrival path performs no replay revocation or rotation.
+  const replayed = await ordinaryFamily(f);
+  await f.legacy.arrivalSessions.refresh(replayed.tokens.refreshJwt, {
+    account: async (family) => ({ did: family.did }),
+    details: async () => ({}),
+  });
+  const before = await familyRow(f, replayed.familyId);
+  assert.deepEqual(
+    (await call(replayed.tokens.refreshJwt)).json,
+    ordinaryAnswer,
+  );
+  assert.deepEqual(await familyRow(f, replayed.familyId), before);
+  assert.equal(
+    (await refreshRow(f, replayed.tokens.refreshJwt)).usedAt !== undefined,
+    true,
+  );
+  // Revoked.
+  const revoked = await ordinaryFamily(f);
+  await f.legacy.arrivalSessions.revoke([revoked.familyId], "test");
+  const revokedRow = await familyRow(f, revoked.familyId);
+  assert.deepEqual(
+    (await call(revoked.tokens.refreshJwt)).json,
+    ordinaryAnswer,
+  );
+  assert.deepEqual(await familyRow(f, revoked.familyId), revokedRow);
+  // Expired refresh token (family lifetime elapsed).
+  const expired = await ordinaryFamily(f);
+  const unused = await refreshRow(f, expired.tokens.refreshJwt);
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  t.mock.timers.tick(91 * 24 * 60 * 60 * 1000);
+  assert.deepEqual(
+    (await call(expired.tokens.refreshJwt)).json,
+    ordinaryAnswer,
+  );
+  assert.deepEqual(await refreshRow(f, expired.tokens.refreshJwt), unused);
+});
+
+test("refreshSession still refuses an expired tracked refresh credential with the expired-token code", async (t) => {
+  const { h, session, f } = await created(t);
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  t.mock.timers.tick(91 * 24 * 60 * 60 * 1000);
+  const response = await h.call(refreshPath, {
+    headers: { authorization: `Bearer ${session.refreshJwt}` },
+  });
+  assert.equal(response.status, 400);
+  assert.equal(response.json.error, "ExpiredToken");
+  void f;
 });
