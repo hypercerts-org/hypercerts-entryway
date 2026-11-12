@@ -12,6 +12,8 @@ import { createAccountSecurity } from "./compose-account-security.mjs";
 import { createProtocolOperations } from "./compose-protocol-operations.mjs";
 import { createAccountMigration } from "./features/pds-migration/move-between-pds.mjs";
 import { requestFailureEvent } from "./logging/request-event.js";
+import { createIncomingArrival } from "./compose-incoming-arrival.mjs";
+import { mountIncomingRoutes } from "./features/external-migration/routes.js";
 
 export async function createApp({ config, db, mail, lifecycle }) {
   const accounts = await createAccounts({
@@ -167,8 +169,23 @@ export async function createApp({ config, db, mail, lifecycle }) {
   });
   app.use(express.json({ limit: "64kb" }));
   mountOperationRecoveryRoutes({ app, config, ownership: accounts.ownership });
+  const incoming = await createIncomingArrival({
+    db,
+    config,
+    accounts,
+    legacy,
+    oauth,
+  });
+  mountIncomingRoutes({
+    app,
+    issuer: config.issuer,
+    incoming,
+    oauth,
+    rateLimit: protocolOperations.rateLimit,
+  });
   await mountXrpc({
     app,
+    incoming,
     db,
     config,
     accounts,

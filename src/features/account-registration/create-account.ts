@@ -12,6 +12,7 @@ import {
   type RegistrationInput,
 } from "../../accounts/input-schema.js";
 import { xrpc } from "../../pds/client.mjs";
+import { createPendingArrivalGuard } from "../../accounts/pending-arrival.js";
 
 import type { AuthorityDatabase } from "../../database/connection.js";
 import type { AccountRow } from "../../accounts/types.js";
@@ -486,6 +487,12 @@ export function createRegistration({
     registrationIdentity,
   }: ProvisionInput): Promise<AccountRow> => {
     let row = await registrationAccountForEmail(storage, email);
+    // An unfinished incoming arrival is a placed `provisioning` account for this
+    // email. Ordinary registration must never resume or activate it.
+    await createPendingArrivalGuard(storage).assertPermitted(
+      row,
+      "registration",
+    );
     await assertEmailAvailable(email, row);
     if (row) {
       assertSameRegistration(row, { handle, pdsId, recoveryKey });

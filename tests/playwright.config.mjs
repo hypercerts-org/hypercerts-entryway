@@ -1,26 +1,35 @@
 import { defineConfig } from "@playwright/test";
 
 const publicRun = process.env.PUBLIC_BROWSER_TESTS === "true";
-const artifactPrefix = publicRun ? "public-browser" : "browser";
+// The incoming public journey needs an owned sandbox's access projection, so
+// only `./tests/local.sh incoming-public-journey` selects it.
+const incomingJourney = process.env.INCOMING_PUBLIC_JOURNEY === "1";
+const artifactPrefix = incomingJourney
+  ? "incoming-public-journey"
+  : publicRun
+    ? "public-browser"
+    : "browser";
 export default defineConfig({
   testDir: "./browser",
-  testMatch: publicRun
-    ? "public-browser.spec.mjs"
-    : [
-        "browser.spec.mjs",
-        "account-console.spec.mjs",
-        "account-confirm.spec.mjs",
-        "account-console-multi-binding.spec.mjs",
-        "migration-console.spec.mjs",
-        "experience-browser.spec.mjs",
-        "browser-oauth.spec.mjs",
-        "oauth-lifecycle.spec.mjs",
-        "account-chooser.spec.mjs",
-        "oauth-remembered-device.spec.mjs",
-        "oauth-signup-consent-skip.spec.mjs",
-        "oauth-sign-in-hints.spec.mjs",
-        "shared-email-lookups.spec.mjs",
-      ],
+  testMatch: incomingJourney
+    ? "incoming-public-journey.spec.mjs"
+    : publicRun
+      ? "public-browser.spec.mjs"
+      : [
+          "browser.spec.mjs",
+          "account-console.spec.mjs",
+          "account-confirm.spec.mjs",
+          "account-console-multi-binding.spec.mjs",
+          "migration-console.spec.mjs",
+          "experience-browser.spec.mjs",
+          "browser-oauth.spec.mjs",
+          "oauth-lifecycle.spec.mjs",
+          "account-chooser.spec.mjs",
+          "oauth-remembered-device.spec.mjs",
+          "oauth-signup-consent-skip.spec.mjs",
+          "oauth-sign-in-hints.spec.mjs",
+          "shared-email-lookups.spec.mjs",
+        ],
   fullyParallel: false,
   workers: 1,
   retries: 0,

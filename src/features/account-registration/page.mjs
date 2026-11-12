@@ -1,5 +1,9 @@
 import { escapeHtml } from "../../ui/html.mjs";
 import { registrationAccountForEmail } from "./create-account.js";
+import {
+  createPendingArrivalGuard,
+  pendingArrivalMessage,
+} from "../../accounts/pending-arrival.js";
 const signupState = (recoveryRequired, retry) => {
   if (recoveryRequired)
     return {
@@ -24,6 +28,10 @@ export function createSignupForm({ db, config, accounts, fields }) {
     const account = flow.authEmail
       ? await registrationAccountForEmail(accounts.storage, flow.authEmail)
       : null;
+    // An unfinished incoming arrival is not an unfinished signup: never offer
+    // to "retry" or complete it here.
+    if (await createPendingArrivalGuard(accounts.storage).isPending(account))
+      return `<p role="status">${escapeHtml(pendingArrivalMessage)}</p><p><a href="/incoming">Review your incoming migration</a></p>`;
     const attempt = flow.authEmail
       ? await accounts.ownership?.pendingExternal(`email:${flow.authEmail}`)
       : null;

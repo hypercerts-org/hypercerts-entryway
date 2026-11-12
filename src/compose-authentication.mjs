@@ -8,6 +8,7 @@ import { mountSignupRoutes } from "./features/account-registration/signup-routes
 import { createConsent } from "./features/oauth-authorization/consent.mjs";
 import { mountAuthorizationRoutes } from "./features/oauth-authorization/authorization-routes.mjs";
 import { authorizationRedirect } from "./features/oauth-authorization/redirect.mjs";
+import { createPendingArrivalGuard } from "./accounts/pending-arrival.js";
 
 export async function createAuthentication({
   app,
@@ -53,6 +54,7 @@ export async function createAuthentication({
     stores,
     flows,
     accountAccess,
+    pendingArrival: createPendingArrivalGuard(accounts.storage),
     clientRequestsSignupConsentSkip,
   });
   const { startEmailCode } = mountEmailLogin({

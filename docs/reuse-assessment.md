@@ -94,9 +94,11 @@ Entryway-hosted inactive destination accepting a streamed import, and sequential
 same-DID reservation with placement isolation. That run is bounded by its own
 committed byte and phase budgets and does not establish finality, blob pagination
 or an activation barrier. C4 is now an accepted client-managed responsibility
-contract, not a claim that those stronger guarantees were proved. C1–C5 are design contracts; existing
-dormant producers cover preparation, admission and continuation only,
-not mounted public APIs or complete readiness; see the
+contract, not a claim that those stronger guarantees were proved. C1–C5 are design contracts; the
+mounted incoming routes reuse the existing producers (arrival preparation,
+admission, tracked credentials, guarded activation, challenge budgets, invitation
+policy) and add no dependency or new service port. They are not complete readiness:
+public journey qualification is separate; see the
 contract gates in
 [incoming migration](incoming-migration.md#contract-qualification-gates-for-implementers).
 

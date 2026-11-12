@@ -13,6 +13,63 @@ import { createAuthenticatedArrival } from "./features/external-migration/submit
 import { readIncomingObservation } from "./plc/incoming-observation.js";
 import { createArrivalCredentials } from "./features/external-migration/arrival-credentials.js";
 import { createArrivalActivation } from "./features/external-migration/activate-arrival.js";
+import { createToolAdmission } from "./features/external-migration/tool-admission.js";
+import { summarizeArrival } from "./features/external-migration/arrival-summary.js";
+import { createArrivalStorage } from "./database/drizzle/migration-arrival.js";
+
+/** Production arrival persistence over the application's account storage. The
+ * placed account, saved-user binding and the later `provisioning` -> `active`
+ * flip all go through the reviewed account authority, in the arrival's own
+ * transactions. */
+export function createIncomingArrivalStorage({ db, config, accounts }) {
+  const storage = accounts.storage;
+  return createArrivalStorage(db, config.pds, {
+    readAccount: (did) => storage.getByDid(did),
+    readBinding: (did) => storage.getVerifiedBinding(did),
+    reserveEmailClaim: (...args) => storage.reserveEmail(...args),
+    reserveHandleClaim: (...args) => storage.reserveHandle(...args),
+    recordSavedUserBinding: (did, userId) =>
+      storage.bindPlacedAccount(did, userId),
+    activatePlacedAccount: (did) => storage.activatePlacedAccount(did),
+    insertPlacedAccount: (input) =>
+      storage.insertAccount(
+        {
+          did: input.did,
+          email: input.email,
+          emailVerified: true,
+          handle: input.handle,
+          pdsId: input.pdsId,
+          pdsUrl: input.pdsUrl,
+          status: "provisioning",
+          createdAt: new Date().toISOString(),
+        },
+        input.userId,
+      ),
+  });
+}
+
+/** The application's incoming-arrival feature: production storage, the real
+ * browser authentication/CSRF producers and the one composition below. */
+export async function createIncomingArrival({
+  db,
+  config,
+  accounts,
+  legacy,
+  oauth,
+}) {
+  return composeIncomingArrival({
+    db,
+    arrivals: createIncomingArrivalStorage({ db, config, accounts }),
+    config,
+    accounts,
+    legacy,
+    authentication: oauth,
+    browserFlow: {
+      loadBrowser: (request) => oauth.loadBrowser(request, request.res),
+      checkCsrf: oauth.checkCsrf,
+    },
+  });
+}
 
 export async function composeIncomingArrival({
   db,
@@ -98,6 +155,10 @@ export async function composeIncomingArrival({
     rateLimit,
     plcClient: accounts.plcClient,
   });
+  const verify = createIncomingAuthorization({
+    serviceDid: config.serviceDid,
+    readDirectory: (did) => accounts.plcClient.getDocument(did),
+  });
   const admission = createArrivalAdmission({ db, arrivals, invitation });
   const authenticated = createAuthenticatedArrival({
     arrivals,
@@ -113,14 +174,11 @@ export async function composeIncomingArrival({
       bindPending: admission.bindPending,
       backend: arrivalBackend,
     }),
-    verify: createIncomingAuthorization({
-      serviceDid: config.serviceDid,
-      readDirectory: (did) => accounts.plcClient.getDocument(did),
-    }),
+    verify,
     client: accounts.plcClient,
   });
-  // Dormant internal callables: browser authentication supplies the saved user,
-  // never claim.resource or a user ID from the request body.
+  // Browser callables: browser authentication supplies the saved user, never
+  // claim.resource or a user ID from the request body.
   const savedUser = async (request) => {
     const browser = await browserFlow.loadBrowser(request);
     browserFlow.checkCsrf(request, browser);
@@ -147,6 +205,16 @@ export async function composeIncomingArrival({
     loadBrowser: browserFlow.loadBrowser,
     rateLimit,
   });
+  // Tool surfaces carry no cookie. PROPOSED, awaiting owner decision: the
+  // current arrival code selects the arrival and its saved user (see
+  // tool-admission.ts); browser surfaces below keep the browser-bound forms.
+  const toolAdmission = createToolAdmission({
+    arrivals,
+    verify,
+    admit: authenticated.admit,
+    continueCreation: authenticated.continueCreation,
+    issueCreationSession: credentials.issueCreationSession,
+  });
   const activation = createArrivalActivation({
     arrivals,
     ownership: accounts.ownership,
@@ -168,8 +236,36 @@ export async function composeIncomingArrival({
   return {
     ...admission,
     prepareArrival,
-    // Tracked migration credentials and the one guarded activation. Dormant:
-    // plan 012 injects these into routes, XRPC and the stock callback.
+    submitIncomingHandoff: toolAdmission.submitHandoff,
+    createIncomingAccount: toolAdmission.createAccount,
+    /** Secret-free state for the saved user's own arrival; a read needs the
+     * verified session but no CSRF token. Another user's arrival is not found. */
+    describeArrival: async (request, operationId) => {
+      const principal = await authentication.requireSession(request);
+      if (!principal?.emailVerified)
+        throw new DomainError(
+          "AccountMismatch",
+          403,
+          "A verified saved browser owner is required",
+        );
+      const aggregate =
+        typeof operationId === "string" && operationId.length <= 200
+          ? await arrivals.readArrivalAggregate(operationId, principal.userId)
+          : null;
+      if (!aggregate)
+        throw new DomainError("AccountNotFound", 404, "Arrival not found");
+      return summarizeArrival(aggregate);
+    },
+    /** A fresh sign-in code for the saved user's own email, on the existing
+     * challenge budget. */
+    sendArrivalCode: async (request) => {
+      const userId = await savedUser(request);
+      const principal = await authentication.requireSession(request);
+      await rateLimit(`incoming-code:${userId}`);
+      await authentication.sendSignInCode(principal.email);
+      return {};
+    },
+    // Tracked migration credentials and the one guarded activation.
     issueArrivalSession: async (request, operationId, expectedVersion) =>
       credentials.issueArrivalSession(
         await savedUser(request),

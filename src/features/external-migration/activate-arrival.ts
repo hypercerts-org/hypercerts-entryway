@@ -111,6 +111,14 @@ export function createArrivalActivation({
       "This arrival is no longer actionable",
     );
 
+  /** A finished arrival's committed result is only the answer to a lost final
+   * response while the local account is still active. Afterwards (for example the
+   * user deactivated it) the family is an ordinary session and the request is not
+   * an arrival's, so the ordinary route must handle it. */
+  const assertStillActive = async (did: string) => {
+    if ((await accounts.getByDid(did))?.status !== "active") throw inactive();
+  };
+
   const run = async (
     claim: OperationClaim,
     initial: ArrivalAggregate,
@@ -120,6 +128,7 @@ export function createArrivalActivation({
     const read = async () => owner.read(saved.operationId, saved.userId);
     if (initial.progress.completedAt !== null) {
       // A lost response retries into the committed result; nothing is dispatched.
+      await assertStillActive(saved.did);
       await ownership.checkpoint("complete", null);
       return finished(initial);
     }
@@ -366,7 +375,10 @@ export function createArrivalActivation({
     // Both kinds of intent were just proved against this very arrival (the
     // credential's own unrevoked tracked family), so a finished arrival returns
     // its committed result with no backend write and no journal change.
-    if (initial.progress.completedAt !== null) return finished(initial);
+    if (initial.progress.completedAt !== null) {
+      await assertStillActive(initial.arrival.did);
+      return finished(initial);
+    }
     if (initial.arrival.cancelledAt !== null) throw inactive();
     try {
       return await owner.resume(initial.arrival, (claim, current) =>
@@ -379,7 +391,10 @@ export function createArrivalActivation({
       ) {
         // Another request completed activation and released the claim first.
         const current = await owner.read(operationId, userId);
-        if (current.progress.completedAt !== null) return finished(current);
+        if (current.progress.completedAt !== null) {
+          await assertStillActive(current.arrival.did);
+          return finished(current);
+        }
       }
       throw error;
     }

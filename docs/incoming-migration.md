@@ -1,7 +1,8 @@
 # How incoming account migration works
 
 **Status:** accepted design, updated November 11, 2026 for the client-managed
-migration contract; implementation and public runtime qualification remain pending.
+migration contract. The routes below are mounted; independent public runtime
+qualification of the whole journey has not been completed.
 
 Incoming migration moves an existing account from an external PDS to a PDS behind
 Entryway. The account keeps its DID; the migration client transfers its records
@@ -459,7 +460,8 @@ continueHandoff(request, operationId)
 continueCreation(request, operationId)
 ```
 
-These are internal callables, not mounted routes. Each loads the normalized verified
+These are internal browser-bound callables; the browser routes that call them are
+listed under [mounted surfaces](#development-mounted-surfaces-and-pending-guard). Each loads the normalized verified
 browser principal and checks origin/CSRF. Its saved user ID selects the arrival;
 `claim.resource` is the separate `arrival:<did>` ownership resource, never a user ID.
 The same pending preparation ownership intent is reacquired and fenced before work.
@@ -520,15 +522,16 @@ These associations do not mark or clear repository-allocation uncertainty.
 
 Binding the saved user and completing the invitation share one database transaction.
 A bound pending retry returns `{state: "pending", operationId, version}` without
-remote effects. No public route, transfer credential or activation is added. Exhaustive
+remote effects. Exhaustive
 crash/rehydration qualification, activation implementation and public migration qualification remain
 deferred.
 
 ### Development: tracked credentials and guarded activation
 
 `composeIncomingArrival` also exposes dormant credential and activation callables.
-It now takes the application's `legacy` credential instance. No route, page, XRPC
-handler, stock-callback consumer or pending guard is mounted; plan 012 injects these.
+It takes the application's `legacy` credential instance. The mounted routes, XRPC
+handlers, stock-callback consumer and pending guard that call these are described
+under [mounted surfaces](#development-mounted-surfaces-and-pending-guard).
 Failures use stable codes from `DomainError` (`code`) or `HttpError` (`error`).
 
 ```text
@@ -652,6 +655,147 @@ Storage ownership note: this change adds to plan 009's storage code, with no sch
 change. `ArrivalAuthority` gains `activatePlacedAccount`, `completeArrivalActivation`
 performs the flip, `settleArrivalAttempt` also retires an attempt replaced by an
 approved safe retry, and `readArrivalFamilies` and `readArrivalFamily` are read-only.
+
+### Development: mounted surfaces and pending guard
+
+**Status: implemented and unit-tested; no live public journey, no contracts group
+and no stock-PDS callback proof has run.** Everything marked "pending owner
+decision" below is this change's choice, not accepted contract. `src/app.mjs`
+mounts the feature on every deployment (single-node SQLite, multi-node, and
+deployments with no migration intent) with no configuration key or opt-out; this
+is decided. Public qualification has not yet run, so the change is held as an
+unmerged draft until the live journey and contracts pass. It is mounted through `createIncomingArrival` in
+`src/compose-incoming-arrival.mjs` (production arrival storage over the account
+authority, real browser authentication and CSRF) and registers
+`src/features/external-migration/routes.ts` and `xrpc-routes.ts`. XRPC handlers are
+registered before the ordinary protocol routes so an incoming request is selected
+explicitly and never by fall-through.
+
+Browser surfaces, all under the issuer host. Each POST takes a strict body, rejects
+an unknown field as `InvalidRequest` (400), checks origin and the CSRF `csrf` field
+before any code is spent, and sets `Cache-Control: no-store`. A JSON request gets a
+JSON response; a form post gets an HTML page. All spend the per-IP budget
+`incoming-browser-ip` (30 per ten minutes, the existing producer's 30-per-IP limit)
+only after the same-origin check, so a cross-origin post spends nothing. `GET
+/incoming` has no budget, like the other GET pages. The `/incoming/resume`,
+`/activate` and `/code` surfaces and the `GET /incoming` status page are not in the
+C1 table (pending owner decision).
+
+Lost operation ID. If the SAME saved user repeats `/incoming/prepare` for the same DID
+with a valid fresh email code and the repeat is refused with
+`OperationRecoveryRequired`, and an unfinished (live, not completed or cancelled)
+arrival of theirs exists, the refusal keeps its code and status and adds that arrival's `operationId` and
+current `version` (JSON fields, or shown on the HTML page), so they can renew,
+recover, activate or resume. This happens only after origin/CSRF, session, budget
+and the fresh code have passed; the arrival is found by a read by DID, and owner scoping is
+done by comparing the saved user and then reading with the owner-filtered
+`readArrival`. It attaches to no other error (an ownership `OperationPending`, a
+lease loss or a server failure), and if the lookup itself fails the original refusal
+is what the caller sees. It returns no arrival code or other secret, changes nothing in storage, and is `no-store`.
+Another user's arrival for that DID gets today's refusal with no ID.
+
+| Route                     | Body (plus `csrf`)                      | Proof and result                                                               |
+| ------------------------- | --------------------------------------- | ------------------------------------------------------------------------------ |
+| `GET /incoming`           | optional `?operationId=`                | Verified session; secret-free state of the saved user's own arrival            |
+| `POST /incoming/code`     | none                                    | Sends a sign-in code to the verified email on the `incoming-code` budget       |
+| `POST /incoming/prepare`  | `did`, `handle`, `otp`                  | Fresh code; C1 preparation response, arrival code shown once                   |
+| `POST /incoming/renew`    | `operationId`, `expectedVersion`, `otp` | Fresh code; `{operationId, version, arrivalCode, expiresAt}`                   |
+| `POST /incoming/cancel`   | `operationId`, `expectedVersion`, `otp` | Fresh code; only the pre-intent seam cancels, else `OperationRecoveryRequired` |
+| `POST /incoming/recover`  | `operationId`, `expectedVersion`, `otp` | Fresh code; replacement tracked credentials, revoking earlier families         |
+| `POST /incoming/activate` | `operationId`, `expectedVersion`, `otp` | Fresh code; the one guarded activation, `{state, operationId, version}`        |
+| `POST /incoming/resume`   | `operationId`                           | Saved user only; continues saved admitted steps, sends nothing new             |
+
+Failures use the stable codes in C1: `InvalidRequest` 400 (shape, origin or CSRF),
+`ArrivalProofRequired` 403, `AccountNotFound` 404 (unknown operation and another
+user's operation, identical), `ArrivalExpired` and `OperationConflict` and
+`OperationRecoveryRequired` 409, `RateLimitExceeded` 429.
+
+Tool surfaces (no cookie, no CSRF), on the standard XRPC paths:
+
+| Request                                        | Incoming when                                | Needs                                                                                         | Success                              |
+| ---------------------------------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------ |
+| `POST com.atproto.identity.submitPlcOperation` | `Entryway-Arrival-Code` header               | Source JWT bound to that method, Entryway as audience, the arrival's DID; body `{operation}`  | `{}` once canonical                  |
+| `POST com.atproto.server.createAccount`        | `Entryway-Arrival-Code` header               | Source JWT bound to `createAccount`; body `handle` plus optional `did`, `email`, `inviteCode` | Tracked credentials, `active: false` |
+| `POST com.atproto.server.refreshSession`       | refresh token of a tracked unfinished family | The refresh credential                                                                        | Rotated credentials                  |
+| `POST com.atproto.server.activateAccount`      | access token of a tracked arrival family     | The tracked access credential (also the stock PDS's forwarded call)                           | `{}`                                 |
+
+A tool must send exactly those fields. The strict subset rejects `password`,
+`verificationCode`, `verificationPhone`, `recoveryKey` and `plcOp` with
+`InvalidRequest`, and stock tools commonly send `password`, so an unmodified stock
+tool does not work against this surface. Whether to accept or ignore them is a
+pending owner decision.
+
+`refreshSession` and `activateAccount` now perform one arrival lookup before the
+ordinary route, and fall through on `InvalidToken` or `ArrivalExpired`; that
+fall-through design is a pending owner decision. A finished arrival's family is an
+ordinary session: its committed activation result is returned only while the local
+account is still `active`, and once the user deactivates it, `activateAccount`
+reaches the ordinary route. With the header present these never fall through to hosted or managed movement, so
+an invalid incoming credential is refused, not rerouted. Without it, and for any
+token that is not a tracked arrival credential, the ordinary route runs unchanged;
+a source service JWT is never offered to activation and cannot reach hosted
+authority for a pending DID. The per-IP budget `incoming-tool-ip` (30 per ten
+minutes) applies before admission. Submit and create share that one bucket, and
+every retry, including one after `OperationRecoveryRequired`, spends from it, so a
+tool that retries aggressively can exhaust it (`RateLimitExceeded`) for all callers
+behind the same address. The method is fixed by the route, so an
+unsupported method cannot reach admission. Identity-layer failures are
+`InvalidPlcOperation` 400 or `IdentityConflict` 409.
+
+**Proposed, awaiting owner decision (not accepted contract).** Tool requests carry no
+browser cookie, but admission and continuation resolve their owner from a browser
+principal. The tool surfaces therefore select the arrival with the presented
+current, unexpired arrival code, taking the saved user from the arrival and never
+from an email or a request value; the DID is read from the credential's unverified
+issuer only to look the code up, and admission still verifies the method-bound source
+JWT. That verification (same verifier, method, audience, DID and request digest, no
+replay state consumed) runs before any ownership lease is taken, and admission
+verifies again and records replay. Before it, the code permits only a read; a leaked
+code with an invalid credential cannot contend for the arrival, record, sign or
+dispatch. Every failure to select an arrival, including an unparsable credential,
+is the same `ArrivalExpired`. The replacement point is `select` in `tool-admission.ts`.
+
+Retry semantics that follow from stored admissions (pending owner decision whether
+this is the intended contract). An exact retry is the same body
+with the same credential, until it expires or the identity has moved to the
+destination (the source key no longer verifies). A fresh credential for an
+already-admitted body is `OperationConflict`. After the move, the tool cannot retry
+`createAccount`: a retry after the destination move gets 403 `AccountMismatch`
+because the source key no longer verifies. Recovery or resume is the path: a lost
+first issuance is recovered by the saved user with `/incoming/recover`, and a
+stalled continuation with `/incoming/resume`.
+
+Pending guard. A pending arrival is a `provisioning` account whose DID has an
+unfinished saved arrival. The mechanism today is a mix, not a single enforced
+action set. `src/accounts/pending-arrival.ts` defines the permitted and refused
+action names and a predicate that reads saved arrival facts, but its
+`assertPermitted` has one caller (registration's provisioning core), and the account
+console, OAuth consent and signup form use its `isPending` to show an honest page.
+Everything else relies on existing checks: `assertNoMigration` refuses status,
+handle, deletion and PLC changes (`MigrationPending` 409), and ordinary XRPC
+authentication, ordinary refresh and ordinary login refuse a `provisioning` account
+(a refused refresh does not revoke the family). Browser email sign-in still
+succeeds by design: it creates a session and then shows the pending page rather than
+settings or a reactivation prompt. By consumer class: `assertPermitted` protects
+registration; `assertNoMigration` protects status change, handle change, deletion
+and PLC operations; the `provisioning` status check protects login, security
+changes, admin paths and OAuth paths; `isPending` protects the console, consent and
+signup pages. A single enforced guard is follow-up work; this is decided.
+
+Credential limits, stated plainly. Recovery revokes local families, but the stock PDS
+accepts an access token already issued until it expires (five minutes). The browser
+`recover` response contains credentials and is `no-store`. Nothing here deletes the
+source account, and activation makes no claim about repository or blob completeness.
+
+Open for owner confirmation (pending owner decisions):
+
+- the cookie-less arrival-code resolution above;
+- the exact-retry semantics (same body and same credential, until expiry or cutover);
+- the refresh and activate fall-through design and its extra arrival lookup;
+- the strict `createAccount` subset that rejects `password`;
+- the extra browser surfaces: `/incoming/activate`, `/incoming/resume`,
+  `/incoming/code` and the `GET /incoming` status page;
+- the per-IP budget keys `incoming-browser-ip` and `incoming-tool-ip`.
 
 ## Contract qualification gates for implementers
 

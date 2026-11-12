@@ -13,12 +13,14 @@ import { Secp256k1Keypair } from "@atproto/crypto";
 import { cidForCbor } from "@atproto/common";
 import * as plc from "@did-plc/lib";
 import { createLegacy } from "../../../dist/src/oauth/legacy-credentials.mjs";
-import { composeIncomingArrival } from "../../../dist/src/compose-incoming-arrival.mjs";
+import {
+  composeIncomingArrival,
+  createIncomingArrivalStorage,
+} from "../../../dist/src/compose-incoming-arrival.mjs";
 import { createBrowserFlow } from "../../../dist/src/http/browser-flow.mjs";
 import { createOperationOwnership } from "../../../dist/src/accounts/operation-ownership.js";
 import { createOperationOwnershipStore } from "../../../dist/src/database/drizzle/operation-ownership.js";
 import { createAccountStorage } from "../../../dist/src/database/drizzle/account-storage.js";
-import { createArrivalStorage } from "../../../dist/src/database/drizzle/migration-arrival.js";
 import { openTestDatabase, verifiedUser, query } from "../database-fixture.mjs";
 
 export const endpoint = "https://destination.example.test";
@@ -107,34 +109,12 @@ export async function fixture(t, mode = "modern", mutation = "", fault = "") {
     },
   ];
   const storage = createAccountStorage(db, hosts);
+  // The application's own arrival persistence, never a fixture copy.
   const arrivalStorage = () =>
-    createArrivalStorage(db, hosts, {
-      readAccount: (value) => storage.getByDid(value),
-      readBinding: (value) => storage.getVerifiedBinding(value),
-      reserveEmailClaim: (...args) => storage.reserveEmail(...args),
-      reserveHandleClaim: (...args) => storage.reserveHandle(...args),
-      recordSavedUserBinding: (subject, userId) =>
-        db.insert(
-          "account_bindings",
-          { did: subject, user_id: userId },
-          { ignoreConflict: true },
-        ),
-      activatePlacedAccount: (subject) =>
-        storage.activatePlacedAccount(subject),
-      insertPlacedAccount: (input) =>
-        storage.insertAccount(
-          {
-            did: input.did,
-            email: input.email,
-            emailVerified: true,
-            handle: input.handle,
-            pdsId: input.pdsId,
-            pdsUrl: input.pdsUrl,
-            status: "provisioning",
-            createdAt: new Date().toISOString(),
-          },
-          input.userId,
-        ),
+    createIncomingArrivalStorage({
+      db,
+      config: { pds: hosts },
+      accounts: { storage },
     });
   const arrivals = arrivalStorage();
   if (fault.startsWith("after-commit"))
@@ -151,8 +131,12 @@ export async function fixture(t, mode = "modern", mutation = "", fault = "") {
     authenticatedAt: new Date(),
   };
   let verifications = 0;
+  const sentCodes = [];
   const authentication = {
     requireSession: async () => principal,
+    sendSignInCode: async (address) => {
+      sentCodes.push(address);
+    },
     verifySignInCode: async ({ email: destinationEmail, otp }) => {
       verifications++;
       assert.equal(destinationEmail, email);
@@ -460,6 +444,7 @@ export async function fixture(t, mode = "modern", mutation = "", fault = "") {
     repository,
     composed,
     reservations: () => reservations,
+    sentCodes,
     verifications: () => verifications,
     prepare: (otp = "fresh-otp") =>
       composed.prepareArrival(request, otp, { did, handle }),

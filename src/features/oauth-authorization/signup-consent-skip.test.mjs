@@ -91,6 +91,7 @@ async function fixture(
     authEmail: account.email,
   });
   const { authenticated } = createConsent({
+    pendingArrival: { isPending: async () => false },
     db,
     config,
     provider,
