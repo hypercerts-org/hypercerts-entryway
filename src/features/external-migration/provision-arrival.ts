@@ -7,7 +7,10 @@ import type { OperationClaim } from "../../database/operation-ownership.port.js"
 import { incomingCreationMethod } from "./incoming-authorization.js";
 import type { OperationOwnership } from "../../accounts/operation-ownership.js";
 import type { OperationOwnershipStore } from "../../database/operation-ownership.port.js";
-import type { ArrivalAggregate } from "./arrival-types.js";
+import {
+  isRecordedAdmissionGeneration,
+  type ArrivalAggregate,
+} from "./arrival-types.js";
 import type { Secp256k1MigrationPlcSigner } from "../../plc/signing.js";
 import * as Plc from "@did-plc/lib";
 import { validateIncomingHandoff } from "../../plc/policy.js";
@@ -68,7 +71,7 @@ export function createDurableArrivalProvisioning({
       !accepted ||
       accepted.userId !== saved.userId ||
       accepted.did !== saved.did ||
-      accepted.generation !== saved.generation
+      !isRecordedAdmissionGeneration(accepted.generation, saved.generation)
     )
       throw new DomainError(
         "AccountMismatch",

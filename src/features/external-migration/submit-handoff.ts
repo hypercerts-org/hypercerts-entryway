@@ -3,8 +3,12 @@ import type { OperationClaim } from "../../database/operation-ownership.port.js"
 import { cidForCbor } from "@atproto/common";
 import type * as plc from "@did-plc/lib";
 import { DomainError } from "../../accounts/errors.js";
+import { HttpError } from "../../http/http-error.mjs";
 import type { OperationOwnership } from "../../accounts/operation-ownership.js";
-import type { ArrivalAggregate } from "./arrival-types.js";
+import {
+  isRecordedAdmissionGeneration,
+  type ArrivalAggregate,
+} from "./arrival-types.js";
 import {
   incomingHandoffMethod,
   incomingCreationMethod,
@@ -99,7 +103,7 @@ export function createAuthenticatedArrival({
       !handoff ||
       admission.userId !== saved.userId ||
       admission.did !== saved.did ||
-      admission.generation !== saved.generation
+      !isRecordedAdmissionGeneration(admission.generation, saved.generation)
     )
       throw new DomainError(
         "AccountMismatch",
@@ -188,7 +192,36 @@ export function createAuthenticatedArrival({
         input.userId,
         async (owner, aggregate) => {
           const saved = aggregate.arrival;
+          // Before any request comparison or credential work, so a superseded,
+          // garbage or expired code fails identically whether or not an
+          // admission exists for the body. This read neither consumes the code
+          // nor advances the saved version.
+          const current =
+            typeof input.arrivalCode === "string"
+              ? await arrivals.consumeArrivalCode({
+                  codeHash: arrivalCodeHash(input.arrivalCode),
+                  did: saved.did,
+                  method: input.method,
+                })
+              : null;
+          if (current?.operationId !== saved.operationId)
+            throw new HttpError(
+              409,
+              "ArrivalExpired",
+              "This arrival code is no longer valid",
+            );
           const parsed = parseArrivalRequest(saved, input.method, input.body);
+          const recorded = aggregate.admissions.find(
+            (item) => item.method === input.method,
+          );
+          // The digest binds the code generation, so a body admitted before a
+          // renewal can never match again; resubmission cannot succeed.
+          if (recorded && recorded.requestDigest !== parsed.requestDigest)
+            throw new DomainError(
+              "OperationConflict",
+              409,
+              "This request was already admitted; resume the saved arrival instead of resubmitting",
+            );
           const authorization = await verify({
             presentation: input.presentation,
             method: input.method,
@@ -265,7 +298,10 @@ export function createAuthenticatedArrival({
             !accepted ||
             accepted.userId !== aggregate.arrival.userId ||
             accepted.did !== aggregate.arrival.did ||
-            accepted.generation !== aggregate.arrival.generation
+            !isRecordedAdmissionGeneration(
+              accepted.generation,
+              aggregate.arrival.generation,
+            )
           )
             throw new DomainError(
               "AccountMismatch",

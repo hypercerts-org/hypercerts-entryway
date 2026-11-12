@@ -604,16 +604,16 @@ provisioned, and the caller resumes through `recover` from C3 instead.
 
 Errors. Each code is stable and mapped explicitly, and no message carries a secret.
 
-| Condition                                                | Error code                  | HTTP status |
-| -------------------------------------------------------- | --------------------------- | ----------- |
-| Body fails schema                                        | `InvalidRequest`            | 400         |
-| Missing or stale OTP proof                               | `ArrivalProofRequired`      | 403         |
-| Unknown operation or verified principal is not its owner | `AccountNotFound`           | 404         |
-| Saved arrival is no longer actionable                    | `ArrivalExpired`            | 409         |
-| `expectedVersion` differs from the saved version         | `OperationConflict`         | 409         |
-| Concurrent work for the DID is admitted                  | `OperationPending`          | 409         |
-| Per-IP or per-subject budget exhausted                   | `RateLimitExceeded`         | 429         |
-| Dispatch state makes cancellation unsafe                 | `OperationRecoveryRequired` | 409         |
+| Condition                                                                                        | Error code                  | HTTP status |
+| ------------------------------------------------------------------------------------------------ | --------------------------- | ----------- |
+| Body fails schema                                                                                | `InvalidRequest`            | 400         |
+| Missing or stale OTP proof                                                                       | `ArrivalProofRequired`      | 403         |
+| Unknown operation or verified principal is not its owner                                         | `AccountNotFound`           | 404         |
+| Arrival is no longer actionable, or the presented arrival code is superseded, unknown or expired | `ArrivalExpired`            | 409         |
+| `expectedVersion` differs from the saved version                                                 | `OperationConflict`         | 409         |
+| Concurrent work for the DID is admitted                                                          | `OperationPending`          | 409         |
+| Per-IP or per-subject budget exhausted                                                           | `RateLimitExceeded`         | 429         |
+| Dispatch state makes cancellation unsafe, or renewal finds an uncertain allocation               | `OperationRecoveryRequired` | 409         |
 
 Replay. `prepare` with the same verified user, DID and handle is idempotent and
 returns the same saved operation while that operation is still actionable. A changed
@@ -641,6 +641,46 @@ cancelArrival(principal, proof, {operationId, expectedVersion})
 recoverArrival(principal, proof, {operationId, expectedVersion})
   -> standard tracked credential fields
 ```
+
+Implemented behavior of the first two lifecycle callables, both taking
+`(request, otp, {operationId, expectedVersion})` and adapted to HTTP by plan 012.
+Each validates the body after origin/CSRF and session checks but before the OTP is
+verified, so a malformed body spends neither code nor budget. It then re-verifies a
+fresh destination OTP and spends the existing challenge budget under `incoming-renew`
+or `incoming-cancel`. A request that loses a race with a finished claim maps to its
+stable outcome (an idempotent cancelled result, or `ArrivalExpired` for renewal)
+rather than a lost-claim error.
+
+Cancellation first refuses any persisted allocation, signed operation, admission,
+attempt, progress or unacknowledged external attempt, then requires the canonical
+PLC head to equal the saved head. That directory observation happens outside the
+storage transaction. The residual risk is bounded because a pre-intent arrival has
+no signed handoff or destination move, so no Entryway-signed operation can exist for
+it, so a concurrent head change is necessarily client-made. A cancelled arrival is not
+reconciled afterwards (`reconcileArrival` returns not found for it), so such a change
+is not observed by Entryway after cancel. A retry for an already cancelled arrival returns
+the saved cancelled state without a version check and completes any claim left
+pending by a crash after the local cancel commit.
+
+Renewal matches C1: it is refused with `ArrivalExpired` once the arrival is cancelled
+or provisioned, and with `OperationRecoveryRequired` while the saved allocation is
+uncertain. Admissions already recorded survive renewal. Continuations do not
+re-verify the request digest or any credential. They check the owner, DID, method and
+that the recorded code generation is at least 1 and no greater than the current one,
+then dispatch only saved or freshly journaled signed facts. At admission, before any request
+comparison, the presented code must be the current, unexpired code for the arrival;
+a superseded, unknown or expired code fails with `ArrivalExpired` whether or not an
+admission exists for that body, and neither consumes the code nor advances the
+arrival version. A new
+admission, such as creation after a handoff admission, therefore needs the current
+code. Renewal never reserves, signs, dispatches or releases anything. Request digests
+include the code generation, so an already admitted body re-submitted with the new
+code can never match; C1 is silent on this case, so it stays `OperationConflict`
+with a message directing the client to resume the saved arrival.
+
+Accepted decision (proof and budget): renewal and cancellation each require a fresh
+destination OTP and spend their own existing-limit buckets, `incoming-renew` and
+`incoming-cancel`.
 
 Accepted decision M1 (budgets). Arrival wiring reuses the existing limits in
 [existing policy](#existing-policy-these-contracts-reuse) and adds no new numeric
