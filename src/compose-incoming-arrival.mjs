@@ -8,6 +8,7 @@ import { createProtocolChallenges } from "./accounts/challenges.mjs";
 import { createPdsAccountClient } from "./pds/account-client.mjs";
 import { ArrivalPdsClient } from "./pds/arrival-client.js";
 import { createIncomingAuthorization } from "./features/external-migration/incoming-authorization.js";
+import { createArrivalLifecycle } from "./features/external-migration/manage-arrival.js";
 import { createAuthenticatedArrival } from "./features/external-migration/submit-handoff.js";
 import { readIncomingObservation } from "./plc/incoming-observation.js";
 
@@ -49,6 +50,15 @@ export async function composeIncomingArrival({
         jwtJwk: config.jwtJwk,
       }).reserveSigningKey(did);
     },
+  });
+  const lifecycle = createArrivalLifecycle({
+    arrivals,
+    ownership: accounts.ownership,
+    authentication,
+    checkCsrf: browserFlow.checkCsrf,
+    loadBrowser: browserFlow.loadBrowser,
+    rateLimit,
+    plcClient: accounts.plcClient,
   });
   const admission = createArrivalAdmission({ db, arrivals, invitation });
   const authenticated = createAuthenticatedArrival({
@@ -111,6 +121,8 @@ export async function composeIncomingArrival({
   return {
     ...admission,
     prepareArrival,
+    renewArrival: lifecycle.renew,
+    cancelArrival: lifecycle.cancel,
     admitIncoming: async (request, input) =>
       authenticated.admit({
         ...input,

@@ -2,9 +2,9 @@ import { createHash, randomBytes } from "node:crypto";
 import { ensureValidHandle } from "@atproto/syntax";
 import type {
   BrowserAuthentication,
-  BrowserPrincipal,
   BrowserRequest,
 } from "../../authentication/port.js";
+import { createFreshArrivalProof } from "./fresh-proof.js";
 import type { createOperationOwnership } from "../../accounts/operation-ownership.js";
 import { incomingRotationKeys } from "../../plc/policy.js";
 import { readIncomingObservation } from "../../plc/incoming-observation.js";
@@ -159,34 +159,18 @@ export function createIncomingPreparation({
   reserveSigningKey: (request: ReservationRequest) => Promise<string>;
 }) {
   const reservation = createArrivalPreparation({ arrivals, reserveSigningKey });
+  const requireFreshProof = createFreshArrivalProof({
+    authentication,
+    checkCsrf,
+    loadBrowser,
+    rateLimit,
+  });
   return async function prepareArrival(
     request: BrowserRequest,
     otp: string,
     input: { did: string; handle: string },
   ) {
-    const browser = await loadBrowser(request);
-    checkCsrf(request, browser);
-    const principal: BrowserPrincipal | null =
-      await authentication.requireSession(request);
-    const proofRequired = () =>
-      new HttpError(
-        403,
-        "ArrivalProofRequired",
-        "Verify the destination email again",
-      );
-    if (!principal?.emailVerified || !otp) throw proofRequired();
-    await rateLimit(`incoming-prepare:${principal.userId}`);
-    const proof = await authentication.verifySignInCode({
-      email: principal.email,
-      otp,
-    });
-    const identity = proof.ok ? proof.principal : null;
-    if (
-      !identity?.emailVerified ||
-      identity.userId !== principal.userId ||
-      identity.email !== principal.email
-    )
-      throw proofRequired();
+    const identity = await requireFreshProof(request, otp, "incoming-prepare");
     if (!/^did:plc:[a-z2-7]{24}$/.test(input.did))
       throw new HttpError(400, "InvalidRequest", "A PLC DID is required");
     ensureValidHandle(input.handle);
@@ -198,7 +182,7 @@ export function createIncomingPreparation({
         request: {
           did: input.did,
           handle: input.handle,
-          userId: principal.userId,
+          userId: identity.userId,
         },
       },
       async () => {

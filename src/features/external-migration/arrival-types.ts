@@ -174,3 +174,19 @@ export interface ArrivalAggregate {
     readonly reason: string;
   }[];
 }
+
+/** An admission is valid for continuation if it was recorded under a code
+ * generation that has existed: renewal supersedes the code for new admissions but
+ * never strands one already recorded. Storage records the generation only inside
+ * the transaction that verified the then-current code, and generations only
+ * increase, so a recorded value above the current one is inconsistent. */
+export function isRecordedAdmissionGeneration(
+  admissionGeneration: number,
+  arrivalGeneration: number,
+): boolean {
+  return (
+    Number.isSafeInteger(admissionGeneration) &&
+    admissionGeneration >= 1 &&
+    admissionGeneration <= arrivalGeneration
+  );
+}
