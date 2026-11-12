@@ -16,7 +16,7 @@ test("a masked code page never contains the address or its local part", () => {
     otpForm(flow, {}),
     otpForm(flow, {}, "Wait five seconds.", flow.email),
   ]) {
-    assert.ok(html.includes("k••••@zoepa.com"));
+    assert.ok(html.includes("***a.***t@***a.***m"));
     assert.ok(!html.includes("karma.secret"));
     assert.match(html, /id="change-email"[^>]*value=""/);
   }
@@ -27,6 +27,10 @@ test("a typed address is shown in full and prefilled for changes", () => {
 
   assert.ok(html.includes("<strong>karma@zoepa.com</strong>"));
   assert.match(html, /id="change-email"[^>]*value="karma@zoepa.com"/);
+});
+
+test("a single-character part of a masked address becomes three stars", () => {
+  assert.equal(maskEmail("k@a.co"), "***@***.***o");
 });
 
 test("an address without a usable local part is not partially echoed", () => {

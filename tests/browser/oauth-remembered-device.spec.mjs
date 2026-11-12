@@ -60,7 +60,7 @@ test("a remembered device older than seven days sends its code without asking fo
       page.getByRole("heading", { name: "Check your email" }),
     ).toBeVisible();
     await expect(page.locator("#otp-help strong")).toHaveText(
-      `r••••@example.test`,
+      `***${localPart.slice(-1)}@***e.***t`,
     );
     await expect(page.locator("#change-email")).toHaveValue("");
     const html = await page.content();

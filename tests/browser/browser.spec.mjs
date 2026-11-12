@@ -296,6 +296,63 @@ test("existing device session reuses login across two real OAuth clients", async
   expect(outbox(alice.email).createdAt).toEqual(mailBefore);
 });
 
+test("an email hint for a remembered account goes straight to consent for a new client without a code", async () => {
+  // This browser remembers bob from signup and the untrusted client has never
+  // been approved: like a stock PDS, Entryway selects the remembered session and
+  // shows consent instead of sending a code.
+  const bob = identities[1];
+  const mailBefore = outbox(bob.email).createdAt;
+  const url = new URL("/client/login", config.clientUrl);
+  url.searchParams.set("identifier", config.issuer);
+  url.searchParams.set("email", bob.email);
+  url.searchParams.set("client", "untrusted");
+  await page.goto(url.href);
+  await expect(
+    page.getByRole("heading", { name: "Authorize application" }),
+  ).toBeVisible();
+  await completeConsent(bob.did);
+  expect((await session("untrusted")).did).toBe(bob.did);
+  expect(outbox(bob.email).createdAt).toEqual(mailBefore);
+});
+
+test("a returning account that approved a client still sees consent after a code sign-in", async ({
+  browser,
+}) => {
+  // alice approved the secondary client above. A browser that remembers nobody
+  // goes straight to the code step for her handle, and then shows consent as a
+  // stock PDS does after sign-in; the consent form's redirect reaches the client.
+  const alice = identities[0];
+  const fresh = await browser.newContext({ ignoreHTTPSErrors: false });
+  try {
+    const hinted = await fresh.newPage();
+    const url = new URL("/client/login", config.clientUrl);
+    url.searchParams.set("identifier", alice.handle);
+    url.searchParams.set("client", "secondary");
+    const since = Date.now();
+    await hinted.goto(url.href);
+    await expect(
+      hinted.getByRole("heading", { name: "Check your email" }),
+    ).toBeVisible();
+    const html = await hinted.content();
+    expect(html).not.toContain(alice.email);
+    expect(html).not.toContain(alice.email.split("@")[0]);
+    const { code } = await waitForMailpitCode({
+      recipient: alice.email,
+      since,
+    });
+    await hinted.getByLabel("Sign-in code").fill(code);
+    await hinted.getByRole("button", { name: "Verify code" }).click();
+    const approval = hinted.locator('form[action="/auth/consent"]').filter({
+      has: hinted.locator(`input[name="did"][value="${alice.did}"]`),
+    });
+    await approval.getByRole("button", { name: "Allow access" }).click();
+    await expect(hinted.getByTestId("signed-in-did")).toHaveText(alice.did);
+    expect(new URL(hinted.url()).origin).toBe(new URL(config.clientUrl).origin);
+  } finally {
+    await fresh.close();
+  }
+});
+
 test("multiple accounts can be selected without sharing entryway cookies with PDSs", async () => {
   await begin({ prompt: "select_account" });
   await expect(consent(identities[0].did)).toBeVisible();

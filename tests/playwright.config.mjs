@@ -20,6 +20,8 @@ export default defineConfig({
         "oauth-signup-consent-skip.spec.mjs",
         "oauth-sign-in-hints.spec.mjs",
         "shared-email-lookups.spec.mjs",
+        "consent-map.spec.mjs",
+        "hinted-code-limit.spec.mjs",
       ],
   fullyParallel: false,
   workers: 1,
