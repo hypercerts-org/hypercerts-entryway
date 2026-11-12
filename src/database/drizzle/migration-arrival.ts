@@ -1,6 +1,6 @@
 import * as plc from "@did-plc/lib";
 import { cidForCbor } from "@atproto/common";
-import { and, desc, eq, isNull, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { DomainError } from "../../accounts/errors.js";
 import { normalizeEmail } from "../../accounts/rules.js";
 import type { ArrivalTransactor } from "../migration-journal.port.js";
@@ -9,6 +9,7 @@ import type { DatabaseExecutor, StoredRow } from "../executor.js";
 import { isObservedArrivalActivation } from "../../features/external-migration/arrival-types.js";
 import type {
   ArrivalAccess,
+  ArrivalCredentialFamily,
   ArrivalRecord,
   ArrivalSignedOperationRecord,
 } from "../../features/external-migration/arrival-types.js";
@@ -68,6 +69,10 @@ export interface ArrivalAuthority {
     userId: string;
   }): Promise<void>;
   recordSavedUserBinding(did: string, userId: string): Promise<void>;
+  /** Moves the saved placed account from `provisioning` to `active` through the
+   * reviewed account authority, as `activateBoundArrival` does for managed
+   * migration. Called only inside the completion transaction. */
+  activatePlacedAccount(did: string): Promise<void>;
 }
 
 const canonicalFact = (value: unknown): string => {
@@ -115,6 +120,15 @@ function arrivalRecord(
     cancelledAt: row.cancelled_at,
   };
 }
+
+const familyRecord = (
+  saved: StoredRow<"arrival_families">,
+): ArrivalCredentialFamily => ({
+  familyId: saved.family_id,
+  operationId: saved.operation_id,
+  pdsId: saved.pds_id,
+  revokedAt: saved.revoked_at,
+});
 
 export function createArrivalStorage(
   db: DatabaseExecutor,
@@ -268,7 +282,8 @@ export function createArrivalStorage(
     const method =
       input.step === "incoming-creation"
         ? "com.atproto.server.createAccount"
-        : input.step === "incoming-pause"
+        : input.step === "incoming-pause" ||
+            input.step === "incoming-activation"
           ? "com.atproto.admin.updateSubjectStatus"
           : null;
     if (
@@ -994,7 +1009,17 @@ export function createArrivalStorage(
         db.withOperationFence(owner, async () => {
           const saved = await current(input.operationId, expectedVersion);
           const receipt = await externalReceipt(owner, saved, input);
-          if (receipt.state !== "acknowledged" || receipt.result !== "null")
+          // An acknowledged receipt with `null` finished normally. One replaced
+          // by an approved safe retry carries its recovery disposition instead.
+          if (
+            receipt.state !== "acknowledged" ||
+            !(
+              receipt.result === "null" ||
+              /^\{"recovery":"(unapplied|replay-safe)"\}$/.test(
+                receipt.result ?? "",
+              )
+            )
+          )
             throw recoveryRequired();
           const attemptBinding = `${input.operationId}:external:${receipt.id}`;
           const association = (
@@ -1334,11 +1359,29 @@ export function createArrivalStorage(
             "Activation requires observed backend evidence for this arrival",
           );
         return db.withOperationFence(input.owner, async () => {
-          if (!(await authority.readAccount(input.did)))
+          const account = (await authority.readAccount(input.did)) as {
+            email?: unknown;
+            handle?: unknown;
+            pdsId?: unknown;
+            status?: unknown;
+          } | null;
+          if (!account)
             throw new DomainError(
               "OperationConflict",
               409,
               "The bound account is not saved",
+            );
+          // Only the exact placed, still-pending account may become active.
+          if (
+            account.status !== "provisioning" ||
+            account.email !== saved.email ||
+            account.handle !== saved.handle ||
+            account.pdsId !== saved.pds_id
+          )
+            throw new DomainError(
+              "OperationConflict",
+              409,
+              "The saved account no longer matches this arrival",
             );
           await advance(saved, {
             activation_method: input.activation!.method,
@@ -1347,6 +1390,9 @@ export function createArrivalStorage(
             did_root: null,
             active: 0,
           });
+          // After the arrival is no longer active, so the authority's pending
+          // arrival guard passes; any failure rolls back the whole completion.
+          await authority.activatePlacedAccount(input.did);
           return { kind: "applied" as const, version: saved.version + 1 };
         });
       });
@@ -1485,6 +1531,25 @@ export function createArrivalStorage(
           };
         });
       });
+    },
+
+    async readArrivalFamilies(operationId) {
+      return (
+        await db.read("arrival_families", {
+          where: eq(familyTable.operation_id, operationId),
+          orderBy: [asc(familyTable.created_at), asc(familyTable.family_id)],
+        })
+      ).map(familyRecord);
+    },
+
+    async readArrivalFamily(familyId) {
+      const saved = (
+        await db.read("arrival_families", {
+          where: eq(familyTable.family_id, familyId),
+          limit: 1,
+        })
+      )[0];
+      return saved ? familyRecord(saved) : null;
     },
 
     async revokeArrivalCredentialFamilies(input) {

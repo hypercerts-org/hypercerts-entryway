@@ -1,3 +1,4 @@
+import { createLegacy } from "../../../dist/src/oauth/legacy-credentials.mjs";
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -124,6 +125,7 @@ const arrivals = createArrivalStorage(db, hosts, {
       { did, user_id: owner },
       { ignoreConflict: true },
     ),
+  activatePlacedAccount: (subject) => storage.activatePlacedAccount(subject),
   insertPlacedAccount: (input) =>
     storage.insertAccount(
       {
@@ -327,17 +329,19 @@ const config = {
     namedCurve: "secp256k1",
   }).privateKey.export({ format: "jwk" }),
 };
+const fixtureAccounts = {
+  ownership,
+  storage,
+  get: (did) => storage.getByDid(did),
+  plcClient: client,
+  plcSigner: signer,
+};
 const composed = await composeIncomingArrival({
   db,
   arrivals,
   config,
-  accounts: {
-    ownership,
-    storage,
-    get: (did) => storage.get(did),
-    plcClient: client,
-    plcSigner: signer,
-  },
+  legacy: await createLegacy({ db, config, accounts: fixtureAccounts }),
+  accounts: fixtureAccounts,
   authentication: {
     requireSession: async () => {
       if (phase === "resume-unexpected-gate")

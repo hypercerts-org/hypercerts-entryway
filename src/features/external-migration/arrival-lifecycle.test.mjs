@@ -90,6 +90,7 @@ async function fixture() {
         { did: value, user_id: boundUser },
         { ignoreConflict: true },
       ),
+    activatePlacedAccount: (subject) => accounts.activatePlacedAccount(subject),
     insertPlacedAccount: (input) =>
       accounts.insertAccount(
         {

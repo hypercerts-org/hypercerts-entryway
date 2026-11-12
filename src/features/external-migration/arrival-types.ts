@@ -102,7 +102,16 @@ export interface ArrivalExternalAttempt {
   readonly operationId: string;
   readonly did: string;
   readonly externalAttemptId: string;
-  readonly step: "incoming-creation" | "incoming-pause";
+  readonly step: "incoming-creation" | "incoming-pause" | "incoming-activation";
+}
+
+/** One credential family tracked against an arrival. Metadata only: the
+ * signed tokens and the family's refresh state live in the legacy credential store. */
+export interface ArrivalCredentialFamily {
+  readonly familyId: string;
+  readonly operationId: string;
+  readonly pdsId: string;
+  readonly revokedAt: number | null;
 }
 
 export interface ArrivalReplayFacts {

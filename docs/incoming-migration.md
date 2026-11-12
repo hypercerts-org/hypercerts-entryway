@@ -524,6 +524,135 @@ remote effects. No public route, transfer credential or activation is added. Exh
 crash/rehydration qualification, activation implementation and public migration qualification remain
 deferred.
 
+### Development: tracked credentials and guarded activation
+
+`composeIncomingArrival` also exposes dormant credential and activation callables.
+It now takes the application's `legacy` credential instance. No route, page, XRPC
+handler, stock-callback consumer or pending guard is mounted; plan 012 injects these.
+Failures use stable codes from `DomainError` (`code`) or `HttpError` (`error`).
+
+```text
+issueArrivalSession(request, operationId, expectedVersion)      -> session
+issueCreationSession({did, operationId, arrivalCode})           -> session
+refreshArrivalSession(refreshCredential)                        -> session
+recoverArrivalSession(request, otp, {operationId, expectedVersion}) -> session
+authorizeArrivalAccess(bearer) -> {operationId, did, userId, familyId}
+activateArrivalAsUser(request, otp, {operationId, expectedVersion})
+  -> {state: "active", operationId, version}
+activateArrivalWithCredential(bearer) -> {state: "active", operationId, version}
+```
+
+The C3 `owner` is acquired inside each callable (`resumePending` on `arrival:<did>`)
+because ownership is scoped to the running operation. `issueArrivalSession` takes the
+saved user from the normalized browser principal. `issueCreationSession` is the
+cookie-less continuation for the standard `createAccount` response, which carries no
+browser cookie (C1). Its saved user is never supplied: it is the user saved on the
+arrival, reached only through the current, unexpired arrival code for the same DID
+and operation (renewal supersedes it; only its hash is stored), so an operation id
+alone mints nothing. The arrival must also be bound and carry an accepted
+`createAccount` admission for that saved user and DID with a recorded code
+generation. The version is read under the fence because the tool cannot know it. The
+source JWT is verified by the admission step, not repeated here. A repeat issuance is
+`OperationConflict`.
+
+Consequences, stated plainly. Once the creation admission and binding exist, the code
+together with the DID and operation id from the same preparation response is enough to
+obtain the first family: no source JWT (it cannot verify after cutover) and no browser
+session. The window closes at first issuance or code expiry. A repeat call is
+`OperationConflict`; a lost or pre-empted first issuance is recovered through
+`recoverArrivalSession` with a fresh email code, which revokes the earlier family apart
+from the stock access-token expiry gap. For plan 012: the exported `admitIncoming` still
+takes the saved user from a browser principal, so the cookie-less creation admission
+that precedes this call must be resolved there.
+
+A session holds the standard fields `did`, `handle`, `email`, `emailConfirmed`,
+`didDoc`, `accessJwt` and `refreshJwt`, plus `active: false` and
+`status: "deactivated"` because the backend is still paused. The access token is
+`at+jwt` with the issuer, subject the DID, audience the placement's PDS DID and scope
+`com.atproto.access`; the refresh token is `refresh+jwt` for the Entryway service DID
+with scope `com.atproto.refresh`. These are the existing legacy families.
+
+Issuance and recovery require observed provisioning, observed deactivation, the
+saved-user binding, a pending (`provisioning`) account on the configured host that
+matches the saved arrival, and no unresolved attempt. Refresh requires the same saved
+facts and bound unfinished state under the fence, but is not refused by an unresolved
+attempt (accepted decision). The family, its arrival association and, for recovery, the
+revocation of every prior family commit in one authority transaction; tokens are signed
+before it but returned only after it. Recovery needs the exact saved version (a
+bound-pending continuation returns it without remote effects), no source JWT (the
+source key is no longer current after cutover), and does not depend on the arrival
+code's expiry. Revoking local families does not revoke access tokens already issued,
+which stock PDS accepts until they expire (five minutes); this gap applies to every
+recovery.
+
+Ordinary paths are unchanged. A pending account has status `provisioning`, so ordinary
+login, access verification and refresh refuse its families with `AccountUnavailable`
+without revoking them, even with a real main password. Ordinary status changes stay
+refused by the existing `MigrationPending` and pending-arrival guards. After activation
+the same families are ordinary account sessions. `refreshArrivalSession` serves only
+tracked families of a bound, unfinished arrival (`InvalidToken` for others,
+`ArrivalExpired` for finished ones). Replay revokes the family as for ordinary sessions.
+
+Errors: `AccountNotFound` (unknown operation or other user, identical),
+`ArrivalProofRequired`, `InvalidRequest`, `OperationConflict` (version, state, host,
+account, repeat issuance), `ArrivalExpired` (cancelled or complete, or an unknown,
+superseded or expired code for creation issuance), `OperationRecoveryRequired`,
+`InvalidToken`, `ExpiredToken`, `AccountMismatch` (binding or missing creation
+admission) and `AccountUnavailable`.
+
+Activation is one operation for every consumer. Intent comes from the saved verified
+user or from a live tracked access credential for the arrival (exact subject,
+audience, type, main-access scope, unrevoked family, bound unfinished arrival,
+re-proved under the fence). No client ready flag, count or digest is read. Under live
+ownership it checks, before journaling anything: the canonical PLC head is the exact
+saved destination move and its endpoint, repository key, ordered rotation custody and
+handle equal the saved facts (`IdentityConflict`; an unreadable directory is
+`AccountUnavailable`); the configured host (a changed placement is `OperationConflict`),
+local account and saved-user binding match (`OperationConflict`, `AccountMismatch`); no
+other unresolved attempt exists; and the backend is observed, is the same DID and
+handle, and is paused (`AccountUnavailable` when unobservable; an active backend
+without this arrival's journaled activation is `OperationRecoveryRequired`). Raw
+transport errors never surface. It then journals the `incoming-activation` attempt and
+sets `deactivated: {applied: false}` through the administrator `updateSubjectStatus`
+hook. A fresh send requires the backend still paused, otherwise
+`OperationRecoveryRequired` with the receipt left unresolved. It observes the backend
+active, rechecks identity and, in one transaction, settles the attempt (and any attempt
+replaced by an approved safe retry), completes the arrival checkpoint through the
+storage primitive (which also marks the local account active), and completes the ownership claim. A
+lost acknowledgement keeps the attempt unresolved: backend status alone never
+completes, and only isolation/drain recovery allows the exact operation to finish.
+Retrying a completed arrival as the saved user returns the committed result. Activation
+does not fence in-flight imports and makes no inventory or finality claim (C4).
+
+Accepted decisions for this slice:
+
+- `issueCreationSession` is gated by the current, unexpired arrival code plus an
+  accepted `createAccount` admission for the saved user and DID on a bound arrival.
+  That gating is the tool's capability for the first family (consequences above).
+- Recovery and browser activation each require a fresh destination email code, with
+  the separate `incoming-recover` and `incoming-activate` budgets on the existing
+  challenge producer at its existing limits.
+- Refresh stays allowed while an external attempt is unresolved; issuance and
+  recovery are refused.
+- A retry of `activateArrivalWithCredential` after activation completed returns the
+  committed `{state: "active", operationId, version}` with no backend write and no
+  journal change. It applies only to a bearer that verifies exactly as before (live,
+  unrevoked family tracked against that arrival, same DID, host and scope pins), so a
+  revoked or replaced family, another bearer or an ordinary unrelated session still
+  gets the earlier refusal and learns nothing about completion. A cancelled arrival
+  never qualifies. `authorizeArrivalAccess` itself still refuses a finished arrival
+  with `AccountUnavailable`. An expired access token needs an ordinary refresh first.
+- Marking the local account `active` is part of the storage primitive:
+  `completeArrivalActivation` moves the exact placed account (`provisioning`, same
+  email, handle and placement) to `active` through the account authority in the same
+  transaction, fence and version checks as the checkpoint, and refuses an account that
+  does not match. An arrival cannot complete without the account becoming active.
+
+Storage ownership note: this change adds to plan 009's storage code, with no schema
+change. `ArrivalAuthority` gains `activatePlacedAccount`, `completeArrivalActivation`
+performs the flip, `settleArrivalAttempt` also retires an attempt replaced by an
+approved safe retry, and `readArrivalFamilies` and `readArrivalFamily` are read-only.
+
 ## Contract qualification gates for implementers
 
 These are delivery contracts for implementers, not public APIs. The development

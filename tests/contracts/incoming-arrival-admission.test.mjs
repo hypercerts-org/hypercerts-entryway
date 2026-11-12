@@ -1,3 +1,4 @@
+import { createLegacy } from "../../dist/src/oauth/legacy-credentials.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { generateKeyPairSync } from "node:crypto";
@@ -75,6 +76,7 @@ async function fixture() {
         { did: value, user_id: userId },
         { ignoreConflict: true },
       ),
+    activatePlacedAccount: (subject) => accounts.activatePlacedAccount(subject),
     insertPlacedAccount: (input) =>
       accounts.insertAccount(
         {
@@ -165,6 +167,7 @@ async function admissionFixture(required = true) {
     arrivals: f.arrivals,
     config,
     accounts,
+    legacy: await createLegacy({ db: f.db, config, accounts }),
     browserFlow: { checkCsrf() {}, loadBrowser() {} },
   });
   const arrival = await f.prepare();

@@ -1,3 +1,4 @@
+import { createLegacy } from "../../../dist/src/oauth/legacy-credentials.mjs";
 import assert from "node:assert/strict";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { createOperationOwnershipStore } from "../../../dist/src/database/drizzle/operation-ownership.js";
@@ -112,6 +113,7 @@ export async function qualifyIncomingArrival(t, fault = "normal") {
         { did, user_id: userId },
         { ignoreConflict: true },
       ),
+    activatePlacedAccount: (subject) => storage.activatePlacedAccount(subject),
     insertPlacedAccount: (input) =>
       storage.insertAccount(
         {
@@ -132,6 +134,7 @@ export async function qualifyIncomingArrival(t, fault = "normal") {
     arrivals,
     config,
     accounts,
+    legacy: await createLegacy({ db, config, accounts }),
     authentication,
     browserFlow,
   });

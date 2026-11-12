@@ -102,6 +102,7 @@ async function fixture() {
         { did: value, user_id: userId },
         { ignoreConflict: true },
       ),
+    activatePlacedAccount: (subject) => accounts.activatePlacedAccount(subject),
     insertPlacedAccount: (input) =>
       accounts.insertAccount(
         {
@@ -1183,7 +1184,7 @@ test("activation completion is separate and requires exact version and observed 
       });
       assert.deepEqual(await claimSnapshot(db), completedSnapshot);
     }
-    assert.equal((await accounts.getByDid(did))?.status, "provisioning");
+    assert.equal((await accounts.getByDid(did))?.status, "active");
     await assert.rejects(complete({ expectedVersion: bound.version + 1 }), {
       code: "OperationConflict",
     });
@@ -1191,6 +1192,98 @@ test("activation completion is separate and requires exact version and observed 
     await db.close();
   }
 });
+
+const completion = (arrivals, claim, expectedVersion) =>
+  arrivals.completeArrivalActivation({
+    owner: claim,
+    operationId: "op-1",
+    expectedVersion,
+    did,
+    userId: "user-a",
+    activation: {
+      backendActiveObserved: true,
+      method: "com.atproto.admin.updateSubjectStatus",
+      observedAt: Date.now(),
+    },
+  });
+const accountState = async (db) =>
+  (await query(db, "SELECT status FROM accounts"))[0].status;
+
+test("completion activates the placed account in the same transaction", async () => {
+  const { db, arrivals, claim, prepare, allocate, bind } = await fixture();
+  try {
+    const bound = await bind(await allocate((await prepare()).version));
+    assert.equal(await accountState(db), "provisioning");
+    assert.equal(
+      (await completion(arrivals, claim, bound.version)).kind,
+      "applied",
+    );
+    assert.equal(await accountState(db), "active");
+    assert.equal((await arrivals.readArrivalAccess(did)).complete, true);
+  } finally {
+    await db.close();
+  }
+});
+
+test("a failure after the account flip rolls back the flip and the completion", async () => {
+  const { db, accounts, arrivals, claim, prepare, allocate, bind } =
+    await fixture();
+  try {
+    const bound = await bind(await allocate((await prepare()).version));
+    const original = accounts.activatePlacedAccount;
+    accounts.activatePlacedAccount = async (subject) => {
+      await original(subject);
+      assert.equal((await accounts.getByDid(subject)).status, "active");
+      throw new Error("after account flip");
+    };
+    await assert.rejects(
+      completion(arrivals, claim, bound.version),
+      /after account flip/,
+    );
+    accounts.activatePlacedAccount = original;
+    assert.equal(await accountState(db), "provisioning");
+    const access = await arrivals.readArrivalAccess(did);
+    assert.equal(access.complete, false);
+    assert.equal(access.version, bound.version);
+    assert.equal(
+      (await completion(arrivals, claim, bound.version)).kind,
+      "applied",
+    );
+    assert.equal(await accountState(db), "active");
+  } finally {
+    await db.close();
+  }
+});
+
+for (const [name, statement] of [
+  [
+    "not provisioning",
+    "UPDATE accounts SET status = 'deactivated', data = replace(data, '\"provisioning\"', '\"deactivated\"')",
+  ],
+  [
+    "a different handle",
+    "UPDATE accounts SET handle = 'other.entryway.test', data = replace(data, 'dest.entryway.test', 'other.entryway.test')",
+  ],
+  [
+    "a different email",
+    "UPDATE accounts SET email = 'other@example.test', data = replace(data, 'dest@example.test', 'other@example.test')",
+  ],
+])
+  test(`completion refuses an account that is ${name}`, async () => {
+    const { db, arrivals, claim, prepare, allocate, bind } = await fixture();
+    try {
+      const bound = await bind(await allocate((await prepare()).version));
+      await query(db, statement, [], "run");
+      const before = await query(db, "SELECT status FROM accounts");
+      await assert.rejects(completion(arrivals, claim, bound.version), {
+        code: "OperationConflict",
+      });
+      assert.deepEqual(await query(db, "SELECT status FROM accounts"), before);
+      assert.equal((await arrivals.readArrivalAccess(did)).complete, false);
+    } finally {
+      await db.close();
+    }
+  });
 
 test("activation completion is rejected when the operation owner changed", async () => {
   const { db, arrivals, claim, prepare, allocate, bind } = await fixture();
@@ -1504,6 +1597,8 @@ test(
             { did: value, user_id: userId },
             { ignoreConflict: true },
           ),
+        activatePlacedAccount: (subject) =>
+          accounts.activatePlacedAccount(subject),
         insertPlacedAccount: (input) =>
           accounts.insertAccount(
             {
@@ -1626,6 +1721,8 @@ test(
             { did: value, user_id: userId },
             { ignoreConflict: true },
           ),
+        activatePlacedAccount: (subject) =>
+          accounts.activatePlacedAccount(subject),
         insertPlacedAccount: (input) =>
           accounts.insertAccount(
             {
@@ -3252,6 +3349,63 @@ test("generic arrival attempts settle only exact acknowledged receipts without a
     );
     const bound = await f.bind(version);
     assert.equal((await f.bind(bound.version)).kind, "already-settled");
+  } finally {
+    await f.db.close();
+  }
+});
+
+test("settlement accepts only a null result or an approved safe-retry disposition", async () => {
+  const f = await fixture();
+  const store = createOperationOwnershipStore(f.db);
+  try {
+    let version = await f.allocate((await f.prepare()).version);
+    const receipt = await store.beginExternal(f.claim, {
+      step: "incoming-activation",
+      target: endpoint,
+      method: "com.atproto.admin.updateSubjectStatus",
+      intentDigest: hash("f"),
+    });
+    const input = {
+      operationId: "op-1",
+      did,
+      externalAttemptId: receipt.id,
+      step: "incoming-activation",
+    };
+    version = (
+      await f.arrivals.associateArrivalAttempt(f.claim, version, input)
+    ).version;
+    await store.acknowledgeExternal(f.claim, receipt, null);
+    for (const result of [
+      '{"recovery":"applied"}',
+      '{"recovery":"unapplied","extra":1}',
+      '{"recovery":"unapplied"} ',
+      '{"recovery":null}',
+      '"null"',
+      "true",
+      "{}",
+    ]) {
+      await query(
+        f.db,
+        "UPDATE external_operation_attempts SET result = ? WHERE id = ?",
+        [result, receipt.id],
+        "run",
+      );
+      await assert.rejects(
+        f.arrivals.settleArrivalAttempt(f.claim, version, input),
+        { code: "OperationRecoveryRequired" },
+        result,
+      );
+    }
+    await query(
+      f.db,
+      "UPDATE external_operation_attempts SET result = ? WHERE id = ?",
+      ['{"recovery":"replay-safe"}', receipt.id],
+      "run",
+    );
+    assert.equal(
+      (await f.arrivals.settleArrivalAttempt(f.claim, version, input)).kind,
+      "applied",
+    );
   } finally {
     await f.db.close();
   }

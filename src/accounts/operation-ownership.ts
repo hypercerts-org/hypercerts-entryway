@@ -57,7 +57,7 @@ function canonical(value: unknown): unknown {
     );
   return value;
 }
-const requestDigest = (value: unknown) =>
+export const requestDigest = (value: unknown) =>
   createHash("sha256")
     .update(JSON.stringify(canonical(value)) ?? "null")
     .digest("hex");
