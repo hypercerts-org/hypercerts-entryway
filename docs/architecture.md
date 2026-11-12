@@ -185,8 +185,20 @@ backend state and durable operation ownership. It does not certify a final sourc
 head or full inventory, or provide a global verification-to-activation write barrier.
 Concurrent/later source writes and missing blobs may not transfer. Early PLC cutover,
 create-active then pause, pending-account guards and isolation/drain recovery remain
-required. This is design acceptance, not completion of credentials, mounted public
-routes or stock-PDS public journey/recovery qualification.
+required. The external-migration feature now owns the mounted incoming routes
+(browser pages and strict JSON, and the tool-facing XRPC surfaces selected by the
+`Entryway-Arrival-Code` header), registered explicitly through
+`compose-incoming-arrival.mjs` and `app.mjs`. A pending arrival is refused by a mix of
+existing checks (`assertNoMigration`, the `provisioning` status) and the explicit
+predicate and action names in `accounts/pending-arrival.ts` (one enforcing caller;
+a single enforced guard is follow-up work); one activation operation
+serves the saved user, an authorized client and the stock PDS's forwarded
+`activateAccount`. Tracked credentials are the existing legacy families, so a stock
+PDS keeps accepting an already-issued access token until it expires (five minutes)
+after recovery. Ordinary refresh and activate now do one arrival lookup first. The cookie-less tool resolution (arrival code selects the arrival
+and its saved user) is proposed and awaits owner decision. This is not stock-PDS
+public journey or recovery qualification, which has not been run; see
+[incoming migration](incoming-migration.md#development-mounted-surfaces-and-pending-guard).
 
 The architecture checker resolves real imports, including TS/MJS aliases, dynamic
 imports and require. It rejects extra ports, raw SQL/SMTP/Better Auth access outside

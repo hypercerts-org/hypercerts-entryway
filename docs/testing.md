@@ -119,8 +119,8 @@ That run skips the live-gated tests; those skips are not qualification. Setting
 it as shown. Report live results only from an executed managed sandbox run.
 
 The offline cases cover the managed request boundary and phase budgets. They do not
-prove any public behavior, and no Entryway endpoint or route implements this
-migration: the contract test consumes stock PDS APIs, not Entryway handlers.
+prove any public behavior: this contract test consumes stock PDS APIs, not Entryway
+handlers. Entryway's own incoming routes are exercised by the public journey below.
 
 The preflight verifies the signed PLC operation against the source's observed
 rotation keys. The [contract gates](incoming-migration.md#contract-qualification-gates-for-implementers)
@@ -129,9 +129,37 @@ accepted on 2026-11-11. The client owns transfer, checks its chosen transferred
 state and chooses when to request activation; Entryway does not certify a final
 source snapshot, exhaustive inventories or a global verification-to-activation
 write barrier. Counts, zero missing blobs and client intent do not replace source
-ownership proof. Tracked credentials, guarded activation, public exposure and full
-runtime qualification remain pending; dormant internal producers do not complete
-those gates.
+ownership proof. The incoming routes, tracked credentials and guarded activation are
+mounted; full public runtime qualification is a separate gate that a passing unit
+suite does not establish.
+
+### Public incoming journey
+
+```sh
+./tests/local.sh incoming-public-journey
+```
+
+After `up`, this runs the one Playwright spec
+`tests/browser/incoming-public-journey.spec.mjs` in the owned project's browser
+container, selected by `INCOMING_PUBLIC_JOURNEY=1`; the default browser run does not
+include it. It uses the standalone stock source PDS, a stock destination behind
+Entryway, Mailpit and managed TLS, and reaches Entryway only through its public
+browser pages and XRPC routes: a browser-verified destination email, an
+arrival code, a source-signed handoff, creation returning tracked credentials, a
+direct client transfer between the pinned endpoints, refresh, and activation
+through the stock destination's `activateAccount`, which forwards to Entryway. It
+seeds no authority rows and calls no private fixture. The client chooses what to
+transfer and when to activate: the spec checks one record and one blob, not a
+complete inventory, and later source writes are outside what it proves. List the
+spec without a sandbox to verify discovery:
+
+```sh
+INCOMING_PUBLIC_JOURNEY=1 npx playwright test --config tests/playwright.config.mjs --list
+```
+
+`fresh-group incoming-public-mechanisms incoming-public-journey contracts` runs the
+same steps in one disposable project. A skipped, synthetic or negative-control
+result is not a public qualification; report only an executed managed run.
 
 Contributors qualifying the dormant incoming-arrival composition run
 `./tests/local.sh incoming-arrival-live` after `up`. This creates fresh stock

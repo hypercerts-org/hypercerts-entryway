@@ -11,9 +11,13 @@ import { mountAccountDeletionXrpc } from "./features/account-deletion/xrpc-route
 import { mountPlcXrpc } from "./plc/xrpc-routes.mjs";
 import { mountOauthAuthorizationXrpc } from "./features/oauth-authorization/xrpc-routes.mjs";
 import { mountMailXrpc } from "./mail/xrpc-routes.mjs";
+import { mountIncomingXrpc } from "./features/external-migration/xrpc-routes.js";
 
 export async function mountXrpc(services) {
   const routing = await createProtocolRouting(services);
+  // Before the ordinary routes: incoming requests are selected explicitly by
+  // their arrival-code header or tracked credential; everything else falls through.
+  mountIncomingXrpc(services);
   mountHttpXrpc({ ...services, ...routing });
   mountHandleChangeXrpc({ ...services, ...routing });
   mountEmailLoginXrpc({ ...services, ...routing });

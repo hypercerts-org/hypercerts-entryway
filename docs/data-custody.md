@@ -408,7 +408,13 @@ backend provisioning and deactivation, before transfer, so the tool can receive
 destination credentials. A bound migration-pending account is not active and
 cannot bypass guarded activation or ordinary-access restrictions. This differs
 from the current fixture's post-transfer binding and does not change existing
-signup activation semantics. Implementation and public qualification remain open.
+signup activation semantics. The routes are mounted (see
+[mounted surfaces](incoming-migration.md#development-mounted-surfaces-and-pending-guard));
+public qualification remains open. Custody facts that hold in the mounted code: a
+source service JWT proves control of the source key for one method and is never
+hosted authority, a pending DID has no hosted account for it to act on, the saved
+user comes from the arrival and its browser proof and never from email alone, and
+the arrival code is shown once and stored only as a hash.
 
 The user accepted the [C4 client-managed contract](incoming-migration.md#c4-client-managed-migration-contract-accepted)
 on 2026-11-11, replacing the former Entryway final-source/inventory certification

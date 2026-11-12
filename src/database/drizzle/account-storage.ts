@@ -793,6 +793,27 @@ export function createAccountStorage(
         return row;
       });
     },
+    /** Saved-user binding for a placed incoming arrival account. Fails closed:
+     * an existing binding must already be this user's (an exact repeat changes
+     * nothing); a binding to a different user is a conflict and changes nothing. */
+    async bindPlacedAccount(did, userId) {
+      await db.transact(async () => {
+        const existing = await one(
+          "account_bindings",
+          eq(t.account_bindings.did, did),
+        );
+        if (existing) {
+          if (existing.user_id !== userId)
+            throw new DomainError(
+              "IdentityConflict",
+              409,
+              "This account is already bound to a different verified user",
+            );
+          return;
+        }
+        await db.insert("account_bindings", { did, user_id: userId });
+      });
+    },
     async activatePlacedAccount(did) {
       await db.transact(async () => {
         const row = await getByDid(did);

@@ -46,6 +46,10 @@ export interface ArrivalFamilyCredentials {
   }>;
   persist(minted: { familyId: string }): Promise<void>;
   revoke(familyIds: readonly string[], reason: string): Promise<void>;
+  readFamily(
+    input: unknown,
+    kind: "access" | "refresh",
+  ): Promise<{ familyId: string; did: string }>;
   readAccess(
     input: unknown,
   ): Promise<{ familyId: string; did: string; pdsDid: string }>;
@@ -256,8 +260,20 @@ export function createArrivalCredentials({
   const identify = async (
     bearer: unknown,
   ): Promise<AuthorizedArrivalAccess & { readonly complete: boolean }> => {
-    const access = await signer.readAccess(bearer);
-    const tracked = await arrivals.readArrivalFamily(access.familyId);
+    // A credential is only an arrival's once it is signature-verified and its
+    // family is tracked. Expired or revoked state is judged after that, so an
+    // ordinary credential in any condition is "not an arrival's" and falls
+    // through to the ordinary route.
+    const claimed = await signer.readFamily(bearer, "access");
+    const tracked = await arrivals.readArrivalFamily(claimed.familyId);
+    if (!tracked) throw invalidToken();
+    // A finished arrival's family is an ordinary session. Once the session
+    // store finds it expired or revoked, it is the ordinary route's to refuse.
+    const finished =
+      (await arrivals.readArrivalAccess(claimed.did))?.complete === true;
+    const access = await signer.readAccess(bearer).catch((error: unknown) => {
+      throw finished && error instanceof HttpError ? invalidToken() : error;
+    });
     const projection = await arrivals.readArrivalAccess(access.did);
     if (
       !tracked ||
@@ -357,11 +373,17 @@ export function createArrivalCredentials({
     async refreshArrivalSession(
       refreshCredential: unknown,
     ): Promise<TrackedArrivalSession> {
-      const { familyId, did } = await signer.readRefresh(refreshCredential);
+      // Signature-verified, expiry-tolerant: only to decide whether the family
+      // is tracked. Nothing is rotated or revoked for an untracked family.
+      const { familyId, did } = await signer.readFamily(
+        refreshCredential,
+        "refresh",
+      );
       const tracked = await arrivals.readArrivalFamily(familyId);
       const access = await arrivals.readArrivalAccess(did);
       if (!tracked || !access || access.operationId !== tracked.operationId)
         throw invalidToken();
+      await signer.readRefresh(refreshCredential);
       if (tracked.revokedAt !== null) throw expiredToken();
       const initial = await owner.read(access.operationId, access.userId);
       assertBoundPending(initial);

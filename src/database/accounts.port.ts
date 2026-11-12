@@ -56,6 +56,8 @@ export interface AccountTransactor extends AccountReader {
   reserveExternalMigration(input: ExternalMigrationReservation): Promise<void>;
   bindProvisionedArrival(input: BindProvisionedArrival): Promise<AccountRow>;
   activateBoundArrival(input: ActivateBoundArrival): Promise<AccountRow>;
+  /** Bind a placed incoming arrival account to its saved verified user. */
+  bindPlacedAccount(did: string, userId: string): Promise<void>;
   /** Incoming-arrival completion: moves the saved placed account from
    * `provisioning` to `active` through `saveAccount`'s reviewed invariants. The
    * arrival storage calls this inside its completion transaction. */

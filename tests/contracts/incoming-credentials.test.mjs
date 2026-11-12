@@ -428,7 +428,7 @@ test("access authorization requires exact subject, audience, type, scope and a t
         payload: { scope: "com.atproto.access", sid: "u".repeat(43) },
       },
       "at+jwt",
-      "ExpiredToken",
+      "InvalidToken",
     ],
   ])
     await assert.rejects(

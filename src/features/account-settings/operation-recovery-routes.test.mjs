@@ -102,7 +102,14 @@ test("operator recovery requires Entryway authorization and exact nonreplayable 
   };
   const form = createSignupForm({
     db,
-    accounts: { ownership, storage: { listByEmail: async () => [account] } },
+    accounts: {
+      ownership,
+      storage: {
+        listByEmail: async () => [account],
+        // An unfinished signup, not an incoming arrival.
+        hasPendingExternalMigration: async () => false,
+      },
+    },
     config: {
       pds: [{ id: "pds1", url: target }],
       handleDomains: [".example.test"],

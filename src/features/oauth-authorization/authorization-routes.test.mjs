@@ -190,6 +190,7 @@ async function fixture(
     },
   });
   const { authenticated } = createConsent({
+    pendingArrival: { isPending: async () => false },
     db,
     provider,
     stores: { account: async () => null },

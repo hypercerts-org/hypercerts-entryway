@@ -5,6 +5,10 @@ import { accountUrl, manageUrl } from "../ui/account-forms.mjs";
 import { accountChooser } from "../ui/account-chooser.mjs";
 import { HttpError } from "./http-error.mjs";
 import {
+  createPendingArrivalGuard,
+  pendingArrivalMessage,
+} from "../accounts/pending-arrival.js";
+import {
   noRecentLogin,
   retryableCodeFailures,
   startPage,
@@ -40,6 +44,7 @@ export function createAccountConsole({
   security,
   legacy,
 }) {
+  const pendingArrival = createPendingArrivalGuard(accounts.storage);
   const guarded = (handler) => async (req, res, next) => {
     try {
       await handler(req, res);
@@ -108,6 +113,17 @@ export function createAccountConsole({
       canSwitchAccount = resolution.kind === "selection-required";
     }
     if (account.status === "deleted") return noAccount(res);
+    // Deny by default: an unfinished incoming arrival has no ordinary account
+    // settings, so nothing here may invite reactivation or any change.
+    if (await pendingArrival.isPending(account)) {
+      page(
+        res,
+        "Migration in progress",
+        `<p role="status">${esc(pendingArrivalMessage)}</p><p><a href="/incoming">Review your incoming migration</a></p>`,
+        409,
+      );
+      return null;
+    }
     const deviceAccount = (
       await oauth.provider.accountManager.listDeviceAccounts(browser.deviceId)
     ).find(({ account: device }) => device.did === account.did);

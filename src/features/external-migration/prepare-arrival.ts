@@ -175,6 +175,45 @@ export function createIncomingPreparation({
       throw new HttpError(400, "InvalidRequest", "A PLC DID is required");
     ensureValidHandle(input.handle);
     const pds = choosePds();
+    try {
+      return await prepareOwned(identity, input, pds);
+    } catch (error) {
+      // Only after the full proof sequence. A repeat by the SAME saved user for
+      // the same DID is told their own arrival's operation ID, so a lost
+      // preparation response can be continued. Another user's arrival is
+      // indistinguishable from today's refusal. Read-only: no code, no secret,
+      // no allocation, no version change.
+      if (
+        error instanceof DomainError &&
+        error.code === "OperationRecoveryRequired"
+      ) {
+        try {
+          const found = await arrivals.readArrivalAccess(input.did);
+          // `readArrival` is owner-scoped and returns only a live arrival, so a
+          // completed or cancelled one is never reported.
+          const saved =
+            found?.userId === identity.userId
+              ? await arrivals.readArrival(found.operationId, identity.userId)
+              : null;
+          if (saved)
+            Object.assign(error, {
+              existing: {
+                operationId: saved.operationId,
+                version: saved.version,
+              },
+            });
+        } catch {
+          // The original refusal is what the caller sees.
+        }
+      }
+      throw error;
+    }
+  };
+  async function prepareOwned(
+    identity: { userId: string; email: string },
+    input: { did: string; handle: string },
+    pds: { id: string; url: string },
+  ) {
     return ownership.run(
       `arrival:${input.did}`,
       {
@@ -245,7 +284,7 @@ export function createIncomingPreparation({
         };
       },
     );
-  };
+  }
 }
 
 /** One-time displayed arrival code. Only its hash and expiry are persisted. */
