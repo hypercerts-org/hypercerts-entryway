@@ -527,12 +527,16 @@ test(
     const transaction = db.transact(async () => {
       const [{ pid }] = await query(db, "SELECT pg_backend_pid() AS pid");
       await admin.query("SELECT pg_terminate_backend($1)", [pid]);
+      const deadline = Date.now() + 10_000;
       for (;;) {
         const { rows } = await admin.query(
           "SELECT 1 FROM pg_stat_activity WHERE pid = $1",
           [pid],
         );
         if (rows.length === 0) break;
+        if (Date.now() > deadline) {
+          throw new Error(`PostgreSQL backend ${pid} did not exit in 10s`);
+        }
         await new Promise((done) => setTimeout(done, 5));
       }
       await new Promise((done) => setTimeout(done, 50));
