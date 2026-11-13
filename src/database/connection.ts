@@ -53,6 +53,26 @@ export type DatabaseConfiguration =
  * Reentrant helpers inherit only the active transaction executor, never a pool.
  * The better-sqlite3 transaction(callback) API is never given an async callback. */
 const sqliteStartup = new Map<string, Promise<void>>();
+/** True when an error in the `cause` chain (Drizzle wraps pg errors) shows the
+ * backend session has ended. Classify by the non-localized SQLSTATE first:
+ * class 08 (connection exception) or 57P01/57P02/57P03 (admin/crash shutdown,
+ * cannot connect now). `severity` is localized by lc_messages, so FATAL/PANIC
+ * is only a fallback for servers using English messages. */
+const isFatalPostgresError = (error: unknown): boolean => {
+  for (let current = error; current instanceof Error; current = current.cause) {
+    const { code, severity } = current as {
+      code?: unknown;
+      severity?: unknown;
+    };
+    if (
+      typeof code === "string" &&
+      (code.startsWith("08") || ["57P01", "57P02", "57P03"].includes(code))
+    )
+      return true;
+    if (severity === "FATAL" || severity === "PANIC") return true;
+  }
+  return false;
+};
 export async function openDatabase(configuration: DatabaseConfiguration) {
   if (configuration.backend !== "sqlite" || configuration.path === ":memory:")
     return connectDatabase(configuration);
@@ -167,6 +187,16 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
     // pg removes failed idle clients itself; handling this event prevents a DB
     // outage from becoming an unhandled process error. Probes decide readiness.
     pool.on("error", () => {});
+    // Attach a client error listener when the client is created, before pg can
+    // parse any server message. pg-pool removes its own idle listener while a
+    // client is checked out, and a listener added after `await pool.connect()`
+    // is too late: ReadyForQuery and a backend ErrorMessage can arrive in one
+    // socket read and emit 'error' before the await resumes. Broken clients
+    // are discarded on release instead of being handed out again.
+    const brokenClients = new WeakSet<pg.ClientBase>();
+    pool.on("connect", (client) => {
+      client.on("error", () => brokenClients.add(client));
+    });
     probeDriver = async (deadline) => {
       const remaining = () =>
         Math.max(1, Math.floor(deadline - performance.now()));
@@ -212,6 +242,7 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
     };
     runConnection = async (operation) => {
       const client = await pool.connect();
+      let fatal = false;
       const orm = postgresDrizzle({ client });
       const current: Context = {
         backend: "postgresql",
@@ -241,9 +272,14 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
       };
       try {
         return await context.run(current, () => operation(current));
+      } catch (error) {
+        // A FATAL reply ends the backend, but pg keeps the client queryable
+        // until the socket closes. Do not return it to the idle pool.
+        if (isFatalPostgresError(error)) fatal = true;
+        throw error;
       } finally {
         current.active = false;
-        client.release();
+        client.release(brokenClients.has(client) || fatal);
       }
     };
     closeDriver = () => pool.end();
