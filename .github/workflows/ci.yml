@@ -156,12 +156,18 @@ jobs:
         run: |
           bash tests/local.sh prepare
       - name: Build and start managed application and test images
+        env:
+          DATABASE_BACKEND: postgresql
+          DEPLOYMENT_MODE: single-node
+          DATABASE_URL: postgresql://authority_owner@entryway-postgres/account_authority
         run: |
           bash tests/local.sh up
       - name: SQLite and PostgreSQL contracts
         run: |
           bash tests/local.sh database-dialects
       - name: PostgreSQL login restart and restore
+        env:
+          POSTGRESQL_PROFILE_REUSE_SANDBOX: "1"
         run: |
           bash tests/support/run-postgresql-profile.sh
       - name: Clean only recorded projects and children
@@ -171,14 +177,20 @@ jobs:
             python3 scripts/ci-ownership.py cleanup "$CI_OWNERSHIP_MANIFEST"
           fi
   profiles:
+    name: profiles (${{ matrix.profile }})
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        profile:
+          [sqlite-single-node, postgresql-single-node, postgresql-multi-node]
     env:
       SOURCE_CHECKOUT: ${{ github.workspace }}
-      SANDBOX_PROJECT: hypercerts-entryway-ci-profiles-${{ github.run_id }}-${{ github.run_attempt }}
-      SANDBOX_CHECKOUT: ${{ github.workspace }}/tests/.runtime/ci-profiles-${{ github.run_id }}-${{ github.run_attempt }}
-      ACCEPTANCE_REPORT_DIR: ${{ github.workspace }}/tests/artifacts/ci-profiles-${{ github.run_id }}-${{ github.run_attempt }}/reports
-      CI_OWNERSHIP_MANIFEST: ${{ github.workspace }}/tests/artifacts/ci-profiles-${{ github.run_id }}-${{ github.run_attempt }}/ownership.json
+      SANDBOX_PROJECT: hypercerts-entryway-ci-profile-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+      SANDBOX_CHECKOUT: ${{ github.workspace }}/tests/.runtime/ci-profile-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
+      ACCEPTANCE_REPORT_DIR: ${{ github.workspace }}/tests/artifacts/ci-profile-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}/reports
+      CI_OWNERSHIP_MANIFEST: ${{ github.workspace }}/tests/artifacts/ci-profile-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}/ownership.json
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -202,25 +214,59 @@ jobs:
           mkdir -p "$SANDBOX_CHECKOUT" "$ACCEPTANCE_REPORT_DIR"
       - name: Initialize deployment profile collection
         run: |
-          echo "PROFILE_COLLECTION_INDEX=$ACCEPTANCE_REPORT_DIR/profiles.tsv" >> "$GITHUB_ENV"
+          echo "PROFILE_COLLECTION_INDEX=$ACCEPTANCE_REPORT_DIR/profiles-${{ matrix.profile }}.tsv" >> "$GITHUB_ENV"
           echo "KEEP_PROFILE_SANDBOX=1" >> "$GITHUB_ENV"
-      - name: sqlite-single-node
+      - name: ${{ matrix.profile }}
         run: |
-          bash tests/support/run-resilience-profile.sh sqlite-single-node
-      - name: postgresql-single-node
-        run: |
-          bash tests/support/run-resilience-profile.sh postgresql-single-node
-      - name: postgresql-multi-node
-        run: |
-          bash tests/support/run-resilience-profile.sh postgresql-multi-node
-      - name: Assert all deployment profile receipts
-        run: |
-          last=$(tail -1 "$PROFILE_COLLECTION_INDEX" | cut -f2)
-          mapfile -t identity < "$ACCEPTANCE_REPORT_DIR/$last/sandbox-identity.txt"
-          SANDBOX_PROJECT="${identity[1]}" docker --context "$DOCKER_CONTEXT" compose --project-name "${identity[1]}" -f "${identity[0]}/compose.yaml" run --rm --no-deps -v "$ACCEPTANCE_REPORT_DIR:/profiles:ro" -v "$ACCEPTANCE_REPORT_DIR:/app/artifacts:z" test node tests/support/assert-resilience-profiles.mjs
+          bash tests/support/run-resilience-profile.sh "${{ matrix.profile }}"
+      # Only the files assert-resilience-profiles.mjs reads. Logs, commands and
+      # browser output can contain mailbox codes or sandbox identity.
+      - name: Upload deployment profile receipt
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: resilience-profile-${{ matrix.profile }}
+          path: |
+            ${{ env.ACCEPTANCE_REPORT_DIR }}/profiles-${{ matrix.profile }}.tsv
+            ${{ env.ACCEPTANCE_REPORT_DIR }}/resilience-${{ matrix.profile }}-*/prepare.exit
+            ${{ env.ACCEPTANCE_REPORT_DIR }}/resilience-${{ matrix.profile }}-*/up.exit
+            ${{ env.ACCEPTANCE_REPORT_DIR }}/resilience-${{ matrix.profile }}-*/exercise.exit
+            ${{ env.ACCEPTANCE_REPORT_DIR }}/resilience-${{ matrix.profile }}-*/assert-profile.exit
+            ${{ env.ACCEPTANCE_REPORT_DIR }}/resilience-${{ matrix.profile }}-*/profile.exit
+            ${{ env.ACCEPTANCE_REPORT_DIR }}/resilience-${{ matrix.profile }}-*/resilience-profile.json
+            ${{ env.ACCEPTANCE_REPORT_DIR }}/resilience-${{ matrix.profile }}-*/profile-duration.json
+            ${{ env.ACCEPTANCE_REPORT_DIR }}/resilience-${{ matrix.profile }}-*/exercise-controller.json
+          if-no-files-found: warn
+          retention-days: 7
       - name: Clean only recorded projects and children
         if: always()
         run: |
           if test -f "$CI_OWNERSHIP_MANIFEST"; then
             python3 scripts/ci-ownership.py cleanup "$CI_OWNERSHIP_MANIFEST"
           fi
+  profiles-assert:
+    name: profiles (assert all receipts)
+    needs: profiles
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: resilience-profile-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/profiles
+      - name: Combine profile collection index
+        run: |
+          cat "$RUNNER_TEMP"/profiles/profiles-*.tsv > "$RUNNER_TEMP/profiles/profiles.tsv"
+          mkdir -p "$RUNNER_TEMP/assert-output"
+      # The receipts record a digest of the candidate files inside the test image.
+      # Build the same image from the same Dockerfile and context to recompute it.
+      - name: Build candidate test image
+        run: |
+          docker --context default build -f tests/support/Dockerfile -t entryway-profile-assert:local .
+      - name: Assert all deployment profile receipts
+        run: |
+          docker --context default run --rm -v "$RUNNER_TEMP/profiles:/profiles:ro" -v "$RUNNER_TEMP/assert-output:/app/artifacts:z" entryway-profile-assert:local node tests/support/assert-resilience-profiles.mjs
