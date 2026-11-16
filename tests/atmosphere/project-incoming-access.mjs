@@ -45,7 +45,12 @@ export function projectIncomingAccess(access, project, routes) {
   }
   const expected = [
     ["pds", "pds3", origin(routes.sourceUrl)],
-    ["application", "entryway", origin(routes.entrywayUrl)],
+    // A multi-node profile serves the Entryway route through its ingress.
+    [
+      "application",
+      ["entryway", "profile-ingress"],
+      origin(routes.entrywayUrl),
+    ],
     ["application", "pds1", origin(routes.destinationUrls[0])],
     ["application", "pds2", origin(routes.destinationUrls[1])],
     ["plc", "plc", origin(routes.plcUrl)],
@@ -62,7 +67,7 @@ export function projectIncomingAccess(access, project, routes) {
     if (
       matching.length !== 1 ||
       matching[0].serviceType !== serviceType ||
-      matching[0].service !== service ||
+      ![service].flat().includes(matching[0].service) ||
       matching[0].kind !== "exact" ||
       origin(matching[0].url) !== expectedOrigin
     ) {
