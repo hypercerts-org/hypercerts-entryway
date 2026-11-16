@@ -1,5 +1,5 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { and, asc, eq, gt, ne, sql } from "drizzle-orm";
+import { and, asc, eq, gt, isNotNull, ne, sql } from "drizzle-orm";
 import { HttpError } from "../../http/http-error.mjs";
 import { normalizeEmail } from "../../accounts/rules.js";
 const fail = (status, error, message) => new HttpError(status, error, message);
@@ -99,6 +99,7 @@ export function createAccountAuthority({ db, accounts }) {
     const arrival = await db.read("arrivals", {
       where: and(
         eq(t.arrivals.active, 1),
+        isNotNull(t.arrivals.did_root),
         eq(sql`lower(${t.arrivals.email})`, email),
       ),
       limit: 1,

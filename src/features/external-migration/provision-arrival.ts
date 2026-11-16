@@ -1,10 +1,13 @@
-import { createHash } from "node:crypto";
 import { cidForCbor } from "@atproto/common";
 import { DomainError } from "../../accounts/errors.js";
 import type { ArrivalTransactor } from "../../database/migration-journal.port.js";
 import type { ArrivalRecord } from "./arrival-types.js";
 import type { OperationClaim } from "../../database/operation-ownership.port.js";
 import { incomingCreationMethod } from "./incoming-authorization.js";
+import {
+  requestDigest,
+  signingKeyResult,
+} from "../../accounts/operation-ownership.js";
 import type { OperationOwnership } from "../../accounts/operation-ownership.js";
 import type { OperationOwnershipStore } from "../../database/operation-ownership.port.js";
 import {
@@ -28,6 +31,10 @@ const conflict = (message: string): never => {
 
 /** For internal composition: saved creation admission is the authority for every
  * continuation. Network work never runs inside an arrival transaction. */
+/** How an observation relates to a destination effect that may have been sent:
+ * applied, certainly not applied (so a resend is safe), or neither. */
+type EffectState = "applied" | "unapplied" | "diverged";
+
 export function createDurableArrivalProvisioning({
   arrivals,
   ownership,
@@ -50,11 +57,12 @@ export function createDurableArrivalProvisioning({
     } | null>;
     create(operation: Record<string, unknown>): Promise<unknown>;
     pause(): Promise<void>;
+    reserveSigningKey(): Promise<string>;
   };
   bindPending: ArrivalTransactor["bindProvisionedArrival"];
 }) {
   return async (owner: OperationClaim, initial: ArrivalAggregate) => {
-    const saved = initial.arrival;
+    let saved = initial.arrival;
     const read = async () => {
       const value = await arrivals.readArrivalAggregate(
         saved.operationId,
@@ -87,7 +95,7 @@ export function createDurableArrivalProvisioning({
     const handoff = initial.signedOperations.find(
       (item) => item.kind === "handoff",
     );
-    if (!handoff || !saved.signingKey || initial.reservation?.uncertainReason)
+    if (!handoff || initial.reservation?.uncertainReason)
       return pending("The saved handoff and resolved reservation are required");
     await validateIncomingHandoff({
       operation: handoff.operation,
@@ -109,6 +117,58 @@ export function createDurableArrivalProvisioning({
         "Canonical identity is neither the saved handoff nor the exact saved move",
       );
     const target = backend(saved);
+    if (!saved.signingKey) {
+      // The key is reserved only now, under the claim, once the handoff is
+      // canonical: a lost response is an operator-recoverable dispatch.
+      if (move || directory.sourcePlcHead !== handoff.cid)
+        return pending("A reserved repository key is required");
+      // The durable intent precedes the remote call and is recorded once: a
+      // retry of an unresolved reservation changes nothing before recovery.
+      if (!initial.reservation) {
+        const intent = await arrivals.recordAllocationIntent(
+          owner,
+          saved.version,
+          {
+            operationId: saved.operationId,
+            did: saved.did,
+            pdsId: saved.pdsId,
+            endpoint: saved.endpoint,
+          },
+        );
+        if (intent.kind === "reconciliation-required")
+          return pending("The saved arrival allocation is uncertain");
+      }
+      const reserved = await ownership.dispatch(
+        {
+          step: "incoming-reservation",
+          target: saved.endpoint,
+          method: "com.atproto.server.reserveSigningKey",
+          intent: { did: saved.did, pdsId: saved.pdsId },
+        },
+        {
+          send: async () => ({ signingKey: await target.reserveSigningKey() }),
+          project: (value) => signingKeyResult.project(value),
+          resume: (value) => signingKeyResult.resume(value),
+          observe: async () => ({ state: "replay-safe" as const }),
+        },
+      );
+      const result = await arrivals.recordReservationResult(
+        owner,
+        (await read()).arrival.version,
+        {
+          operationId: saved.operationId,
+          did: saved.did,
+          pdsId: saved.pdsId,
+          endpoint: saved.endpoint,
+          signingKey: reserved.signingKey,
+        },
+      );
+      if (result.kind === "reconciliation-required")
+        return pending("The reserved key requires recovery");
+      saved = (await read()).arrival;
+      if (!saved.signingKey)
+        return pending("The reserved repository key is not durable");
+    }
     const inspect = async () => {
       const account = await target.inspect();
       if (
@@ -182,20 +242,20 @@ export function createDurableArrivalProvisioning({
     };
     // dispatch owns isolation/drain approval. Association runs before the remote
     // send; after observed recovery the same generic acknowledged receipt settles.
+    // `observe` must report "unapplied" only when the effect certainly did not
+    // happen, which is what lets an operator's retry-if-safe resend it.
     const dispatch = async (
       step: "incoming-creation" | "incoming-pause",
       method: string,
       send: () => Promise<void>,
-      applied: () => Promise<boolean>,
+      observe: () => Promise<EffectState>,
     ) => {
       const intent = { did: saved.did, cid: savedMove.cid, step };
       const descriptor = {
         step,
         target: saved.endpoint,
         method,
-        intentDigest: createHash("sha256")
-          .update(JSON.stringify({ cid: savedMove.cid, did: saved.did, step }))
-          .digest("hex"),
+        intentDigest: requestDigest(intent),
       };
       const associate = async () => {
         const receipt = await receipts.readExternal(owner, descriptor);
@@ -216,7 +276,7 @@ export function createDurableArrivalProvisioning({
           send: async () => {
             await associate();
             await send();
-            if (!(await creationApplied()) || !(await applied()))
+            if ((await observe()) !== "applied")
               return pending(
                 "The destination effect is not canonically observed",
               );
@@ -228,25 +288,38 @@ export function createDurableArrivalProvisioning({
               return conflict("Invalid saved destination receipt");
             return null;
           },
-          observe: async () =>
-            (await applied())
+          observe: async () => {
+            const state = await observe();
+            return state === "applied"
               ? { state: "applied" as const, result: null }
-              : { state: "diverged" as const },
+              : { state };
+          },
         },
       );
-      if (!(await creationApplied()) || !(await applied()))
+      if ((await observe()) !== "applied")
         return pending("The destination effect is not canonically observed");
       const receipt = await associate();
-      await arrivals.settleArrivalAttempt(
-        owner,
-        (await read()).arrival.version,
-        {
-          operationId: saved.operationId,
-          did: saved.did,
-          externalAttemptId: receipt.id,
-          step,
-        },
+      // An approved retry replaces its receipt, so every association of this
+      // step, including the superseded ones, settles with the applied effect.
+      const associated = (await read()).attempts.filter(
+        (item) => item.reason === `external:${step}`,
       );
+      for (const item of [
+        receipt.id,
+        ...associated
+          .map((attempt) => attempt.attemptId)
+          .filter((id) => id !== receipt.id),
+      ])
+        await arrivals.settleArrivalAttempt(
+          owner,
+          (await read()).arrival.version,
+          {
+            operationId: saved.operationId,
+            did: saved.did,
+            externalAttemptId: item,
+            step,
+          },
+        );
     };
     // An unresolved generic write must be reconciled even if its remote effect is
     // visible. Presence alone cannot bypass the operator isolation/drain gate.
@@ -273,7 +346,15 @@ export function createDurableArrivalProvisioning({
             return pending("Creation requires the exact canonical handoff");
           await target.create(savedMove.operation);
         },
-        creationApplied,
+        async () => {
+          if (await creationApplied()) return "applied";
+          // Only the saved handoff as head with no backend account proves that
+          // creation did not take effect; anything else needs investigation.
+          const head = await readIncomingObservation(client, saved.did);
+          return head.sourcePlcHead === handoff.cid && !(await inspect())
+            ? "unapplied"
+            : "diverged";
+        },
       );
       account = await inspect();
     }
@@ -289,7 +370,14 @@ export function createDurableArrivalProvisioning({
           return pending("The exact saved move is not canonical");
         if (!(await inspect())?.deactivated) await target.pause();
       },
-      async () => (await inspect())?.deactivated === true,
+      async () => {
+        if (!(await creationApplied())) return "diverged";
+        // Pausing is idempotent: an active destination means the pause did not
+        // take effect and may be sent again.
+        return (await inspect())?.deactivated === true
+          ? "applied"
+          : "unapplied";
+      },
     );
     if (!(await creationApplied()) || !(await inspect())?.deactivated)
       return pending("Destination deactivation is unobserved");

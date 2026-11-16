@@ -87,16 +87,16 @@ behavior rather than assuming full equivalence. The synthetic migration fixture
 and repository inventory comparison are reuse candidates, not public end-to-end
 qualification or proof of a historical source signature.
 
-Historical bounded stock-mechanism evidence observed a real stock source CAR
-verification, a nonempty snapshot, two export requests started before a write was
-dispatched (request ordering only, not server-side overlap), an
-Entryway-hosted inactive destination accepting a streamed import, and sequential
-same-DID reservation with placement isolation. That run is bounded by its own
-committed byte and phase budgets and does not establish finality, blob pagination
-or an activation barrier. C4 is now an accepted client-managed responsibility
-contract, not a claim that those stronger guarantees were proved. C1–C5 are design contracts; existing
-dormant producers cover preparation, admission and continuation only,
-not mounted public APIs or complete readiness; see the
+The committed contract test (`tests/contracts/incoming-public-mechanisms.test.mjs`)
+asserts, within its explicit byte and phase budgets, a real stock source CAR
+verification, a nonempty snapshot, two export requests started before a write is
+dispatched (request ordering only, not server-side overlap), an Entryway-hosted
+inactive destination accepting a streamed import, and sequential same-DID
+reservation with placement isolation. That does not establish finality, blob
+pagination or an activation barrier. C4 is an accepted client-managed
+responsibility contract, not a claim that those stronger guarantees were proved.
+C1–C5 are accepted design contracts; existing dormant producers cover preparation,
+admission and continuation only, not mounted public APIs or complete readiness; see the
 contract gates in
 [incoming migration](incoming-migration.md#contract-qualification-gates-for-implementers).
 

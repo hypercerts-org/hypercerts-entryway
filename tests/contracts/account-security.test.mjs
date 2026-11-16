@@ -10,6 +10,7 @@ import {
 import { createSecurityPrimitives } from "../../dist/src/accounts/security-primitives.mjs";
 import { createAccountAccess } from "../../dist/src/accounts/account-access.mjs";
 import { createArrivalStorage } from "../../dist/src/database/drizzle/migration-arrival.js";
+import { createOperationOwnershipStore } from "../../dist/src/database/drizzle/operation-ownership.js";
 import { createAccountAuthority } from "../../dist/src/database/drizzle/account-authority.mjs";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
@@ -1812,7 +1813,7 @@ test("stale saved deletion authorization cannot manufacture another deletion adm
   assert.equal((await f.accounts.get(f.alice.did)).status, "deleted");
 });
 
-test("active arrivals reject email availability, pending, backup and final authority changes atomically", async (t) => {
+test("claimed arrivals reject email availability, pending, backup and final authority changes atomically", async (t) => {
   const f = await fixture(t);
   const email = "arrival@example.com";
   const userId = await f.accounts.storage.ensureVerifiedEmailUser(email);
@@ -1852,8 +1853,22 @@ test("active arrivals reject email availability, pending, backup and final autho
     codeHash: "a".repeat(64),
     codeExpiresAt: Date.now() + 60_000,
   });
-  assert.ok(await preparing.readArrival("authority-arrival", userId));
+  const prepared = await preparing.readArrival("authority-arrival", userId);
+  assert.ok(prepared);
   const authority = createAccountAuthority({ db: f.db, accounts: f.accounts });
+  // An unclaimed preparation reserves nothing, so the email guard ignores it.
+  await authority.assertEmailAvailable(" ARRIVAL@EXAMPLE.COM ", f.alice.did);
+  const handoff = await createOperationOwnershipStore(f.db).acquire({
+    resource: "arrival:did:plc:incomingauthority",
+    kind: "public-arrival",
+    requestDigest: "c".repeat(64),
+    workerId: "worker-1",
+    leaseMs: 120_000,
+  });
+  await preparing.claimArrival(handoff, prepared.version, {
+    operationId: "authority-arrival",
+    did: "did:plc:incomingauthority",
+  });
   const snapshot = async () => ({
     accounts: await f.db.read("accounts"),
     claims: await f.db.read("email_claims"),
