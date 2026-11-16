@@ -36,30 +36,31 @@ Run these from the repository root. `npm run test:e2e:atmosphere` is an optional
 alias for `./tests/local.sh fresh`; this host command only starts shell orchestration
 and requires no host dependency install:
 
-| Command                                | Purpose and precondition                                                                                                                                                                                 |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `./tests/local.sh fresh`               | Repeatable full run as three parallel disposable groups; cleanup follows success/failure                                                                                                                 |
-| `./tests/local.sh fresh-group <steps>` | Run the named steps in order in one disposable project, for example `fresh-group browser contracts`                                                                                                      |
-| `./tests/local.sh prepare`             | Install sandbox CLI dependencies and create/check project configuration                                                                                                                                  |
-| `./tests/local.sh up`                  | Build/start the sandbox and build test/browser images after prepare                                                                                                                                      |
-| `./tests/local.sh status`              | Inspect this project's services after prepare                                                                                                                                                            |
-| `./tests/local.sh database-contracts`  | Run both database contract dialects, then the separate PostgreSQL login/restart/restore profile; see [database configuration](database.md)                                                               |
-| `./tests/local.sh database-profile`    | Run the one-node PostgreSQL application profile in its own fresh project                                                                                                                                 |
-| `./tests/local.sh resilience-profiles` | Run all three fresh deployment profiles and require complete bounded receipts; see [profile contract](deployment-profiles.md)                                                                            |
-| `./tests/local.sh contracts`           | Run imported contract scenarios in the test container after up                                                                                                                                           |
-| `./tests/local.sh browser`             | Run browser scenarios after up                                                                                                                                                                           |
+| Command                                       | Purpose and precondition                                                                                                                                                                                  |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `./tests/local.sh fresh`                      | Repeatable full run as three parallel disposable groups; cleanup follows success/failure                                                                                                                  |
+| `./tests/local.sh fresh-group <steps>`        | Run the named steps in order in one disposable project, for example `fresh-group browser contracts`                                                                                                       |
+| `./tests/local.sh prepare`                    | Install sandbox CLI dependencies and create/check project configuration                                                                                                                                   |
+| `./tests/local.sh up`                         | Build/start the sandbox and build test/browser images after prepare                                                                                                                                       |
+| `./tests/local.sh status`                     | Inspect this project's services after prepare                                                                                                                                                             |
+| `./tests/local.sh database-contracts`         | Run both database contract dialects, then the separate PostgreSQL login/restart/restore profile; see [database configuration](database.md)                                                                |
+| `./tests/local.sh database-profile`           | Run the one-node PostgreSQL application profile in its own fresh project                                                                                                                                  |
+| `./tests/local.sh resilience-profiles`        | Run all three fresh deployment profiles and require complete bounded receipts; see [profile contract](deployment-profiles.md)                                                                             |
+| `./tests/local.sh contracts`                  | Run imported contract scenarios in the test container after up                                                                                                                                            |
+| `./tests/local.sh browser`                    | Run browser scenarios after up                                                                                                                                                                            |
 | `./tests/local.sh incoming-public-mechanisms` | Bounded stock public-mechanism contract test after up: standalone signup, Mailpit, PLC signing, inactive destination and reservation; offline checks plus live-gated cases, not a migration qualification |
-| `./tests/local.sh migration`           | Fresh synthetic external-source migration, including two Entryway restarts                                                                                                                               |
-| `./tests/local.sh migration-resume`    | Resume a reviewed interrupted fixture; inspect state before using                                                                                                                                        |
-| `./tests/local.sh reverify`            | Check an already completed migration fixture                                                                                                                                                             |
-| `./tests/local.sh resilience`          | Disruptive outage/restart checks after other suites finish; run alone                                                                                                                                    |
-| `./tests/local.sh all`                 | Prepare, up, browser, contracts, migration, profile, PLC recovery, crash, managed recovery, authority drills, resilience; requires fresh fixture                                                         |
-| `./tests/local.sh interop-profile`     | Raw product profile; exit 2 retains inherited missing moderation requirement                                                                                                                             |
-| `./tests/local.sh plc-recovery`        | Five named synthetic PLC/cache recovery cases in the selected project                                                                                                                                    |
-| `./tests/local.sh process-crash`       | Two actual SIGKILL boundaries, exit 137 and post-recovery PDS writes; before-pds waits out the default 120 s lease, after-pds uses `OPERATION_LEASE_MS=15000`                                            |
-| `./tests/local.sh managed-recovery`    | Two real managed-migration modes: consumed successful response and rejected request followed by observe-to-retry authorization; pending/reload UI and preserved record/blob/session/PDS-write assertions |
-| `./tests/local.sh authority-drills`    | Fresh two-PDS identities, bounded backup/restore and issuer/fleet/restored key checks                                                                                                                    |
-| `./tests/local.sh down`                | Stop this project; retain volumes and state                                                                                                                                                              |
+| `./tests/local.sh incoming-goat-journey`      | Second incoming client after up: the public goat CLI, patched to the Entryway incoming contract, migrates a fresh stock source account; see below                                                         |
+| `./tests/local.sh migration`                  | Fresh synthetic external-source migration, including two Entryway restarts                                                                                                                                |
+| `./tests/local.sh migration-resume`           | Resume a reviewed interrupted fixture; inspect state before using                                                                                                                                         |
+| `./tests/local.sh reverify`                   | Check an already completed migration fixture                                                                                                                                                              |
+| `./tests/local.sh resilience`                 | Disruptive outage/restart checks after other suites finish; run alone                                                                                                                                     |
+| `./tests/local.sh all`                        | Prepare, up, browser, contracts, migration, profile, PLC recovery, crash, managed recovery, authority drills, resilience; requires fresh fixture                                                          |
+| `./tests/local.sh interop-profile`            | Raw product profile; exit 2 retains inherited missing moderation requirement                                                                                                                              |
+| `./tests/local.sh plc-recovery`               | Five named synthetic PLC/cache recovery cases in the selected project                                                                                                                                     |
+| `./tests/local.sh process-crash`              | Two actual SIGKILL boundaries, exit 137 and post-recovery PDS writes; before-pds waits out the default 120 s lease, after-pds uses `OPERATION_LEASE_MS=15000`                                             |
+| `./tests/local.sh managed-recovery`           | Two real managed-migration modes: consumed successful response and rejected request followed by observe-to-retry authorization; pending/reload UI and preserved record/blob/session/PDS-write assertions  |
+| `./tests/local.sh authority-drills`           | Fresh two-PDS identities, bounded backup/restore and issuer/fleet/restored key checks                                                                                                                     |
+| `./tests/local.sh down`                       | Stop this project; retain volumes and state                                                                                                                                                               |
 
 For the optional persistent commands, the default generated checkout is
 `tests/.runtime/atmosphereinabox`. `down` retains state; it does not reset fixtures.
@@ -160,6 +161,44 @@ INCOMING_PUBLIC_JOURNEY=1 npx playwright test --config tests/playwright.config.m
 `fresh-group incoming-public-mechanisms incoming-public-journey contracts` runs the
 same steps in one disposable project. A skipped, synthetic or negative-control
 result is not a public qualification; report only an executed managed run.
+
+### Public incoming journey with goat
+
+```sh
+./tests/local.sh incoming-goat-journey
+```
+
+After `up`, this repeats the public journey with a third-party client. The harness
+does the browser step (verified email, `/incoming/prepare`) and reads the source
+PLC token from Mailpit. The migration is the public
+[goat](https://github.com/bluesky-social/goat) CLI built from its pinned commit and
+a patch in `tests/support/goat/` (`Dockerfile` plus `entryway-incoming.patch`;
+provenance in the [reuse assessment](reuse-assessment.md#goat-test-client-provenance)).
+Only goat's CLI and session handling and indigo's XRPC and auth client are
+independent. The Entryway migration logic in `account_migrate_entryway.go` is
+written in this repository against the incoming contract, so the run checks the
+contract against an outside client stack, not an outside implementation of it.
+
+The patch adds `account migrate --arrival-code` (or `ENTRYWAY_ARRIVAL_CODE`),
+`--handoff`, `--destination-endpoint`, `--skip-preferences` and the test-only
+`--pause-after-import`. Without `--arrival-code` the stock path is unchanged and
+the new flags are refused. The spec passes `--skip-preferences` because, without an
+AppView, the stock PDS does not register the preferences routes at all, so
+preference migration is not covered. It passes `--pause-after-import 320s` so the
+300 s tracked access token expires: goat refreshes at Entryway, retries the blob
+upload and activates with the rotated token, and the spec requires goat's
+"destination session refreshed at entryway" line. This makes the migration test
+take about six minutes.
+
+goat logs in to the source with its stock password login and keeps that password
+in a 0600 state file in a temporary `HOME` inside the browser container, removed
+after the run. The static binary is mounted into that container, which trusts the
+sandbox CA through `SSL_CERT_FILE`, so TLS verification stays on. The run asserts an
+active destination serving the record and blob, a PLC document naming the
+destination endpoint and handle, and a deactivated source. Unmodified stock goat is
+not expected to work: it sends a password and skips the arrival code. The spec is
+selected only by `INCOMING_GOAT_JOURNEY=1`. Printed goat output has the arrival
+code, PLC token, source password, invite code and JWT-shaped strings redacted.
 
 Contributors qualifying the dormant incoming-arrival composition run
 `./tests/local.sh incoming-arrival-live` after `up`. This creates fresh stock

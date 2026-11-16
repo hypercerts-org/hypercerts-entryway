@@ -15,7 +15,7 @@ command=${1:-help}
 mkdir -p "$artifacts"
 # Phase identity comes from the controller, never from a command or request body.
 case "$command" in
-  fresh|fresh-group|prepare|up|contracts|database-contracts|database-dialects|resilience-profiles|database-profile|browser|incoming-public-mechanisms|incoming-public-journey|incoming-arrival-live|migration|migration-resume|resilience|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|all|down|status|help) ;;
+  fresh|fresh-group|prepare|up|contracts|database-contracts|database-dialects|resilience-profiles|database-profile|browser|incoming-public-mechanisms|incoming-public-journey|incoming-goat-journey|incoming-arrival-live|migration|migration-resume|resilience|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|all|down|status|help) ;;
   *) echo 'code=UNKNOWN_PHASE'; exit 2 ;;
 esac
 printf 'phase=%s status=started\n' "$command"
@@ -108,7 +108,7 @@ case "$command" in
     (( $# > 0 )) || { echo 'fresh-group needs at least one step' >&2; exit 2; }
     for step in "$@"; do
       case "$step" in
-        browser|contracts|incoming-public-mechanisms|incoming-public-journey|database-contracts|migration|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience) ;;
+        browser|contracts|incoming-public-mechanisms|incoming-public-journey|incoming-goat-journey|database-contracts|migration|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience) ;;
         *) echo "Unknown fresh-group step: $step" >&2; exit 2 ;;
       esac
     done
@@ -222,6 +222,17 @@ case "$command" in
     # because it needs this project's access projection and mail capture.
     compose run --rm --no-deps --volume "$sandbox/incoming-access.json:/run/incoming-access.json:ro" -e INCOMING_ACCESS_PATH=/run/incoming-access.json -e "INCOMING_PROJECT=$project" -e INCOMING_PUBLIC_JOURNEY=1 browser npx --no-install playwright test --config tests/playwright.config.mjs 2>&1 | tee "$artifacts/incoming-public-journey.log" | python3 "$root/scripts/ci-summary.py"
     ;;
+  incoming-goat-journey)
+    require_state
+    prepare_incoming_access
+    # Build the patched public goat CLI from its pinned commit (tests/support/goat)
+    # and mount only the static binary; the browser container's sandbox CA keeps
+    # TLS verification on.
+    goat_dir="$sandbox/goat-client"
+    mkdir -p "$goat_dir"
+    docker --context "$DOCKER_CONTEXT" build --quiet --output "type=local,dest=$goat_dir" "$root/tests/support/goat"
+    compose run --rm --no-deps --volume "$sandbox/incoming-access.json:/run/incoming-access.json:ro" --volume "$goat_dir/goat:/usr/local/bin/goat:ro" -e INCOMING_ACCESS_PATH=/run/incoming-access.json -e "INCOMING_PROJECT=$project" -e INCOMING_GOAT_JOURNEY=1 browser npx --no-install playwright test --config tests/playwright.config.mjs 2>&1 | tee "$artifacts/incoming-goat-journey.log" | python3 "$root/scripts/ci-summary.py"
+    ;;
   migration)
     require_state
     exec 9> "$artifacts/migration.lock"
@@ -300,7 +311,7 @@ case "$command" in
     deno task sandbox status
     ;;
   *)
-    echo 'Usage: ./tests/local.sh fresh|fresh-group <steps...>|prepare|up|browser|incoming-public-mechanisms|incoming-public-journey|contracts|database-contracts|database-profile|resilience-profiles|migration|migration-resume|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience|all|status|down'
+    echo 'Usage: ./tests/local.sh fresh|fresh-group <steps...>|prepare|up|browser|incoming-public-mechanisms|incoming-public-journey|incoming-goat-journey|contracts|database-contracts|database-profile|resilience-profiles|migration|migration-resume|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience|all|status|down'
     echo 'all requires a fresh project fixture; down retains state and volumes. No implicit reset.'
     ;;
 esac

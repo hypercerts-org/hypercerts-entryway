@@ -1,0 +1,344 @@
+diff -ruN a/account_migrate_entryway.go b/account_migrate_entryway.go
+--- a/account_migrate_entryway.go
++++ b/account_migrate_entryway.go
+@@ -0,0 +1,272 @@
++package main
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"fmt"
++	"log/slog"
++	"net/http"
++	"os"
++	"strings"
++	"time"
++
++	"github.com/bluesky-social/indigo/api/agnostic"
++	comatproto "github.com/bluesky-social/indigo/api/atproto"
++	"github.com/bluesky-social/indigo/atproto/atclient"
++	"github.com/bluesky-social/indigo/atproto/syntax"
++
++	"github.com/urfave/cli/v3"
++)
++
++// entrywayHandoff holds exactly the fields Entryway's incoming migration page
++// shows for the source to sign. Nothing else is sent to signPlcOperation; the
++// page's prev and type fields are deliberately ignored.
++type entrywayHandoff struct {
++	RotationKeys        []string         `json:"rotationKeys"`
++	AlsoKnownAs         []string         `json:"alsoKnownAs"`
++	VerificationMethods *json.RawMessage `json:"verificationMethods"`
++	Services            *json.RawMessage `json:"services"`
++}
++
++// serviceBearerAuth sends one service JWT as a bearer token. It never refreshes,
++// so an Entryway 400 ExpiredToken surfaces as itself.
++type serviceBearerAuth struct{ token string }
++
++func (a *serviceBearerAuth) DoWithAuth(c *http.Client, req *http.Request, endpoint syntax.NSID) (*http.Response, error) {
++	req.Header.Set("Authorization", "Bearer "+a.token)
++	return c.Do(req)
++}
++
++// rejectEntrywayOnlyFlags keeps the stock path unchanged: the Entryway-only
++// flags are refused unless --arrival-code selects that flow.
++func rejectEntrywayOnlyFlags(cmd *cli.Command) error {
++	for _, name := range []string{"handoff", "destination-endpoint", "skip-preferences", "pause-after-import"} {
++		if cmd.IsSet(name) {
++			return fmt.Errorf("--%s requires --arrival-code (the Entryway flow)", name)
++		}
++	}
++	return nil
++}
++
++func validHandoff(h *entrywayHandoff) error {
++	empty := func(raw *json.RawMessage) bool {
++		s := strings.TrimSpace(string(*raw))
++		return s == "" || s == "null" || s == "{}" || s == "[]"
++	}
++	if len(h.RotationKeys) == 0 || len(h.AlsoKnownAs) == 0 || h.VerificationMethods == nil || empty(h.VerificationMethods) || h.Services == nil || empty(h.Services) {
++		// A missing field would make signPlcOperation copy it from the current
++		// operation and silently drop Entryway's key or service.
++		return fmt.Errorf("handoff must contain non-empty rotationKeys, alsoKnownAs, verificationMethods and services")
++	}
++	return nil
++}
++
++// runAccountMigrateEntryway is the incoming-migration flow for an Entryway
++// destination. The arrival code, the signed handoff and creation without a
++// password come from the Entryway incoming-migration contract; the stock flow
++// (password, session login, recommended credentials) is not used.
++func runAccountMigrateEntryway(ctx context.Context, cmd *cli.Command, oldClient *atclient.APIClient) error {
++	did := *oldClient.AccountDID
++	didStr := did.String()
++
++	arrivalCode := cmd.String("arrival-code")
++	if cmd.String("new-password") != "" {
++		return fmt.Errorf("--new-password must not be set with --arrival-code: Entryway creation takes no password")
++	}
++	handoffPath := cmd.String("handoff")
++	destinationEndpoint := cmd.String("destination-endpoint")
++	if handoffPath == "" || destinationEndpoint == "" {
++		return fmt.Errorf("--handoff and --destination-endpoint are required with --arrival-code")
++	}
++	handoffBytes, err := os.ReadFile(handoffPath)
++	if err != nil {
++		return fmt.Errorf("failed reading handoff: %w", err)
++	}
++	var handoff entrywayHandoff
++	if err := json.Unmarshal(handoffBytes, &handoff); err != nil {
++		return fmt.Errorf("failed parsing handoff: %w", err)
++	}
++	if err := validHandoff(&handoff); err != nil {
++		return err
++	}
++	// A trailing slash would make a refresh request hit //xrpc.
++	newHostURL := strings.TrimRight(cmd.String("pds-host"), "/")
++	destinationEndpoint = strings.TrimRight(destinationEndpoint, "/")
++	newHandle := cmd.String("new-handle")
++	plcToken := cmd.String("plc-token")
++	inviteCode := cmd.String("invite-code")
++	newEmail := cmd.String("new-email")
++
++	entryway := atclient.NewAPIClient(newHostURL)
++	entryway.Headers.Set("User-Agent", userAgentString())
++	desc, err := comatproto.ServerDescribeServer(ctx, entryway)
++	if err != nil {
++		return fmt.Errorf("failed connecting to Entryway: %w", err)
++	}
++	entrywayDID, err := syntax.ParseDID(desc.Did)
++	if err != nil {
++		return err
++	}
++	slog.Info("entryway", "serviceDID", entrywayDID, "url", newHostURL, "destinationEndpoint", destinationEndpoint)
++	entryway.Headers.Set("Entryway-Arrival-Code", arrivalCode)
++	entryway.AccountDID = &did
++
++	// service auth tokens are short lived, so each is minted right before use
++	useServiceAuth := func(lxm string) error {
++		resp, err := comatproto.ServerGetServiceAuth(ctx, oldClient, entrywayDID.String(), time.Now().Unix()+60, lxm)
++		if err != nil {
++			return fmt.Errorf("failed getting service auth token for %s: %w", lxm, err)
++		}
++		entryway.Auth = &serviceBearerAuth{token: resp.Token}
++		return nil
++	}
++
++	// 1. Source signs exactly the handoff Entryway prepared.
++	slog.Info("requesting source signature over the Entryway handoff")
++	signed, err := agnostic.IdentitySignPlcOperation(ctx, oldClient, &agnostic.IdentitySignPlcOperation_Input{
++		AlsoKnownAs:         handoff.AlsoKnownAs,
++		RotationKeys:        handoff.RotationKeys,
++		Services:            handoff.Services,
++		Token:               &plcToken,
++		VerificationMethods: handoff.VerificationMethods,
++	})
++	if err != nil {
++		return fmt.Errorf("failed requesting PLC operation signature: %w", err)
++	}
++
++	// 2. Entryway publishes only that operation.
++	if err := useServiceAuth("com.atproto.identity.submitPlcOperation"); err != nil {
++		return err
++	}
++	if err := agnostic.IdentitySubmitPlcOperation(ctx, entryway, &agnostic.IdentitySubmitPlcOperation_Input{Operation: signed.Operation}); err != nil {
++		return fmt.Errorf("failed submitting PLC operation: %w", err)
++	}
++
++	// 3. Create the paused destination account: no password.
++	slog.Info("creating account on Entryway", "handle", newHandle)
++	if err := useServiceAuth("com.atproto.server.createAccount"); err != nil {
++		return err
++	}
++	createParams := comatproto.ServerCreateAccount_Input{Did: &didStr, Handle: newHandle}
++	if newEmail != "" {
++		createParams.Email = &newEmail
++	}
++	if inviteCode != "" {
++		createParams.InviteCode = &inviteCode
++	}
++	created, err := comatproto.ServerCreateAccount(ctx, entryway, &createParams)
++	if err != nil {
++		return fmt.Errorf("failed creating new account: %w", err)
++	}
++	if created.Did != didStr {
++		return fmt.Errorf("new account DID not a match: %s != %s", created.Did, did)
++	}
++
++	// Data goes to the destination PDS endpoint with the tracked credential.
++	// Refreshing always goes to Entryway (Session.Host), never to the PDS.
++	dest := atclient.NewAPIClient(destinationEndpoint)
++	dest.Headers.Set("User-Agent", userAgentString())
++	dest.Client.Timeout = 300 * time.Second
++	dest.AccountDID = &did
++	dest.Auth = &atclient.PasswordAuth{
++		Session: atclient.PasswordSessionData{
++			AccountDID:   did,
++			AccessToken:  created.AccessJwt,
++			RefreshToken: created.RefreshJwt,
++			Host:         newHostURL,
++		},
++		RefreshCallback: func(ctx context.Context, data atclient.PasswordSessionData) {
++			slog.Info("destination session refreshed at entryway")
++		},
++	}
++
++	// 4. Migrate data.
++	slog.Info("migrating repo")
++	repoBytes, err := comatproto.SyncGetRepo(ctx, oldClient, didStr, "")
++	if err != nil {
++		return fmt.Errorf("failed exporting repo: %w", err)
++	}
++	if err := comatproto.RepoImportRepo(ctx, dest, bytes.NewReader(repoBytes)); err != nil {
++		return fmt.Errorf("failed importing repo: %w", err)
++	}
++
++	// Test-only: let the tracked access token expire so the refresh to Entryway,
++	// the retried request and the later activation are exercised.
++	if pause := cmd.Duration("pause-after-import"); pause > 0 {
++		slog.Info("pausing after import", "duration", pause)
++		select {
++		case <-time.After(pause):
++		case <-ctx.Done():
++			return ctx.Err()
++		}
++	}
++
++	if cmd.Bool("skip-preferences") {
++		// Without an AppView the stock PDS does not register the preferences routes.
++		slog.Warn("skipping preferences by request")
++	} else {
++		slog.Info("migrating preferences")
++		prefResp, err := agnostic.ActorGetPreferences(ctx, oldClient)
++		if err != nil {
++			return fmt.Errorf("failed fetching old preferences: %w", err)
++		}
++		if err := agnostic.ActorPutPreferences(ctx, dest, &agnostic.ActorPutPreferences_Input{Preferences: prefResp.Preferences}); err != nil {
++			return fmt.Errorf("failed importing preferences to the paused destination: %w", err)
++		}
++	}
++
++	slog.Info("migrating blobs")
++	blobCursor := ""
++	for {
++		listResp, err := comatproto.SyncListBlobs(ctx, oldClient, blobCursor, didStr, 100, "")
++		if err != nil {
++			return fmt.Errorf("failed listing blobs: %w", err)
++		}
++		for _, blobCID := range listResp.Cids {
++			blobBytes, err := comatproto.SyncGetBlob(ctx, oldClient, blobCID, didStr)
++			if err != nil {
++				return fmt.Errorf("failed downloading blob %s: %w", blobCID, err)
++			}
++			if _, err := comatproto.RepoUploadBlob(ctx, dest, bytes.NewReader(blobBytes)); err != nil {
++				return fmt.Errorf("failed uploading blob %s: %w", blobCID, err)
++			}
++			slog.Info("transferred blob", "cid", blobCID, "size", len(blobBytes))
++		}
++		if listResp.Cursor == nil || *listResp.Cursor == "" {
++			break
++		}
++		blobCursor = *listResp.Cursor
++	}
++
++	statusResp, err := comatproto.ServerCheckAccountStatus(ctx, dest)
++	if err != nil {
++		return fmt.Errorf("failed checking account status: %w", err)
++	}
++	slog.Info("account migration status", "status", statusResp)
++	if statusResp.Activated {
++		return fmt.Errorf("destination is already active before activation was requested")
++	}
++
++	// The identity already moved in step 2, so the stock recommended-credentials
++	// signing and submission are skipped.
++
++	// 5. Finalize: activation reaches Entryway through the destination PDS, and
++	// the source is deactivated only after activation is confirmed.
++	slog.Info("activating new account")
++	if err := comatproto.ServerActivateAccount(ctx, dest); err != nil {
++		return fmt.Errorf("failed activating new host: %w", err)
++	}
++	statusResp, err = comatproto.ServerCheckAccountStatus(ctx, dest)
++	if err != nil {
++		return fmt.Errorf("failed confirming activation: %w", err)
++	}
++	if !statusResp.Activated {
++		return fmt.Errorf("destination is not active after activation; leaving the source active")
++	}
++	if err := comatproto.ServerDeactivateAccount(ctx, oldClient, &comatproto.ServerDeactivateAccount_Input{}); err != nil {
++		return fmt.Errorf("failed deactivating old host: %w", err)
++	}
++	slog.Info("account migration completed")
++	return nil
++}
+diff -ruN a/account_migrate.go b/account_migrate.go
+--- a/account_migrate.go
++++ b/account_migrate.go
+@@ -34,10 +34,9 @@
+ 			Sources:  cli.EnvVars("NEW_ACCOUNT_HANDLE"),
+ 		},
+ 		&cli.StringFlag{
+-			Name:     "new-password",
+-			Required: true,
+-			Usage:    "password on new PDS",
+-			Sources:  cli.EnvVars("NEW_ACCOUNT_PASSWORD"),
++			Name:    "new-password",
++			Usage:   "password on new PDS (not used with --arrival-code or ENTRYWAY_ARRIVAL_CODE)",
++			Sources: cli.EnvVars("NEW_ACCOUNT_PASSWORD"),
+ 		},
+ 		&cli.StringFlag{
+ 			Name:     "plc-token",
+@@ -53,11 +52,40 @@
+ 			Name:  "new-email",
+ 			Usage: "email address for new account",
+ 		},
++		&cli.StringFlag{
++			Name:    "arrival-code",
++			Usage:   "Entryway incoming-migration arrival code; selects the Entryway flow (--pds-host is Entryway)",
++			Sources: cli.EnvVars("ENTRYWAY_ARRIVAL_CODE"),
++		},
++		&cli.StringFlag{
++			Name:  "handoff",
++			Usage: "JSON file with the Entryway handoff (rotationKeys, alsoKnownAs, verificationMethods, services)",
++		},
++		&cli.BoolFlag{
++			Name:  "skip-preferences",
++			Usage: "Entryway flow: do not migrate preferences (without an AppView the stock PDS has no preferences routes)",
++		},
++		&cli.DurationFlag{
++			Name:  "pause-after-import",
++			Usage: "Entryway flow, test only: sleep after the repo import so the tracked access token expires",
++		},
++		&cli.StringFlag{
++			Name:  "destination-endpoint",
++			Usage: "URL of the destination PDS that receives repo, blobs and activation (Entryway flow)",
++		},
+ 	},
+ 	Action: runAccountMigrate,
+ }
+ 
+ func runAccountMigrate(ctx context.Context, cmd *cli.Command) error {
++	if cmd.String("arrival-code") == "" {
++		if cmd.String("new-password") == "" {
++			return fmt.Errorf("--new-password is required without --arrival-code (or set ENTRYWAY_ARRIVAL_CODE for the Entryway flow)")
++		}
++		if err := rejectEntrywayOnlyFlags(cmd); err != nil {
++			return err
++		}
++	}
+ 	// NOTE: this could check rev / commit before and after and ensure last-minute content additions get lost
+ 	oldClient, err := loadAuthClient(ctx, cmd)
+ 	if err == ErrNoAuthSession {
+@@ -80,6 +108,9 @@
+ 	if err != nil {
+ 		return err
+ 	}
++	if cmd.String("arrival-code") != "" {
++		return runAccountMigrateEntryway(ctx, cmd, oldClient)
++	}
+ 	newPassword := cmd.String("new-password")
+ 	plcToken := cmd.String("plc-token")
+ 	inviteCode := cmd.String("invite-code")

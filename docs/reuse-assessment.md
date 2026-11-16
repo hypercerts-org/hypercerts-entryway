@@ -102,6 +102,33 @@ public journey qualification is separate; see the
 contract gates in
 [incoming migration](incoming-migration.md#contract-qualification-gates-for-implementers).
 
+### goat test client provenance
+
+The `incoming-goat-journey` live test builds the public goat CLI as a test-only
+third-party client stack. It is not shipped or reused in `src/`. goat's CLI and
+session handling and indigo's XRPC and auth client are independent code; the
+patch, including the whole Entryway migration flow, is authored in this repository
+against our contract.
+
+- Upstream: <https://github.com/bluesky-social/goat>, tag `v0.2.9`, commit
+  `f6a214a184a206241ace7adbb88b43c620e4ff61`, licensed MIT or Apache-2.0.
+- Handling: `tests/support/goat/Dockerfile` fetches that commit, verifies it,
+  applies `tests/support/goat/entryway-incoming.patch` and runs `go build` in the
+  `golang:1.27.3-alpine` base image. Dependencies resolve from goat's `go.sum`
+  (indigo `a41b056300f5`). The upstream tree is not vendored.
+- Patch: adds `account migrate --arrival-code/--handoff/--destination-endpoint`
+  plus `--skip-preferences` and the test-only `--pause-after-import` (new
+  `account_migrate_entryway.go`), and makes `--new-password` optional in
+  `account_migrate.go`, rejecting it with an arrival code and rejecting the new
+  flags without one. The Entryway path requires a complete handoff, signs exactly
+  its fields, submits the operation and creates the account with the arrival code
+  header and no password, transfers data to the destination endpoint with the
+  tracked credential (refreshing at Entryway), skips the stock
+  recommended-credentials cutover, activates through the destination, confirms
+  activation and then deactivates the source. Blob failures are fatal there.
+- Status: reusable as a harness only; stock unmodified goat does not support the
+  Entryway surface.
+
 ### Client-managed migration design reference
 
 For maintainers implementing incoming migration, the user accepted the Rust-like
