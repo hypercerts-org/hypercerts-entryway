@@ -15,7 +15,9 @@ import { waitForStockPlcMessage } from "../support/helpers/stock-plc-mailpit.mjs
 // built from its pinned commit (tests/support/pds-moover) and served at its own
 // sandbox route, migrates a stock source account into Entryway entirely in the
 // browser. Entryway is reached through the sandbox's CORS ingress, so Chromium
-// enforces real CORS. Arrival codes, PLC tokens, passwords and JWTs are set
+// checks the CORS headers on the actual responses. Playwright answers the
+// preflights itself while a route is installed; the ingress preflight is
+// asserted by entryway-ingress-cors.spec.mjs in the browser suite. Arrival codes, PLC tokens, passwords and JWTs are set
 // through evaluate() so Playwright step titles never carry them, and are never
 // printed.
 let access;
@@ -55,7 +57,8 @@ const cors = (request) => ({
 // built UI cannot be pointed away from (plc.directory, slingshot, Cloudflare DoH).
 // They are answered here from the sandbox's own PLC directory and PDS, exactly
 // as the upstream mock e2e does for its mock. Every request to a sandbox host
-// continues untouched to the real service, so CORS stays enforced by Chromium.
+// continues to the real service, so Chromium still checks the CORS headers of
+// the real responses (not the preflights, which Playwright answers).
 // Anything else is aborted, so nothing leaves the sandbox.
 async function installNetwork(page) {
   const sandboxJson = async (url) => {
@@ -75,8 +78,6 @@ async function installNetwork(page) {
     return route.abort();
   });
   await page.route("https://plc.directory/**", async (route, request) => {
-    if (request.method() === "OPTIONS")
-      return route.fulfill({ status: 204, headers: cors(request) });
     const url = new URL(request.url());
     const response = await route.fetch({
       url: `${access.plcUrl}${url.pathname}${url.search}`,
@@ -385,75 +386,4 @@ test("the destination is active and serves the state; the source is deactivated"
   );
   ok(sourceStatus, "source status");
   expect(json(sourceStatus).active).toBe(false);
-});
-
-test("the ingress adds CORS to /xrpc and the well-known handle route only", async () => {
-  const origin = moover;
-  const header = (response, name) => response.headers.get(name);
-  const arrivalHeaders =
-    "content-type,entryway-arrival-code,authorization,dpop";
-  for (const path of [
-    "/xrpc/com.atproto.server.createAccount",
-    "/.well-known/atproto-did",
-  ]) {
-    const preflight = await fetch(new URL(path, config.issuer), {
-      method: "OPTIONS",
-      headers: {
-        origin,
-        "access-control-request-method": "POST",
-        "access-control-request-headers": arrivalHeaders,
-      },
-    });
-    expect(preflight.status, `${path} preflight`).toBe(204);
-    expect(header(preflight, "access-control-allow-origin")).toBe("*");
-    expect(header(preflight, "access-control-allow-headers")).toBe(
-      arrivalHeaders,
-    );
-    expect(header(preflight, "access-control-max-age")).toBe("86400");
-    expect(header(preflight, "access-control-allow-credentials")).toBeNull();
-  }
-  // Duplicate headers would be joined with ", " by fetch, so exact equality
-  // proves a single value.
-  const xrpc = await fetch(
-    new URL("/xrpc/com.atproto.server.describeServer", config.issuer),
-    { headers: { origin } },
-  );
-  expect(xrpc.status).toBe(200);
-  expect(header(xrpc, "access-control-allow-origin")).toBe("*");
-  expect(header(xrpc, "access-control-expose-headers")).toBe(
-    "DPoP-Nonce, WWW-Authenticate, Retry-After",
-  );
-  const wellKnown = await fetch(
-    new URL("/.well-known/atproto-did", config.issuer),
-    { headers: { origin }, redirect: "manual" },
-  );
-  expect(header(wellKnown, "access-control-allow-origin")).toBe("*");
-  // Entryway's own OAuth CORS is not doubled by the ingress.
-  const oauth = [
-    await fetch(new URL("/oauth/jwks", config.issuer), { headers: { origin } }),
-    await fetch(new URL("/oauth/par", config.issuer), {
-      method: "OPTIONS",
-      headers: {
-        origin,
-        "access-control-request-method": "POST",
-        "access-control-request-headers": "content-type,dpop",
-      },
-    }),
-  ];
-  for (const response of oauth) {
-    const value = header(response, "access-control-allow-origin");
-    expect(value, `${response.url} allow-origin`).toBeTruthy();
-    expect(value.includes(","), `${response.url} single allow-origin`).toBe(
-      false,
-    );
-  }
-  // Same-origin pages get none.
-  for (const path of ["/incoming", "/login"]) {
-    const page = await fetch(new URL(path, config.issuer), {
-      headers: { origin },
-      redirect: "manual",
-    });
-    expect(header(page, "access-control-allow-origin"), `${path}`).toBeNull();
-    expect(header(page, "access-control-expose-headers")).toBeNull();
-  }
 });

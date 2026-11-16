@@ -36,32 +36,32 @@ Run these from the repository root. `npm run test:e2e:atmosphere` is an optional
 alias for `./tests/local.sh fresh`; this host command only starts shell orchestration
 and requires no host dependency install:
 
-| Command                                       | Purpose and precondition                                                                                                                                                                                  |
-| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `./tests/local.sh fresh`                      | Repeatable full run as three parallel disposable groups; cleanup follows success/failure                                                                                                                  |
-| `./tests/local.sh fresh-group <steps>`        | Run the named steps in order in one disposable project, for example `fresh-group browser contracts`                                                                                                       |
-| `./tests/local.sh prepare`                    | Install sandbox CLI dependencies and create/check project configuration                                                                                                                                   |
-| `./tests/local.sh up`                         | Build/start the sandbox and build test/browser images after prepare                                                                                                                                       |
-| `./tests/local.sh status`                     | Inspect this project's services after prepare                                                                                                                                                             |
-| `./tests/local.sh database-contracts`         | Run both database contract dialects, then the separate PostgreSQL login/restart/restore profile; see [database configuration](database.md)                                                                |
-| `./tests/local.sh database-profile`           | Run the one-node PostgreSQL application profile in its own fresh project                                                                                                                                  |
-| `./tests/local.sh resilience-profiles`        | Run all three fresh deployment profiles and require complete bounded receipts; see [profile contract](deployment-profiles.md)                                                                             |
-| `./tests/local.sh contracts`                  | Run imported contract scenarios in the test container after up                                                                                                                                            |
-| `./tests/local.sh browser`                    | Run browser scenarios after up                                                                                                                                                                            |
-| `./tests/local.sh incoming-public-mechanisms` | Bounded stock public-mechanism contract test after up: standalone signup, Mailpit, PLC signing, inactive destination and reservation; offline checks plus live-gated cases, not a migration qualification |
-| `./tests/local.sh incoming-goat-journey`      | Second incoming client after up: the public goat CLI, patched to the Entryway incoming contract, migrates a fresh stock source account; see below                                                         |
-| `./tests/local.sh incoming-moover-journey`    | Third incoming client after up: the PDS MOOver web UI, driven in Chromium through the sandbox CORS ingress, migrates a fresh stock source account; see below                                             |
-| `./tests/local.sh migration`                  | Fresh synthetic external-source migration, including two Entryway restarts                                                                                                                                |
-| `./tests/local.sh migration-resume`           | Resume a reviewed interrupted fixture; inspect state before using                                                                                                                                         |
-| `./tests/local.sh reverify`                   | Check an already completed migration fixture                                                                                                                                                              |
-| `./tests/local.sh resilience`                 | Disruptive outage/restart checks after other suites finish; run alone                                                                                                                                     |
-| `./tests/local.sh all`                        | Prepare, up, browser, contracts, migration, profile, PLC recovery, crash, managed recovery, authority drills, resilience; requires fresh fixture                                                          |
-| `./tests/local.sh interop-profile`            | Raw product profile; exit 2 retains inherited missing moderation requirement                                                                                                                              |
-| `./tests/local.sh plc-recovery`               | Five named synthetic PLC/cache recovery cases in the selected project                                                                                                                                     |
-| `./tests/local.sh process-crash`              | Two actual SIGKILL boundaries, exit 137 and post-recovery PDS writes; before-pds waits out the default 120 s lease, after-pds uses `OPERATION_LEASE_MS=15000`                                             |
-| `./tests/local.sh managed-recovery`           | Two real managed-migration modes: consumed successful response and rejected request followed by observe-to-retry authorization; pending/reload UI and preserved record/blob/session/PDS-write assertions  |
-| `./tests/local.sh authority-drills`           | Fresh two-PDS identities, bounded backup/restore and issuer/fleet/restored key checks                                                                                                                     |
-| `./tests/local.sh down`                       | Stop this project; retain volumes and state                                                                                                                                                               |
+| Command                                       | Purpose and precondition                                                                                                                                                                                   |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `./tests/local.sh fresh`                      | Repeatable full run as three parallel disposable groups; cleanup follows success/failure                                                                                                                   |
+| `./tests/local.sh fresh-group <steps>`        | Run the named steps in order in one disposable project, for example `fresh-group browser contracts`                                                                                                        |
+| `./tests/local.sh prepare`                    | Install sandbox CLI dependencies and create/check project configuration                                                                                                                                    |
+| `./tests/local.sh up`                         | Build/start the sandbox and build test/browser images after prepare                                                                                                                                        |
+| `./tests/local.sh status`                     | Inspect this project's services after prepare                                                                                                                                                              |
+| `./tests/local.sh database-contracts`         | Run both database contract dialects, then the separate PostgreSQL login/restart/restore profile; see [database configuration](database.md)                                                                 |
+| `./tests/local.sh database-profile`           | Run the one-node PostgreSQL application profile in its own fresh project                                                                                                                                   |
+| `./tests/local.sh resilience-profiles`        | Run all three fresh deployment profiles and require complete bounded receipts; see [profile contract](deployment-profiles.md)                                                                              |
+| `./tests/local.sh contracts`                  | Run imported contract scenarios in the test container after up                                                                                                                                             |
+| `./tests/local.sh browser`                    | Run browser scenarios after up                                                                                                                                                                             |
+| `./tests/local.sh incoming-public-mechanisms` | Bounded stock public-mechanism contract test after up: standalone signup, Mailpit, PLC signing, inactive destination and reservation; offline checks plus live-gated cases, not a migration qualification  |
+| `./tests/local.sh incoming-goat-journey`      | Second incoming client after up: the public goat CLI, patched to the Entryway incoming contract, migrates a fresh stock source account; see below                                                          |
+| `./tests/local.sh incoming-moover-journey`    | Third incoming client after up: a fork of the PDS MOOver web UI carrying the unmerged Entryway mode, driven in Chromium through the sandbox CORS ingress, migrates a fresh stock source account; see below |
+| `./tests/local.sh migration`                  | Fresh synthetic external-source migration, including two Entryway restarts                                                                                                                                 |
+| `./tests/local.sh migration-resume`           | Resume a reviewed interrupted fixture; inspect state before using                                                                                                                                          |
+| `./tests/local.sh reverify`                   | Check an already completed migration fixture                                                                                                                                                               |
+| `./tests/local.sh resilience`                 | Disruptive outage/restart checks after other suites finish; run alone                                                                                                                                      |
+| `./tests/local.sh all`                        | Prepare, up, browser, contracts, migration, profile, PLC recovery, crash, managed recovery, authority drills, resilience; requires fresh fixture                                                           |
+| `./tests/local.sh interop-profile`            | Raw product profile; exit 2 retains inherited missing moderation requirement                                                                                                                               |
+| `./tests/local.sh plc-recovery`               | Five named synthetic PLC/cache recovery cases in the selected project                                                                                                                                      |
+| `./tests/local.sh process-crash`              | Two actual SIGKILL boundaries, exit 137 and post-recovery PDS writes; before-pds waits out the default 120 s lease, after-pds uses `OPERATION_LEASE_MS=15000`                                              |
+| `./tests/local.sh managed-recovery`           | Two real managed-migration modes: consumed successful response and rejected request followed by observe-to-retry authorization; pending/reload UI and preserved record/blob/session/PDS-write assertions   |
+| `./tests/local.sh authority-drills`           | Fresh two-PDS identities, bounded backup/restore and issuer/fleet/restored key checks                                                                                                                      |
+| `./tests/local.sh down`                       | Stop this project; retain volumes and state                                                                                                                                                                |
 
 For the optional persistent commands, the default generated checkout is
 `tests/.runtime/atmosphereinabox`. `down` retains state; it does not reset fixtures.
@@ -209,13 +209,13 @@ code, PLC token, source password, invite code and JWT-shaped strings redacted.
 ./tests/local.sh incoming-moover-journey
 ```
 
-After `up`, this drives the [PDS MOOver](https://tangled.org/kandake.africa/pds-moover)
-web UI in Chromium. The command builds the UI from its pinned commit
+After `up`, this drives a fork of the [PDS MOOver](https://tangled.org/pds.dad/pds-moover)
+web UI that carries the unmerged Entryway mode, in Chromium. The command builds the UI from its pinned commit
 (`tests/support/pds-moover/Dockerfile`; provenance in the
 [reuse assessment](reuse-assessment.md#pds-moover-test-client-provenance)) and starts it
 as the `pds-moover` sandbox service (compose profile `moover`, so `up` never builds
-it). Its route is `https://moover.atmosbox.internal`: the OAuth client library
-refuses client IDs on `.test`, and the source PDS fetches the client metadata over
+it). Its route is `https://moover.atmosbox.internal`: the stock PDS
+authorization server refuses client IDs on `.test`, and the source PDS fetches the client metadata over
 the sandbox CA.
 
 The spec creates a stock source account with a record and a blob, prepares the
@@ -229,26 +229,29 @@ the destination endpoint and handle, and a deactivated source.
 The stock PDS answers `deactivateAccount` from an OAuth session with 403 (`OAuth
 credentials are not supported for this endpoint`), so the UI documents the outcome and
 offers its password form for the old account. The spec uses that form and requires
-the UI to report the source as deactivated. The UI prefills the optional email
-field with the old account's email, which Entryway refuses when it differs from the
-verified one (400 `InvalidAccount`, after the PLC handoff was submitted), so the
-spec empties the field as the field's own hint says.
+the UI to report the source as deactivated. In Entryway mode the UI leaves the optional email field empty and the spec asserts
+it, because Entryway binds the email verified on its own page.
 
 The built UI reaches plc.directory, slingshot and Cloudflare DoH at fixed public
 addresses. The spec answers those three from the sandbox PLC directory and PDS with
 Playwright routing (the same approach as the upstream mock e2e) and aborts every
-other non-sandbox request; requests to sandbox hosts are untouched, so Chromium
-enforces real CORS against Entryway. Typed secrets are set through `evaluate`, so
+other non-sandbox request. Requests to sandbox hosts continue to the real service,
+so Chromium checks the CORS headers on the real responses. While a page route is
+installed Playwright answers the browser's preflights itself, so the journey does
+not exercise the ingress preflight. Typed secrets are set through `evaluate`, so
 no Playwright step title carries them, and none are printed.
 
-The same spec checks the ingress, a Caddy proxy in front of Entryway
-(`tests/support/entryway-ingress.Caddyfile`, the block from
-the "Browser access to XRPC" section of the deployment profiles guide with only the
-site address and upstream changed, plus two lines for the sandbox gateway's extra
-proxy hop). All Entryway routes in the sandbox go through it. It asserts a preflight
-carrying `entryway-arrival-code` on `/xrpc/*` and `/.well-known/atproto-did`,
-`Access-Control-Expose-Headers` on `/xrpc/*`, one `Access-Control-Allow-Origin` on
-`/oauth/*`, and none on `/incoming` or `/login`.
+The sandbox puts a Caddy proxy in front of Entryway
+(`tests/support/entryway-ingress.Caddyfile`, the block from the "Browser access to
+XRPC" section of the deployment profiles guide with only the site address changed,
+plus lines for the sandbox gateway's extra proxy hop). All Entryway routes in the
+sandbox go through it. The `browser` suite asserts the ingress directly with plain
+requests (`tests/browser/entryway-ingress-cors.spec.mjs`): a preflight carrying
+`entryway-arrival-code` on `/xrpc/*` and `/.well-known/atproto-did`,
+`Access-Control-Expose-Headers` and one `Access-Control-Allow-Origin` on `/xrpc/*`,
+one `Access-Control-Allow-Origin` on `/oauth/*`, and none on `/incoming` or `/login`.
+The journey command always removes the `pds-moover` container, and `down` and
+`fresh-group` cleanup fail when any project container survives teardown.
 
 Contributors qualifying the dormant incoming-arrival composition run
 `./tests/local.sh incoming-arrival-live` after `up`. This creates fresh stock

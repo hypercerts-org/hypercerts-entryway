@@ -1,9 +1,11 @@
 # Test ingress in front of Entryway: the documented browser-access proxy from
 # docs/deployment-profiles.md ("Browser access to XRPC"). The atproto_cors
 # snippet is copied verbatim. The sandbox gateway terminates TLS and forwards
-# to this plain-HTTP site, so the site address and upstream differ, and the two
-# additions marked below exist only because the gateway is a second proxy hop.
+# to this plain-HTTP site, so the site address differs, and the additions marked
+# below exist only because the gateway is a second proxy hop or the container
+# needs no admin endpoint.
 {
+	# Not in the documented block: no admin endpoint in the test container.
 	admin off
 	servers {
 		# Keep the gateway's forwarded protocol and host (added for the extra hop).
