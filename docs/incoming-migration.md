@@ -605,8 +605,10 @@ activateArrivalAsUser(request, otp, {operationId, expectedVersion})
 activateArrivalWithCredential(bearer) -> {state: "active", operationId, version}
 ```
 
-The C3 `owner` is acquired inside each callable (`resumePending` on `arrival:<did>`)
-because ownership is scoped to the running operation. `issueArrivalSession` takes the
+The C3 `owner` is acquired inside each callable by resuming the arrival's recorded
+claim operation (the one taken when its handoff was admitted) because ownership is
+scoped to the running operation. An unclaimed arrival has none: it gives
+`OperationNoLongerPending` without taking a lease. `issueArrivalSession` takes the
 saved user from the normalized browser principal. `issueCreationSession` is the
 cookie-less continuation for the standard `createAccount` response, which carries no
 browser cookie (C1). Its saved user is never supplied: it is the user saved on the
@@ -684,6 +686,8 @@ replaced by an approved safe retry), completes the arrival checkpoint through th
 storage primitive (which also marks the local account active), and completes the ownership claim. A
 lost acknowledgement keeps the attempt unresolved: backend status alone never
 completes, and only isolation/drain recovery allows the exact operation to finish.
+An acknowledged receipt whose backend was paused again before the local commit is
+resolved the same way, through the activation receipt approval in C5.
 Retrying a completed arrival as the saved user returns the committed result. Activation
 does not fence in-flight imports and makes no inventory or finality claim (C4).
 
@@ -1230,10 +1234,16 @@ fenced execution that observes remote state before acknowledging. It is a candid
 reuse for public arrival, not automatic coverage.
 
 Activation receipts. When the destination acknowledged activation but Entryway did
-not observe the active state, operator recovery may approve that acknowledged but
-unobserved receipt. The approval authorizes either observing the backend state or,
-only where the shared-operation rules deem it safe, retrying. Without approval the
-arrival retains `OperationRecoveryRequired`.
+not observe the active state (for example the local commit failed and the backend was
+paused again before the retry), operator recovery may approve that acknowledged but
+unobserved receipt, once the dispatcher is no longer running it. The shared-operation
+status reports it as `recovery-required` and the same isolation and drain
+attestations apply. `observe` lets the next retry complete only if the backend is
+observed active for this DID and handle, without resending. An `observe` to
+`retry-if-safe` upgrade also lets it resend the activation, only if the backend is
+observed paused; the replaced receipt's association settles with the new one. Only
+activation receipts have this approval; every other acknowledged receipt is final.
+Without approval the arrival retains `OperationRecoveryRequired`.
 
 Cancellation safe point. Cancellation is safe exactly while the arrival is
 unclaimed, because no allocation intent, remote reservation or admitted handoff exists. Once a

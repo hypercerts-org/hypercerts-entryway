@@ -161,6 +161,14 @@ export function createArrivalActivation({
     );
     if (!move)
       throw recoveryRequired("The saved destination move is not durable");
+    // A host removed or moved since placement is the documented conflict, and
+    // is decided before any backend client is built for it.
+    if (placement(saved.pdsId)?.url !== saved.endpoint)
+      throw new DomainError(
+        "OperationConflict",
+        409,
+        "Arrival placement changed",
+      );
     const target = backend(saved);
     const intentFacts = { cid: move.cid, did: saved.did, step: activationStep };
     const descriptor = {

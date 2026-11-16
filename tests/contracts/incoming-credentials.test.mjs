@@ -5,6 +5,7 @@ import {
   fixture,
   admitProvisioning,
 } from "../support/helpers/incoming-arrival-fixture.mjs";
+import { createArrivalOwner } from "../../dist/src/features/external-migration/arrival-owner.js";
 import { hashPassword } from "../../dist/src/authentication/password-crypto.mjs";
 import { createAccountPrimitives } from "../../dist/src/accounts/primitives.mjs";
 import {
@@ -754,3 +755,24 @@ for (const [name, statement] of [
     );
     assert.equal((await families(f)).length, 0);
   });
+
+test("resuming an unclaimed arrival is no longer pending and takes no lease", async (t) => {
+  const f = await fixture(t);
+  const prepared = await f.prepare();
+  const owner = createArrivalOwner({
+    arrivals: f.arrivals,
+    ownership: f.ownership,
+  });
+  const aggregate = await owner.read(prepared.operationId, f.principal.userId);
+  assert.equal(aggregate.arrival.claimOperationId, null);
+  let worked = false;
+  await assert.rejects(
+    owner.resume(aggregate.arrival, async () => {
+      worked = true;
+    }),
+    hasCode("OperationNoLongerPending"),
+  );
+  assert.equal(worked, false);
+  for (const table of ["operation_admissions", "authority_operations"])
+    assert.equal((await query(f.db, `SELECT * FROM ${table}`)).length, 0);
+});
