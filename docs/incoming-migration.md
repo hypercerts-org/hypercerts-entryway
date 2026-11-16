@@ -482,15 +482,13 @@ used only to inspect public facts. Preparation preserves the existing ordered
 rotation authority and appends the Entryway hot key only when absent; invalid or
 overfull lists fail rather than being reordered or truncated.
 
-The callable persists arrival authority and a pending `arrival:<did>` ownership
-checkpoint before allocation. The saved allocation intent precedes the fixed-PDS
-reservation request, and its validated public result precedes the one-time code
-response. Failed or lost allocation responses retain the saved placement and
-obligation. Replaying preparation cannot recover a stored code; continuation must
-use the saved arrival lifecycle rather than allocate another placement. These
-checks establish preparation state, not source DID ownership, repository finality
-or activation readiness. C4 design is accepted; activation implementation and
-public exposure remain deferred.
+The callable persists an unclaimed preparation through `createArrival`, which
+replaces the user's earlier one. It takes no `arrival:<did>` claim and reserves no
+repository key, handle, email or invitation, so a lost response is recovered by
+preparing again. Replaying preparation cannot recover a stored code. These checks
+establish preparation state, not source DID ownership, repository finality or
+activation readiness. C4 design is accepted; activation implementation and public
+exposure remain deferred.
 
 ### Development: authenticated admission and saved continuation
 
@@ -505,7 +503,10 @@ continueCreation(request, operationId)
 These are internal callables, not mounted routes. Each loads the normalized verified
 browser principal and checks origin/CSRF. Its saved user ID selects the arrival;
 `claim.resource` is the separate `arrival:<did>` ownership resource, never a user ID.
-The same pending preparation ownership intent is reacquired and fenced before work.
+Handoff admission verifies the source JWT and validates the handoff before any
+lease, then takes the claim with `claimArrival` under `arrival:<did>`. The claim's
+request digest is `{did, operationId}`, built by one helper, so another arrival can
+never resume it. Continuations resume that claim by its recorded operation ID.
 
 Fresh handoff bodies must be exactly `{operation}` with the signed object. Creation
 admission supports stock `handle` plus optional `did`, `email` and `inviteCode`.
@@ -527,8 +528,10 @@ issuer/JTI and the server digest enter replay storage. Valid public source histo
 is identity state, not ownership proof.
 
 The signed handoff is validated against saved predecessor, source facts and ordered
-custody. Admission and immutable signed operation/CID commit together through the
-same database before dispatch. Creation admission calls the existing real invitation
+custody. The claim, the replay binding, the immutable signed operation/CID and the
+pending `arrival-claimed` checkpoint commit in one transaction before dispatch; a
+failure leaves the DID unclaimed. Creation admission on an unclaimed arrival is
+refused with `OperationRecoveryRequired` before any write. Creation admission calls the existing real invitation
 producer in that database transaction, passing its raw invite transiently. Existing
 registration invitation inventory/reservation storage is unchanged; no raw invite,
 arrival code or bearer is copied into new incoming durable DTOs or logs.
@@ -545,8 +548,11 @@ not caller-authorized replacements.
 For contributors continuing an admitted creation, `continueCreation` now provisions
 from the saved browser owner and accepted creation admission. It does not require
 another source JWT or arrival code. It validates the saved signed handoff and the
-configured canonical head, signs the actual destination handle, endpoint and reserved
-repository key, and persists the exact signed move before ordinary PDS creation.
+configured canonical head. Once the handoff is canonical it reserves the repository
+key under the claim, through `ownership.dispatch`, so a lost reservation response
+takes the operator recovery path. It then signs the actual destination handle,
+endpoint and reserved repository key, and persists the exact signed move before
+ordinary PDS creation.
 Retries reuse that move rather than signing another. Only the exact saved handoff
 or saved move is a permitted canonical head; an unrelated descendant stays pending.
 
@@ -559,7 +565,17 @@ with `com.atproto.admin.updateSubjectStatus` using `repoRef` and `deactivated.ap
 set to true, not an account token. Generic creation and pause attempts are associated
 under the persisted arrival resource and live fence. Lost responses still require
 isolation/drain approval before observation can settle the acknowledged receipt.
-These associations do not mark or clear repository-allocation uncertainty.
+The observation reports whether a creation or pause was applied, certainly not
+applied, or neither. Creation is not applied only when the saved handoff is still
+the canonical head and no backend account exists; pause is not applied while the
+backend is active. Only that observation lets an operator's `retry-if-safe`, or
+`observe` followed by `retry-if-safe`, resend the effect. An approved retry replaces
+the receipt, and every superseded association settles with the applied effect so
+binding is not blocked. These associations do not mark or clear
+repository-allocation uncertainty.
+
+Recovery selection (`reconcile`) lives in the external-migration feature beside the
+continuations; composition only supplies the saved user.
 
 Binding the saved user and completing the invitation share one database transaction.
 A bound pending retry returns `{state: "pending", operationId, version}` without

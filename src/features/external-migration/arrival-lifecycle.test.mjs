@@ -14,10 +14,7 @@ import { createArrivalStorage } from "../../../dist/src/database/drizzle/migrati
 import { createOperationOwnershipStore } from "../../../dist/src/database/drizzle/operation-ownership.js";
 import { validateIncomingHandoff } from "../../../dist/src/plc/policy.js";
 import { createIncomingAuthorization } from "../../../dist/src/features/external-migration/incoming-authorization.js";
-import {
-  createArrivalPreparation,
-  generateArrivalCode,
-} from "../../../dist/src/features/external-migration/prepare-arrival.js";
+import { generateArrivalCode } from "../../../dist/src/features/external-migration/prepare-arrival.js";
 
 const hosts = [
   { id: "pds1", url: "https://pds1.example.test" },
@@ -132,70 +129,50 @@ async function fixture() {
     leaseMs: 120_000,
   });
   await ownership.bindResource(claim, `arrival:${did}`);
-  return { db, arrivals, ownership, authority, code, arrival, claim };
+  // The claim, not preparation, holds the DID.
+  const claimed = await arrivals.claimArrival(claim, arrival.version, {
+    operationId: arrival.operationId,
+    did,
+  });
+  return {
+    db,
+    arrivals,
+    ownership,
+    authority,
+    code,
+    arrival: { ...arrival, version: claimed.version },
+    claim,
+  };
 }
 
-test("preparation journals the allocation intent before reserving and persists the public key", async () => {
+test("a lost reservation response retains the saved intent and cannot be re-placed", async () => {
   const { db, arrivals, arrival, claim } = await fixture();
-  const calls = [];
-  const preparation = createArrivalPreparation({
-    arrivals,
-    reserveSigningKey: async (request) => {
-      calls.push(request);
-      assert.deepEqual(
-        await query(db, "SELECT signing_key FROM arrival_reservations"),
-        [{ signing_key: null }],
-      );
-      return (await Secp256k1Keypair.create({ exportable: true })).did();
-    },
-  });
-  const reserved = await preparation.reserve(claim, arrival.version, arrival);
-  assert.equal(reserved.version, arrival.version + 2);
-  assert.deepEqual(calls, [{ did, pdsId: "pds1", endpoint }]);
-  assert.equal(
-    (await query(db, "SELECT signing_key FROM arrival_reservations"))[0]
-      .signing_key,
-    reserved.signingKey,
+  const placement = {
+    operationId: "op-1",
+    did,
+    pdsId: "pds1",
+    endpoint,
+  };
+  const intent = await arrivals.recordAllocationIntent(
+    claim,
+    arrival.version,
+    placement,
   );
-  // An accepted key is consumed as saved and never replaced by a second call.
-  const reused = await preparation.reserve(claim, reserved.version, {
-    ...arrival,
-    signingKey: reserved.signingKey,
-  });
-  assert.equal(reused.signingKey, reserved.signingKey);
-  assert.equal(calls.length, 1);
-});
-
-test("a failed reservation response retains the saved intent and dispatches no placement change", async () => {
-  const { db, arrivals, arrival, claim } = await fixture();
-  let calls = 0;
-  const preparation = createArrivalPreparation({
-    arrivals,
-    reserveSigningKey: async () => {
-      calls += 1;
-      throw new Error("lost reservation response");
-    },
-  });
-  await assert.rejects(
-    preparation.reserve(claim, arrival.version, arrival),
-    /lost reservation response/,
-  );
-  // The durable intent survives the lost response without a saved key.
+  assert.equal(intent.kind, "applied");
+  // The durable intent survives a lost response without a saved key.
   assert.deepEqual(
     await query(db, "SELECT signing_key FROM arrival_reservations"),
     [{ signing_key: null }],
   );
   // The saved tuple cannot be re-placed on another host.
   await assert.rejects(
-    arrivals.recordAllocationIntent(claim, arrival.version + 1, {
-      operationId: "op-1",
-      did,
+    arrivals.recordAllocationIntent(claim, intent.version, {
+      ...placement,
       pdsId: "pds2",
       endpoint: hosts[1].url,
     }),
     { code: "OperationConflict" },
   );
-  assert.equal(calls, 1);
 });
 
 test("incoming authorization is scope-, audience-, issuer- and time-bound and consumes nothing", async () => {

@@ -11,10 +11,13 @@ import {
   type IncomingMethod,
   type VerifyIncomingAuthorization,
 } from "./incoming-authorization.js";
-import { parseArrivalRequest } from "./arrival-request.js";
+import { arrivalClaimInput, parseArrivalRequest } from "./arrival-request.js";
 import { arrivalCodeHash } from "./prepare-arrival.js";
 import { validateIncomingHandoff } from "../../plc/policy.js";
-import { observeIncomingHandoff } from "../../plc/incoming-observation.js";
+import {
+  observeIncomingHandoff,
+  readIncomingObservation,
+} from "../../plc/incoming-observation.js";
 
 /** Internal composition consumes a trusted browser user separately from the
  * operation resource. No caller observation or digest can authorize publication. */
@@ -56,20 +59,24 @@ export function createAuthenticatedArrival({
       throw new DomainError("AccountNotFound", 404, "Arrival not found");
     return aggregate;
   };
+  /** Continuations of a claimed arrival resume its claim. An unclaimed
+   * preparation has no claim to resume. */
   const underOwner = async <T>(
     operationId: string,
     userId: string,
     work: (owner: OperationClaim, aggregate: ArrivalAggregate) => Promise<T>,
   ) => {
-    const initial = await read(operationId, userId);
-    const saved = initial.arrival;
+    const saved = (await read(operationId, userId)).arrival;
+    if (saved.claimOperationId === null)
+      throw new DomainError(
+        "OperationNoLongerPending",
+        409,
+        "The arrival has no admitted handoff",
+      );
     return ownership.resumePending(
       `arrival:${saved.did}`,
-      saved.operationId,
-      {
-        kind: "public-arrival",
-        request: { did: saved.did, handle: saved.handle, userId },
-      },
+      saved.claimOperationId,
+      arrivalClaimInput(saved),
       async () => {
         const owner = ownership.currentClaim;
         if (!owner)
@@ -174,7 +181,7 @@ export function createAuthenticatedArrival({
     });
     return { state: "published" as const, cid: handoff.cid };
   };
-  return {
+  const api = {
     async admit(input: {
       operationId: string;
       userId: string;
@@ -183,70 +190,100 @@ export function createAuthenticatedArrival({
       presentation: unknown;
       arrivalCode: string;
     }) {
-      return underOwner(
-        input.operationId,
-        input.userId,
-        async (owner, aggregate) => {
-          const saved = aggregate.arrival;
-          const parsed = parseArrivalRequest(saved, input.method, input.body);
-          const authorization = await verify({
-            presentation: input.presentation,
-            method: input.method,
-            operationId: saved.operationId,
-            requestDigest: parsed.requestDigest,
-            expectedDid: saved.did,
-          });
-          const proof = {
-            codeHash: arrivalCodeHash(input.arrivalCode),
-            codeGeneration: saved.codeGeneration,
-          };
-          // Crypto and directory work finish before the physical admission transaction.
-          const signed =
-            input.method === incomingHandoffMethod
-              ? await validateIncomingHandoff({
-                  operation: parsed.operation,
-                  expectedPredecessor: saved.sourcePredecessor,
-                  approvedRotationKeys: saved.approvedRotationKeys,
-                  source: saved.source,
-                })
-              : null;
-          await transact(async () => {
-            if (input.method === incomingCreationMethod) {
-              await admitCreation(owner, saved.version, {
+      // Selection and source verification run before any lease, so a code
+      // holder without authority over the DID never touches the DID's claim.
+      const saved = (await read(input.operationId, input.userId)).arrival;
+      const parsed = parseArrivalRequest(saved, input.method, input.body);
+      const authorization = await verify({
+        presentation: input.presentation,
+        method: input.method,
+        operationId: saved.operationId,
+        requestDigest: parsed.requestDigest,
+        expectedDid: saved.did,
+      });
+      const proof = {
+        codeHash: arrivalCodeHash(input.arrivalCode),
+        codeGeneration: saved.codeGeneration,
+      };
+      if (input.method === incomingCreationMethod) {
+        // Creation never takes the claim: it needs an admitted handoff.
+        if (saved.claimOperationId === null)
+          throw new DomainError(
+            "OperationRecoveryRequired",
+            409,
+            "Creation requires the admitted handoff of this arrival",
+          );
+        return underOwner(
+          input.operationId,
+          input.userId,
+          async (owner, aggregate) => {
+            await transact(async () => {
+              await admitCreation(owner, aggregate.arrival.version, {
                 ownerUserId: input.userId,
                 facts: authorization.replayFacts,
                 proof,
                 inviteCode: parsed.inviteCode,
               });
-            } else {
-              await arrivals.recordArrivalReplay(
-                owner,
-                saved.version,
-                authorization.replayFacts,
-                proof,
-              );
-              const current = await read(saved.operationId, input.userId);
-              await arrivals.recordSignedOperation(
-                owner,
-                current.arrival.version,
-                {
-                  kind: "handoff",
-                  operationId: saved.operationId,
-                  did: saved.did,
-                  operation: signed! as unknown as Record<string, unknown>,
-                  cid: String(await cidForCbor(signed)),
-                },
-              );
-            }
-          });
-          if (input.method === incomingCreationMethod)
+            });
             return {
               state: "admitted" as const,
               operationId: saved.operationId,
             };
+          },
+        );
+      }
+      // Crypto and directory work finish before the claim's transaction.
+      const signed = await validateIncomingHandoff({
+        operation: parsed.operation,
+        expectedPredecessor: saved.sourcePredecessor,
+        approvedRotationKeys: saved.approvedRotationKeys,
+        source: saved.source,
+      });
+      return ownership.run(
+        `arrival:${saved.did}`,
+        arrivalClaimInput(saved),
+        async () => {
+          const owner = ownership.currentClaim;
+          if (!owner)
+            throw new DomainError(
+              "OperationLeaseLost",
+              409,
+              "Arrival owner unavailable",
+            );
+          // The claim, the replay binding, the signed handoff and the pending
+          // checkpoint commit together: a failure leaves the DID unclaimed.
+          await transact(async () => {
+            const fresh = (await read(input.operationId, input.userId)).arrival;
+            await arrivals.claimArrival(owner, fresh.version, {
+              operationId: saved.operationId,
+              did: saved.did,
+            });
+            const claimed = (await read(input.operationId, input.userId))
+              .arrival;
+            await arrivals.recordArrivalReplay(
+              owner,
+              claimed.version,
+              authorization.replayFacts,
+              proof,
+            );
+            const current = (await read(input.operationId, input.userId))
+              .arrival;
+            await arrivals.recordSignedOperation(owner, current.version, {
+              kind: "handoff",
+              operationId: saved.operationId,
+              did: saved.did,
+              operation: signed as unknown as Record<string, unknown>,
+              cid: String(await cidForCbor(signed)),
+            });
+            await ownership.checkpoint("arrival-claimed", {
+              operationId: saved.operationId,
+              did: saved.did,
+              pdsId: saved.pdsId,
+            });
+          });
           return dispatchSaved(
             owner,
-            await read(saved.operationId, input.userId),
+            await read(input.operationId, input.userId),
           );
         },
       );
@@ -286,5 +323,52 @@ export function createAuthenticatedArrival({
     continueHandoff(input: { operationId: string; userId: string }) {
       return underOwner(input.operationId, input.userId, dispatchSaved);
     },
+    /** Recovery selects the continuation from durable admission, never from the
+     * preparation response or a fresh source credential. */
+    async reconcile(input: { operationId: string; userId: string }) {
+      const { operationId, userId } = input;
+      const aggregate = await read(operationId, userId);
+      // An unclaimed preparation has no admitted obligation to continue.
+      if (aggregate.arrival.claimOperationId === null)
+        return { state: "pending" as const, operationId };
+      if (
+        aggregate.admissions.some(
+          (item) => item.method === incomingCreationMethod,
+        )
+      ) {
+        const move = aggregate.signedOperations.find(
+          (item) => item.kind === "destination-move",
+        );
+        if (aggregate.progress.canonicalHandoffCid === null && !move) {
+          const directory = await readIncomingObservation(
+            client,
+            aggregate.arrival.did,
+          );
+          const handoff = aggregate.signedOperations.find(
+            (item) => item.kind === "handoff",
+          );
+          if (
+            handoff &&
+            [aggregate.arrival.sourcePlcHead, handoff.cid].includes(
+              directory.sourcePlcHead,
+            )
+          ) {
+            const result = await api.continueHandoff(input);
+            if (result.state !== "published")
+              return { state: "pending" as const, operationId };
+          }
+        }
+        return api.continueCreation(input);
+      }
+      if (
+        aggregate.admissions.some(
+          (item) => item.method === incomingHandoffMethod,
+        )
+      )
+        await api.continueHandoff(input);
+      // Creation admission cannot be invented here.
+      return { state: "pending" as const, operationId };
+    },
   };
+  return api;
 }

@@ -167,7 +167,13 @@ async function admissionFixture(required = true) {
     accounts,
     browserFlow: { checkCsrf() {}, loadBrowser() {} },
   });
-  const arrival = await f.prepare();
+  const prepared = await f.prepare();
+  // Creation admission needs the claim that handoff admission takes.
+  const claimed = await f.arrivals.claimArrival(f.claim, prepared.version, {
+    operationId: prepared.operationId,
+    did,
+  });
+  const arrival = { ...prepared, version: claimed.version };
   const facts = {
     operationId: arrival.operationId,
     did,
@@ -178,7 +184,7 @@ async function admissionFixture(required = true) {
   };
   const proof = { codeHash: hash("a"), codeGeneration: 1 };
   const admit = (inviteCode, overrides = {}) =>
-    admission.admitCreation(f.claim, 1, {
+    admission.admitCreation(f.claim, arrival.version, {
       ownerUserId: "user-a",
       facts,
       proof,
@@ -210,7 +216,7 @@ for (const required of [true, false]) {
       });
       assert.equal((await f.db.get("entryway:invites", code)).remaining, 0);
       assert.equal((await f.db.read("arrival_replay")).length, 1);
-      assert.equal(await persistedVersion(f.db, "op-1"), 2);
+      assert.equal(await persistedVersion(f.db, "op-1"), 3);
       await assert.rejects(
         f.admit(code, { facts: { ...f.facts, requestDigest: hash("e") } }),
         { code: "OperationConflict" },
@@ -249,7 +255,7 @@ for (const write of ["arrival_replay", "capacity", "reservation"]) {
         await f.db.get("entryway:invite-reservations", "dest@example.test"),
         null,
       );
-      assert.equal(await persistedVersion(f.db, "op-1"), 1);
+      assert.equal(await persistedVersion(f.db, "op-1"), 2);
     } finally {
       await f.db.close();
     }
@@ -261,7 +267,7 @@ test("pending binding and real invite completion roll back together, then comple
   try {
     const { code } = await f.invites.createInviteCode({ useCount: 1 });
     await f.admit(code);
-    const version = await f.allocate(2);
+    const version = await f.allocate(3);
     const input = {
       owner: f.claim,
       expectedVersion: version,

@@ -1246,7 +1246,16 @@ export function createArrivalStorage(
         db.withOperationFence(owner, async () => {
           const saved = await current(input.operationId, expectedVersion);
           const receipt = await externalReceipt(owner, saved, input);
-          if (receipt.state !== "acknowledged" || receipt.result !== "null")
+          // An approved retry acknowledges the receipt it replaces with its
+          // observed disposition, so that superseded receipt settles as well.
+          if (
+            receipt.state !== "acknowledged" ||
+            ![
+              "null",
+              '{"recovery":"unapplied"}',
+              '{"recovery":"replay-safe"}',
+            ].includes(receipt.result ?? "")
+          )
             throw recoveryRequired();
           const attemptBinding = `${input.operationId}:external:${receipt.id}`;
           const association = (
