@@ -226,7 +226,9 @@ signature through `requestPlcOperationSignature` and `signPlcOperation`.
 The signed handoff retains source hosting, repository verification keys and aliases
 while adding the required Entryway rotation authority. Entryway validates the exact
 ordered key list against custody policy and protocol limits; a full list is not
-silently truncated and recovery authority is not discarded. User recovery, operator
+silently truncated and recovery authority is not discarded: every key the source
+already lists stays in its original order and at most one key is added. Preparation
+and handoff validation both reject a list that drops, reorders or over-extends it. User recovery, operator
 offline recovery, hot Entryway authority and the repository key remain distinct roles.
 
 The tool obtains source service authentication with Entryway as audience and
