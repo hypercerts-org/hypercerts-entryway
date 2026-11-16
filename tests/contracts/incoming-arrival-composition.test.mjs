@@ -1997,24 +1997,52 @@ test("simultaneous cancellations delete once and the loser is not found", async 
   assert.ok(["AccountNotFound", "OperationConflict"].includes(lost.code));
   assert.equal((await stored(f)).arrivals.length, 0);
 });
-test("renewal racing a cancellation never leaves a live preparation behind", async (t) => {
+test("renewal racing a cancellation has exactly one winner", async (t) => {
   const f = await fixture(t);
   const prepared = await f.prepare();
   const [cancelled, renewed] = await Promise.allSettled([
     cancel(f, prepared.operationId, prepared.version),
     renew(f, prepared.operationId, prepared.version),
   ]);
-  // Cancellation deletes the row, so whichever order won, nothing remains.
-  assert.equal((await stored(f)).arrivals.length, 0);
-  if (renewed.status === "rejected")
+  assert.equal(
+    [cancelled, renewed].filter((item) => item.status === "fulfilled").length,
+    1,
+  );
+  const rows = await stored(f);
+  if (cancelled.status === "fulfilled") {
+    assert.equal(rows.arrivals.length, 0);
     assert.ok(
       ["AccountNotFound", "ArrivalExpired", "OperationConflict"].includes(
         renewed.reason.code ?? renewed.reason.error,
       ),
     );
-  else assert.equal(cancelled.status, "rejected");
+  } else {
+    assert.equal(rows.arrivals.length, 1);
+    assert.equal(rows.code[0].generation, 2);
+    assert.equal(cancelled.reason.code, "OperationConflict");
+  }
 });
 
+for (const order of ["cancel first", "renew first"])
+  test(`${order} leaves one stable outcome`, async (t) => {
+    const f = await fixture(t);
+    const prepared = await f.prepare();
+    if (order === "cancel first") {
+      await cancel(f, prepared.operationId, prepared.version);
+      await assert.rejects(renew(f, prepared.operationId, prepared.version), {
+        code: "AccountNotFound",
+      });
+      assert.equal((await stored(f)).arrivals.length, 0);
+    } else {
+      await renew(f, prepared.operationId, prepared.version);
+      await assert.rejects(cancel(f, prepared.operationId, prepared.version), {
+        code: "OperationConflict",
+      });
+      const rows = await stored(f);
+      assert.equal(rows.arrivals.length, 1);
+      assert.equal(rows.code[0].generation, 2);
+    }
+  });
 test("cancellation racing the handoff claim has exactly one winner", async (t) => {
   const f = await fixture(t);
   const prepared = await f.prepare();
@@ -2166,14 +2194,23 @@ test("a lapsed unclaimed preparation renews as expired and a repeat is not found
   });
 });
 
-test("renewal between provisioning and binding issues a replay-only code", async (t) => {
+test("an exact replay with a renewed code resumes provisioning without verifying the source", async (t) => {
   const f = await fixture(t);
   const prepared = await admitProvisioning(f);
-  await f.db.update(
-    "arrivals",
-    { provisioned_at: Date.now() },
-    eq(f.db.tables.arrivals.operation_id, prepared.operationId),
+  f.backendState.mode = "pause-lost";
+  await assert.rejects(
+    f.composed.continueCreation(f.request, prepared.operationId),
   );
+  const moved = await f.arrivals.readArrivalAggregate(
+    prepared.operationId,
+    f.principal.userId,
+  );
+  const move = moved.signedOperations.find(
+    (item) => item.kind === "destination-move",
+  );
+  assert.equal(f.audit.at(-1).cid, move.cid);
+  assert.equal(moved.progress.provisionedAt, null);
+  assert.equal(moved.progress.boundAt, null);
   const renewed = await renew(
     f,
     prepared.operationId,
@@ -2181,51 +2218,56 @@ test("renewal between provisioning and binding issues a replay-only code", async
   );
   assert.notEqual(renewed.arrivalCode, prepared.arrivalCode);
   assert.equal(await consume(f, prepared.arrivalCode), null);
-  const admissions = await query(f.db, "SELECT * FROM arrival_replay");
-  const accepted = admissions.find(
-    (row) => row.method === incomingCreationMethod,
-  );
-  const creation = async (inviteCode, overrides) =>
+  const pending = await f.store.pendingExternal(`arrival:${f.did}`);
+  await f.store.approveRecovery({
+    operationId: pending.operationId,
+    externalAttemptId: pending.id,
+    executionAttemptId: pending.executionAttemptId,
+    target: pending.target,
+    dispatcherIsolationReference: "test-dispatcher-isolated",
+    upstreamDrainReference: "test-upstream-drained",
+    action: "observe",
+  });
+  f.backendState.mode = "normal";
+  const replay = (body, presentation, arrivalCode = renewed.arrivalCode) =>
     f.composed.admitIncoming(f.request, {
       operationId: prepared.operationId,
       method: incomingCreationMethod,
-      body: { handle, inviteCode },
-      presentation: await f.credential(incomingCreationMethod, overrides),
-      arrivalCode: renewed.arrivalCode,
+      body,
+      presentation,
+      arrivalCode,
     });
-  // The accepted createAccount replays exactly, with the renewed code.
-  const replayed = await creation(prepared.inviteCode, {
-    jti: accepted.credential_jti,
-  });
-  assert.equal(replayed.state, "admitted");
-  assert.deepEqual(
-    await query(f.db, "SELECT * FROM arrival_replay"),
-    admissions,
-  );
-  // Any other body for that method conflicts instead of admitting anew.
-  await assert.rejects(creation("different"), { code: "OperationConflict" });
-});
-
-test("a provisioned arrival refuses a new admission even with the current code", async (t) => {
-  const f = await fixture(t);
-  const prepared = await f.prepare();
-  await admitHandoff(f, prepared);
-  await f.db.update(
-    "arrivals",
-    { provisioned_at: Date.now() },
-    eq(f.db.tables.arrivals.operation_id, prepared.operationId),
-  );
-  const renewed = await renew(
-    f,
-    prepared.operationId,
-    await versionOf(f, prepared),
-  );
-  const before = await query(f.db, "SELECT * FROM arrival_replay");
+  const issued = f.credentialsIssued();
+  // A non-matching body is a new admission: it conflicts before any
+  // credential or provisioning work.
   await assert.rejects(
-    admitCreation(f, prepared, renewed.arrivalCode, await inviteFor(f)),
-    { error: "ArrivalExpired", status: 409 },
+    replay(
+      { handle, inviteCode: "different" },
+      await f.credential(incomingCreationMethod),
+    ),
+    { code: "OperationConflict" },
   );
-  assert.deepEqual(await query(f.db, "SELECT * FROM arrival_replay"), before);
+  // A superseded code is refused before the saved continuation runs.
+  await assert.rejects(
+    replay(
+      { handle, inviteCode: prepared.inviteCode },
+      "Bearer unusable",
+      prepared.arrivalCode,
+    ),
+    { error: "ArrivalExpired" },
+  );
+  // The exact body replays with no usable source credential at all.
+  await replay({ handle, inviteCode: prepared.inviteCode }, "Bearer unusable");
+  const after = await f.arrivals.readArrivalAggregate(
+    prepared.operationId,
+    f.principal.userId,
+  );
+  assert.ok(after.progress.provisionedAt);
+  assert.ok(after.progress.boundAt);
+  assert.equal(after.admissions.length, 2);
+  assert.equal(f.backendState.creates, 1);
+  assert.equal(f.publicationAttempts.length, 1);
+  assert.equal(f.credentialsIssued() - issued, 1);
 });
 test("a superseded, garbage or expired code fails identically with the contract's expired error", async (t) => {
   const f = await fixture(t);

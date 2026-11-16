@@ -38,7 +38,8 @@ Dormant saved-user lifecycle: renewal issues a replacement code after a fresh
 destination OTP, and cancellation deletes an unclaimed preparation without
 touching the DID. A claimed arrival is never cancelled and keeps its recorded
 admissions across renewal. Renewal stays available between provisioning and
-binding, where the new code only replays the already accepted `createAccount`.
+binding, where replaying the already accepted `createAccount` with the new code
+needs no source credential and resumes the saved provisioning.
 Admission requires the current, unexpired code and refuses a stale one with
 `ArrivalExpired`.
 

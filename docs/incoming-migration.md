@@ -409,8 +409,9 @@ An unclaimed preparation lapses with its code and is prepared again. Once a hand
 is admitted, credential expiry does not destroy progress or end custody obligations.
 
 Renewal remains available between provisioning and binding. In that state it issues
-a replacement code valid only for exact replay of the already accepted
-`createAccount`. It grants no credentials and starts no new admission; `recover`
+a replacement code that lets the caller replay the already accepted
+`createAccount` exactly. The replay needs no source credential and resumes the saved
+provisioning. Renewal grants no credentials and starts no new admission; `recover`
 takes over once the binding is committed. This keeps the accepted operation
 resumable after the code is lost or expires.
 
@@ -677,8 +678,8 @@ unclaimed preparation gives `ArrivalExpired`; prepare again. After handoff admis
 renewal remains available and gives `OperationRecoveryRequired` only while the
 reservation is uncertain.
 Renewal is allowed in the provisioned-but-unbound state, where it issues a code valid
-only for exact replay of the already accepted `createAccount`; it never authorizes a
-new admission. Once the arrival is bound, the caller resumes through `recover` from
+for exact replay of the already accepted `createAccount`, which resumes the saved
+provisioning without a source credential; it never authorizes a new admission. Once the arrival is bound, the caller resumes through `recover` from
 C3 instead.
 
 Errors. Each code is stable and mapped explicitly, and no message carries a secret.
@@ -757,11 +758,13 @@ current, unexpired code for the arrival. A superseded, unknown or expired code f
 with `ArrivalExpired` whether or not an admission exists for that body, and neither
 consumes the code nor advances the arrival version. A new admission needs the
 current code. An already accepted admission is compared under the code generation it
-was recorded with, so an exact replay with a renewed code succeeds while any other
-body for that method is `OperationConflict`. Once the arrival is provisioned, a
-request for a method with no recorded admission is refused with `ArrivalExpired`:
-the renewed code only replays. Continuations do not re-verify the request digest or
-any credential. They check the owner, DID, method and that the recorded code
+was recorded with. An exact replay with the current code, including a renewed one,
+does not verify the source credential and does not admit again: after the identity
+moves the source key no longer verifies. It runs the saved continuation under the
+recorded claim, which is the saved creation for `createAccount` and the saved
+handoff dispatch for `submitPlcOperation`. Any other body for that method is
+`OperationConflict`, and every new admission still needs full source verification.
+Continuations do not re-verify the request digest or any credential. They check the owner, DID, method and that the recorded code
 generation is at least 1 and no greater than the current one, then dispatch only
 saved or freshly journaled signed facts. Renewal never reserves, signs, dispatches or
 releases anything.
@@ -1114,8 +1117,8 @@ operator approval of the activation receipt described above.
 
 Accepted decision M4 (repair permission). The affected user may resume the exact
 accepted operation at any time, through exact `createAccount` replay with a
-replay-only renewed code where needed; that continuation never creates new authority
-and always replays the saved signed facts. An operator may additionally reconcile a
+renewed code where needed; the replay needs no source credential, never creates new
+authority and always continues from the saved signed facts. An operator may additionally reconcile a
 partial outcome, but only with canonical observation evidence recorded for that
 attempt. Lease expiry alone authorizes no repair and permits no new remote write, and
 no automatic repair exists. A repair whose evidence is missing, uncertain or

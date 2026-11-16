@@ -220,14 +220,6 @@ export function createAuthenticatedArrival({
       const recorded = aggregate.admissions.find(
         (item) => item.method === input.method,
       );
-      // A provisioned arrival accepts no new admission: a renewed code only
-      // replays what was already accepted.
-      if (!recorded && aggregate.progress.provisionedAt !== null)
-        throw new HttpError(
-          409,
-          "ArrivalExpired",
-          "This arrival no longer accepts new admissions",
-        );
       // An accepted admission is compared under the code generation it was
       // recorded with, so exact replay survives a renewal while any other body
       // for that method conflicts.
@@ -242,6 +234,16 @@ export function createAuthenticatedArrival({
           409,
           "This request was already admitted; resume the saved arrival instead of resubmitting",
         );
+      // An exact replay of an accepted admission needs no source credential:
+      // after the identity moves the source key no longer verifies. It resumes
+      // the saved continuation under the recorded claim instead of admitting
+      // again. Every new admission is fully verified below.
+      if (recorded) {
+        const ids = { operationId: input.operationId, userId: input.userId };
+        if (input.method === incomingCreationMethod)
+          return api.continueCreation(ids);
+        return api.continueHandoff(ids);
+      }
       const authorization = await verify({
         presentation: input.presentation,
         method: input.method,
