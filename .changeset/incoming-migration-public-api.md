@@ -77,7 +77,7 @@ What operators and users now see:
   share one tool bucket, so retries after `OperationRecoveryRequired` spend it), and five fresh-code
   requests per ten minutes per purpose and user. New stable error codes in
   failure logs: `ArrivalExpired`, `ArrivalProofRequired`, `OperationConflict`,
-  `OperationRecoveryRequired`.
+  `OperationLeaseLost`, `OperationNoLongerPending`, `OperationRecoveryRequired`.
 
 See the [incoming migration guide](https://github.com/hypercerts-org/hypercerts-entryway/blob/main/docs/incoming-migration.md)
 for the accepted contract and the open decisions. Independent public

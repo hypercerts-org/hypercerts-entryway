@@ -641,9 +641,10 @@ obtain the first family: no source JWT (it cannot verify after cutover) and no b
 session. The window closes at first issuance or code expiry. A repeat call is
 `OperationConflict`; a lost or pre-empted first issuance is recovered through
 `recoverArrivalSession` with a fresh email code, which revokes the earlier family apart
-from the stock access-token expiry gap. For plan 012: the exported `admitIncoming` still
-takes the saved user from a browser principal, so the cookie-less creation admission
-that precedes this call must be resolved there.
+from the stock access-token expiry gap. The exported `admitIncoming` takes the saved user from
+a browser principal; the cookie-less tool admission that precedes this call is
+described under
+[mounted surfaces](#development-mounted-surfaces-and-pending-guard).
 
 A session holds the standard fields `did`, `handle`, `email`, `emailConfirmed`,
 `didDoc`, `accessJwt` and `refreshJwt`, plus `active: false` and
@@ -832,11 +833,14 @@ tool that retries aggressively can exhaust it (`RateLimitExceeded`) for all call
 behind the same address. The method is fixed by the route, so an
 unsupported method cannot reach admission. Identity-layer failures are
 `InvalidPlcOperation` 400 and `IdentityConflict` 409 only for a definitive
-refusal. A transient directory outage or a head change during observation, after
-the claim and its dispatch marker are saved, is `OperationRecoveryRequired` 409:
-the request stays pending for the
-[operator recovery](shared-operations.md#supported-operator-recovery) and is never
-reported as an identity conflict.
+refusal. A transient directory outage or a head change during observation is
+`OperationRecoveryRequired` 409 and is never reported as an identity conflict. The
+handoff observation runs before any dispatch marker is written, so the exact same
+request is retried and succeeds once the directory answers; only an external attempt
+that stays unresolved needs the
+[operator recovery](shared-operations.md#supported-operator-recovery). For
+`createAccount` before the destination move, a head race returns 409 and the exact
+replay then succeeds, while a raw directory 503 there is 503 `RequestFailed`.
 
 **Accepted by both developers.** Tool requests carry no
 browser cookie, but admission and continuation resolve their owner from a browser
@@ -852,8 +856,7 @@ never duplicates the claim transaction. Every failure to select an arrival, incl
 an unparsable credential, is the same `ArrivalExpired`. The resolution lives in
 `select` in `tool-admission.ts`.
 
-Retry semantics that follow from stored admissions (pending owner decision whether
-this is the intended contract). An exact replay is the same body presented with the
+Retry semantics that follow from stored admissions (decided). An exact replay is the same body presented with the
 current arrival code, with any credential: it is not re-verified and not re-admitted,
 so it works after the identity has moved to the destination, when the source key no
 longer verifies. It runs the saved continuation under the recorded claim: provisioning
@@ -885,7 +888,6 @@ source account, and activation makes no claim about repository or blob completen
 
 Open for owner confirmation (pending owner decisions):
 
-- the exact-retry semantics (same body and same credential, until expiry or cutover);
 - the refresh and activate fall-through design and its extra arrival lookup;
 - the strict `createAccount` subset that rejects `password`;
 - the extra browser surfaces: `/incoming/activate`, `/incoming/resume`,
@@ -1411,8 +1413,9 @@ paused again before the retry), the ownership store can approve that acknowledge
 unobserved receipt (`pendingExternal` reports it and `approveRecovery` accepts it)
 once no worker holds the lease. The same isolation and drain attestations apply. The
 HTTP operator routes `POST /_operations/status` and `POST /_operations/recovery`
-accept the `arrival:<did>` resource, so an operator sees and approves the receipt over
-HTTP with the Entryway administrator credential. A first approval may be `observe` or `retry-if-safe`, and
+accept the `arrival:<did>` resource for status, so an operator sees the receipt over
+HTTP with the Entryway administrator credential. Recovery takes no resource: it
+approves the attempt IDs that status reports. A first approval may be `observe` or `retry-if-safe`, and
 `observe` may later be upgraded to `retry-if-safe`. `observe` lets the next retry
 complete only if the backend is observed active for this DID and handle, without
 resending. `retry-if-safe` also lets it resend, only if the backend is observed

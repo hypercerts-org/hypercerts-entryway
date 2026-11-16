@@ -198,7 +198,7 @@ PDS keeps accepting an already-issued access token until it expires (five minute
 after recovery. Ordinary refresh and activate now do one family lookup first. The cookie-less tool resolution (arrival code selects the arrival
 and its saved user) is accepted by both developers. Operator recovery over HTTP reaches an arrival's acknowledged activation receipt
 through the `arrival:<did>` resource. This is not stock-PDS
-public journey or recovery qualification, which has not been run; see
+public journey or recovery qualification, remains open; see
 [incoming migration](incoming-migration.md#development-mounted-surfaces-and-pending-guard).
 
 The architecture checker resolves real imports, including TS/MJS aliases, dynamic

@@ -855,16 +855,13 @@ for (const fault of ["unavailable", "head-race"])
     assert.equal(response.json.error, "OperationRecoveryRequired");
     assert.notEqual(response.json.error, "IdentityConflict");
     assert.equal(s.f.publicationAttempts.length, 0);
-    // The request stays saved under the claim with its dispatch marker, so an
-    // operator can see and approve it; the retry is the same stable refusal.
+    // No dispatch marker was written, so the exact retry completes.
     s.f.setDirectoryFault("");
     const retry = await submit(s);
-    assert.equal(retry.status, 409);
-    assert.equal(retry.json.error, "OperationRecoveryRequired");
-    assert.equal(s.f.publicationAttempts.length, 0);
-    assert.equal((await rows(s.f, "arrival_replay")).length, 1);
-    const pending = await s.f.store.pendingExternal(`arrival:${s.f.did}`);
-    assert.equal(pending.step, "incoming-handoff");
+    assert.equal(retry.status, 200, retry.text);
+    assert.deepEqual(retry.json, {});
+    assert.equal(s.f.publicationAttempts.length, 1);
+    assert.equal(await s.f.store.pendingExternal(`arrival:${s.f.did}`), null);
   });
 
 /** A hosted account that appeared after the arrival was prepared. */

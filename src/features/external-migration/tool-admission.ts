@@ -13,7 +13,8 @@ import { PlcError } from "../../plc/errors.js";
 
 /** Directory evidence that was unavailable or moved during observation says
  * nothing about the identity. The claim and its dispatch marker are already
- * saved, so the request stays pending for the shared operator recovery. */
+ * saved; retry the same request. Only an external attempt that stays unresolved
+ * needs the shared operator recovery. */
 const pendingIdentity = new Set([
   "CustodyEvidenceUnavailable",
   "InvalidCustodyObservation",
@@ -34,7 +35,7 @@ async function stableIdentity<T>(work: () => Promise<T>): Promise<T> {
       throw new DomainError(
         "OperationRecoveryRequired",
         409,
-        "The identity directory could not be observed; the saved request needs verified recovery before it continues",
+        "The identity directory could not be observed; retry the same request. If an external attempt stays unresolved, it needs operator recovery",
       );
     throw new HttpError(
       409,

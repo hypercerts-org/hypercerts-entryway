@@ -124,6 +124,9 @@ export function createAuthenticatedArrival({
         handoff.cid,
         saved.sourcePlcHead,
       );
+    // Observed before the dispatch marker is written: a directory outage or a
+    // head race here leaves no marker, so the exact request is simply retried.
+    const before = await observe();
     await ownership.dispatch(
       {
         step: "incoming-handoff",
@@ -133,7 +136,6 @@ export function createAuthenticatedArrival({
       },
       {
         send: async () => {
-          const before = await observe();
           if (before.canonical) return null;
           if (before.diverged)
             throw new DomainError(
