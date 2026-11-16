@@ -1412,8 +1412,7 @@ not observe the active state (for example the local commit failed and the backen
 paused again before the retry), the ownership store can approve that acknowledged but
 unobserved receipt (`pendingExternal` reports it and `approveRecovery` accepts it)
 once no worker holds the lease. The same isolation and drain attestations apply. The
-HTTP operator routes `POST /_operations/status` and `POST /_operations/recovery`
-accept the `arrival:<did>` resource for status, so an operator sees the receipt over
+`POST /_operations/status` accepts the `arrival:<did>` resource, so an operator sees the receipt over
 HTTP with the Entryway administrator credential. Recovery takes no resource: it
 approves the attempt IDs that status reports. A first approval may be `observe` or `retry-if-safe`, and
 `observe` may later be upgraded to `retry-if-safe`. `observe` lets the next retry

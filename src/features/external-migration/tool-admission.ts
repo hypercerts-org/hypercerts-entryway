@@ -12,8 +12,8 @@ import { arrivalCodeHash } from "./prepare-arrival.js";
 import { PlcError } from "../../plc/errors.js";
 
 /** Directory evidence that was unavailable or moved during observation says
- * nothing about the identity. The claim and its dispatch marker are already
- * saved; retry the same request. Only an external attempt that stays unresolved
+ * nothing about the identity. No dispatch marker is written before the handoff
+ * observation; retry the same request. Only an external attempt that stays unresolved
  * needs the shared operator recovery. */
 const pendingIdentity = new Set([
   "CustodyEvidenceUnavailable",
