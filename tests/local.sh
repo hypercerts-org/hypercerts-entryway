@@ -25,10 +25,11 @@ compose() { docker --context "$DOCKER_CONTEXT" compose --project-name "$project"
 # The moover service sits behind a compose profile, and `down` without that
 # profile leaves it running while still exiting 0.
 remove_moover() { compose --profile moover rm --stop --force pds-moover; }
+# Scoped by compose project label, so no other project is ever considered.
 assert_project_empty() {
   local leftover
-  leftover=$(compose --profile moover ps --all --quiet)
-  [[ -z "$leftover" ]] || { echo "Containers of project $project survived teardown" >&2; return 1; }
+  leftover=$(docker --context "$DOCKER_CONTEXT" ps --all --quiet --filter "label=com.docker.compose.project=$1") || return 1
+  [[ -z "$leftover" ]] || { echo "Containers of project $1 survived teardown" >&2; return 1; }
 }
 guard_project() {
   node --input-type=module - "$sandbox/state/manifest.json" "$project" <<'JS'
@@ -137,8 +138,8 @@ case "$command" in
         echo "Preserved project $SANDBOX_PROJECT at $temp" >&2
       else
         if [[ -f "$SANDBOX_CHECKOUT/compose.yaml" ]] \
-          && ! { docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" -f "$root/tests/atmosphere/stacks/incoming-source-mail.yaml" --profile moover down --volumes --remove-orphans \
-            && assert_project_empty; }; then
+          && ! { docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" -f "$root/tests/atmosphere/stacks/incoming-source-mail.yaml" --profile '*' down --volumes --remove-orphans \
+            && assert_project_empty "$SANDBOX_PROJECT"; }; then
           echo "Scoped cleanup failed; preserved $temp for project $SANDBOX_PROJECT" >&2
           (( result != 0 )) || result=1
           echo "Group exit: $result; reports: $ACCEPTANCE_REPORT_DIR"
@@ -258,7 +259,7 @@ console.log(`https://${matches[0].hostname}`)
 JS
     )
     # Remove the profiled container whatever the outcome of the run.
-    trap remove_moover EXIT
+    trap 'result=$?; remove_moover || (( result )) || result=1; printf "phase=%s status=finished exit=%s\n" "$command" "$result"; exit "$result"' EXIT
     compose --profile moover up -d --build --wait --no-deps pds-moover
     compose run --rm --no-deps --volume "$sandbox/incoming-access.json:/run/incoming-access.json:ro" -e INCOMING_ACCESS_PATH=/run/incoming-access.json -e "INCOMING_PROJECT=$project" -e "MOOVER_URL=$moover_url" -e INCOMING_MOOVER_JOURNEY=1 browser npx --no-install playwright test --config tests/playwright.config.mjs 2>&1 | tee "$artifacts/incoming-moover-journey.log" | python3 "$root/scripts/ci-summary.py"
     ;;
@@ -335,7 +336,9 @@ JS
     require_state
     remove_moover
     deno task sandbox down
-    assert_project_empty
+    # Profiled services (database, moover) survive a plain down. No --volumes: down retains state.
+    compose --profile '*' down
+    assert_project_empty "$project"
     ;;
   status)
     require_state

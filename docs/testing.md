@@ -244,14 +244,15 @@ no Playwright step title carries them, and none are printed.
 The sandbox puts a Caddy proxy in front of Entryway
 (`tests/support/entryway-ingress.Caddyfile`, the block from the "Browser access to
 XRPC" section of the deployment profiles guide with only the site address changed,
-plus lines for the sandbox gateway's extra proxy hop). All Entryway routes in the
+plus lines for the sandbox gateway's extra proxy hop and no admin endpoint). All Entryway routes in the
 sandbox go through it. The `browser` suite asserts the ingress directly with plain
 requests (`tests/browser/entryway-ingress-cors.spec.mjs`): a preflight carrying
 `entryway-arrival-code` on `/xrpc/*` and `/.well-known/atproto-did`,
 `Access-Control-Expose-Headers` and one `Access-Control-Allow-Origin` on `/xrpc/*`,
 one `Access-Control-Allow-Origin` on `/oauth/*`, and none on `/incoming` or `/login`.
-The journey command always removes the `pds-moover` container, and `down` and
-`fresh-group` cleanup fail when any project container survives teardown.
+The journey command always removes the `pds-moover` container. Group cleanup and
+`down` also stop services in other compose profiles (such as the database), and fail
+when any container of that project survives; `down` keeps volumes.
 
 Contributors qualifying the dormant incoming-arrival composition run
 `./tests/local.sh incoming-arrival-live` after `up`. This creates fresh stock
