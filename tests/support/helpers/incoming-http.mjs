@@ -12,6 +12,7 @@ import { mountIncomingXrpc } from "../../../dist/src/features/external-migration
  * Requests use node:http because the fixture replaces globalThis.fetch. */
 export async function incomingHttp(t, f, { ordinary = true } = {}) {
   const app = express();
+  app.disable("x-powered-by");
   app.use(express.json({ limit: "64kb" }));
   const { rateLimit } = await createProtocolChallenges({
     db: f.db,

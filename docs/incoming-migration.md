@@ -739,13 +739,11 @@ approved safe retry, and `readArrivalFamilies` and `readArrivalFamily` are read-
 
 ### Development: mounted surfaces and pending guard
 
-**Status: implemented; the live public journey, stock-PDS callback proof and
-contracts group have run on single-node SQLite only.** Everything marked "pending owner
-decision" below is this change's choice, not accepted contract. `src/app.mjs`
-mounts the feature on every deployment (single-node SQLite, multi-node, and
-deployments with no migration intent) with no configuration key or opt-out; this
-is decided. The live journey has not run on multi-node PostgreSQL, and the owner
-decisions below are open, so the change is held as an unmerged draft. It is mounted through `createIncomingArrival` in
+**Status: implemented. Multi-node PostgreSQL deployments are not yet qualified for
+incoming migration.** Everything marked "pending owner decision" below is this
+change's choice, not accepted contract. `src/app.mjs` mounts the feature on every
+deployment (single-node SQLite, multi-node, and deployments with no migration
+intent) with no configuration key or opt-out; this is decided. It is mounted through `createIncomingArrival` in
 `src/compose-incoming-arrival.mjs` (production arrival storage over the account
 authority, real browser authentication and CSRF) and registers
 `src/features/external-migration/routes.ts` and `xrpc-routes.ts`. XRPC handlers are
@@ -762,34 +760,37 @@ only after the same-origin check, so a cross-origin post spends nothing. `GET
 `/activate` and `/code` surfaces and the `GET /incoming` status page are not in the
 C1 table (pending owner decision).
 
-Lost operation ID. If the SAME saved user repeats `/incoming/prepare` for the same DID
-with a valid fresh email code and the repeat is refused with
-`OperationRecoveryRequired`, and an unfinished (live, not completed or cancelled)
-arrival of theirs exists, the refusal keeps its code and status and adds that arrival's `operationId` and
-current `version` (JSON fields, or shown on the HTML page), so they can renew,
-recover, activate or resume. This happens only after origin/CSRF, session, budget
-and the fresh code have passed; the arrival is found by a read by DID, and owner scoping is
-done by comparing the saved user and then reading with the owner-filtered
-`readArrival`. It attaches to no other error (an ownership `OperationPending`, a
-lease loss or a server failure), and if the lookup itself fails the original refusal
-is what the caller sees. It returns no arrival code or other secret, changes nothing in storage, and is `no-store`.
-Another user's arrival for that DID gets today's refusal with no ID.
+Lost operation ID. Preparing again replaces the saved user's own unclaimed
+preparation, so a lost preparation response is recovered by preparing again. When the
+SAME saved user repeats `/incoming/prepare` for a DID that their own claimed arrival
+holds, the `OperationPending` refusal keeps its code and status and adds that
+arrival's `operationId` and current `version` (JSON fields, or shown on the HTML
+page), so they can recover, activate or resume. This happens only after
+origin/CSRF, session, budget and the fresh code have passed; the claimed arrival is
+found by a read by DID, and owner scoping is done by comparing the saved user and
+then reading with the owner-filtered `readArrival`. It attaches to no other error, and
+if the lookup itself fails the original refusal is what the caller sees. It returns
+no arrival code or other secret, changes nothing in storage, and is `no-store`.
+Another user's claimed arrival for that DID gets today's refusal with no ID.
 
-| Route                     | Body (plus `csrf`)                      | Proof and result                                                               |
-| ------------------------- | --------------------------------------- | ------------------------------------------------------------------------------ |
-| `GET /incoming`           | optional `?operationId=`                | Verified session; secret-free state of the saved user's own arrival            |
-| `POST /incoming/code`     | none                                    | Sends a sign-in code to the verified email on the `incoming-code` budget       |
-| `POST /incoming/prepare`  | `did`, `handle`, `otp`                  | Fresh code; C1 preparation response, arrival code shown once                   |
-| `POST /incoming/renew`    | `operationId`, `expectedVersion`, `otp` | Fresh code; `{operationId, version, arrivalCode, expiresAt}`                   |
-| `POST /incoming/cancel`   | `operationId`, `expectedVersion`, `otp` | Fresh code; only the pre-intent seam cancels, else `OperationRecoveryRequired` |
-| `POST /incoming/recover`  | `operationId`, `expectedVersion`, `otp` | Fresh code; replacement tracked credentials, revoking earlier families         |
-| `POST /incoming/activate` | `operationId`, `expectedVersion`, `otp` | Fresh code; the one guarded activation, `{state, operationId, version}`        |
-| `POST /incoming/resume`   | `operationId`                           | Saved user only; continues saved admitted steps, sends nothing new             |
+| Route                     | Body (plus `csrf`)                      | Proof and result                                                                                     |
+| ------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `GET /incoming`           | optional `?operationId=`                | Verified session; secret-free state of the saved user's own arrival                                  |
+| `POST /incoming/code`     | none                                    | Sends a sign-in code to the verified email on the `incoming-code` budget                             |
+| `POST /incoming/prepare`  | `did`, `handle`, `otp`                  | Fresh code; C1 preparation response, arrival code shown once                                         |
+| `POST /incoming/renew`    | `operationId`, `expectedVersion`, `otp` | Fresh code; `{operationId, version, arrivalCode, expiresAt}`                                         |
+| `POST /incoming/cancel`   | `operationId`, `expectedVersion`, `otp` | Fresh code; an unclaimed preparation is deleted, a claimed arrival gives `OperationRecoveryRequired` |
+| `POST /incoming/recover`  | `operationId`, `expectedVersion`, `otp` | Fresh code; replacement tracked credentials, revoking earlier families                               |
+| `POST /incoming/activate` | `operationId`, `expectedVersion`, `otp` | Fresh code; the one guarded activation, `{state, operationId, version}`                              |
+| `POST /incoming/resume`   | `operationId`                           | Saved user only; continues saved admitted steps, sends nothing new                                   |
 
 Failures use the stable codes in C1: `InvalidRequest` 400 (shape, origin or CSRF),
-`ArrivalProofRequired` 403, `AccountNotFound` 404 (unknown operation and another
-user's operation, identical), `ArrivalExpired` and `OperationConflict` and
-`OperationRecoveryRequired` 409, `RateLimitExceeded` 429.
+`ArrivalProofRequired` 403, `AccountNotFound` 404 (unknown operation, another
+user's operation and an already deleted preparation, identical), `ArrivalExpired`,
+`OperationConflict`, `OperationPending`, `OperationRecoveryRequired`,
+`OperationNoLongerPending`, `HandleNotAvailable`, `EmailNotAvailable` and
+`IdentityConflict` 409, `RateLimitExceeded` 429. Statuses follow the
+[C1 error table](#c1-wire-and-admission-contract-accepted).
 
 Tool surfaces (no cookie, no CSRF), on the standard XRPC paths:
 
@@ -806,9 +807,10 @@ A tool must send exactly those fields. The strict subset rejects `password`,
 tool does not work against this surface. Whether to accept or ignore them is a
 pending owner decision.
 
-`refreshSession` and `activateAccount` now perform one arrival lookup before the
-ordinary route, and fall through on `InvalidToken` or `ArrivalExpired`; that
-fall-through design is a pending owner decision. The lookup happens only after the
+`refreshSession` and `activateAccount` now look up the credential's family before the
+ordinary route (an ordinary refresh does that one lookup and no arrival read), and
+fall through on `InvalidToken` or `ArrivalExpired`; that fall-through design is a
+pending owner decision. The lookup happens only after the
 credential's signature is verified (expiry tolerated), so a genuine credential is
 judged "tracked or not" before its expiry or revocation is judged. An ordinary
 credential that is expired, revoked, replayed or untracked always reaches the
@@ -829,47 +831,52 @@ every retry, including one after `OperationRecoveryRequired`, spends from it, so
 tool that retries aggressively can exhaust it (`RateLimitExceeded`) for all callers
 behind the same address. The method is fixed by the route, so an
 unsupported method cannot reach admission. Identity-layer failures are
-`InvalidPlcOperation` 400 or `IdentityConflict` 409.
+`InvalidPlcOperation` 400 and `IdentityConflict` 409 only for a definitive
+refusal. A transient directory outage or a head change during observation, after
+the claim and its dispatch marker are saved, is `OperationRecoveryRequired` 409:
+the request stays pending for the
+[operator recovery](shared-operations.md#supported-operator-recovery) and is never
+reported as an identity conflict.
 
 **Accepted by both developers.** Tool requests carry no
 browser cookie, but admission and continuation resolve their owner from a browser
 principal. The tool surfaces therefore select the arrival with the presented
 current, unexpired arrival code, taking the saved user from the arrival and never
 from an email or a request value; the DID is read from the credential's unverified
-issuer only to look the code up, and admission still verifies the method-bound source
-JWT. That verification (same verifier, method, audience, DID and request digest, no
-replay state consumed) runs before any ownership lease is taken, and admission
-verifies again and records replay. Before it, the code permits only a read; a leaked
-code with an invalid credential cannot contend for the arrival, record, sign or
-dispatch. Every failure to select an arrival, including an unparsable credential,
-is the same `ArrivalExpired`. The resolution lives in `select` in `tool-admission.ts`.
+issuer only to look the code up. The code check comes first and permits only a read of
+the arrival row. The feature's admission then verifies the method-bound source JWT
+(same verifier, method, audience, DID and request digest) before it takes any
+ownership lease, and then takes the claim itself, so a leaked code with an invalid
+credential cannot contend for the arrival, record, sign or dispatch. The tool surface
+never duplicates the claim transaction. Every failure to select an arrival, including
+an unparsable credential, is the same `ArrivalExpired`. The resolution lives in
+`select` in `tool-admission.ts`.
 
 Retry semantics that follow from stored admissions (pending owner decision whether
-this is the intended contract). An exact retry is the same body
-with the same credential, until it expires or the identity has moved to the
-destination (the source key no longer verifies). A fresh credential for an
-already-admitted body is `OperationConflict`. After the move, the tool cannot retry
-`createAccount`: a retry after the destination move gets 403 `AccountMismatch`
-because the source key no longer verifies. Recovery or resume is the path: a lost
-first issuance is recovered by the saved user with `/incoming/recover`, and a
-stalled continuation with `/incoming/resume`.
+this is the intended contract). An exact replay is the same body presented with the
+current arrival code, with any credential: it is not re-verified and not re-admitted,
+so it works after the identity has moved to the destination, when the source key no
+longer verifies. It runs the saved continuation under the recorded claim: provisioning
+for `createAccount` and the saved handoff dispatch for `submitPlcOperation`; once the
+identity head has moved past the handoff, the handoff continuation reports it as saved
+but not observed (`OperationRecoveryRequired`) rather than as `{}`. A
+different body for an already admitted method is `OperationConflict`, and a new
+admission always needs full source verification. A `createAccount` replay cannot mint
+a second family once credentials were issued (`OperationConflict`); the saved user
+recovers them with `/incoming/recover`, and a stalled continuation resumes with
+`/incoming/resume`.
 
-Pending guard. A pending arrival is a `provisioning` account whose DID has an
-unfinished saved arrival. The mechanism today is a mix, not a single enforced
-action set. `src/accounts/pending-arrival.ts` defines the permitted and refused
-action names and a predicate that reads saved arrival facts, but its
-`assertPermitted` has one caller (registration's provisioning core), and the account
-console, OAuth consent and signup form use its `isPending` to show an honest page.
-Everything else relies on existing checks: `assertNoMigration` refuses status,
-handle, deletion and PLC changes (`MigrationPending` 409), and ordinary XRPC
-authentication, ordinary refresh and ordinary login refuse a `provisioning` account
-(a refused refresh does not revoke the family). Browser email sign-in still
+Pending guard. A pending arrival is a `provisioning` account whose DID has a claimed,
+unfinished saved arrival; an unclaimed preparation is never pending and blocks
+nothing for anyone, including another user's preparation for a DID that is hosted
+later. The predicate and the reviewed action names live in
+`src/accounts/pending-arrival.ts` and read saved arrival facts. Existing checks
+refuse status, handle, deletion and PLC changes (`MigrationPending` 409), and ordinary
+XRPC authentication, ordinary refresh and ordinary login refuse a `provisioning`
+account (a refused refresh does not revoke the family). Browser email sign-in still
 succeeds by design: it creates a session and then shows the pending page rather than
-settings or a reactivation prompt. By consumer class: `assertPermitted` protects
-registration; `assertNoMigration` protects status change, handle change, deletion
-and PLC operations; the `provisioning` status check protects login, security
-changes, admin paths and OAuth paths; `isPending` protects the console, consent and
-signup pages. A single enforced guard is follow-up work; this is decided.
+settings or a reactivation prompt. The console, OAuth consent and signup pages show an
+honest pending page. A single enforced guard is follow-up work; this is decided.
 
 Credential limits, stated plainly. Recovery revokes local families, but the stock PDS
 accepts an access token already issued until it expires (five minutes). The browser
@@ -1403,9 +1410,9 @@ not observe the active state (for example the local commit failed and the backen
 paused again before the retry), the ownership store can approve that acknowledged but
 unobserved receipt (`pendingExternal` reports it and `approveRecovery` accepts it)
 once no worker holds the lease. The same isolation and drain attestations apply. The
-HTTP operator routes accept only `did:` and `email:` resources, not the
-`arrival:<did>` resource, so they do not yet expose this approval; activation itself
-is not yet mounted. A first approval may be `observe` or `retry-if-safe`, and
+HTTP operator routes `POST /_operations/status` and `POST /_operations/recovery`
+accept the `arrival:<did>` resource, so an operator sees and approves the receipt over
+HTTP with the Entryway administrator credential. A first approval may be `observe` or `retry-if-safe`, and
 `observe` may later be upgraded to `retry-if-safe`. `observe` lets the next retry
 complete only if the backend is observed active for this DID and handle, without
 resending. `retry-if-safe` also lets it resend, only if the backend is observed

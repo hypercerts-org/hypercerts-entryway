@@ -8,9 +8,8 @@ tracked-credential and activation behavior they describe is now reachable.
 It does not certify that an account's data transferred completely, and it adds
 no schema change or configuration key. The routes are mounted on every
 deployment (single-node SQLite, multi-node, and deployments with no migration
-intent) with no configuration key or opt-out. The live public journey,
-stock-PDS callback proof and contracts group have run on single-node SQLite
-only, not on multi-node PostgreSQL.
+intent) with no configuration key or opt-out. Multi-node PostgreSQL deployments
+are not yet qualified for incoming migration.
 
 What operators and users now see:
 
@@ -33,41 +32,39 @@ What operators and users now see:
   fields, including `password`, are rejected with `InvalidRequest`, so an
   unmodified stock tool that sends `password` does not work (pending owner
   decision). `refreshSession` and `activateAccount` serve a tracked
-  arrival credential and otherwise fall through unchanged, after one arrival
+  arrival credential and otherwise fall through unchanged, after one family
   lookup on every such request (pending owner decision). Once a migration is
   finished, a later ordinary deactivation and reactivation use the ordinary route.
 - **Arrival code selects the arrival.** The tool surfaces carry no cookie, so
   the presented current arrival code selects the arrival and the user saved on
   it. The source service JWT is still required; the code alone admits nothing.
-- **Lost operation ID.** A repeat `/incoming/prepare` by the same saved user for
-  the same DID, after a valid fresh email code, keeps its existing refusal and
-  adds that user's own `operationId` and `version`. Never an arrival code, and
-  never for another user's arrival.
+- **Lost operation ID.** Preparing again replaces the saved user's own unclaimed
+  preparation. A repeat `/incoming/prepare` by the same saved user for a DID
+  their own claimed arrival holds keeps its `OperationPending` refusal and adds
+  that user's own `operationId` and `version`. Never an arrival code, and never
+  for another user's arrival.
 - **Extra surfaces.** `/incoming/resume`, `/incoming/activate`, `/incoming/code`
   and the `GET /incoming` status page are not in the accepted contract (pending
   owner decision).
 - **Lifecycle.** An arrival code lasts 24 hours and is renewable with a fresh
-  email code. A prepared arrival cannot be cancelled to release its
-  reservations: cancel returns `OperationRecoveryRequired`. Retrying a tool
-  request is the same body with the same credential until it expires or the
-  identity moves to the destination (after that, a `createAccount` retry gets 403
-  `AccountMismatch` because the source key no longer verifies); later, the saved user recovers with
+  email code. Cancelling deletes an unclaimed preparation; once a handoff is
+  admitted, cancel returns `OperationRecoveryRequired`. An exact replay of an
+  admitted tool request is not re-verified, so it works after the identity moved
+  to the destination and resumes the saved steps; a different body is
+  `OperationConflict`. The saved user recovers lost credentials with
   `/incoming/recover` (new credentials, fresh email code) or continues with
-  `/incoming/resume`.
+  `/incoming/resume`. A directory outage or head change after the handoff claim
+  is `OperationRecoveryRequired`, not `IdentityConflict`.
 - **Pending accounts.** Until activation a migrated account is paused. OAuth
-  authorization, account settings, signup, status, handle,
-  deletion and PLC operations refuse it (`MigrationPending` or an honest
-  page), and ordinary status changes cannot activate it. Browser email sign-in still
-  succeeds by design and then shows the pending page. By consumer class,
-  `assertPermitted` protects registration, `assertNoMigration` protects status,
-  handle, deletion and PLC changes, the `provisioning` status protects login,
-  security changes, admin and OAuth paths, and `isPending` protects the console,
-  consent and signup pages. A single enforced guard is follow-up work. Activation is one
-  operation for the saved user (fresh email code, `/incoming/activate`) and for
-  an authorized client (its tracked access credential on
-  `activateAccount`, including the stock PDS callback). The client decides when
-  to activate; Entryway checks identity, binding and backend state, not
-  repository or blob completeness, and does not stop later source writes.
+  authorization, account settings, signup, status, handle, deletion and PLC
+  operations refuse it (`MigrationPending` or an honest page), and ordinary status
+  changes cannot activate it. Browser email sign-in still succeeds by design and
+  then shows the pending page. An unclaimed preparation never blocks anyone.
+  Activation is one operation for the saved user (fresh email code,
+  `/incoming/activate`) and for an authorized client (its tracked access
+  credential on `activateAccount`, including the stock PDS callback). The client
+  decides when to activate; Entryway checks identity, binding and backend state,
+  not repository or blob completeness, and does not stop later source writes.
 - **Limits you should know.** From the identity move until activation the
   account is unavailable to the network, for as long as the client takes to
   import and activate; the source keeps its copy. If a user stops after the

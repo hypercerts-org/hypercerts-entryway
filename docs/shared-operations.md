@@ -110,8 +110,8 @@ or settling external attempts. This is not a new fleet scan.
 
 The existing Entryway administrator authorization protects `POST
 /_operations/status` and `POST /_operations/recovery`. PDS administrator credentials
-do not authorize these endpoints. Status accepts an affected DID or normalized
-`email:` resource and returns the current safe attempt identifiers and target.
+do not authorize these endpoints. Status accepts an affected DID, a normalized
+`email:` resource or an `arrival:<did>` resource, and returns the current safe attempt identifiers and target.
 It also returns the current authorization ID, version and action, when present.
 It does not return request payloads, audit history, credentials or private signing
 material.
@@ -150,8 +150,8 @@ An acknowledged receipt is final except for steps listed in
 show the remote state. For them, while the operation is pending and no worker holds
 its lease, the ownership store's `pendingExternal` reports the acknowledged receipt
 and `approveRecovery` takes the same authorizations; an observed result then
-completes or resends the step as above. The HTTP operator routes accept only `did:`
-and `email:` resources, so they do not yet reach `arrival:` resources.
+completes or resends the step as above. The HTTP operator routes reach these receipts
+through the `arrival:<did>` resource.
 
 Approval keeps the account pending. A fresh fenced execution observes the saved
 operation's remote state before acknowledging it or recording a new external

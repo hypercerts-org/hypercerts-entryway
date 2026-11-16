@@ -169,6 +169,7 @@ export async function fixture(t, mode = "modern", mutation = "", fault = "") {
     heartbeatMs: 0,
   });
   let publicationMode = "normal";
+  let directoryFault = "";
   let directoryReads = 0;
   let plcReads = 0;
   let credentialsIssued = 0;
@@ -184,6 +185,10 @@ export async function fixture(t, mode = "modern", mutation = "", fault = "") {
       url: "https://plc.example.test",
       getAuditableLog: async () => {
         plcReads++;
+        if (directoryFault === "unavailable")
+          throw Object.assign(new Error("PLC directory unavailable"), {
+            status: 503,
+          });
         if (
           backendState.mode === "directory-outage" &&
           backendState.creates > 0
@@ -228,6 +233,8 @@ export async function fixture(t, mode = "modern", mutation = "", fault = "") {
       },
       getLastOp: async () => {
         plcReads++;
+        if (directoryFault === "head-race")
+          return { ...predecessor, sig: "changed" };
         return mutation === "race"
           ? { ...predecessor, sig: "changed" }
           : audit.at(-1).operation;
@@ -405,6 +412,11 @@ export async function fixture(t, mode = "modern", mutation = "", fault = "") {
     publicationAttempts,
     setPublicationMode: (value) => {
       publicationMode = value;
+    },
+    /** "unavailable" makes the directory answer 503; "head-race" moves the head
+     * between observation reads; "" restores normal behaviour. */
+    setDirectoryFault: (value) => {
+      directoryFault = value;
     },
     directoryReads: () => directoryReads,
     plcReads: () => plcReads,

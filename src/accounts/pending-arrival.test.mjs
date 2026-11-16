@@ -9,7 +9,7 @@ import {
   email,
   handle,
 } from "../../tests/support/helpers/incoming-arrival-fixture.mjs";
-import { query } from "../../tests/support/database-fixture.mjs";
+import { query, verifiedUser } from "../../tests/support/database-fixture.mjs";
 import {
   createPendingArrivalGuard,
   permittedWhilePending,
@@ -99,6 +99,46 @@ test("the guard reads saved arrival facts, never the status alone", async () => 
   );
   assert.equal(await some.isPending(null), false);
   assert.equal(await some.isPending(unfinishedSignup), true);
+});
+
+test("an unclaimed preparation, including another user's for a hosted DID, never makes anything pending or blocks anyone", async (t) => {
+  const f = await fixture(t);
+  await f.prepare();
+  // The preparation belongs to a different user than the one who hosts the DID.
+  await verifiedUser(f.db, "other-user", "other@example.test");
+  await query(
+    f.db,
+    "UPDATE arrivals SET user_id = ?, email = ?",
+    ["other-user", "other@example.test"],
+    "run",
+  );
+  const row = {
+    did: f.did,
+    email: "hosted@example.test",
+    emailVerified: true,
+    handle: "hosted.example.test",
+    pdsId: "pds1",
+    pdsUrl: "https://destination.example.test",
+    status: "provisioning",
+    createdAt: new Date().toISOString(),
+  };
+  // Hosting the DID is not blocked by the preparation.
+  await f.storage.insertAccount(row, undefined);
+  assert.equal(await f.storage.hasPendingExternalMigration(f.did), false);
+  const guard = createPendingArrivalGuard(f.storage);
+  assert.equal(await guard.isPending(row), false);
+  for (const action of refusedWhilePending)
+    await guard.assertPermitted(row, action);
+  const primitives = createAccountPrimitives({
+    db: f.db,
+    config: f.config,
+    storage: f.storage,
+    ownership: f.ownership,
+  });
+  await primitives.assertNoMigration(f.did);
+  // The preparation is untouched and still unclaimed.
+  const [saved] = await query(f.db, "SELECT did_root FROM arrivals");
+  assert.equal(saved.did_root, null);
 });
 
 test("ordinary setStatus cannot activate or deactivate a pending arrival", async (t) => {

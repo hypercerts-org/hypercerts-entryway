@@ -195,8 +195,9 @@ a single enforced guard is follow-up work); one activation operation
 serves the saved user, an authorized client and the stock PDS's forwarded
 `activateAccount`. Tracked credentials are the existing legacy families, so a stock
 PDS keeps accepting an already-issued access token until it expires (five minutes)
-after recovery. Ordinary refresh and activate now do one arrival lookup first. The cookie-less tool resolution (arrival code selects the arrival
-and its saved user) is proposed and awaits owner decision. This is not stock-PDS
+after recovery. Ordinary refresh and activate now do one family lookup first. The cookie-less tool resolution (arrival code selects the arrival
+and its saved user) is accepted by both developers. Operator recovery over HTTP reaches an arrival's acknowledged activation receipt
+through the `arrival:<did>` resource. This is not stock-PDS
 public journey or recovery qualification, which has not been run; see
 [incoming migration](incoming-migration.md#development-mounted-surfaces-and-pending-guard).
 
@@ -294,9 +295,9 @@ the user restarts from the app.
 A skip records the granted scopes. Returning accounts keep the stock provider
 consent policy.
 
-| Setting                     | Values and behavior                                                                                                        |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `OAUTH_TRUSTED_CLIENTS`     | Comma-separated https client metadata URLs; replaces the config-file list and the primary-client default; `""` trusts none |
+| Setting                 | Values and behavior                                                                                                        |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `OAUTH_TRUSTED_CLIENTS` | Comma-separated https client metadata URLs; replaces the config-file list and the primary-client default; `""` trusts none |
 
 Invalid values fail startup with `InvalidOAuthClientPolicy` and never echo the value.
 

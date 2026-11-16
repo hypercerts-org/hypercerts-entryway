@@ -6,15 +6,23 @@ import {
   incomingCreationMethod,
   incomingHandoffMethod,
   type IncomingMethod,
-  type VerifyIncomingAuthorization,
 } from "./incoming-authorization.js";
-import { parseArrivalRequest } from "./arrival-request.js";
 import type { ArrivalRecord } from "./arrival-types.js";
 import { arrivalCodeHash } from "./prepare-arrival.js";
 import { PlcError } from "../../plc/errors.js";
 
+/** Directory evidence that was unavailable or moved during observation says
+ * nothing about the identity. The claim and its dispatch marker are already
+ * saved, so the request stays pending for the shared operator recovery. */
+const pendingIdentity = new Set([
+  "CustodyEvidenceUnavailable",
+  "InvalidCustodyObservation",
+]);
+
 /** Identity-layer failures carry no HTTP status. Map them to stable public
- * codes; the message is the fixed public text, never a candidate or key. */
+ * codes; the message is the fixed public text, never a candidate or key. Only
+ * a definitive refusal is `IdentityConflict`; a transient directory failure or
+ * a head race after the claim stays pending as `OperationRecoveryRequired`. */
 async function stableIdentity<T>(work: () => Promise<T>): Promise<T> {
   try {
     return await work();
@@ -22,6 +30,12 @@ async function stableIdentity<T>(work: () => Promise<T>): Promise<T> {
     if (!(error instanceof PlcError)) throw error;
     if (error.code === "InvalidPlcOperation")
       throw new HttpError(400, "InvalidPlcOperation", error.message);
+    if (pendingIdentity.has(error.code))
+      throw new DomainError(
+        "OperationRecoveryRequired",
+        409,
+        "The identity directory could not be observed; the saved request needs verified recovery before it continues",
+      );
     throw new HttpError(
       409,
       "IdentityConflict",
@@ -43,11 +57,14 @@ async function stableIdentity<T>(work: () => Promise<T>): Promise<T> {
  * Replacing this resolution means replacing `select` below and nothing else.
  *
  * What the code alone permits before the source JWT verifies: reading the
- * arrival row and contending for the arrival's ownership lease (a denial of
- * service limited by the caller's request budget). It records nothing, signs
- * nothing and dispatches nothing. Every failure to select an arrival, including
- * an unparsable credential, is the same `ArrivalExpired`, so a caller without the
- * code learns nothing about any DID, operation or user.
+ * arrival row only. The feature's `admit` verifies the method-bound source JWT
+ * before it takes any ownership lease or claim, and it takes the claim itself;
+ * this file never duplicates that transaction. An exact replay of an already
+ * recorded admission is not verified (the source key no longer verifies after
+ * the identity moves) and resumes the saved continuation. Every failure to
+ * select an arrival, including an unparsable credential, is the same
+ * `ArrivalExpired`, so a caller without the code learns nothing about any DID,
+ * operation or user.
  */
 const codeShape = /^[A-Za-z0-9_-]{16,128}$/;
 const bearerShape = /^Bearer ([A-Za-z0-9._~+/-]+=*)$/;
@@ -89,11 +106,9 @@ export interface ToolAdmissionInput {
 export function createToolAdmission({
   arrivals,
   admit,
-  verify,
   continueCreation,
   issueCreationSession,
 }: {
-  verify: VerifyIncomingAuthorization;
   arrivals: Pick<ArrivalTransactor, "consumeArrivalCode">;
   admit: (input: {
     operationId: string;
@@ -113,7 +128,8 @@ export function createToolAdmission({
     arrivalCode: string;
   }) => Promise<TrackedArrivalSession>;
 }) {
-  /** The one selection point. Method first, then a current code. */
+  /** The one selection point. Method first, then a current code. The code only
+   * selects; `admit` verifies the source credential before any lease. */
   const select = async (
     method: IncomingMethod,
     input: ToolAdmissionInput,
@@ -130,19 +146,6 @@ export function createToolAdmission({
       method,
     });
     if (!record) throw expired();
-    // The code only selects. The method-bound source credential is verified
-    // with the same verifier and request digest admission uses, BEFORE any
-    // ownership lease is taken, so a leaked code with a bad credential cannot
-    // contend for the arrival. Verification consumes no replay state; admission
-    // verifies again and records it.
-    const parsed = parseArrivalRequest(record, method, input.body);
-    await verify({
-      presentation: input.presentation,
-      method,
-      operationId: record.operationId,
-      requestDigest: parsed.requestDigest,
-      expectedDid: record.did,
-    });
     return { record, arrivalCode };
   };
   return {
@@ -184,18 +187,21 @@ export function createToolAdmission({
         input,
       );
       return stableIdentity(async () => {
-        await admit({
+        const admitted = (await admit({
           operationId: record.operationId,
           userId: record.userId,
           method: incomingCreationMethod,
           body: input.body,
           presentation: input.presentation,
           arrivalCode,
-        });
-        await continueCreation({
-          operationId: record.operationId,
-          userId: record.userId,
-        });
+        })) as { state?: string } | undefined;
+        // An exact replay already resumed the saved continuation under the
+        // recorded claim; only a new admission still needs it.
+        if (admitted?.state === "admitted")
+          await continueCreation({
+            operationId: record.operationId,
+            userId: record.userId,
+          });
         return issueCreationSession({
           did: record.did,
           operationId: record.operationId,

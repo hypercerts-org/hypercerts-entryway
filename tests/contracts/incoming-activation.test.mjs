@@ -7,6 +7,9 @@ import {
   admitProvisioning,
 } from "../support/helpers/incoming-arrival-fixture.mjs";
 import { query, verifiedUser } from "../support/database-fixture.mjs";
+import http from "node:http";
+import express from "express";
+import { mountOperationRecoveryRoutes } from "../../dist/src/features/account-settings/operation-recovery-routes.js";
 import { createOperationOwnership } from "../../dist/src/accounts/operation-ownership.js";
 import { createOperationOwnershipStore } from "../../dist/src/database/drizzle/operation-ownership.js";
 import { arrivalClaimInput } from "../../dist/src/features/external-migration/arrival-request.js";
@@ -612,6 +615,89 @@ test("an approved observe completes an acknowledged activation once the backend 
   const access = await f.arrivals.readArrivalAccess(f.did);
   assert.equal(access.complete, true);
   assert.equal(access.unresolvedAttempt, false);
+});
+
+test("the operator HTTP routes see and approve an acknowledged activation receipt through the arrival resource", async (t) => {
+  const { f, op } = await stuckAfterAcknowledgement(t);
+  const app = express();
+  app.use(express.json());
+  mountOperationRecoveryRoutes({
+    app,
+    config: { adminPassword: "operator-test" },
+    ownership: f.store,
+  });
+  // eslint-disable-next-line no-unused-vars -- Express requires four-argument error middleware.
+  app.use((error, _req, res, _next) =>
+    res.status(error.status ?? 500).json({ error: error.code ?? error.error }),
+  );
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise((resolve) => server.once("listening", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  // The fixture replaces globalThis.fetch, so use node:http.
+  const call = (path, body, password = "operator-test") =>
+    new Promise((resolve, reject) => {
+      const request = http.request(
+        {
+          host: "127.0.0.1",
+          port: server.address().port,
+          path,
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Basic ${Buffer.from(`admin:${password}`).toString("base64")}`,
+          },
+        },
+        (response) => {
+          const chunks = [];
+          response.on("data", (chunk) => chunks.push(chunk));
+          response.on("end", () =>
+            resolve({
+              status: response.statusCode,
+              json: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+            }),
+          );
+        },
+      );
+      request.on("error", reject);
+      request.end(JSON.stringify(body));
+    });
+  const resource = `arrival:${f.did}`;
+  // Authenticated and shaped: an unauthenticated or malformed resource is refused.
+  assert.equal(
+    (await call("/_operations/status", { resource }, "wrong")).status,
+    401,
+  );
+  assert.equal(
+    (await call("/_operations/status", { resource: "arrival:nope" })).status,
+    400,
+  );
+  const status = await call("/_operations/status", { resource });
+  assert.equal(status.status, 200);
+  assert.equal(status.json.status, "recovery-required");
+  assert.equal(status.json.attempt.step, "incoming-activation");
+  assert.equal(Object.hasOwn(status.json.attempt, "result"), false);
+  const { operationId, externalAttemptId, executionAttemptId, target } =
+    status.json.attempt;
+  const approved = await call("/_operations/recovery", {
+    operationId,
+    externalAttemptId,
+    executionAttemptId,
+    target,
+    action: "observe",
+    dispatcherIsolationReference: "test-dispatcher-isolated",
+    upstreamDrainReference: "test-upstream-drained",
+  });
+  assert.equal(approved.status, 200, JSON.stringify(approved.json));
+  assert.equal(approved.json.status, "recovery-authorized");
+  const after = await call("/_operations/status", { resource });
+  assert.equal(after.json.status, "recovery-authorized");
+  assert.equal(after.json.authorization.action, "observe");
+  // The approval alone changes nothing: the saved user's retry observes the
+  // backend and completes once it is active again.
+  assert.equal(await accountStatus(f), "provisioning");
+  f.backendState.deactivated = false;
+  assert.equal((await asUser(f, op)).state, "active");
+  assert.equal(f.backendState.activations, 1);
 });
 
 test("an approved safe retry completes an acknowledged activation whose backend stays paused", async (t) => {

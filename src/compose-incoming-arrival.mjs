@@ -98,9 +98,6 @@ export async function composeIncomingArrival({
     const transport = new ArrivalPdsClient({
       endpoint: saved.endpoint,
       did: saved.did,
-      pdsDid: pds.did,
-      issuer: config.serviceDid,
-      jwtJwk: config.jwtJwk,
     });
     const authorization = () =>
       `Basic ${Buffer.from(`admin:${pds.adminPassword}`).toString("base64")}`;
@@ -191,7 +188,6 @@ export async function composeIncomingArrival({
   // tool-admission.ts); browser surfaces below keep the browser-bound forms.
   const toolAdmission = createToolAdmission({
     arrivals,
-    verify,
     admit: authenticated.admit,
     continueCreation: authenticated.continueCreation,
     issueCreationSession: credentials.issueCreationSession,

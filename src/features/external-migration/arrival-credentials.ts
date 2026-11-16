@@ -382,8 +382,10 @@ export function createArrivalCredentials({
         "refresh",
       );
       const tracked = await arrivals.readArrivalFamily(familyId);
+      // An ordinary refresh does one family read and no arrival read.
+      if (!tracked) throw invalidToken();
       const access = await arrivals.readArrivalAccess(did);
-      if (!tracked || !access || access.operationId !== tracked.operationId)
+      if (!access || access.operationId !== tracked.operationId)
         throw invalidToken();
       await signer.readRefresh(refreshCredential);
       if (tracked.revokedAt !== null) throw expiredToken();
