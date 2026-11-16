@@ -9,6 +9,7 @@ import {
 import { query, verifiedUser } from "../support/database-fixture.mjs";
 import { createOperationOwnership } from "../../dist/src/accounts/operation-ownership.js";
 import { createOperationOwnershipStore } from "../../dist/src/database/drizzle/operation-ownership.js";
+import { arrivalClaimInput } from "../../dist/src/features/external-migration/arrival-request.js";
 import { assertActivationReady } from "../../dist/src/features/external-migration/activation-checks.js";
 
 const codeOf = (error) => error.code ?? error.error;
@@ -355,6 +356,17 @@ test("changed placement and unavailable backend refuse without dispatch", async 
   await assertUntouched(f, op);
 });
 
+test("a placement host removed from configuration is the documented conflict", async (t) => {
+  const { f, op } = await bound(t);
+  const [removed] = f.config.pds.splice(0, 1);
+  try {
+    await assert.rejects(asUser(f, op), hasCode("OperationConflict"));
+  } finally {
+    f.config.pds.unshift(removed);
+  }
+  await assertUntouched(f, op);
+});
+
 test("a lost activation acknowledgement keeps uncertainty until recovery observes the exact effect", async (t) => {
   const { f, op } = await bound(t);
   f.backendState.mode = "activation-lost";
@@ -532,7 +544,9 @@ test("a lost local commit resumes the exact acknowledged operation without a sec
   );
 });
 
-test("a backend paused again before the local commit is not completed as active", async (t) => {
+/** The receipt is acknowledged and the backend was active, then the local
+ * commit failed and something paused the backend again. */
+async function stuckAfterAcknowledgement(t) {
   const { f, op } = await bound(t);
   const original = f.storage.activatePlacedAccount;
   f.storage.activatePlacedAccount = async () => {
@@ -541,43 +555,160 @@ test("a backend paused again before the local commit is not completed as active"
   await assert.rejects(asUser(f, op), /local commit lost/);
   f.storage.activatePlacedAccount = original;
   assert.equal(f.backendState.activations, 1);
-  // The activation was acknowledged, then something paused the backend again.
   f.backendState.deactivated = true;
   await assert.rejects(asUser(f, op), hasCode("OperationRecoveryRequired"));
   assert.equal(await accountStatus(f), "provisioning");
   assert.equal((await f.arrivals.readArrivalAccess(f.did)).complete, false);
   assert.equal(f.backendState.activations, 1);
+  return { f, op };
+}
+const approval = (pending, action, previous) => ({
+  operationId: pending.operationId,
+  externalAttemptId: pending.id,
+  executionAttemptId: pending.executionAttemptId,
+  target: pending.target,
+  dispatcherIsolationReference: "test-dispatcher-isolated",
+  upstreamDrainReference: "test-upstream-drained",
+  action,
+  ...(previous ? { previousAuthorization: previous } : {}),
+});
+
+test("a backend paused again before the local commit is not completed as active", async (t) => {
+  const { f } = await stuckAfterAcknowledgement(t);
+  // The acknowledged receipt is reported for operator recovery, not hidden.
+  const pending = await f.store.pendingExternal(`arrival:${f.did}`);
+  assert.equal(pending.state, "acknowledged");
+  assert.equal(pending.step, "incoming-activation");
+  assert.equal((await f.arrivals.readArrivalAccess(f.did)).complete, false);
+});
+
+test("an acknowledged activation receipt is not reported while a lease is held", async (t) => {
+  const { f } = await stuckAfterAcknowledgement(t);
+  const resource = `arrival:${f.did}`;
+  assert.equal((await f.store.pendingExternal(resource)).state, "acknowledged");
+  await query(
+    f.db,
+    "UPDATE authority_operations SET worker_id = ?, lease_expires_at = ? WHERE pending",
+    ["other-worker", Date.now() + 600_000],
+    "run",
+  );
+  assert.equal(await f.store.pendingExternal(resource), null);
+});
+
+test("an approved observe completes an acknowledged activation once the backend is active again", async (t) => {
+  const { f, op } = await stuckAfterAcknowledgement(t);
+  await approveObserve(f);
+  assert.deepEqual(
+    (await receipts(f)).map((row) => row.state),
+    ["recovery-approved"],
+  );
+  // Observation finds it unapplied: observe alone never resends.
+  await assert.rejects(asUser(f, op), hasCode("OperationRecoveryRequired"));
+  assert.equal(f.backendState.activations, 1);
+  f.backendState.deactivated = false;
+  assert.equal((await asUser(f, op)).state, "active");
+  assert.equal(f.backendState.activations, 1);
+  assert.equal(await accountStatus(f), "active");
+  const access = await f.arrivals.readArrivalAccess(f.did);
+  assert.equal(access.complete, true);
+  assert.equal(access.unresolvedAttempt, false);
+});
+
+test("an approved safe retry completes an acknowledged activation whose backend stays paused", async (t) => {
+  const { f, op } = await stuckAfterAcknowledgement(t);
+  const pending = await f.store.pendingExternal(`arrival:${f.did}`);
+  await f.store.approveRecovery(approval(pending, "observe"));
+  const latest = await f.store.pendingExternal(`arrival:${f.did}`);
+  await f.store.approveRecovery(
+    approval(pending, "retry-if-safe", latest.recovery),
+  );
+  assert.equal((await asUser(f, op)).state, "active");
+  assert.equal(f.backendState.activations, 2);
+  assert.equal(await accountStatus(f), "active");
+  const access = await f.arrivals.readArrivalAccess(f.did);
+  assert.equal(access.complete, true);
+  assert.equal(access.unresolvedAttempt, false);
+  assert.deepEqual(
+    (await receipts(f)).map((row) => row.state),
+    ["acknowledged", "acknowledged"],
+  );
+});
+
+test("approval of an acknowledged activation is upgrades only once from observe", async (t) => {
+  const { f } = await stuckAfterAcknowledgement(t);
+  const pending = await f.store.pendingExternal(`arrival:${f.did}`);
+  await f.store.approveRecovery(approval(pending, "observe"));
+  await assert.rejects(
+    f.store.approveRecovery(approval(pending, "observe")),
+    hasCode("InvalidOperationRecovery"),
+  );
+});
+
+test("an acknowledged receipt of another step is never approvable", async (t) => {
+  const { f } = await bound(t);
+  const creation = (
+    await query(
+      f.db,
+      "SELECT id, operation_id, execution_attempt_id, target FROM external_operation_attempts WHERE step <> 'incoming-activation' ORDER BY created_at DESC",
+    )
+  )[0];
+  assert.ok(creation);
+  assert.equal(await f.store.pendingExternal(`arrival:${f.did}`), null);
+  await assert.rejects(
+    f.store.approveRecovery(
+      approval(
+        {
+          operationId: creation.operation_id,
+          id: creation.id,
+          executionAttemptId: creation.execution_attempt_id,
+          target: creation.target,
+        },
+        "observe",
+      ),
+    ),
+    hasCode("InvalidOperationRecovery"),
+  );
 });
 
 test("a stale owner cannot finish activation", async (t) => {
   const { f, op } = await bound(t);
+  // The takeover runs from the test body, outside the activation's fence scope.
+  let reached;
+  const atBackend = new Promise((resolve) => (reached = resolve));
+  let release;
+  const held = new Promise((resolve) => (release = resolve));
   f.backendState.onActivate = async () => {
     f.backendState.onActivate = null;
-    await query(
-      f.db,
-      "UPDATE authority_operations SET lease_expires_at = 1 WHERE pending = 1",
-      [],
-      "run",
-    );
-    const successor = createOperationOwnership({
-      store: createOperationOwnershipStore(f.db),
-      heartbeatMs: 0,
-    });
-    await successor.resumePending(
-      `arrival:${f.did}`,
-      op,
-      {
-        kind: "public-arrival",
-        request: {
-          did: f.did,
-          handle: "destination.example.test",
-          userId: "destination-user",
-        },
-      },
-      async () => {},
-    );
+    reached();
+    await held;
   };
-  await assert.rejects(asUser(f, op), hasCode("OperationLeaseLost"));
+  const stale = asUser(f, op);
+  const outcome = assert.rejects(stale, hasCode("OperationLeaseLost"));
+  await atBackend;
+  await query(
+    f.db,
+    "UPDATE authority_operations SET lease_expires_at = 1 WHERE pending",
+    [],
+    "run",
+  );
+  const saved = (await f.arrivals.readArrivalAggregate(op, f.principal.userId))
+    .arrival;
+  const successor = createOperationOwnership({
+    store: createOperationOwnershipStore(f.db),
+    heartbeatMs: 0,
+  });
+  let ran = false;
+  await successor.resumePending(
+    `arrival:${f.did}`,
+    saved.claimOperationId,
+    arrivalClaimInput(saved),
+    async () => {
+      ran = true;
+    },
+  );
+  assert.equal(ran, true);
+  release();
+  await outcome;
   assert.equal(await accountStatus(f), "provisioning");
   assert.equal((await f.arrivals.readArrivalAccess(f.did)).complete, false);
   assert.equal(f.backendState.activations, 1);

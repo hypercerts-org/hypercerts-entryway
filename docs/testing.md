@@ -114,9 +114,9 @@ env -u INCOMING_PUBLIC_MECHANISMS -u INCOMING_ACCESS_PATH node --test \
   tests/contracts/incoming-public-mechanisms.test.mjs
 ```
 
-That run skips the live-gated tests; those skips are not qualification. Setting
-`INCOMING_PUBLIC_MECHANISMS=0` still opts in because the gate tests presence; unset
-it as shown. Report live results only from an executed managed sandbox run.
+That run skips the three live-gated tests; those skips are not qualification.
+It exercises the offline subset only. Report counts and sandbox outcomes in the PR
+or handoff, not in this document.
 
 The offline cases cover the managed request boundary and phase budgets. They do not
 prove any public behavior: this contract test consumes stock PDS APIs, not Entryway

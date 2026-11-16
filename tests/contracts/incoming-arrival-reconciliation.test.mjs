@@ -24,9 +24,18 @@ const cases = [
   "binding-response-lost",
   "lease-takeover",
 ];
+// The repository key is reserved by the creation continuation, after the claim,
+// so only cuts at or after that continuation have reserved it.
+const beforeReservation = new Set([
+  "signed-handoff",
+  "handoff-observed",
+  "creation-admitted",
+  "lease-takeover",
+  "divergent",
+  "tombstone",
+  "uncertain",
+]);
 const pendingCuts = new Set([
-  "intent-response-missing",
-  "key-response-lost",
   "signed-handoff",
   "handoff-observed",
   "move-without-backend",
@@ -176,6 +185,11 @@ for (const cut of [...cases, "divergent", "tombstone", "uncertain"]) {
       if (cut === "intent-response-missing") {
         assert.ok(aggregate.reservation);
         assert.equal(aggregate.arrival.signingKey, null);
+        assert.equal(checkpoint.external.step, "incoming-reservation");
+      } else if (beforeReservation.has(cut)) {
+        assert.equal(aggregate.reservation, null);
+        assert.equal(aggregate.arrival.signingKey, null);
+        assert.equal(checkpoint.counts.reserve, 0);
       } else
         assert.equal(
           aggregate.arrival.signingKey,
@@ -303,7 +317,14 @@ for (const cut of [...cases, "divergent", "tombstone", "uncertain"]) {
       );
       assert.equal(inviteCounts.completed, pendingCuts.has(cut) ? 0 : 1);
       assert.equal(inviteCounts.remaining, 0);
-      assert.equal(after.counts.reserve, 1);
+      assert.equal(
+        after.counts.reserve,
+        beforeReservation.has(cut) && pendingCuts.has(cut)
+          ? 0
+          : cut === "intent-response-missing"
+            ? 2
+            : 1,
+      );
       assert.equal(after.counts.credentials, checkpoint.counts.credentials);
       for (const signed of aggregate.signedOperations)
         assert.deepEqual(
