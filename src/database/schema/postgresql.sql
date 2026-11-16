@@ -99,6 +99,7 @@ CREATE TABLE "arrivals" (
 	"operation_id" text PRIMARY KEY,
 	"did" text NOT NULL,
 	"did_root" text,
+	"claim_operation_id" text,
 	"active" integer NOT NULL,
 	"user_id" text NOT NULL,
 	"email" text NOT NULL,
@@ -123,7 +124,7 @@ CREATE TABLE "arrivals" (
 	"activation_at" bigint,
 	"completed_at" bigint,
 	CONSTRAINT "arrival_active" CHECK ("active" IN (0, 1)),
-	CONSTRAINT "arrival_tuple" CHECK (("active" = 1 AND "did_root" = "did") OR ("active" = 0 AND "did_root" IS NULL)),
+	CONSTRAINT "arrival_tuple" CHECK (("active" = 1 AND "claim_operation_id" IS NOT NULL AND "did_root" IS NOT NULL AND "did_root" = "did") OR ("active" = 1 AND "claim_operation_id" IS NULL AND "did_root" IS NULL) OR ("active" = 0 AND "did_root" IS NULL)),
 	CONSTRAINT "arrival_cancel" CHECK (("cancelled_at" IS NULL) OR ("cancelled_at" IS NOT NULL AND "active" = 0)),
 	CONSTRAINT "arrival_bound" CHECK (("bound_at" IS NULL) OR ("bound_at" IS NOT NULL AND "deactivated_at" IS NOT NULL)),
 	CONSTRAINT "arrival_complete" CHECK (("completed_at" IS NULL) OR ("completed_at" IS NOT NULL AND "bound_at" IS NOT NULL AND "activation_method" IS NOT NULL))
@@ -326,6 +327,7 @@ CREATE INDEX "arrival_family_operation" ON "arrival_families" ("operation_id","r
 CREATE UNIQUE INDEX "arrival_replay_credential" ON "arrival_replay" ("credential_issuer","credential_jti");--> statement-breakpoint
 CREATE UNIQUE INDEX "arrival_signed_kind_cid" ON "arrival_signed_operations" ("operation_id","kind_operation_cid");--> statement-breakpoint
 CREATE UNIQUE INDEX "arrivals_did_active" ON "arrivals" ("did_root");--> statement-breakpoint
+CREATE UNIQUE INDEX "arrivals_user_unclaimed" ON "arrivals" ("user_id") WHERE "active" = 1 AND "claim_operation_id" IS NULL;--> statement-breakpoint
 CREATE INDEX "arrivals_did" ON "arrivals" ("did","created_at");--> statement-breakpoint
 CREATE INDEX "arrivals_user" ON "arrivals" ("user_id","created_at");--> statement-breakpoint
 CREATE INDEX "arrivals_email" ON "arrivals" (lower("email"));--> statement-breakpoint

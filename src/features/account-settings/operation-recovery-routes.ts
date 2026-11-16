@@ -54,12 +54,12 @@ export function mountOperationRecoveryRoutes({
       const resource = body.resource;
       if (
         typeof resource !== "string" ||
-        !/^(did:|email:).{1,320}$/.test(resource)
+        !/^(did:|email:|arrival:did:).{1,320}$/.test(resource)
       )
         throw new HttpError(
           400,
           "InvalidRequest",
-          "Provide the affected DID or normalized email resource",
+          "Provide the affected DID, normalized email or arrival:<did> resource",
         );
       const attempt = await ownership.pendingExternal(resource);
       if (!attempt) return res.json({ status: "no-uncertain-attempt" });

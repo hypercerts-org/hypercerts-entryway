@@ -3,6 +3,7 @@ import { HttpError } from "../../http/http-error.mjs";
 import type { OperationOwnership } from "../../accounts/operation-ownership.js";
 import type { ArrivalTransactor } from "../../database/migration-journal.port.js";
 import type { OperationClaim } from "../../database/operation-ownership.port.js";
+import { arrivalClaimInput } from "./arrival-request.js";
 import type { ArrivalAggregate, ArrivalRecord } from "./arrival-types.js";
 
 export const notFound = () =>
@@ -19,7 +20,8 @@ export const recoveryRequired = (message: string) =>
   new DomainError("OperationRecoveryRequired", 409, message);
 
 /** Saved-arrival reads and live ownership for credential and activation work.
- * The owner is the arrival's pending `arrival:<did>` operation; every callback
+ * The owner is the arrival's recorded claim operation on `arrival:<did>`, taken
+ * when its handoff was admitted; an unclaimed arrival has none. Every callback
  * re-reads the aggregate after the fence is held, so earlier unowned reads can
  * only select the operation, never authorize a change. */
 export function createArrivalOwner({
@@ -38,21 +40,20 @@ export function createArrivalOwner({
     if (!aggregate) throw notFound();
     return aggregate;
   };
-  const resume = <T>(
+  const resume = async <T>(
     saved: ArrivalRecord,
     work: (owner: OperationClaim, current: ArrivalAggregate) => Promise<T>,
-  ): Promise<T> =>
-    ownership.resumePending(
+  ): Promise<T> => {
+    if (saved.claimOperationId === null)
+      throw new DomainError(
+        "OperationNoLongerPending",
+        409,
+        "The arrival has no admitted handoff",
+      );
+    return ownership.resumePending(
       `arrival:${saved.did}`,
-      saved.operationId,
-      {
-        kind: "public-arrival",
-        request: {
-          did: saved.did,
-          handle: saved.handle,
-          userId: saved.userId,
-        },
-      },
+      saved.claimOperationId,
+      arrivalClaimInput(saved),
       async () => {
         const owner = ownership.currentClaim;
         if (!owner)
@@ -65,6 +66,7 @@ export function createArrivalOwner({
         return work(owner, await read(saved.operationId, saved.userId));
       },
     );
+  };
   return { read, resume };
 }
 

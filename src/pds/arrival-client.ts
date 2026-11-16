@@ -1,7 +1,5 @@
 import { parseDidKey } from "@atproto/crypto";
-import type { JWK } from "jose";
 import { DomainError } from "../accounts/errors.js";
-import { createTargetAccessTokenSigner } from "./access-token.js";
 
 /** A stock PDS holds the reserved repository private key. This client only ever
  * receives public key material and never persists a returned session. */
@@ -83,26 +81,12 @@ async function readPublicJson(
  * then inspects and pauses through composition's administrator authorization
  * callbacks without storing an administrator secret on this client. */
 export class ArrivalPdsClient {
-  #accountAccess:
-    | Promise<{
-        sign: (did: string) => Promise<string>;
-      }>
-    | undefined;
   public constructor(
     private readonly options: {
       readonly endpoint: string;
       readonly did: string;
-      readonly pdsDid: string;
-      readonly issuer: string;
-      readonly jwtJwk: JWK;
     },
-  ) {
-    for (const did of [options.pdsDid, options.issuer])
-      if (!did.startsWith("did:"))
-        throw new TypeError(
-          "A destination service DID and issuer are required",
-        );
-  }
+  ) {}
   /** Configured administrator credentials stay in composition's signing closure. */
   public async getAccountInfo(
     authorization: () => string,
@@ -176,19 +160,6 @@ export class ArrivalPdsClient {
   #url(method: string): URL {
     return new URL(`/xrpc/${method}`, this.options.endpoint);
   }
-  /** These two methods reach the destination's `authVerifier.access()` through
-   * `authorization()`, which pins `typ: "at+jwt"` and requires the audience to be
-   * the destination PDS's own DID, with no Entryway fallback. It is a different
-   * verifier from `verifyEntrywayServiceJwt`, which serves `createAccount` and
-   * `reserveSigningKey` and requires `typ: "JWT"`; those rules do not apply here. */
-  async #accessToken(did: string): Promise<string> {
-    this.#accountAccess ??= createTargetAccessTokenSigner({
-      privateJwk: this.options.jwtJwk,
-      issuer: this.options.issuer,
-      audience: this.options.pdsDid,
-    });
-    return await (await this.#accountAccess).sign(did);
-  }
   /** Stock reservation is unauthenticated and echoes neither DID nor host: the
    * caller binds the result through its own durable intent, not this response. */
   public async reserveSigningKey(did: string): Promise<string> {
@@ -231,50 +202,5 @@ export class ArrivalPdsClient {
     )
       throw invalidResponse(method);
     return { did: value.did, handle: value.handle };
-  }
-  /** Status requires the account's own credential and describes only itself. */
-  public async checkAccountStatus(
-    did: string,
-  ): Promise<{ activated: boolean }> {
-    const method = "com.atproto.server.checkAccountStatus";
-    const response = await fetch(this.#url(method), {
-      method: "GET",
-      headers: { authorization: `Bearer ${await this.#accessToken(did)}` },
-      redirect: "error",
-      signal: AbortSignal.timeout(15_000),
-    });
-    const value = await readPublicJson(response, method);
-    if (!isRecord(value) || typeof value.activated !== "boolean")
-      throw invalidResponse(method);
-    return { activated: value.activated };
-  }
-  private async deactivationObserved(did: string): Promise<boolean> {
-    try {
-      return !(await this.checkAccountStatus(did)).activated;
-    } catch {
-      return false;
-    }
-  }
-  /** Ordinary self-deactivation with the account's own credential, followed by a
-   * status read. Callers treat any failure as an unresolved obligation. */
-  public async deactivateAccount(did: string): Promise<void> {
-    const method = "com.atproto.server.deactivateAccount";
-    const response = await fetch(this.#url(method), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${await this.#accessToken(did)}`,
-      },
-      body: JSON.stringify({}),
-      redirect: "error",
-      signal: AbortSignal.timeout(30_000),
-    });
-    await readPublicJson(response, method);
-    if (!(await this.deactivationObserved(did)))
-      throw new DomainError(
-        "AccountUnavailable",
-        502,
-        "Destination deactivation is not yet observed",
-      );
   }
 }

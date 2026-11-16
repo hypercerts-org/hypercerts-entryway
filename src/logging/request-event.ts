@@ -50,6 +50,8 @@ const safeCodes = new Set([
   "MissingSnapshot",
   "NotFound",
   "OperationConflict",
+  "OperationLeaseLost",
+  "OperationNoLongerPending",
   "OperationPending",
   "OperationRecoveryRequired",
   "OwnerBindingChanged",

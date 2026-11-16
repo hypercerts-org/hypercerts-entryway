@@ -126,6 +126,21 @@ export function incomingRotationKeys(
   return keys;
 }
 
+/** An incoming handoff keeps every predecessor rotation key in its original
+ * order and may append at most one key. Removing or reordering a key would
+ * discard recovery authority the holder already has. */
+export function assertRotationKeysPreserved(
+  predecessor: readonly string[],
+  approved: readonly string[],
+): void {
+  if (
+    approved.length < predecessor.length ||
+    approved.length > predecessor.length + 1 ||
+    predecessor.some((key, index) => approved[index] !== key)
+  )
+    return invalid();
+}
+
 /** Source facts an authority-only handoff must not alter. Comparison is exact
  * and order-sensitive: a reordered rotation list is a different approved list. */
 export interface IncomingSourceFacts {
@@ -136,8 +151,8 @@ export interface IncomingSourceFacts {
 
 /** Validate a source-signed authority-only handoff in its original encoding.
  * The signature must prove the expected source predecessor, and the only change
- * to the approved ordered rotation list may be adding the Entryway rotation key,
- * within the protocol limit. Overfull lists, removals, reordering, unexpected
+ * to the approved ordered rotation list may be appending the Entryway rotation key
+ * after every predecessor key, within the protocol limit. Overfull lists, removals, reordering, unexpected
  * keys, changed source facts and tombstones are rejected rather than truncated. */
 export async function validateIncomingHandoff(input: {
   readonly operation: unknown;
@@ -170,6 +185,7 @@ export async function validateIncomingHandoff(input: {
     if (error instanceof PlcError) throw error;
     return invalid();
   }
+  assertRotationKeysPreserved(predecessor.rotationKeys, approved);
   const facts = plc.normalizeOp(candidate);
   if (facts.rotationKeys.length !== approved.length) return invalid();
   for (let index = 0; index < approved.length; index += 1)

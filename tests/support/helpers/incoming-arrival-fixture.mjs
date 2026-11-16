@@ -117,10 +117,6 @@ export async function fixture(t, mode = "modern", mutation = "", fault = "") {
       accounts: { storage },
     });
   const arrivals = arrivalStorage();
-  if (fault.startsWith("after-commit"))
-    arrivals.recordAllocationIntent = async () => {
-      throw new Error("interrupted before allocation intent");
-    };
   await verifiedUser(db, "destination-user", email);
   const principal = {
     userId: "destination-user",
@@ -165,25 +161,17 @@ export async function fixture(t, mode = "modern", mutation = "", fault = "") {
     store: {
       ...store,
       async checkpoint(...args) {
-        if (
-          fault === "after-commit-complete-fails" &&
-          args[1].phase === "complete" &&
-          !completionFailed
-        ) {
-          completionFailed = true;
-          throw new Error("completion interrupted");
-        }
         if (fault === "before-checkpoint") throw new Error("checkpoint fault");
         await store.checkpoint(...args);
         if (fault === "after-checkpoint") throw new Error("checkpoint fault");
       },
-      release: fault === "after-commit-crash" ? async () => {} : store.release,
     },
     heartbeatMs: 0,
   });
-  let completionFailed = false;
   let publicationMode = "normal";
+  let directoryFault = "";
   let directoryReads = 0;
+  let plcReads = 0;
   let credentialsIssued = 0;
   const publicationAttempts = [];
   const accounts = {
@@ -196,6 +184,11 @@ export async function fixture(t, mode = "modern", mutation = "", fault = "") {
     plcClient: {
       url: "https://plc.example.test",
       getAuditableLog: async () => {
+        plcReads++;
+        if (directoryFault === "unavailable")
+          throw Object.assign(new Error("PLC directory unavailable"), {
+            status: 503,
+          });
         if (
           backendState.mode === "directory-outage" &&
           backendState.creates > 0
@@ -205,6 +198,7 @@ export async function fixture(t, mode = "modern", mutation = "", fault = "") {
       },
       getDocument: async () => {
         directoryReads++;
+        plcReads++;
         return plc.formatDidDoc({
           did,
           ...plc.normalizeOp(audit.at(-1).operation),
@@ -237,10 +231,14 @@ export async function fixture(t, mode = "modern", mutation = "", fault = "") {
         if (publicationMode === "lost-applied")
           throw new Error("response lost");
       },
-      getLastOp: async () =>
-        mutation === "race"
+      getLastOp: async () => {
+        plcReads++;
+        if (directoryFault === "head-race")
+          return { ...predecessor, sig: "changed" };
+        return mutation === "race"
           ? { ...predecessor, sig: "changed" }
-          : audit.at(-1).operation,
+          : audit.at(-1).operation;
+      },
     },
   };
   const browserFlow = createBrowserFlow({
@@ -263,6 +261,7 @@ export async function fixture(t, mode = "modern", mutation = "", fault = "") {
     calls: [],
     onActivate: null,
     mode: "normal",
+    reservation: mutation,
     exactMove: null,
     adminExtras: {},
   };
@@ -375,8 +374,10 @@ export async function fixture(t, mode = "modern", mutation = "", fault = "") {
     const rows = await query(db, "SELECT * FROM arrival_reservations");
     assert.equal(rows.length, 1);
     assert.equal(rows[0].signing_key, null);
-    if (mutation === "lost") throw new Error("reservation response lost");
-    if (mutation === "http") return new Response("{}", { status: 503 });
+    if (backendState.reservation === "lost")
+      throw new Error("reservation response lost");
+    if (backendState.reservation === "http")
+      return new Response("{}", { status: 503 });
     return Response.json({ signingKey: repository.did() });
   };
   const legacy = await createLegacy({ db, config, accounts });
@@ -412,7 +413,13 @@ export async function fixture(t, mode = "modern", mutation = "", fault = "") {
     setPublicationMode: (value) => {
       publicationMode = value;
     },
+    /** "unavailable" makes the directory answer 503; "head-race" moves the head
+     * between observation reads; "" restores normal behaviour. */
+    setDirectoryFault: (value) => {
+      directoryFault = value;
+    },
     directoryReads: () => directoryReads,
+    plcReads: () => plcReads,
     credentialsIssued: () => credentialsIssued,
     async credential(method = incomingHandoffMethod, overrides = {}) {
       credentialsIssued++;
@@ -485,5 +492,5 @@ export async function admitProvisioning(f, interruptHandoff = false) {
     presentation: await f.credential(incomingCreationMethod),
     arrivalCode: prepared.arrivalCode,
   });
-  return prepared;
+  return { ...prepared, inviteCode: code };
 }

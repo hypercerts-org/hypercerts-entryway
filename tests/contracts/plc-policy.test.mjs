@@ -2,10 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Secp256k1Keypair, P256Keypair } from "@atproto/crypto";
 import * as plc from "@did-plc/lib";
+import { cidForCbor } from "@atproto/common";
 import {
   genesisRotationKeys,
   incomingRotationKeys,
   publicUpdateCandidate,
+  validateIncomingHandoff,
 } from "../../dist/src/plc/policy.js";
 
 async function fixture() {
@@ -54,6 +56,55 @@ test("incoming authority preserves priority, rejects invalid/full lists and neve
       code: "InvalidPlcOperation",
     });
   }
+});
+
+test("an incoming handoff keeps every predecessor rotation key and appends at most one", async () => {
+  const entryway = await Secp256k1Keypair.create();
+  const source = await Secp256k1Keypair.create();
+  const recovery = await P256Keypair.create();
+  const extra = await Secp256k1Keypair.create();
+  const predecessor = await plc.signOperation(
+    plc.formatAtprotoOp({
+      signingKey: source.did(),
+      handle: "alice.example.com",
+      pds: "https://pds.example.com",
+      rotationKeys: [source.did(), recovery.did()],
+      prev: null,
+    }),
+    source,
+  );
+  const { sig: _signature, ...unsigned } = predecessor;
+  const prev = String(await cidForCbor(predecessor));
+  const facts = {
+    services: predecessor.services,
+    verificationMethods: predecessor.verificationMethods,
+    alsoKnownAs: predecessor.alsoKnownAs,
+  };
+  const attempt = async (rotationKeys) =>
+    validateIncomingHandoff({
+      operation: await plc.signOperation(
+        { ...unsigned, rotationKeys, prev },
+        source,
+      ),
+      expectedPredecessor: predecessor,
+      approvedRotationKeys: rotationKeys,
+      source: facts,
+    });
+  const kept = [source.did(), recovery.did()];
+  assert.equal(
+    (await attempt([...kept, entryway.did()])).rotationKeys.at(-1),
+    entryway.did(),
+  );
+  for (const rotationKeys of [
+    [source.did(), entryway.did()],
+    [recovery.did(), entryway.did()],
+    [recovery.did(), source.did(), entryway.did()],
+    [...kept, extra.did(), entryway.did()],
+    [entryway.did(), ...kept],
+  ])
+    await assert.rejects(attempt(rotationKeys), {
+      code: "InvalidPlcOperation",
+    });
 });
 
 test("updates preserve omission and pinned duplicate behavior, enforce bounds and policy", async () => {

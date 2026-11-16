@@ -124,3 +124,15 @@ export function parseArrivalRequest(
     .digest("hex");
   return { requestDigest, operation, inviteCode };
 }
+
+/** The one description of an arrival's DID claim. The digest names the arrival
+ * itself, so a different arrival can never resume this claim's operation. */
+export function arrivalClaimInput(saved: {
+  readonly did: string;
+  readonly operationId: string;
+}) {
+  return {
+    kind: "public-arrival",
+    request: { did: saved.did, operationId: saved.operationId },
+  } as const;
+}
