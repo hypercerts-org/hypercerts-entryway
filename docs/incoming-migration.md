@@ -672,7 +672,9 @@ re-proved under the fence). No client ready flag, count or digest is read. Under
 ownership it checks, before journaling anything: the canonical PLC head is the exact
 saved destination move and its endpoint, repository key, ordered rotation custody and
 handle equal the saved facts (`IdentityConflict`; an unreadable directory is
-`AccountUnavailable`); the configured host (a changed placement is `OperationConflict`),
+`AccountUnavailable`); the configured host (a changed or removed placement is `OperationConflict` for
+saved-user activation; a credential for a removed host fails its own authorization
+first),
 local account and saved-user binding match (`OperationConflict`, `AccountMismatch`); no
 other unresolved attempt exists; and the backend is observed, is the same DID and
 handle, and is paused (`AccountUnavailable` when unobservable; an active backend
@@ -1235,15 +1237,18 @@ reuse for public arrival, not automatic coverage.
 
 Activation receipts. When the destination acknowledged activation but Entryway did
 not observe the active state (for example the local commit failed and the backend was
-paused again before the retry), operator recovery may approve that acknowledged but
-unobserved receipt, once the dispatcher is no longer running it. The shared-operation
-status reports it as `recovery-required` and the same isolation and drain
-attestations apply. `observe` lets the next retry complete only if the backend is
-observed active for this DID and handle, without resending. An `observe` to
-`retry-if-safe` upgrade also lets it resend the activation, only if the backend is
-observed paused; the replaced receipt's association settles with the new one. Only
-activation receipts have this approval; every other acknowledged receipt is final.
-Without approval the arrival retains `OperationRecoveryRequired`.
+paused again before the retry), the ownership store can approve that acknowledged but
+unobserved receipt (`pendingExternal` reports it and `approveRecovery` accepts it)
+once no worker holds the lease. The same isolation and drain attestations apply. The
+HTTP operator routes accept only `did:` and `email:` resources, not the
+`arrival:<did>` resource, so they do not yet expose this approval; activation itself
+is not yet mounted. A first approval may be `observe` or `retry-if-safe`, and
+`observe` may later be upgraded to `retry-if-safe`. `observe` lets the next retry
+complete only if the backend is observed active for this DID and handle, without
+resending. `retry-if-safe` also lets it resend, only if the backend is observed
+paused; the replaced receipt's association settles with the new one. Only activation
+receipts have this approval; every other acknowledged receipt is final. Without
+approval the arrival retains `OperationRecoveryRequired`.
 
 Cancellation safe point. Cancellation is safe exactly while the arrival is
 unclaimed, because no allocation intent, remote reservation or admitted handoff exists. Once a

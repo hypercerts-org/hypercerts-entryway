@@ -9,6 +9,7 @@ import {
 import { query, verifiedUser } from "../support/database-fixture.mjs";
 import { createOperationOwnership } from "../../dist/src/accounts/operation-ownership.js";
 import { createOperationOwnershipStore } from "../../dist/src/database/drizzle/operation-ownership.js";
+import { arrivalClaimInput } from "../../dist/src/features/external-migration/arrival-request.js";
 import { assertActivationReady } from "../../dist/src/features/external-migration/activation-checks.js";
 
 const codeOf = (error) => error.code ?? error.error;
@@ -581,6 +582,19 @@ test("a backend paused again before the local commit is not completed as active"
   assert.equal((await f.arrivals.readArrivalAccess(f.did)).complete, false);
 });
 
+test("an acknowledged activation receipt is not reported while a lease is held", async (t) => {
+  const { f } = await stuckAfterAcknowledgement(t);
+  const resource = `arrival:${f.did}`;
+  assert.equal((await f.store.pendingExternal(resource)).state, "acknowledged");
+  await query(
+    f.db,
+    "UPDATE authority_operations SET worker_id = ?, lease_expires_at = ? WHERE pending",
+    ["other-worker", Date.now() + 600_000],
+    "run",
+  );
+  assert.equal(await f.store.pendingExternal(resource), null);
+});
+
 test("an approved observe completes an acknowledged activation once the backend is active again", async (t) => {
   const { f, op } = await stuckAfterAcknowledgement(t);
   await approveObserve(f);
@@ -658,33 +672,43 @@ test("an acknowledged receipt of another step is never approvable", async (t) =>
 
 test("a stale owner cannot finish activation", async (t) => {
   const { f, op } = await bound(t);
+  // The takeover runs from the test body, outside the activation's fence scope.
+  let reached;
+  const atBackend = new Promise((resolve) => (reached = resolve));
+  let release;
+  const held = new Promise((resolve) => (release = resolve));
   f.backendState.onActivate = async () => {
     f.backendState.onActivate = null;
-    await query(
-      f.db,
-      "UPDATE authority_operations SET lease_expires_at = 1 WHERE pending = 1",
-      [],
-      "run",
-    );
-    const successor = createOperationOwnership({
-      store: createOperationOwnershipStore(f.db),
-      heartbeatMs: 0,
-    });
-    await successor.resumePending(
-      `arrival:${f.did}`,
-      op,
-      {
-        kind: "public-arrival",
-        request: {
-          did: f.did,
-          handle: "destination.example.test",
-          userId: "destination-user",
-        },
-      },
-      async () => {},
-    );
+    reached();
+    await held;
   };
-  await assert.rejects(asUser(f, op), hasCode("OperationLeaseLost"));
+  const stale = asUser(f, op);
+  const outcome = assert.rejects(stale, hasCode("OperationLeaseLost"));
+  await atBackend;
+  await query(
+    f.db,
+    "UPDATE authority_operations SET lease_expires_at = 1 WHERE pending",
+    [],
+    "run",
+  );
+  const saved = (await f.arrivals.readArrivalAggregate(op, f.principal.userId))
+    .arrival;
+  const successor = createOperationOwnership({
+    store: createOperationOwnershipStore(f.db),
+    heartbeatMs: 0,
+  });
+  let ran = false;
+  await successor.resumePending(
+    `arrival:${f.did}`,
+    saved.claimOperationId,
+    arrivalClaimInput(saved),
+    async () => {
+      ran = true;
+    },
+  );
+  assert.equal(ran, true);
+  release();
+  await outcome;
   assert.equal(await accountStatus(f), "provisioning");
   assert.equal((await f.arrivals.readArrivalAccess(f.did)).complete, false);
   assert.equal(f.backendState.activations, 1);

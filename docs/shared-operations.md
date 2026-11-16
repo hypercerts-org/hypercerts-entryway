@@ -148,8 +148,10 @@ request was unapplied by itself.
 An acknowledged receipt is final except for steps listed in
 `observedAcknowledgedSteps` (`incoming-activation`), whose acknowledgement does not
 show the remote state. For them, while the operation is pending and no worker holds
-its lease, status reports the acknowledged receipt and it takes the same
-authorizations; an observed result then completes or resends the step as above.
+its lease, the ownership store's `pendingExternal` reports the acknowledged receipt
+and `approveRecovery` takes the same authorizations; an observed result then
+completes or resends the step as above. The HTTP operator routes accept only `did:`
+and `email:` resources, so they do not yet reach `arrival:` resources.
 
 Approval keeps the account pending. A fresh fenced execution observes the saved
 operation's remote state before acknowledging it or recording a new external
