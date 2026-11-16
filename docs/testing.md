@@ -115,10 +115,9 @@ env -u INCOMING_PUBLIC_MECHANISMS -u INCOMING_ACCESS_PATH node --test \
   tests/contracts/incoming-public-mechanisms.test.mjs
 ```
 
-That run reports the three live-gated tests skipped; those skips are not
-qualification. At the time of writing, that native run reports 12 passed and 3
-skipped, which is the offline subset only. A live count is a claim about a sandbox run
-and must not be reported from this document.
+That run skips the three live-gated tests; those skips are not qualification.
+It exercises the offline subset only. Report counts and sandbox outcomes in the PR
+or handoff, not in this document.
 
 The offline cases cover the managed request boundary and phase budgets. They do not
 prove any public behavior, and no Entryway endpoint or route implements this
