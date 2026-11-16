@@ -596,7 +596,7 @@ downstream code only when this section states both the exact call shape and the
 failure behavior, and a maintainer accepts it per case. C1–C5 are **ACCEPTED**
 design contracts; M1–M4 retain their existing meanings. The user accepted the C4
 client-managed responsibility decision on 2026-11-11. Design acceptance does not
-complete plan 011 credentials/activation or plan 012 public integration and qualification.
+complete credentials, activation, public integration or qualification.
 
 Source and destination versions stay distinct. The upstream facts here are
 inspection of pinned PDS 0.5.36, and the standalone qualification source is the
@@ -953,18 +953,21 @@ isolation/drain recovery are unchanged; client-managed data does not excuse unsa
 external writes. Source deactivation is the client's action after confirmed
 destination activation, never automatic deletion.
 
-Owners and handoffs: plan 008 maintains this policy and stock-mechanism qualification;
-009 supplies existing durable arrival/projection/attempt APIs; 010 supplies the
-actual dormant `composeIncomingArrival` preparation/admission/continuation flow;
-011 must integrate tracked credentials and guarded activation; 012 must mount and
-qualify the public consumers. This decision adds no wire field, namespace, fictional
-source-attestation producer or optional future evidence schema. Any missing concrete
-activation adapter contract must be declared by its owner before implementation.
+Owners: this policy and its stock-mechanism qualification are maintained in
+`docs/` and the contract tests; `src/database` supplies the durable
+arrival, projection and attempt APIs; `src/features/external-migration` supplies the
+preparation, admission and continuation flow, and must integrate tracked
+credentials and guarded activation and mount and qualify the public consumers. This
+decision adds no wire field, namespace, fictional source-attestation producer or
+optional future evidence schema. Any missing concrete activation adapter contract
+must be declared by its owner before implementation.
 
-Bounded stock-mechanism evidence and its limits. The committed tests exercise the
-following source and inactive-destination behaviors within explicit byte and phase
-budgets. Historical observations are not a current verification result or a full
-migration qualification; reproof requires a fresh managed sandbox run:
+Qualification limits. The committed contract test
+(`tests/contracts/incoming-public-mechanisms.test.mjs`) asserts the following stock
+source and inactive destination behaviors within its explicit byte and phase
+budgets. Its offline cases cover only the managed request boundary and phase
+budgets; its live cases need a managed sandbox. Neither is a full migration
+qualification:
 
 - Source CAR exports verify against the observed repository key, including a
   nonempty snapshot. Two export requests are started before a write is dispatched,
