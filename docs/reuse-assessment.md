@@ -122,10 +122,14 @@ against our contract.
   `account_migrate.go`, rejecting it with an arrival code and rejecting the new
   flags without one. The Entryway path requires a complete handoff, signs exactly
   its fields, submits the operation and creates the account with the arrival code
-  header and no password, transfers data to the destination endpoint with the
-  tracked credential (refreshing at Entryway), skips the stock
+  header and no password, exports the repo and lists blobs before the identity
+  moves, transfers data to the destination endpoint with the
+  tracked credential (refreshing at Entryway; blobs are fetched from the source's
+  public endpoints), skips the stock
   recommended-credentials cutover, activates through the destination, confirms
-  activation and then deactivates the source. Blob failures are fatal there.
+  activation and then deactivates the source. Blob failures are fatal there. The
+  Docker build also checks that stock goat, without `--arrival-code`, refuses the
+  Entryway-only flags.
 - Status: reusable as a harness only; stock unmodified goat does not support the
   Entryway surface.
 

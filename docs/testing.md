@@ -182,7 +182,9 @@ contract against an outside client stack, not an outside implementation of it.
 The patch adds `account migrate --arrival-code` (or `ENTRYWAY_ARRIVAL_CODE`),
 `--handoff`, `--destination-endpoint`, `--skip-preferences` and the test-only
 `--pause-after-import`. Without `--arrival-code` the stock path is unchanged and
-the new flags are refused. The spec passes `--skip-preferences` because, without an
+the new flags are refused, which the image build checks. goat exports the repo
+and lists blobs before the identity moves, then imports and fetches blobs from the
+source's public endpoints. The spec passes `--skip-preferences` because, without an
 AppView, the stock PDS does not register the preferences routes at all, so
 preference migration is not covered. It passes `--pause-after-import 320s` so the
 300 s tracked access token expires: goat refreshes at Entryway, retries the blob

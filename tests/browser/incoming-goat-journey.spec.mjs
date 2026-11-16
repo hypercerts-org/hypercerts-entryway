@@ -6,7 +6,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
+import {
+  call,
+  json,
+  ok,
+  prepareArrival,
+} from "../support/helpers/incoming-journey.mjs";
 import { waitForStockPlcMessage } from "../support/helpers/stock-plc-mailpit.mjs";
 
 // Second incoming-migration client, run only by `./tests/local.sh
@@ -29,37 +34,6 @@ const pixel = Buffer.from(
   "base64",
 );
 const run = {};
-
-async function call(origin, method, { token, body, params, bytes, type } = {}) {
-  const url = new URL(`/xrpc/${method}`, origin);
-  for (const [key, value] of Object.entries(params ?? {}))
-    url.searchParams.set(key, value);
-  const response = await fetch(url, {
-    method:
-      body !== undefined ||
-      bytes !== undefined ||
-      /requestPlcOperationSignature$/.test(method)
-        ? "POST"
-        : "GET",
-    headers: {
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-      ...(body === undefined ? {} : { "content-type": "application/json" }),
-      ...(bytes === undefined ? {} : { "content-type": type }),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    ...(bytes === undefined ? {} : { body: bytes }),
-    redirect: "error",
-    signal: AbortSignal.timeout(30_000),
-  });
-  return {
-    status: response.status,
-    content: Buffer.from(await response.arrayBuffer()),
-  };
-}
-const json = ({ content }) => JSON.parse(content.toString("utf8") || "{}");
-// Status only: bodies of failed calls can echo credentials.
-const ok = (response, what) =>
-  expect(response.status, `${what} status`).toBeLessThan(300);
 
 function redact(text, secrets) {
   let out = String(text);
@@ -151,62 +125,13 @@ test("a standalone source account has a record and a blob", async () => {
 test("the browser verifies the destination email and prepares the arrival", async ({
   page,
 }) => {
-  const since = Date.now();
-  await page.goto(`${config.issuer}/login`);
-  await page.getByLabel("Email address").first().fill(destinationEmail);
-  await page.getByRole("button", { name: "Send sign-in code" }).click();
-  const login = await waitForMailpitCode({
-    recipient: destinationEmail,
-    since,
-    baseUrl: access.mailpitUrl,
+  run.prepared = await prepareArrival(page, {
+    issuer: config.issuer,
+    mailpitUrl: access.mailpitUrl,
+    did: run.source.did,
+    handle: run.destinationHandle,
+    email: destinationEmail,
   });
-  await page.getByLabel("Sign-in code").fill(login.code);
-  await page.getByRole("button", { name: "Verify code" }).click();
-  await page.goto(`${config.issuer}/incoming`);
-  await expect(
-    page.getByRole("heading", { name: "Incoming migration" }),
-  ).toBeVisible();
-  await page.waitForTimeout(6_000);
-  const asked = Date.now();
-  await page
-    .getByRole("button", { name: "Send me a fresh email code" })
-    .click();
-  const fresh = await waitForMailpitCode({
-    recipient: destinationEmail,
-    since: asked,
-    excludeIds: [login.messageId],
-    baseUrl: access.mailpitUrl,
-  });
-  await page.goto(`${config.issuer}/incoming`);
-  await page.getByLabel("Your DID").fill(run.source.did);
-  await page.getByLabel("Destination handle").fill(run.destinationHandle);
-  await page.getByLabel("Fresh email code").fill(fresh.code);
-  const response = page.waitForResponse(
-    (candidate) =>
-      candidate.url().endsWith("/incoming/prepare") &&
-      candidate.request().method() === "POST",
-  );
-  await page.getByRole("button", { name: "Prepare arrival" }).click();
-  expect((await response).status()).toBe(200);
-  await expect(page.getByText("shown once")).toBeVisible();
-  const fields = await page
-    .locator("dl.identity")
-    .evaluate((list) =>
-      Object.fromEntries(
-        [...list.querySelectorAll("dt")].map((term) => [
-          term.textContent,
-          term.nextElementSibling.textContent,
-        ]),
-      ),
-    );
-  run.prepared = {
-    arrivalCode: fields.arrivalCode,
-    handoff: JSON.parse(fields.handoff),
-    destinationEndpoint: fields.destinationEndpoint,
-  };
-  // Booleans only: a failing assertion must never print the code.
-  expect(/^[A-Za-z0-9_-]{32}$/.test(run.prepared.arrivalCode)).toBe(true);
-  expect(run.prepared.destinationEndpoint).toBeTruthy();
 });
 
 test("goat migrates the account through Entryway's incoming flow", async () => {
