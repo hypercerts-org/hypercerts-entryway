@@ -80,29 +80,43 @@ claims remain 30 seconds. Existing recovery requirements are unchanged.
 
 ## Browser access to XRPC
 
-Entryway sends no CORS headers on `/xrpc/*`. A stock PDS allows any origin there,
-and browser clients such as web migration tools and apps that sign in with a
-password depend on it. Deployments that serve browser clients put a reverse
-proxy in front of Entryway that adds CORS to `/xrpc/*` only.
+Entryway sends no CORS headers on `/xrpc/*` or `/.well-known/atproto-did`. A
+stock PDS allows any origin on both, and browser clients such as web migration
+tools, apps that sign in with a password and browser OAuth clients resolving a
+hosted handle depend on it. Deployments that serve browser clients put a reverse
+proxy in front of Entryway that adds CORS to those two paths, on the issuer host
+and on every handle hostname.
 
 The OAuth provider already sends its own CORS headers on `/oauth/*` and the
 OAuth metadata documents. Adding them again produces a duplicate
-`Access-Control-Allow-Origin`, which browsers reject. Account pages, `/incoming`
-and the other browser routes are same-origin and must not get CORS.
+`Access-Control-Allow-Origin`, which browsers reject. Account pages and the other
+browser routes are same-origin and must not get CORS.
 
 The policy matches the stock PDS: any origin, no credentials, the request's
 preflight headers reflected (this covers `Authorization`, `DPoP`, `Content-Type`
-and `Entryway-Arrival-Code`), and a one-day preflight cache. Because
-`Access-Control-Allow-Origin` is `*` and credentials are not allowed, browsers do
-not send Entryway cookies on these requests. A Caddy configuration:
+and any custom header a client sends), and a
+one-day preflight cache. It also exposes `DPoP-Nonce` and `WWW-Authenticate`, as
+the stock PDS does on authentication responses, so a browser client can read a
+fresh DPoP nonce and retry. It adds `Retry-After`, which the stock PDS exposes on
+rate limits and which Entryway sends while draining.
+
+The wildcard origin without credentials keeps a cross-origin page from reading
+responses that depend on a cookie. It does not stop a browser from attaching
+cookies to a simple cross-origin request. `com.atproto.server.createAccount` reads
+the browser session. With a `did` it also requires Entryway's Origin check against
+the issuer and a body CSRF token. Without one, a verified session whose email
+matches replaces the email code, and that path relies on `SameSite=Lax` session
+cookies and its JSON-only body, which forces a preflight that fails without
+`Access-Control-Allow-Credentials`. Any future cookie-authenticated XRPC route
+must rely on its own Origin and CSRF checks, not on CORS. A Caddy configuration:
 
 ```caddyfile
-entryway.example.com {
-	@xrpcPreflight {
+(atproto_cors) {
+	@preflight {
 		method OPTIONS
-		path /xrpc/*
+		path /xrpc/* /.well-known/atproto-did
 	}
-	handle @xrpcPreflight {
+	handle @preflight {
 		header Access-Control-Allow-Origin "*"
 		header Access-Control-Allow-Methods "GET, HEAD, PUT, PATCH, POST, DELETE"
 		header Access-Control-Allow-Headers "{http.request.header.Access-Control-Request-Headers}"
@@ -111,13 +125,20 @@ entryway.example.com {
 		respond 204
 	}
 	header /xrpc/* >Access-Control-Allow-Origin "*"
+	header /xrpc/* >Access-Control-Expose-Headers "DPoP-Nonce, WWW-Authenticate, Retry-After"
+	header /.well-known/atproto-did >Access-Control-Allow-Origin "*"
+}
+
+entryway.example.com, *.handles.example.com {
+	import atproto_cors
 	reverse_proxy entryway:3000
 }
 ```
 
-Replace the site address and upstream with the deployment's own. The proxy also
-terminates TLS and must forward the client address for the per-IP request budgets
-(`trust proxy` is set to one hop).
+Replace the site addresses and upstream with the deployment's own; the second
+address stands for the hosted handle domain (a wildcard site needs a certificate
+that covers it). The proxy also terminates TLS and must forward the client
+address for the per-IP request budgets (`trust proxy` is set to one hop).
 
 ## Repeatable profile checks
 
