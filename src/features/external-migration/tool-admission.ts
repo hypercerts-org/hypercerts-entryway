@@ -33,10 +33,10 @@ async function stableIdentity<T>(work: () => Promise<T>): Promise<T> {
 /**
  * Cookie-less admission for the migration tool.
  *
- * PROPOSED RESOLUTION, NOT AN ACCEPTED CONTRACT. C1 says the tool surfaces never
- * accept or export browser cookies, but admission and continuation otherwise
- * resolve their owner from a browser principal. Until the owner decides, this is
- * the single place that selects an arrival for the XRPC surfaces: the presented
+ * Accepted by both developers. C1 says the tool surfaces never accept or export
+ * browser cookies, but admission and continuation otherwise resolve their owner
+ * from a browser principal. This is the single place that selects an arrival for
+ * the XRPC surfaces: the presented
  * current, unexpired arrival code selects the arrival and the user saved on it.
  * The user is never taken from an email, a request value or the credential, and
  * the method-bound source JWT is still verified by admission exactly as before.

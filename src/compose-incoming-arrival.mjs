@@ -205,7 +205,7 @@ export async function composeIncomingArrival({
     loadBrowser: browserFlow.loadBrowser,
     rateLimit,
   });
-  // Tool surfaces carry no cookie. PROPOSED, awaiting owner decision: the
+  // Tool surfaces carry no cookie. Accepted by both developers: the
   // current arrival code selects the arrival and its saved user (see
   // tool-admission.ts); browser surfaces below keep the browser-bound forms.
   const toolAdmission = createToolAdmission({

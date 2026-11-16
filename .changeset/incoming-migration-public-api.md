@@ -8,9 +8,9 @@ tracked-credential and activation behavior they describe is now reachable.
 It does not certify that an account's data transferred completely, and it adds
 no schema change or configuration key. The routes are mounted on every
 deployment (single-node SQLite, multi-node, and deployments with no migration
-intent) with no configuration key or opt-out. No live public
-journey, contracts group or stock-PDS callback proof has been run for this
-change; it is covered by unit and in-process application tests only.
+intent) with no configuration key or opt-out. The live public journey,
+stock-PDS callback proof and contracts group have run on single-node SQLite
+only, not on multi-node PostgreSQL.
 
 What operators and users now see:
 
@@ -36,9 +36,9 @@ What operators and users now see:
   arrival credential and otherwise fall through unchanged, after one arrival
   lookup on every such request (pending owner decision). Once a migration is
   finished, a later ordinary deactivation and reactivation use the ordinary route.
-- **Proposed, awaiting owner decision:** the tool surfaces carry no cookie, so
+- **Arrival code selects the arrival.** The tool surfaces carry no cookie, so
   the presented current arrival code selects the arrival and the user saved on
-  it. This is one bounded resolution that may change.
+  it. The source service JWT is still required; the code alone admits nothing.
 - **Lost operation ID.** A repeat `/incoming/prepare` by the same saved user for
   the same DID, after a valid fresh email code, keeps its existing refusal and
   adds that user's own `operationId` and `version`. Never an arrival code, and
@@ -68,7 +68,12 @@ What operators and users now see:
   `activateAccount`, including the stock PDS callback). The client decides when
   to activate; Entryway checks identity, binding and backend state, not
   repository or blob completeness, and does not stop later source writes.
-- **Limits you should know.** Rotating or replacing credentials does not revoke
+- **Limits you should know.** From the identity move until activation the
+  account is unavailable to the network, for as long as the client takes to
+  import and activate; the source keeps its copy. If a user stops after the
+  authority handoff and no destination account is created, the Entryway rotation
+  key stays on their DID: Entryway does not remove it, and the user removes it
+  through their source PDS. Rotating or replacing credentials does not revoke
   an access token already issued: the stock PDS accepts it until it expires
   (five minutes). Request budgets reuse existing producers: 30 requests per IP
   per ten minutes for each of the browser and tool groups (submit and create

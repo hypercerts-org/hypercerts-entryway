@@ -48,6 +48,10 @@ The protocol accounts for four considerations:
   repository key, Entryway rotation key and recovery keys retain distinct roles.
 - **Availability:** identity cutover precedes data import. The destination is briefly
   active before deactivation, so provisioning is not an atomic inactive operation.
+  From cutover until activation the DID resolves to a deactivated destination, so
+  the account is unavailable to the network for as long as the client takes to
+  import and activate. The source keeps its copy; nothing is lost. A client shortens
+  the window by exporting from the source before it requests destination creation.
 - **Data integrity:** the client retains the original source endpoint after cutover,
   exports/imports records and blobs, checks its chosen transferred state and decides
   when to request activation. Entryway does not certify universal data completeness.
@@ -410,7 +414,14 @@ is implemented here; operators retain the obligation and use only the documented
 shared-operation recovery path, not deletion or an invented cleanup command.
 
 Deleting local state cannot remove published Entryway authority. Reversal requires
-an authorized PLC operation; it is not an expiry side effect. The
+an authorized PLC operation; it is not an expiry side effect. **Known limitation:**
+if the authority handoff is published and the destination account is never created,
+the Entryway rotation key stays on the DID. It is appended after the existing keys,
+so a higher-priority source key can override an Entryway-signed operation within
+the PLC recovery window, but Entryway does not remove it. Until a removal procedure
+exists, the user removes it through the source PDS with
+`requestPlcOperationSignature` and `signPlcOperation`, restoring their earlier
+rotation list. The
 [shared-operation recovery rules](shared-operations.md) govern mutation retries
 and release of conflicting work.
 
@@ -658,13 +669,13 @@ approved safe retry, and `readArrivalFamilies` and `readArrivalFamily` are read-
 
 ### Development: mounted surfaces and pending guard
 
-**Status: implemented and unit-tested; no live public journey, no contracts group
-and no stock-PDS callback proof has run.** Everything marked "pending owner
+**Status: implemented; the live public journey, stock-PDS callback proof and
+contracts group have run on single-node SQLite only.** Everything marked "pending owner
 decision" below is this change's choice, not accepted contract. `src/app.mjs`
 mounts the feature on every deployment (single-node SQLite, multi-node, and
 deployments with no migration intent) with no configuration key or opt-out; this
-is decided. Public qualification has not yet run, so the change is held as an
-unmerged draft until the live journey and contracts pass. It is mounted through `createIncomingArrival` in
+is decided. The live journey has not run on multi-node PostgreSQL, and the owner
+decisions below are open, so the change is held as an unmerged draft. It is mounted through `createIncomingArrival` in
 `src/compose-incoming-arrival.mjs` (production arrival storage over the account
 authority, real browser authentication and CSRF) and registers
 `src/features/external-migration/routes.ts` and `xrpc-routes.ts`. XRPC handlers are
@@ -750,7 +761,7 @@ behind the same address. The method is fixed by the route, so an
 unsupported method cannot reach admission. Identity-layer failures are
 `InvalidPlcOperation` 400 or `IdentityConflict` 409.
 
-**Proposed, awaiting owner decision (not accepted contract).** Tool requests carry no
+**Accepted by both developers.** Tool requests carry no
 browser cookie, but admission and continuation resolve their owner from a browser
 principal. The tool surfaces therefore select the arrival with the presented
 current, unexpired arrival code, taking the saved user from the arrival and never
@@ -761,7 +772,7 @@ replay state consumed) runs before any ownership lease is taken, and admission
 verifies again and records replay. Before it, the code permits only a read; a leaked
 code with an invalid credential cannot contend for the arrival, record, sign or
 dispatch. Every failure to select an arrival, including an unparsable credential,
-is the same `ArrivalExpired`. The replacement point is `select` in `tool-admission.ts`.
+is the same `ArrivalExpired`. The resolution lives in `select` in `tool-admission.ts`.
 
 Retry semantics that follow from stored admissions (pending owner decision whether
 this is the intended contract). An exact retry is the same body
@@ -797,7 +808,6 @@ source account, and activation makes no claim about repository or blob completen
 
 Open for owner confirmation (pending owner decisions):
 
-- the cookie-less arrival-code resolution above;
 - the exact-retry semantics (same body and same credential, until expiry or cutover);
 - the refresh and activate fall-through design and its extra arrival lookup;
 - the strict `createAccount` subset that rejects `password`;
