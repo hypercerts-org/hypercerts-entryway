@@ -39,12 +39,15 @@ export interface TrackedArrivalSession {
 
 /** What the legacy credential signer provides. The arrival feature decides when
  * a family may exist; the signer never reads arrival state. */
+export interface MintedArrivalFamily {
+  readonly familyId: string;
+  /** The signer's own pending family; `persist` stores exactly this value. */
+  readonly family: unknown;
+  readonly tokens: { accessJwt: string; refreshJwt: string };
+}
 export interface ArrivalFamilyCredentials {
-  prepare(input: { did: string; pdsId: string }): Promise<{
-    familyId: string;
-    tokens: { accessJwt: string; refreshJwt: string };
-  }>;
-  persist(minted: { familyId: string }): Promise<void>;
+  prepare(input: { did: string; pdsId: string }): Promise<MintedArrivalFamily>;
+  persist(minted: MintedArrivalFamily): Promise<void>;
   revoke(familyIds: readonly string[], reason: string): Promise<void>;
   readFamily(
     input: unknown,
@@ -322,11 +325,10 @@ export function createArrivalCredentials({
      * The caller (012) has already verified the source JWT at admission. The
      * version is optional: the tool cannot know it, so it is read under the fence;
      * a repeat issuance is still a conflict. */
-    async issueCreationSession(input: {
-      did: string;
-      operationId: string;
-      arrivalCode: string;
-    }): Promise<TrackedArrivalSession> {
+    async issueCreationSession(
+      untrusted: unknown,
+    ): Promise<TrackedArrivalSession> {
+      const input = (untrusted ?? {}) as Record<string, unknown>;
       const refuse = () =>
         new HttpError(
           409,
@@ -334,7 +336,7 @@ export function createArrivalCredentials({
           "This arrival code is no longer valid",
         );
       if (
-        typeof input?.arrivalCode !== "string" ||
+        typeof input.arrivalCode !== "string" ||
         typeof input.did !== "string" ||
         typeof input.operationId !== "string"
       )
@@ -380,8 +382,10 @@ export function createArrivalCredentials({
         "refresh",
       );
       const tracked = await arrivals.readArrivalFamily(familyId);
+      // An ordinary refresh does one family read and no arrival read.
+      if (!tracked) throw invalidToken();
       const access = await arrivals.readArrivalAccess(did);
-      if (!tracked || !access || access.operationId !== tracked.operationId)
+      if (!access || access.operationId !== tracked.operationId)
         throw invalidToken();
       await signer.readRefresh(refreshCredential);
       if (tracked.revokedAt !== null) throw expiredToken();

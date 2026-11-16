@@ -99,10 +99,20 @@ test("submitPlcOperation admits the source-signed handoff with no cookie and pub
   assert.equal((await rows(s.f, "arrival_replay")).length, 1);
 });
 
-test("a fresh credential for an already admitted body is a conflict, never a second admission", async (t) => {
+test("an exact replay of an admitted body passes through without re-admission; a different body conflicts", async (t) => {
   const s = await begin(t);
   assert.equal((await submit(s)).status, 200);
-  const conflict = await submit(s);
+  // A fresh credential for the same body is an exact replay: it resumes the
+  // saved continuation, publishes nothing new and records no second admission.
+  const replay = await submit(s);
+  assert.equal(replay.status, 200);
+  assert.equal(s.f.publicationAttempts.length, 1);
+  assert.equal((await rows(s.f, "arrival_replay")).length, 1);
+  const other = await plc.signOperation(
+    { ...s.prepared.handoff, alsoKnownAs: ["at://other.example.test"] },
+    s.f.source,
+  );
+  const conflict = await submit(s, { json: { operation: other } });
   assert.equal(conflict.status, 409);
   assert.equal(conflict.json.error, "OperationConflict");
   assert.equal(s.f.publicationAttempts.length, 1);
@@ -227,8 +237,8 @@ test("a repeated createAccount cannot mint a second family; recovery is the save
     handle,
     inviteCode: "ignored-after-admission",
   });
-  assert.equal(again.status, 403);
-  assert.equal(again.json.error, "AccountMismatch");
+  assert.equal(again.status, 409);
+  assert.equal(again.json.error, "OperationConflict");
   assert.equal(again.text.includes(s.session.accessJwt), false);
   assert.equal(
     (await f.arrivals.readArrivalFamilies(prepared.operationId)).length,
@@ -281,12 +291,12 @@ test("invitation policy: a supplied valid code is consumed once and no retry aft
   const jwt = await s.f.credential(incomingCreationMethod);
   const first = await create(s, { handle, inviteCode: code }, { jwt });
   assert.equal(first.status, 200);
-  // After cutover the source key no longer verifies, so even the exact retry
-  // cannot be admitted again: no second invitation, family or creation. The
-  // saved user recovers through /incoming/recover instead.
+  // After cutover the source key no longer verifies, but an exact replay is not
+  // verified: it resumes the saved creation, admits nothing again and cannot
+  // mint a second family. The saved user recovers through /incoming/recover.
   const retry = await create(s, { handle, inviteCode: code }, { jwt });
-  assert.equal(retry.status, 403);
-  assert.equal(retry.json.error, "AccountMismatch");
+  assert.equal(retry.status, 409);
+  assert.equal(retry.json.error, "OperationConflict");
   const used = await s.f.db.get("entryway:invites", code);
   assert.equal(used.remaining, 0);
   assert.equal(used.uses.length, 1);
@@ -627,11 +637,13 @@ test("the tool request budget answers 429 with the existing code", async (t) => 
 test("a valid code with an invalid credential takes no lease and writes nothing", async (t) => {
   const s = await begin(t);
   let leases = 0;
-  const resume = s.f.ownership.resumePending;
-  s.f.ownership.resumePending = (...args) => {
-    leases++;
-    return resume(...args);
-  };
+  for (const name of ["run", "resumePending"]) {
+    const original = s.f.ownership[name];
+    s.f.ownership[name] = (...args) => {
+      leases++;
+      return original(...args);
+    };
+  }
   const bad = [
     await s.f.credential(incomingHandoffMethod, {
       aud: "did:web:other.example.test",
@@ -720,6 +732,17 @@ test("refreshSession leaves ordinary revoked, expired and replayed refresh token
   const call = (jwt) =>
     h.call(refreshPath, { headers: { authorization: `Bearer ${jwt}` } });
   const ordinaryAnswer = { ordinary: "server.refreshSession" };
+  // An untracked family costs no arrival read at all.
+  const readAccess = f.arrivals.readArrivalAccess;
+  let accessReads = 0;
+  f.arrivals.readArrivalAccess = (...args) => {
+    accessReads++;
+    return readAccess(...args);
+  };
+  const plain = await ordinaryFamily(f);
+  assert.deepEqual((await call(plain.tokens.refreshJwt)).json, ordinaryAnswer);
+  f.arrivals.readArrivalAccess = readAccess;
+  assert.equal(accessReads, 0);
   // Replayed: the arrival path performs no replay revocation or rotation.
   const replayed = await ordinaryFamily(f);
   await f.legacy.arrivalSessions.refresh(replayed.tokens.refreshJwt, {
@@ -767,4 +790,124 @@ test("refreshSession still refuses an expired tracked refresh credential with th
   assert.equal(response.status, 400);
   assert.equal(response.json.error, "ExpiredToken");
   void f;
+});
+
+test("an exact createAccount replay after the identity moved resumes the saved creation without verifying the credential", async (t) => {
+  const s = await published(t);
+  const { f } = s;
+  const body = { handle, inviteCode: await invite(f) };
+  const jwt = await f.credential(incomingCreationMethod);
+  // The destination move is published and acknowledged, then the local binding
+  // commit is lost: the saved continuation is all that remains.
+  const bind = f.storage.bindPlacedAccount;
+  f.storage.bindPlacedAccount = async () => {
+    throw new Error("local commit lost");
+  };
+  const lost = await create(s, body, { jwt });
+  f.storage.bindPlacedAccount = bind;
+  assert.notEqual(lost.status, 200);
+  assert.equal(f.backendState.creates, 1);
+  // The move is canonical, so the source credential no longer verifies.
+  const unverified = await create(s, { handle }, { jwt });
+  assert.notEqual(unverified.status, 200);
+  const replay = await create(s, body, { jwt });
+  assert.equal(replay.status, 200, replay.text);
+  assert.equal(replay.json.did, f.did);
+  assert.equal(typeof replay.json.accessJwt, "string");
+  assert.equal(f.backendState.creates, 1);
+  assert.equal(
+    (await f.arrivals.readArrivalFamilies(s.prepared.operationId)).length,
+    1,
+  );
+});
+
+test("an exact replay of an admitted handoff is not verified after the identity moved; a different body conflicts", async (t) => {
+  const s = await created(t);
+  const { f } = s;
+  // The destination move is canonical: the source key no longer verifies, so a
+  // credential refusal would mean the request was verified. The replay is not;
+  // it reaches the saved continuation, which reports the moved head as saved
+  // but not observed, and it records and publishes nothing.
+  const replay = await submit(s, { jwt: await f.credential() });
+  assert.equal(replay.status, 409, replay.text);
+  assert.equal(replay.json.error, "OperationRecoveryRequired");
+  assert.equal(f.publicationAttempts.length, 1);
+  assert.equal((await rows(f, "arrival_replay")).length, 2);
+  // A different body for the admitted method is a conflict, never admitted.
+  const other = await plc.signOperation(
+    { ...s.prepared.handoff, alsoKnownAs: ["at://other.example.test"] },
+    f.source,
+  );
+  const fresh = await submit(s, {
+    jwt: await f.credential(),
+    json: { operation: other },
+  });
+  assert.equal(fresh.status, 409);
+  assert.equal(fresh.json.error, "OperationConflict");
+});
+
+for (const fault of ["unavailable", "head-race"])
+  test(`a ${fault} directory during handoff dispatch is retryable, never an identity conflict`, async (t) => {
+    const s = await begin(t);
+    s.f.setDirectoryFault(fault);
+    const response = await submit(s);
+    assert.equal(response.status, 409);
+    assert.equal(response.json.error, "OperationRecoveryRequired");
+    assert.notEqual(response.json.error, "IdentityConflict");
+    assert.equal(s.f.publicationAttempts.length, 0);
+    // No dispatch marker was written, so the exact retry completes.
+    s.f.setDirectoryFault("");
+    const retry = await submit(s);
+    assert.equal(retry.status, 200, retry.text);
+    assert.deepEqual(retry.json, {});
+    assert.equal(s.f.publicationAttempts.length, 1);
+    assert.equal(await s.f.store.pendingExternal(`arrival:${s.f.did}`), null);
+  });
+
+/** A hosted account that appeared after the arrival was prepared. */
+const host = (f, fields) =>
+  f.storage.insertAccount(
+    {
+      did: `did:plc:${"b".repeat(24)}`,
+      email: "someone-else@example.test",
+      emailVerified: true,
+      handle: "someone.example.test",
+      pdsId: "pds1",
+      pdsUrl: "https://destination.example.test",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      ...fields,
+    },
+    undefined,
+  );
+
+// One fixture per test: each replaces globalThis.fetch and restores it after.
+for (const [expected, taken] of [
+  ["IdentityConflict", (f) => ({ did: f.did })],
+  ["HandleNotAvailable", () => ({ handle })],
+  ["EmailNotAvailable", (f) => ({ email: f.principal.email })],
+])
+  test(`admission refuses ${expected} with 409 when it arose since preparation`, async (t) => {
+    const s = await begin(t);
+    await host(s.f, taken(s.f));
+    const refused = await submit(s);
+    assert.equal(refused.status, 409);
+    assert.equal(refused.json.error, expected);
+    assert.equal(s.f.publicationAttempts.length, 0);
+    // The claim was refused: nothing is claimed or recorded.
+    assert.equal((await rows(s.f, "arrival_replay")).length, 0);
+    assert.equal((await rows(s.f, "arrivals"))[0].claim_operation_id, null);
+  });
+
+test("an expired code is ArrivalExpired 409 and an unknown operation on a browser route is AccountNotFound 404", async (t) => {
+  const s = await begin(t);
+  const expired = await submit(s, { code: "Z".repeat(32) });
+  assert.equal(expired.status, 409);
+  assert.equal(expired.json.error, "ArrivalExpired");
+  const unknown = await s.h.browser("/incoming/cancel", {
+    operationId: "no-such-operation",
+    expectedVersion: 1,
+  });
+  assert.equal(unknown.status, 404);
+  assert.equal(unknown.json.error, "AccountNotFound");
 });

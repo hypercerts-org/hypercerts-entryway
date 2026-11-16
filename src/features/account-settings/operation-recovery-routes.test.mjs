@@ -195,3 +195,40 @@ test("operator recovery requires Entryway authorization and exact nonreplayable 
   assert.equal(history.length, 2);
   assert.equal(history[0].id, authorized.authorization.id);
 });
+
+test("status accepts the arrival resource and refuses other resource shapes", async (t) => {
+  const db = await openTestDatabase();
+  t.after(() => db.close());
+  const ownership = createOperationOwnership({
+    store: createOperationOwnershipStore(db),
+    heartbeatMs: 0,
+  });
+  const app = express();
+  app.use(express.json());
+  mountOperationRecoveryRoutes({
+    app,
+    config: { adminPassword: "entryway-recovery-test" },
+    ownership,
+  });
+  // eslint-disable-next-line no-unused-vars -- Express requires four-argument error middleware.
+  app.use((error, _req, res, _next) =>
+    res.status(error.status ?? 500).json({ error: error.code ?? error.error }),
+  );
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise((resolve) => server.once("listening", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const status = (resource) =>
+    fetch(`http://127.0.0.1:${server.address().port}/_operations/status`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Basic ${Buffer.from("admin:entryway-recovery-test").toString("base64")}`,
+      },
+      body: JSON.stringify({ resource }),
+    });
+  const arrival = await status(`arrival:did:plc:${"a".repeat(24)}`);
+  assert.equal(arrival.status, 200);
+  assert.equal((await arrival.json()).status, "no-uncertain-attempt");
+  for (const resource of ["arrival:", "arrival:owner@example.test", "x:did:a"])
+    assert.equal((await status(resource)).status, 400, resource);
+});

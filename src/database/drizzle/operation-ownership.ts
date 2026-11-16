@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, desc, ne } from "drizzle-orm";
 import { DomainError } from "../../accounts/errors.js";
-import { plcSubmissionRejectionReasons } from "../operation-ownership.port.js";
+import {
+  observedAcknowledgedSteps,
+  plcSubmissionRejectionReasons,
+} from "../operation-ownership.port.js";
 import type { DatabaseExecutor } from "../executor.js";
 import type {
   OperationClaim,
@@ -229,6 +232,27 @@ export function createOperationOwnershipStore(
       limit: 1,
     });
     return rows[0] ? externalRow(rows[0]) : null;
+  };
+  /** The unfinished attempt, or else the latest acknowledged receipt of a step
+   * whose acknowledgement alone is not proof of the remote state (the caller
+   * must observe it before completing). Only that receipt can still take the
+   * single approval or observe -> retry-if-safe upgrade. */
+  const approvableExternal = async (operationId: string) => {
+    const unfinished = await latestExternal(operationId);
+    if (unfinished) return unfinished;
+    const rows = await db.read("external_operation_attempts", {
+      where: eq(external.operation_id, operationId),
+      orderBy: [desc(external.created_at), desc(external.id)],
+      limit: 1,
+    });
+    const latest = rows[0] ? externalRow(rows[0]) : null;
+    return latest?.state === "acknowledged" &&
+      observedAcknowledgedSteps.includes(latest.step) &&
+      (latest.recoveryHistory.length === 0 ||
+        (latest.recoveryHistory.length === 1 &&
+          latest.recovery?.action === "observe"))
+      ? latest
+      : null;
   };
   const matches = (attempt: ExternalAttempt, input: ExternalAttemptInput) =>
     attempt.target === input.target &&
@@ -618,15 +642,17 @@ export function createOperationOwnershipStore(
             limit: 1,
           })
         )[0];
-        const attempt = await latestExternal(input.operationId);
+        const attempt = await approvableExternal(input.operationId);
         if (
           !operation?.pending ||
           !attempt ||
           !(
-            (attempt.state === "dispatched" &&
+            ((attempt.state === "dispatched" ||
+              attempt.state === "acknowledged") &&
               !attempt.recovery &&
               input.previousAuthorization === undefined) ||
-            (attempt.state === "recovery-approved" &&
+            ((attempt.state === "recovery-approved" ||
+              attempt.state === "acknowledged") &&
               attempt.recovery?.action === "observe" &&
               input.action === "retry-if-safe" &&
               input.previousAuthorization?.id === attempt.recovery.id &&
@@ -668,7 +694,24 @@ export function createOperationOwnershipStore(
           limit: 1,
         })
       )[0];
-      return admission ? latestExternal(admission.operation_id) : null;
+      if (!admission) return null;
+      const attempt = await approvableExternal(admission.operation_id);
+      if (attempt?.state !== "acknowledged") return attempt;
+      // An acknowledged receipt is reported only once nothing is still running
+      // it: a held lease means the normal completion is in progress.
+      const operation = (
+        await db.read("authority_operations", {
+          where: eq(operations.id, admission.operation_id),
+          limit: 1,
+        })
+      )[0];
+      return operation?.pending &&
+        !(
+          operation.worker_id &&
+          (operation.lease_expires_at ?? 0) > (await db.databaseTime())
+        )
+        ? attempt
+        : null;
     },
     async pendingIntentId(resource, kind, requestDigest) {
       return db.transact(async () => {

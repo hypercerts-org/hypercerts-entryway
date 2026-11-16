@@ -1,7 +1,7 @@
 diff -ruN a/account_migrate_entryway.go b/account_migrate_entryway.go
 --- a/account_migrate_entryway.go
 +++ b/account_migrate_entryway.go
-@@ -0,0 +1,272 @@
+@@ -0,0 +1,286 @@
 +package main
 +
 +import (
@@ -103,6 +103,9 @@ diff -ruN a/account_migrate_entryway.go b/account_migrate_entryway.go
 +	newEmail := cmd.String("new-email")
 +
 +	entryway := atclient.NewAPIClient(newHostURL)
++	// Own client, so no timeout is set on the process-wide http.DefaultClient.
++	// submitPlcOperation blocks until the operation is canonical.
++	entryway.Client = &http.Client{Timeout: 300 * time.Second}
 +	entryway.Headers.Set("User-Agent", userAgentString())
 +	desc, err := comatproto.ServerDescribeServer(ctx, entryway)
 +	if err != nil {
@@ -124,6 +127,27 @@ diff -ruN a/account_migrate_entryway.go b/account_migrate_entryway.go
 +		}
 +		entryway.Auth = &serviceBearerAuth{token: resp.Token}
 +		return nil
++	}
++
++	// 0. Export before the identity moves, as the contract advises: the repo and
++	// the blob list are read while the source still serves its own DID.
++	slog.Info("exporting repo")
++	repoBytes, err := comatproto.SyncGetRepo(ctx, oldClient, didStr, "")
++	if err != nil {
++		return fmt.Errorf("failed exporting repo: %w", err)
++	}
++	var blobCIDs []string
++	blobCursor := ""
++	for {
++		listResp, err := comatproto.SyncListBlobs(ctx, oldClient, blobCursor, didStr, 100, "")
++		if err != nil {
++			return fmt.Errorf("failed listing blobs: %w", err)
++		}
++		blobCIDs = append(blobCIDs, listResp.Cids...)
++		if listResp.Cursor == nil || *listResp.Cursor == "" {
++			break
++		}
++		blobCursor = *listResp.Cursor
 +	}
 +
 +	// 1. Source signs exactly the handoff Entryway prepared.
@@ -171,7 +195,7 @@ diff -ruN a/account_migrate_entryway.go b/account_migrate_entryway.go
 +	// Refreshing always goes to Entryway (Session.Host), never to the PDS.
 +	dest := atclient.NewAPIClient(destinationEndpoint)
 +	dest.Headers.Set("User-Agent", userAgentString())
-+	dest.Client.Timeout = 300 * time.Second
++	dest.Client = &http.Client{Timeout: 300 * time.Second}
 +	dest.AccountDID = &did
 +	dest.Auth = &atclient.PasswordAuth{
 +		Session: atclient.PasswordSessionData{
@@ -185,12 +209,8 @@ diff -ruN a/account_migrate_entryway.go b/account_migrate_entryway.go
 +		},
 +	}
 +
-+	// 4. Migrate data.
-+	slog.Info("migrating repo")
-+	repoBytes, err := comatproto.SyncGetRepo(ctx, oldClient, didStr, "")
-+	if err != nil {
-+		return fmt.Errorf("failed exporting repo: %w", err)
-+	}
++	// 4. Migrate data: import the repo exported in step 0.
++	slog.Info("importing repo")
 +	if err := comatproto.RepoImportRepo(ctx, dest, bytes.NewReader(repoBytes)); err != nil {
 +		return fmt.Errorf("failed importing repo: %w", err)
 +	}
@@ -220,27 +240,21 @@ diff -ruN a/account_migrate_entryway.go b/account_migrate_entryway.go
 +		}
 +	}
 +
-+	slog.Info("migrating blobs")
-+	blobCursor := ""
-+	for {
-+		listResp, err := comatproto.SyncListBlobs(ctx, oldClient, blobCursor, didStr, 100, "")
++	// Blobs come from the source's public sync endpoints, which need no
++	// credential and do not depend on the moved identity.
++	slog.Info("migrating blobs", "count", len(blobCIDs))
++	public := atclient.NewAPIClient(oldClient.Host)
++	public.Headers.Set("User-Agent", userAgentString())
++	public.Client = &http.Client{Timeout: 300 * time.Second}
++	for _, blobCID := range blobCIDs {
++		blobBytes, err := comatproto.SyncGetBlob(ctx, public, blobCID, didStr)
 +		if err != nil {
-+			return fmt.Errorf("failed listing blobs: %w", err)
++			return fmt.Errorf("failed downloading blob %s: %w", blobCID, err)
 +		}
-+		for _, blobCID := range listResp.Cids {
-+			blobBytes, err := comatproto.SyncGetBlob(ctx, oldClient, blobCID, didStr)
-+			if err != nil {
-+				return fmt.Errorf("failed downloading blob %s: %w", blobCID, err)
-+			}
-+			if _, err := comatproto.RepoUploadBlob(ctx, dest, bytes.NewReader(blobBytes)); err != nil {
-+				return fmt.Errorf("failed uploading blob %s: %w", blobCID, err)
-+			}
-+			slog.Info("transferred blob", "cid", blobCID, "size", len(blobBytes))
++		if _, err := comatproto.RepoUploadBlob(ctx, dest, bytes.NewReader(blobBytes)); err != nil {
++			return fmt.Errorf("failed uploading blob %s: %w", blobCID, err)
 +		}
-+		if listResp.Cursor == nil || *listResp.Cursor == "" {
-+			break
-+		}
-+		blobCursor = *listResp.Cursor
++		slog.Info("transferred blob", "cid", blobCID, "size", len(blobBytes))
 +	}
 +
 +	statusResp, err := comatproto.ServerCheckAccountStatus(ctx, dest)

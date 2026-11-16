@@ -13,6 +13,9 @@ RUN git init -q . \
 COPY entryway-incoming.patch /tmp/entryway-incoming.patch
 RUN git apply --check /tmp/entryway-incoming.patch && git apply /tmp/entryway-incoming.patch
 RUN CGO_ENABLED=0 go build -trimpath -o /out/goat .
+# Without --arrival-code the stock path must refuse the Entryway-only flags.
+RUN if out=$(/out/goat account migrate --pds-host https://pds.invalid --new-handle h.invalid --plc-token t --new-password p --handoff /none 2>&1); then exit 1; fi; \
+    echo "$out" | grep -q -- "--handoff requires --arrival-code"
 
 FROM scratch
 COPY --from=build /out/goat /goat

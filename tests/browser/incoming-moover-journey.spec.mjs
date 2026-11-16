@@ -2,7 +2,12 @@ import { test, expect } from "@playwright/test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
+import {
+  call,
+  json,
+  ok,
+  prepareArrival,
+} from "../support/helpers/incoming-journey.mjs";
 import { waitForStockPlcMessage } from "../support/helpers/stock-plc-mailpit.mjs";
 
 // Third incoming-migration client, run only by `./tests/local.sh
@@ -26,32 +31,6 @@ const pixel = Buffer.from(
   "base64",
 );
 const run = {};
-
-async function call(origin, method, { token, body, params, bytes, type } = {}) {
-  const url = new URL(`/xrpc/${method}`, origin);
-  for (const [key, value] of Object.entries(params ?? {}))
-    url.searchParams.set(key, value);
-  const response = await fetch(url, {
-    method: body !== undefined || bytes !== undefined ? "POST" : "GET",
-    headers: {
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-      ...(body === undefined ? {} : { "content-type": "application/json" }),
-      ...(bytes === undefined ? {} : { "content-type": type }),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    ...(bytes === undefined ? {} : { body: bytes }),
-    redirect: "error",
-    signal: AbortSignal.timeout(30_000),
-  });
-  return {
-    status: response.status,
-    content: Buffer.from(await response.arrayBuffer()),
-  };
-}
-const json = ({ content }) => JSON.parse(content.toString("utf8") || "{}");
-// Status only: bodies of failed calls can echo credentials.
-const ok = (response, what) =>
-  expect(response.status, `${what} status`).toBeLessThan(300);
 
 // Sets a field without putting its value in a step title or report.
 const setSecret = (locator, value) =>
@@ -205,65 +184,16 @@ test("a standalone source account has a record and a blob", async () => {
 test("the browser verifies the destination email and prepares the arrival", async ({
   page,
 }) => {
-  const since = Date.now();
-  await page.goto(`${config.issuer}/login`);
-  await page.getByLabel("Email address").first().fill(destinationEmail);
-  await page.getByRole("button", { name: "Send sign-in code" }).click();
-  const login = await waitForMailpitCode({
-    recipient: destinationEmail,
-    since,
-    baseUrl: access.mailpitUrl,
+  run.prepared = await prepareArrival(page, {
+    issuer: config.issuer,
+    mailpitUrl: access.mailpitUrl,
+    did: run.source.did,
+    handle: run.destinationHandle,
+    email: destinationEmail,
   });
-  await page.getByLabel("Sign-in code").fill(login.code);
-  await page.getByRole("button", { name: "Verify code" }).click();
-  await page.goto(`${config.issuer}/incoming`);
-  await expect(
-    page.getByRole("heading", { name: "Incoming migration" }),
-  ).toBeVisible();
-  await page.waitForTimeout(6_000);
-  const asked = Date.now();
-  await page
-    .getByRole("button", { name: "Send me a fresh email code" })
-    .click();
-  const fresh = await waitForMailpitCode({
-    recipient: destinationEmail,
-    since: asked,
-    excludeIds: [login.messageId],
-    baseUrl: access.mailpitUrl,
-  });
-  await page.goto(`${config.issuer}/incoming`);
-  await page.getByLabel("Your DID").fill(run.source.did);
-  await page.getByLabel("Destination handle").fill(run.destinationHandle);
-  await setSecret(page.getByLabel("Fresh email code"), fresh.code);
-  const response = page.waitForResponse(
-    (candidate) =>
-      candidate.url().endsWith("/incoming/prepare") &&
-      candidate.request().method() === "POST",
-  );
-  await page.getByRole("button", { name: "Prepare arrival" }).click();
-  expect((await response).status()).toBe(200);
-  await expect(page.getByText("shown once")).toBeVisible();
   // The whole block as the page shows it, for the user to copy.
   run.block = await page.locator("dl.identity").innerText();
-  const fields = await page
-    .locator("dl.identity")
-    .evaluate((list) =>
-      Object.fromEntries(
-        [...list.querySelectorAll("dt")].map((term) => [
-          term.textContent,
-          term.nextElementSibling.textContent,
-        ]),
-      ),
-    );
-  run.prepared = {
-    arrivalCode: fields.arrivalCode,
-    destinationEndpoint: fields.destinationEndpoint,
-    rotationKeys: JSON.parse(fields.handoff).rotationKeys,
-  };
-  // Booleans only: a failing assertion must never print the code.
-  expect(/^[A-Za-z0-9_-]{32}$/.test(run.prepared.arrivalCode)).toBe(true);
   expect(run.block.includes(run.prepared.arrivalCode)).toBe(true);
-  expect(run.prepared.destinationEndpoint).toBeTruthy();
 });
 
 test("PDS MOOver migrates the account into Entryway", async ({ page }) => {
@@ -392,7 +322,7 @@ test("PDS MOOver migrates the account into Entryway", async ({ page }) => {
     await expect(page.locator("#entryway-email")).toHaveValue("");
     await page.locator("#step-3-next").click();
     // The rotation key the handoff adds is shown for the user to confirm.
-    const entrywayKey = run.prepared.rotationKeys.at(-1);
+    const entrywayKey = run.prepared.handoff.rotationKeys.at(-1);
     await expect(page.locator("#entryway-keys")).toContainText(entrywayKey);
     await page.locator("#entryway-confirm-keys").check();
     // Entryway's describeServer links make the UI ask for policy acceptance;

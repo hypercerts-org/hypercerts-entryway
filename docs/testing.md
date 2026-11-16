@@ -116,9 +116,9 @@ env -u INCOMING_PUBLIC_MECHANISMS -u INCOMING_ACCESS_PATH node --test \
   tests/contracts/incoming-public-mechanisms.test.mjs
 ```
 
-That run skips the live-gated tests; those skips are not qualification. Setting
-`INCOMING_PUBLIC_MECHANISMS=0` still opts in because the gate tests presence; unset
-it as shown. Report live results only from an executed managed sandbox run.
+That run skips the three live-gated tests; those skips are not qualification.
+It exercises the offline subset only. Report counts and sandbox outcomes in the PR
+or handoff, not in this document.
 
 The offline cases cover the managed request boundary and phase budgets. They do not
 prove any public behavior: this contract test consumes stock PDS APIs, not Entryway
@@ -183,7 +183,9 @@ contract against an outside client stack, not an outside implementation of it.
 The patch adds `account migrate --arrival-code` (or `ENTRYWAY_ARRIVAL_CODE`),
 `--handoff`, `--destination-endpoint`, `--skip-preferences` and the test-only
 `--pause-after-import`. Without `--arrival-code` the stock path is unchanged and
-the new flags are refused. The spec passes `--skip-preferences` because, without an
+the new flags are refused, which the image build checks. goat exports the repo
+and lists blobs before the identity moves, then imports and fetches blobs from the
+source's public endpoints. The spec passes `--skip-preferences` because, without an
 AppView, the stock PDS does not register the preferences routes at all, so
 preference migration is not covered. It passes `--pause-after-import 320s` so the
 300 s tracked access token expires: goat refreshes at Entryway, retries the blob

@@ -3,12 +3,32 @@ import test from "node:test";
 import { fixture } from "../../../tests/support/helpers/incoming-arrival-fixture.mjs";
 import { incomingHttp } from "../../../tests/support/helpers/incoming-http.mjs";
 import { query } from "../../../tests/support/database-fixture.mjs";
+import * as plc from "@did-plc/lib";
+import { incomingHandoffMethod } from "../../../dist/src/features/external-migration/incoming-authorization.js";
 import { DomainError } from "../../../dist/src/accounts/errors.js";
 
 const prepareBody = (f) => ({ did: f.did, handle: "destination.example.test" });
 const secretFree = (text, secrets) => {
   for (const secret of secrets) assert.equal(text.includes(secret), false);
 };
+
+/** Prepare through the route, then admit the source-signed handoff: the arrival
+ * is claimed and the DID is held. */
+async function claim(f, h) {
+  const prepared = (await h.browser("/incoming/prepare", prepareBody(f))).json;
+  const operation = await plc.signOperation(prepared.handoff, f.source);
+  await f.composed.admitIncoming(f.request, {
+    operationId: prepared.operationId,
+    method: incomingHandoffMethod,
+    body: { operation },
+    presentation: await f.credential(),
+    arrivalCode: prepared.arrivalCode,
+  });
+  return prepared;
+}
+const version = async (f, operationId) =>
+  (await f.arrivals.readArrivalAggregate(operationId, f.principal.userId))
+    .arrival.version;
 
 test("prepare is strict, proof-gated, no-store and returns the code once", async (t) => {
   const f = await fixture(t);
@@ -58,11 +78,17 @@ test("prepare is strict, proof-gated, no-store and returns the code once", async
   // Only the hash is stored.
   const stored = await query(f.db, "SELECT * FROM arrival_code");
   assert.equal(JSON.stringify(stored).includes(ok.json.arrivalCode), false);
-  // Replaying cannot reproduce the code: it is a stable recovery refusal.
+  // An unclaimed preparation holds nothing: preparing again replaces it with a
+  // new operation and code, and the earlier row is deleted.
   const replay = await h.browser("/incoming/prepare", prepareBody(f));
-  assert.equal(replay.status, 409);
-  assert.equal(replay.json.error, "OperationRecoveryRequired");
-  secretFree(replay.text, [ok.json.arrivalCode]);
+  assert.equal(replay.status, 200);
+  assert.notEqual(replay.json.operationId, ok.json.operationId);
+  assert.notEqual(replay.json.arrivalCode, ok.json.arrivalCode);
+  const live = await query(f.db, "SELECT operation_id FROM arrivals");
+  assert.deepEqual(
+    live.map((row) => row.operation_id),
+    [replay.json.operationId],
+  );
 });
 
 test("a form post renders the one-time page, no-store, and failures render stable pages", async (t) => {
@@ -165,17 +191,31 @@ test("a wrong owner and an unknown operation are the same 404 on every saved-use
   assert.equal(strangerPage.text, unknownPage.text);
 });
 
-test("cancel of a prepared arrival is the stable recovery refusal, never a release", async (t) => {
+test("cancel deletes an unclaimed preparation, refuses a claimed arrival and then finds nothing", async (t) => {
   const f = await fixture(t);
   const h = await incomingHttp(t, f);
   const prepared = (await h.browser("/incoming/prepare", prepareBody(f))).json;
-  const refused = await h.browser("/incoming/cancel", {
+  const input = {
     operationId: prepared.operationId,
     expectedVersion: prepared.version,
+  };
+  const cancelled = await h.browser("/incoming/cancel", input);
+  assert.equal(cancelled.status, 200);
+  assert.deepEqual(await query(f.db, "SELECT * FROM arrivals"), []);
+  assert.deepEqual(await query(f.db, "SELECT * FROM arrival_code"), []);
+  const repeat = await h.browser("/incoming/cancel", input);
+  assert.equal(repeat.status, 404);
+  assert.equal(repeat.json.error, "AccountNotFound");
+  // Once a handoff is admitted the claim exists and cancel refuses.
+  const claimed = await claim(f, h);
+  const refused = await h.browser("/incoming/cancel", {
+    operationId: claimed.operationId,
+    expectedVersion: await version(f, claimed.operationId),
   });
   assert.equal(refused.status, 409);
   assert.equal(refused.json.error, "OperationRecoveryRequired");
   const rows = await query(f.db, "SELECT cancelled_at FROM arrivals");
+  assert.equal(rows.length, 1);
   assert.equal(rows[0].cancelled_at, null);
 });
 
@@ -187,10 +227,14 @@ test("recover and activate refuse before binding and spend no backend effect", a
     operationId: prepared.operationId,
     expectedVersion: prepared.version,
   };
+  const expected = {
+    "/incoming/recover": "OperationConflict",
+    "/incoming/activate": "OperationNoLongerPending",
+  };
   for (const path of ["/incoming/recover", "/incoming/activate"]) {
     const refused = await h.browser(path, input);
     assert.equal(refused.status, 409, path);
-    assert.equal(refused.json.error, "OperationConflict", path);
+    assert.equal(refused.json.error, expected[path], path);
   }
   assert.equal(f.backendState.activations, 0);
   assert.equal(f.backendState.creates, 0);
@@ -259,10 +303,10 @@ test("code sends a fresh sign-in code only to the verified browser owner's own e
   assert.equal(sent[5].json.error, "RateLimitExceeded");
 });
 
-test("a repeat prepare by the same saved user returns their own operation ID and nothing else", async (t) => {
+test("a repeat prepare by the same saved user replaces an unclaimed preparation and is told the claimed arrival's ID", async (t) => {
   const f = await fixture(t);
   const h = await incomingHttp(t, f);
-  const first = (await h.browser("/incoming/prepare", prepareBody(f))).json;
+  const first = await claim(f, h);
   const snapshot = async () =>
     JSON.stringify([
       await query(f.db, "SELECT * FROM arrivals"),
@@ -274,20 +318,19 @@ test("a repeat prepare by the same saved user returns their own operation ID and
   const repeat = await h.browser("/incoming/prepare", prepareBody(f));
   // Same status and code as the existing refusal, with the ID added.
   assert.equal(repeat.status, 409);
-  assert.equal(repeat.json.error, "OperationRecoveryRequired");
+  assert.equal(repeat.json.error, "OperationPending");
   assert.equal(repeat.headers["cache-control"], "no-store");
   assert.equal(repeat.json.operationId, first.operationId);
-  assert.equal(repeat.json.version, first.version);
+  assert.equal(repeat.json.version, await version(f, first.operationId));
   assert.equal(repeat.text.includes(first.arrivalCode), false);
   assert.equal(await snapshot(), before);
   assert.equal(f.reservations(), reservations);
-  // The returned ID works for renew.
-  const renewed = await h.browser("/incoming/renew", {
-    operationId: repeat.json.operationId,
-    expectedVersion: repeat.json.version,
+  // The returned ID works for renew only where the arrival allows it; the
+  // status page of the saved user shows it.
+  const page = await h.call(`/incoming?operationId=${first.operationId}`, {
+    method: "GET",
   });
-  assert.equal(renewed.status, 200);
-  assert.notEqual(renewed.json.arrivalCode, first.arrivalCode);
+  assert.equal(page.status, 200);
   // The HTML page shows the ID honestly and still no code.
   const form = await h.call("/incoming/prepare", {
     headers: { origin: f.config.issuer },
@@ -300,13 +343,13 @@ test("a repeat prepare by the same saved user returns their own operation ID and
   assert.equal(form.status, 409);
   assert.match(form.text, /already have an incoming migration/);
   assert.equal(form.text.includes(first.operationId), true);
-  assert.equal(form.text.includes(renewed.json.arrivalCode), false);
+  assert.equal(form.text.includes(first.arrivalCode), false);
 });
 
 test("a repeat prepare gets no ID without the full proof, or for another user's arrival", async (t) => {
   const f = await fixture(t);
   const h = await incomingHttp(t, f);
-  const first = (await h.browser("/incoming/prepare", prepareBody(f))).json;
+  const first = await claim(f, h);
   const refusals = [
     await h.browser("/incoming/prepare", prepareBody(f), { otp: "stale" }),
     await h.browser("/incoming/prepare", prepareBody(f), { csrf: "forged" }),
@@ -332,24 +375,24 @@ test("a repeat prepare gets no ID without the full proof, or for another user's 
   assert.equal(stranger.text.includes(first.operationId), false);
 });
 
-test("the existing ID is attached only to the repeat-prepare refusal of an arrival that can still be acted on", async (t) => {
+test("the existing ID is attached only to the OperationPending refusal of the user's own claimed arrival", async (t) => {
   const f = await fixture(t);
   const h = await incomingHttp(t, f);
-  const first = (await h.browser("/incoming/prepare", prepareBody(f))).json;
+  const first = await claim(f, h);
   const repeat = () => h.browser("/incoming/prepare", prepareBody(f));
   // An unrelated refusal or a server failure never carries the ID.
   const createArrival = f.arrivals.createArrival;
   f.arrivals.createArrival = async () => {
     throw new DomainError(
-      "OperationPending",
+      "OperationRecoveryRequired",
       409,
-      "Another operation is pending",
+      "Another operation is waiting",
     );
   };
-  const pendingRefusal = await repeat();
-  assert.equal(pendingRefusal.status, 409);
-  assert.equal(pendingRefusal.json.error, "OperationPending");
-  assert.equal(pendingRefusal.json.operationId, undefined);
+  const unrelated = await repeat();
+  assert.equal(unrelated.status, 409);
+  assert.equal(unrelated.json.error, "OperationRecoveryRequired");
+  assert.equal(unrelated.json.operationId, undefined);
   f.arrivals.createArrival = async () => {
     throw new Error("boom");
   };
@@ -365,9 +408,9 @@ test("the existing ID is attached only to the repeat-prepare refusal of an arriv
   const lookupFailed = await repeat();
   f.arrivals.readArrivalAccess = read;
   assert.equal(lookupFailed.status, 409);
-  assert.equal(lookupFailed.json.error, "OperationRecoveryRequired");
+  assert.equal(lookupFailed.json.error, "OperationPending");
   assert.equal(lookupFailed.json.operationId, undefined);
-  // A cancelled arrival is not reported.
+  // A cancelled arrival holds nothing and is not reported: preparing succeeds.
   await query(
     f.db,
     "UPDATE arrivals SET cancelled_at = 1, active = 0, did_root = NULL",
@@ -375,6 +418,6 @@ test("the existing ID is attached only to the repeat-prepare refusal of an arriv
     "run",
   );
   const cancelled = await repeat();
-  assert.equal(cancelled.json.operationId, undefined);
-  assert.equal(cancelled.text.includes(first.operationId), false);
+  assert.equal(cancelled.status, 200);
+  assert.notEqual(cancelled.json.operationId, first.operationId);
 });

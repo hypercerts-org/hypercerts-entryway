@@ -1,6 +1,16 @@
 import * as plc from "@did-plc/lib";
 import { cidForCbor } from "@atproto/common";
-import { and, asc, desc, eq, isNull, ne, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  isNotNull,
+  isNull,
+  ne,
+  or,
+  sql,
+} from "drizzle-orm";
 import { DomainError } from "../../accounts/errors.js";
 import { normalizeEmail } from "../../accounts/rules.js";
 import type { ArrivalTransactor } from "../migration-journal.port.js";
@@ -18,6 +28,7 @@ import {
   validateHistoryOperation,
   validateIncomingHandoff,
   publicRotationKey,
+  assertRotationKeysPreserved,
 } from "../../plc/policy.js";
 
 const signingKeyPattern = /^did:key:z[1-9A-HJ-NP-Za-km-z]+$/;
@@ -48,6 +59,62 @@ const immutableTuple = () =>
     409,
     "The arrival operation, DID, host and endpoint cannot change",
   );
+
+/** Names the arrival unique index a database error violated, across both
+ * dialects and wrapped driver errors, without surfacing its parameters. */
+function violatedArrivalIndex(
+  error: unknown,
+): "did" | "handle" | "user" | "operation" | null {
+  for (
+    let depth = 0;
+    error && typeof error === "object" && depth < 6;
+    depth++
+  ) {
+    const fields = error as Record<string, unknown>;
+    const code = typeof fields.code === "string" ? fields.code : "";
+    if (
+      code.startsWith("SQLITE_CONSTRAINT") ||
+      code === "23505" ||
+      code === "23514"
+    ) {
+      const text = [fields.message, fields.constraint, fields.detail]
+        .filter((value): value is string => typeof value === "string")
+        .join(" ");
+      if (/arrivals_did_active|arrivals\.did_root|\(did_root\)/.test(text))
+        return "did";
+      if (/arrivals_handle_active/.test(text)) return "handle";
+      if (/arrivals_user_unclaimed|arrivals\.user_id|\(user_id\)/.test(text))
+        return "user";
+      if (/arrivals_pkey|arrivals\.operation_id|\(operation_id\)/.test(text))
+        return "operation";
+    }
+    error = fields.cause;
+  }
+  return null;
+}
+const operationPending = () =>
+  new DomainError(
+    "OperationPending",
+    409,
+    "Another claimed arrival already holds this DID",
+  );
+function translateArrivalViolation(error: unknown): never {
+  switch (violatedArrivalIndex(error)) {
+    case "did":
+      throw operationPending();
+    case "handle":
+      throw new DomainError(
+        "HandleNotAvailable",
+        409,
+        "Handle is reserved by another arrival",
+      );
+    case "user":
+    case "operation":
+      throw versionConflict();
+    default:
+      throw error;
+  }
+}
 
 /** Account-authority writes the arrival transaction must compose atomically. */
 export interface ArrivalAuthority {
@@ -101,6 +168,7 @@ function arrivalRecord(
   return {
     operationId: row.operation_id,
     did: row.did,
+    claimOperationId: row.claim_operation_id,
     userId: row.user_id,
     email: row.email,
     handle: row.handle,
@@ -245,22 +313,62 @@ export function createArrivalStorage(
       );
   };
 
-  const assertArrivalOwnership = async (
-    owner: OperationClaim,
-    saved: StoredRow<"arrivals">,
-  ) => {
+  /** The owner holds the `arrival:<did>` admission under a current fence. */
+  const assertAdmission = async (owner: OperationClaim, did: string) => {
     await db.assertOperationFence(owner);
     const admissions = db.tables.operation_admissions;
     const binding = (
       await db.read("operation_admissions", {
         where: and(
-          eq(admissions.resource, `arrival:${saved.did}`),
+          eq(admissions.resource, `arrival:${did}`),
           eq(admissions.operation_id, owner.operationId),
         ),
         limit: 1,
       })
     )[0];
     if (!binding) throw versionConflict();
+  };
+
+  /** Only the arrival's own claim may write it; a sibling unclaimed
+   * preparation for the same DID is never writable through another claim. */
+  const assertArrivalOwnership = async (
+    owner: OperationClaim,
+    saved: StoredRow<"arrivals">,
+  ) => {
+    await assertAdmission(owner, saved.did);
+    if (saved.claim_operation_id !== owner.operationId) throw versionConflict();
+  };
+
+  const isLapsed = async (saved: StoredRow<"arrivals">) => {
+    if (saved.claim_operation_id !== null || saved.active === 0) return false;
+    const saving = await code(saved.operation_id);
+    return !saving || saving.expires_at <= (await db.databaseTime());
+  };
+
+  /** Deletes one unclaimed preparation at its current version; claimed rows
+   * and rows that changed meanwhile are never touched. */
+  const deleteUnclaimedInTransaction = async (saved: StoredRow<"arrivals">) => {
+    const unclaimed = and(
+      eq(table.operation_id, saved.operation_id),
+      eq(table.version, saved.version),
+      isNull(table.claim_operation_id),
+    )!;
+    const current = await db.read("arrivals", { where: unclaimed, limit: 1 });
+    if (current.length === 0) return false;
+    await db.remove(
+      "arrival_code",
+      eq(codeTable.operation_id, saved.operation_id),
+    );
+    return (await db.remove("arrivals", unclaimed)) === 1;
+  };
+  const deleteUnclaimed = (saved: StoredRow<"arrivals">) =>
+    db.transact(() => deleteUnclaimedInTransaction(saved));
+
+  /** Lazily deletes an expired unclaimed preparation when it is found. */
+  const purgeIfLapsed = async (saved: StoredRow<"arrivals"> | undefined) => {
+    if (!saved || !(await isLapsed(saved))) return false;
+    await deleteUnclaimed(saved);
+    return true;
   };
 
   const externalReceipt = async (
@@ -308,6 +416,13 @@ export function createArrivalStorage(
       (await authority.readBinding(did))
     )
       throw new DomainError("IdentityConflict", 409, "Identity already hosted");
+    const didHolders = await db.read("arrivals", {
+      where: eq(table.did_root, did),
+    });
+    if (
+      didHolders.some(({ operation_id }) => operation_id !== ignoreOperationId)
+    )
+      throw operationPending();
     const hosted = await db.read("accounts", {
       where: eq(sql`lower(${db.tables.accounts.handle})`, handle),
       limit: 1,
@@ -366,7 +481,11 @@ export function createArrivalStorage(
         "Destination email is reserved by another operation",
       );
     const pending = await db.read("arrivals", {
-      where: and(eq(sql`lower(${table.email})`, email), eq(table.active, 1)),
+      where: and(
+        eq(sql`lower(${table.email})`, email),
+        eq(table.active, 1),
+        isNotNull(table.did_root),
+      ),
     });
     if (pending.some(({ operation_id }) => operation_id !== ignoreOperationId))
       throw new DomainError(
@@ -375,7 +494,11 @@ export function createArrivalStorage(
         "Destination email is reserved by another arrival",
       );
     const handleHolders = await db.read("arrivals", {
-      where: and(eq(sql`lower(${table.handle})`, handle), eq(table.active, 1)),
+      where: and(
+        eq(sql`lower(${table.handle})`, handle),
+        eq(table.active, 1),
+        isNotNull(table.did_root),
+      ),
     });
     if (
       handleHolders.some(
@@ -525,6 +648,11 @@ export function createArrivalStorage(
         )
           throw immutableTuple();
         input.approvedRotationKeys.forEach(publicRotationKey);
+        assertRotationKeysPreserved(
+          normalized.rotationKeys,
+          input.approvedRotationKeys,
+        );
+        if (!digestPattern.test(input.codeHash)) throw immutableTuple();
       } catch {
         throw new DomainError(
           "InvalidAccount",
@@ -564,14 +692,15 @@ export function createArrivalStorage(
             canonicalFact(input.approvedRotationKeys)
         )
           throw immutableTuple();
-        if (saved.active === 0) throw notActionable();
+        if (saved.active === 0 || (await purgeIfLapsed(saved)))
+          throw notActionable();
         return arrivalRecord(
           saved,
           await reservation(saved.operation_id),
           await code(saved.operation_id),
         );
       }
-      await db.transact(async () => {
+      return db.transact(async () => {
         const user = (
           await db.read("user", {
             where: eq(db.tables.user.id, input.userId),
@@ -591,45 +720,75 @@ export function createArrivalStorage(
           input.operationId,
         );
         const now = await db.databaseTime();
-        await db.insert("arrivals", {
-          operation_id: input.operationId,
-          did: input.did,
-          did_root: input.did,
-          active: 1,
-          user_id: input.userId,
-          email,
-          handle: input.handle,
-          pds_id: input.pdsId,
-          endpoint: input.endpoint,
-          source_plc_head: input.sourcePlcHead,
-          source_endpoint: input.source.services.atproto_pds?.endpoint,
-          source_predecessor: JSON.stringify(input.sourcePredecessor),
-          source_facts: JSON.stringify(input.source),
-          approved_rotation_keys: JSON.stringify(input.approvedRotationKeys),
-          version: 1,
-          generation: 1,
-          created_at: now,
-          updated_at: now,
+        // A new preparation replaces the user's earlier unclaimed one. Both
+        // changes commit together, so a refused preparation keeps the old one.
+        const earlier = await db.read("arrivals", {
+          where: and(
+            eq(table.user_id, input.userId),
+            eq(table.active, 1),
+            isNull(table.claim_operation_id),
+          ),
         });
-        await db.insert("arrival_code", {
-          operation_id: input.operationId,
-          code_hash: input.codeHash,
-          generation: 1,
-          issued_at: now,
-          expires_at: input.codeExpiresAt,
-        });
+        for (const superseded of earlier) {
+          await db.remove(
+            "arrival_code",
+            eq(codeTable.operation_id, superseded.operation_id),
+          );
+          await db.remove(
+            "arrivals",
+            and(
+              eq(table.operation_id, superseded.operation_id),
+              isNull(table.claim_operation_id),
+            )!,
+          );
+        }
+        try {
+          await db.insert("arrivals", {
+            operation_id: input.operationId,
+            did: input.did,
+            did_root: null,
+            claim_operation_id: null,
+            active: 1,
+            user_id: input.userId,
+            email,
+            handle: input.handle,
+            pds_id: input.pdsId,
+            endpoint: input.endpoint,
+            source_plc_head: input.sourcePlcHead,
+            source_endpoint: input.source.services.atproto_pds?.endpoint,
+            source_predecessor: JSON.stringify(input.sourcePredecessor),
+            source_facts: JSON.stringify(input.source),
+            approved_rotation_keys: JSON.stringify(input.approvedRotationKeys),
+            version: 1,
+            generation: 1,
+            created_at: now,
+            updated_at: now,
+          });
+          await db.insert("arrival_code", {
+            operation_id: input.operationId,
+            code_hash: input.codeHash,
+            generation: 1,
+            issued_at: now,
+            expires_at: input.codeExpiresAt,
+          });
+        } catch (error) {
+          translateArrivalViolation(error);
+        }
+        // Read inside the transaction: a concurrent preparation may supersede
+        // this row as soon as it commits.
+        return arrivalRecord(
+          (await row(input.operationId))!,
+          undefined,
+          await code(input.operationId),
+        );
       });
-      return arrivalRecord(
-        (await row(input.operationId))!,
-        await reservation(input.operationId),
-        await code(input.operationId),
-      );
     },
 
     async readArrival(operationId, ownerUserId) {
       const saved = await row(operationId);
       if (!saved || saved.user_id !== ownerUserId || saved.active === 0)
         return null;
+      if (await purgeIfLapsed(saved)) return null;
       return arrivalRecord(
         saved,
         await reservation(operationId),
@@ -640,6 +799,18 @@ export function createArrivalStorage(
     async consumeArrivalCode({ codeHash, did, method }) {
       if (!digestPattern.test(codeHash) || !method.startsWith("com.atproto."))
         return null;
+      const lapsed = await purgeIfLapsed(
+        await (async () => {
+          const found = (
+            await db.read("arrival_code", {
+              where: eq(codeTable.code_hash, codeHash),
+              limit: 1,
+            })
+          )[0];
+          return found ? row(found.operation_id) : undefined;
+        })(),
+      );
+      if (lapsed) return null;
       return db.transact(async () => {
         const saved = (
           await db.read("arrival_code", {
@@ -661,6 +832,11 @@ export function createArrivalStorage(
     },
 
     async rotateArrivalCode(input) {
+      if (!digestPattern.test(input.codeHash))
+        throw new DomainError("InvalidAccount", 400, "Invalid arrival code");
+      const found = await row(input.operationId);
+      if (found?.user_id === input.ownerUserId && (await purgeIfLapsed(found)))
+        throw notActionable();
       return db.transact(async () => {
         const saved = await currentOwnedArrival(
           input.operationId,
@@ -671,7 +847,7 @@ export function createArrivalStorage(
         await assertExpiry(await db.databaseTime(), input.codeExpiresAt);
         const binding = await reservation(input.operationId);
         if (binding?.uncertain_reason) throw recoveryRequired();
-        if (saved.provisioned_at !== null) throw notActionable();
+        if (saved.bound_at !== null) throw notActionable();
         const now = await db.databaseTime();
         const generation = saved.generation + 1;
         await db.update(
@@ -697,6 +873,61 @@ export function createArrivalStorage(
           },
         );
       });
+    },
+
+    async claimArrival(owner, expectedVersion, input) {
+      assertClaim(owner);
+      if (!input.operationId || !input.did.startsWith("did:"))
+        throw new DomainError(
+          "InvalidAccount",
+          400,
+          "Invalid arrival operation",
+        );
+      if (await purgeIfLapsed(await row(input.operationId)))
+        throw notActionable();
+      return db.transact(async () =>
+        db.withOperationFence(owner, async () => {
+          const saved = await row(input.operationId);
+          if (!saved)
+            throw new DomainError("AccountNotFound", 404, "Arrival not found");
+          if (saved.did !== input.did) throw immutableTuple();
+          if (saved.active === 0) throw notActionable();
+          if (saved.claim_operation_id !== null) {
+            if (saved.claim_operation_id === owner.operationId)
+              return {
+                kind: "already-settled" as const,
+                version: saved.version,
+              };
+            throw versionConflict();
+          }
+          // The admission is the DID authority; the preparation's own claim is
+          // what this call creates, so the claim check is not applied here.
+          await assertAdmission(owner, saved.did);
+          if (
+            !Number.isSafeInteger(expectedVersion) ||
+            saved.version !== expectedVersion
+          )
+            throw versionConflict();
+          if (await isLapsed(saved)) throw notActionable();
+          await assertFreeDestination(
+            saved.email,
+            saved.did,
+            saved.handle,
+            saved.operation_id,
+          );
+          try {
+            return {
+              kind: "applied" as const,
+              version: await advance(saved, {
+                did_root: saved.did,
+                claim_operation_id: owner.operationId,
+              }),
+            };
+          } catch (error) {
+            translateArrivalViolation(error);
+          }
+        }),
+      );
     },
 
     async recordAllocationIntent(owner, expectedVersion, input) {
@@ -746,12 +977,41 @@ export function createArrivalStorage(
         return db.withOperationFence(owner, async () => {
           const existing = await reservation(input.operationId);
           if (!existing || existing.uncertain_reason) throw recoveryRequired();
-          if (existing.signing_key && existing.signing_key !== input.signingKey)
+          const now = await db.databaseTime();
+          if (
+            existing.signing_key &&
+            existing.signing_key !== input.signingKey
+          ) {
+            // A divergent key is recorded, never overwritten or ignored, so
+            // every later step refuses with OperationRecoveryRequired.
+            await db.update(
+              "arrival_reservations",
+              {
+                uncertain_reason: "saved-key-differs",
+                uncertain_at: now,
+                recorded_at: now,
+              },
+              eq(reservationTable.operation_id, input.operationId),
+            );
+            await db.insert(
+              "arrival_attempts",
+              {
+                attempt_binding: `${input.operationId}:${owner.attemptId}:${owner.fence}`,
+                ownership_operation_id: owner.operationId,
+                attempt_id: owner.attemptId,
+                operation_id: input.operationId,
+                reason: "saved-key-differs",
+                recorded_at: now,
+                fence: owner.fence,
+              },
+              { ignoreConflict: true },
+            );
+            await advance(saved, {});
             return {
               kind: "reconciliation-required" as const,
               reason: "saved-key-differs" as const,
             };
-          const now = await db.databaseTime();
+          }
           if (!existing.signing_key)
             await db.update(
               "arrival_reservations",
@@ -850,6 +1110,8 @@ export function createArrivalStorage(
           )
             throw versionConflict();
           if (input.kind === "destination-move") {
+            if ((await reservation(input.operationId))?.uncertain_reason)
+              throw recoveryRequired();
             if (!savedKinds.some((savedRow) => savedRow.kind === "handoff"))
               throw new DomainError(
                 "OperationConflict",
@@ -1013,12 +1275,11 @@ export function createArrivalStorage(
           // by an approved safe retry carries its recovery disposition instead.
           if (
             receipt.state !== "acknowledged" ||
-            !(
-              receipt.result === "null" ||
-              /^\{"recovery":"(unapplied|replay-safe)"\}$/.test(
-                receipt.result ?? "",
-              )
-            )
+            ![
+              "null",
+              '{"recovery":"unapplied"}',
+              '{"recovery":"replay-safe"}',
+            ].includes(receipt.result ?? "")
           )
             throw recoveryRequired();
           const attemptBinding = `${input.operationId}:external:${receipt.id}`;
@@ -1401,7 +1662,7 @@ export function createArrivalStorage(
     async readArrivalAccess(did) {
       const saved = (
         await db.read("arrivals", {
-          where: eq(table.did, did),
+          where: and(eq(table.did, did), isNotNull(table.claim_operation_id)),
           orderBy: [
             desc(table.active),
             desc(table.created_at),
@@ -1437,56 +1698,52 @@ export function createArrivalStorage(
     },
 
     async cancelArrival(input) {
-      assertClaim(input.owner);
+      const found = await row(input.operationId);
+      if (!found || found.user_id !== input.ownerUserId)
+        throw new DomainError("AccountNotFound", 404, "Arrival not found");
+      if (found.claim_operation_id !== null)
+        throw new DomainError(
+          "OperationRecoveryRequired",
+          409,
+          "A claimed arrival is resolved by completion or recovery, not cancellation",
+        );
       return db.transact(async () => {
         const saved = await currentOwnedArrival(
           input.operationId,
           input.ownerUserId,
           input.expectedVersion,
         );
-        await assertArrivalOwnership(input.owner, saved);
-        if (saved.active === 0)
-          return { kind: "already-settled" as const, version: saved.version };
-        return db.withOperationFence(input.owner, async () => {
-          const binding = await reservation(input.operationId);
-          const obligations = await Promise.all(
-            (
-              [
-                "arrival_signed_operations",
-                "arrival_attempts",
-                "arrival_replay",
-                "arrival_families",
-              ] as const
-            ).map((name) =>
-              db.read(name, {
-                where: eq(db.tables[name].operation_id, input.operationId),
-                limit: 1,
-              }),
-            ),
+        // An unclaimed preparation holds nothing remote: nothing to release,
+        // so cancellation deletes it and leaves no history row.
+        const obligations = await Promise.all(
+          (
+            [
+              "arrival_reservations",
+              "arrival_signed_operations",
+              "arrival_attempts",
+              "arrival_replay",
+              "arrival_families",
+            ] as const
+          ).map((name) =>
+            db.read(name, {
+              where: eq(db.tables[name].operation_id, input.operationId),
+              limit: 1,
+            }),
+          ),
+        );
+        if (
+          saved.did_root !== null ||
+          saved.provisioned_at !== null ||
+          obligations.some((rows) => rows.length > 0)
+        )
+          throw new DomainError(
+            "OperationRecoveryRequired",
+            409,
+            "Cancellation cannot release remote obligations for this arrival",
           );
-          if (
-            saved.provisioned_at !== null ||
-            saved.deactivated_at !== null ||
-            saved.bound_at !== null ||
-            saved.activation_at !== null ||
-            saved.completed_at !== null ||
-            obligations.some((rows) => rows.length > 0) ||
-            input.noRemoteObligation !== true ||
-            binding !== undefined ||
-            input.plcStateUnchanged !== true
-          )
-            throw new DomainError(
-              "OperationRecoveryRequired",
-              409,
-              "Cancellation cannot release remote obligations for this arrival",
-            );
-          await advance(saved, {
-            cancelled_at: await db.databaseTime(),
-            did_root: null,
-            active: 0,
-          });
-          return { kind: "applied" as const, version: saved.version + 1 };
-        });
+        if (!(await deleteUnclaimedInTransaction(saved)))
+          throw versionConflict();
+        return { kind: "applied" as const, version: saved.version };
       });
     },
 
