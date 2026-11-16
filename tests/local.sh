@@ -15,7 +15,7 @@ command=${1:-help}
 mkdir -p "$artifacts"
 # Phase identity comes from the controller, never from a command or request body.
 case "$command" in
-  fresh|fresh-group|prepare|up|contracts|database-contracts|database-dialects|resilience-profiles|database-profile|browser|incoming-public-mechanisms|incoming-public-journey|incoming-goat-journey|incoming-arrival-live|migration|migration-resume|resilience|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|all|down|status|help) ;;
+  fresh|fresh-group|prepare|up|contracts|database-contracts|database-dialects|resilience-profiles|database-profile|browser|incoming-public-mechanisms|incoming-public-journey|incoming-goat-journey|incoming-moover-journey|incoming-arrival-live|migration|migration-resume|resilience|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|all|down|status|help) ;;
   *) echo 'code=UNKNOWN_PHASE'; exit 2 ;;
 esac
 printf 'phase=%s status=started\n' "$command"
@@ -42,11 +42,11 @@ const [manifest, entryway, fixtures] = process.argv.slice(2).map(path => JSON.pa
 const source = manifest.pds.filter(pds => pds.id === 'pds3')
 if (source.length !== 1 || source[0].hostname !== new URL(source[0].url).hostname) throw new Error('Invalid configured standalone PDS')
 function route(definition, id, service) {
-  const matches = definition.routes.filter(item => item.id === id && item.service === service)
+  const matches = definition.routes.filter(item => item.id === id && [service].flat().includes(item.service))
   if (matches.length !== 1 || !matches[0].host || matches[0].hostname) throw new Error('Invalid configured route')
   return `https://${matches[0].host}.${manifest.domain}`
 }
-console.log([source[0].url, route(entryway, 'entryway', 'entryway'), route(entryway, 'cluster1', 'pds1'), route(entryway, 'cluster2', 'pds2'), manifest.plc, route(fixtures, 'mailpit', 'mail-capture')].join(' '))
+console.log([source[0].url, route(entryway, 'entryway', ['entryway', 'entryway-ingress', 'profile-ingress']), route(entryway, 'cluster1', 'pds1'), route(entryway, 'cluster2', 'pds2'), manifest.plc, route(fixtures, 'mailpit', 'mail-capture')].join(' '))
 JS
   ) || return
   local -a origins
@@ -108,7 +108,7 @@ case "$command" in
     (( $# > 0 )) || { echo 'fresh-group needs at least one step' >&2; exit 2; }
     for step in "$@"; do
       case "$step" in
-        browser|contracts|incoming-public-mechanisms|incoming-public-journey|incoming-goat-journey|database-contracts|migration|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience) ;;
+        browser|contracts|incoming-public-mechanisms|incoming-public-journey|incoming-goat-journey|incoming-moover-journey|database-contracts|migration|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience) ;;
         *) echo "Unknown fresh-group step: $step" >&2; exit 2 ;;
       esac
     done
@@ -233,6 +233,24 @@ case "$command" in
     docker --context "$DOCKER_CONTEXT" build --quiet --output "type=local,dest=$goat_dir" "$root/tests/support/goat"
     compose run --rm --no-deps --volume "$sandbox/incoming-access.json:/run/incoming-access.json:ro" --volume "$goat_dir/goat:/usr/local/bin/goat:ro" -e INCOMING_ACCESS_PATH=/run/incoming-access.json -e "INCOMING_PROJECT=$project" -e INCOMING_GOAT_JOURNEY=1 browser npx --no-install playwright test --config tests/playwright.config.mjs 2>&1 | tee "$artifacts/incoming-goat-journey.log" | python3 "$root/scripts/ci-summary.py"
     ;;
+  incoming-moover-journey)
+    require_state
+    prepare_incoming_access
+    # The PDS MOOver web UI, built from its pinned commit (tests/support/pds-moover)
+    # and served at its own sandbox route, so the source PDS can fetch its OAuth
+    # client metadata over the sandbox CA. Started on demand by its profile.
+    moover_url=$(node --input-type=module - "$root/tests/sandbox.json" "$root/tests/atmosphere/stacks/hypercerts-entryway.definition.json" <<'JS'
+import { readFileSync } from 'node:fs'
+const [, definition] = process.argv.slice(2).map(path => JSON.parse(readFileSync(path, 'utf8')))
+const matches = definition.routes.filter(item => item.id === 'moover' && item.service === 'pds-moover')
+// The OAuth client library refuses client IDs on local TLDs such as .test.
+if (matches.length !== 1 || !matches[0].hostname?.endsWith('.atmosbox.internal') || matches[0].host) throw new Error('Invalid configured moover route')
+console.log(`https://${matches[0].hostname}`)
+JS
+    )
+    compose --profile moover up -d --build --wait --no-deps pds-moover
+    compose run --rm --no-deps --volume "$sandbox/incoming-access.json:/run/incoming-access.json:ro" -e INCOMING_ACCESS_PATH=/run/incoming-access.json -e "INCOMING_PROJECT=$project" -e "MOOVER_URL=$moover_url" -e INCOMING_MOOVER_JOURNEY=1 browser npx --no-install playwright test --config tests/playwright.config.mjs 2>&1 | tee "$artifacts/incoming-moover-journey.log" | python3 "$root/scripts/ci-summary.py"
+    ;;
   migration)
     require_state
     exec 9> "$artifacts/migration.lock"
@@ -311,7 +329,7 @@ case "$command" in
     deno task sandbox status
     ;;
   *)
-    echo 'Usage: ./tests/local.sh fresh|fresh-group <steps...>|prepare|up|browser|incoming-public-mechanisms|incoming-public-journey|incoming-goat-journey|contracts|database-contracts|database-profile|resilience-profiles|migration|migration-resume|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience|all|status|down'
+    echo 'Usage: ./tests/local.sh fresh|fresh-group <steps...>|prepare|up|browser|incoming-public-mechanisms|incoming-public-journey|incoming-goat-journey|incoming-moover-journey|contracts|database-contracts|database-profile|resilience-profiles|migration|migration-resume|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience|all|status|down'
     echo 'all requires a fresh project fixture; down retains state and volumes. No implicit reset.'
     ;;
 esac

@@ -34,14 +34,16 @@ for app in ['hypercerts-entryway','entryway-fixtures','entryway-oauth-web-app','
             else:
                 definition = json.loads(text)
                 for route in definition['routes']:
-                    if route['service'] == 'entryway':
+                    if route['service'] in ('entryway', 'entryway-ingress'):
                         route['service'] = 'profile-ingress'
+                        route['port'] = 3000
                 definition['services'].append({'service': 'profile-ingress', 'environment': []})
                 if profile_nodes == '2':
                     definition['services'].append({'service': 'entryway-replica', 'environment': []})
                 text = json.dumps(definition, indent=2) + '\n'
         # Compose paths resolve relative to the generated file in the clone.
         text = text.replace('context: ../..', 'context: ' + json.dumps(str(root)))
+        text = text.replace('../../tests/support/entryway-ingress.Caddyfile', str(root / 'tests/support/entryway-ingress.Caddyfile'))
         text = text.replace('../artifacts:/app/artifacts:z', os.environ.get('ACCEPTANCE_REPORT_DIR', str(root / 'tests/artifacts')) + ':/app/artifacts:z')
         target = sandbox / 'stacks' / (app + suffix)
         if target.exists() and target.read_text() != text and (sandbox / 'state/manifest.json').exists():

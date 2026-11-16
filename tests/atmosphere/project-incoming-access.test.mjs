@@ -80,12 +80,14 @@ test("rejects invalid private sandbox metadata", () => {
 
 test("accepts the multi-node ingress for Entryway only", () => {
   const access = fixture();
-  access.endpoints[1].service = "profile-ingress";
-  assert.deepEqual(projectIncomingAccess(access, project, routes), {
-    schemaVersion: 1,
-    project,
-    ...routes,
-  });
+  for (const service of ["profile-ingress", "entryway-ingress"]) {
+    access.endpoints[1].service = service;
+    assert.deepEqual(projectIncomingAccess(access, project, routes), {
+      schemaVersion: 1,
+      project,
+      ...routes,
+    });
+  }
   const other = fixture();
   other.endpoints[2].service = "profile-ingress";
   assert.throws(() => projectIncomingAccess(other, project, routes));

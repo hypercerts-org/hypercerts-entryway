@@ -129,6 +129,24 @@ against our contract.
 - Status: reusable as a harness only; stock unmodified goat does not support the
   Entryway surface.
 
+### PDS MOOver test client provenance
+
+The `incoming-moover-journey` live test builds the PDS MOOver web UI as a test-only
+third-party client. It is not shipped or reused in `src/`, and nothing of its tree
+is vendored or patched.
+
+- Upstream: <https://tangled.org/kandake.africa/pds-moover>, branch
+  `feat/entryway-incoming-migration`, commit
+  `25a54a75c1347728ff0a8b122aeadad1d6902bb4`. Licence: MIT (the `LICENSE.md` file,
+  named with a leading space upstream, adds a request that members of
+  `@witchcraft.systems` show a cow in a witch's hat in the UI they create).
+- Handling: `tests/support/pds-moover/Dockerfile` fetches that commit, verifies it
+  and builds `web-ui` unmodified with pnpm (stages mirror upstream
+  `Dockerfiles/web-ui.Dockerfile`, on `node:24-bookworm-slim`). Dependencies resolve
+  from its `pnpm-lock.yaml`. `PUBLIC_APP_URL` and `ORIGIN` are the sandbox route.
+- Status: reusable as a harness only. The branch carries the incoming-migration
+  mode; it is not yet in the upstream default branch.
+
 ### Client-managed migration design reference
 
 For maintainers implementing incoming migration, the user accepted the Rust-like

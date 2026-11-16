@@ -50,6 +50,7 @@ and requires no host dependency install:
 | `./tests/local.sh browser`                    | Run browser scenarios after up                                                                                                                                                                            |
 | `./tests/local.sh incoming-public-mechanisms` | Bounded stock public-mechanism contract test after up: standalone signup, Mailpit, PLC signing, inactive destination and reservation; offline checks plus live-gated cases, not a migration qualification |
 | `./tests/local.sh incoming-goat-journey`      | Second incoming client after up: the public goat CLI, patched to the Entryway incoming contract, migrates a fresh stock source account; see below                                                         |
+| `./tests/local.sh incoming-moover-journey`    | Third incoming client after up: the PDS MOOver web UI, driven in Chromium through the sandbox CORS ingress, migrates a fresh stock source account; see below                                             |
 | `./tests/local.sh migration`                  | Fresh synthetic external-source migration, including two Entryway restarts                                                                                                                                |
 | `./tests/local.sh migration-resume`           | Resume a reviewed interrupted fixture; inspect state before using                                                                                                                                         |
 | `./tests/local.sh reverify`                   | Check an already completed migration fixture                                                                                                                                                              |
@@ -199,6 +200,53 @@ destination endpoint and handle, and a deactivated source. Unmodified stock goat
 not expected to work: it sends a password and skips the arrival code. The spec is
 selected only by `INCOMING_GOAT_JOURNEY=1`. Printed goat output has the arrival
 code, PLC token, source password, invite code and JWT-shaped strings redacted.
+
+### Public incoming journey with the PDS MOOver web UI
+
+```sh
+./tests/local.sh incoming-moover-journey
+```
+
+After `up`, this drives the [PDS MOOver](https://tangled.org/kandake.africa/pds-moover)
+web UI in Chromium. The command builds the UI from its pinned commit
+(`tests/support/pds-moover/Dockerfile`; provenance in the
+[reuse assessment](reuse-assessment.md#pds-moover-test-client-provenance)) and starts it
+as the `pds-moover` sandbox service (compose profile `moover`, so `up` never builds
+it). Its route is `https://moover.atmosbox.internal`: the OAuth client library
+refuses client IDs on `.test`, and the source PDS fetches the client metadata over
+the sandbox CA.
+
+The spec creates a stock source account with a record and a blob, prepares the
+arrival on Entryway's `/incoming` page, then in the UI signs in to the source through
+the stock PDS authorization page, ticks Entryway mode, pastes the prepared block,
+confirms the added rotation key, requests the PLC token (read from Mailpit),
+accepts the provider policies and runs the migration to the finish panel. It
+asserts an active destination serving the record and blob, a PLC document naming
+the destination endpoint and handle, and a deactivated source.
+
+The stock PDS answers `deactivateAccount` from an OAuth session with 403 (`OAuth
+credentials are not supported for this endpoint`), so the UI documents the outcome and
+offers its password form for the old account. The spec uses that form and requires
+the UI to report the source as deactivated. The UI prefills the optional email
+field with the old account's email, which Entryway refuses when it differs from the
+verified one (400 `InvalidAccount`, after the PLC handoff was submitted), so the
+spec empties the field as the field's own hint says.
+
+The built UI reaches plc.directory, slingshot and Cloudflare DoH at fixed public
+addresses. The spec answers those three from the sandbox PLC directory and PDS with
+Playwright routing (the same approach as the upstream mock e2e) and aborts every
+other non-sandbox request; requests to sandbox hosts are untouched, so Chromium
+enforces real CORS against Entryway. Typed secrets are set through `evaluate`, so
+no Playwright step title carries them, and none are printed.
+
+The same spec checks the ingress, a Caddy proxy in front of Entryway
+(`tests/support/entryway-ingress.Caddyfile`, the block from
+the "Browser access to XRPC" section of the deployment profiles guide with only the
+site address and upstream changed, plus two lines for the sandbox gateway's extra
+proxy hop). All Entryway routes in the sandbox go through it. It asserts a preflight
+carrying `entryway-arrival-code` on `/xrpc/*` and `/.well-known/atproto-did`,
+`Access-Control-Expose-Headers` on `/xrpc/*`, one `Access-Control-Allow-Origin` on
+`/oauth/*`, and none on `/incoming` or `/login`.
 
 Contributors qualifying the dormant incoming-arrival composition run
 `./tests/local.sh incoming-arrival-live` after `up`. This creates fresh stock
