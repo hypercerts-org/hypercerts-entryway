@@ -60,14 +60,14 @@ preserve existing shared-email associations, and from internal fleet moves.
 
 The following stages describe observable account state, not database status values.
 
-| Stage | Identity and hosting | Destination access |
-| --- | --- | --- |
-| 1. Arrival prepared | DID still points to the source; nothing is reserved or claimed | Arrival authorization only; no account binding yet |
-| 2. Authority handed off | Source hosting remains unchanged; Entryway has authorized rotation authority; the arrival now claims the DID, handle and email | Destination creation is eligible after canonical PLC observation |
-| 3. Destination created | Repository key is reserved under the claim; PLC points to the destination with that key | Backend account is initially active |
-| 4. Destination paused and bound | Destination is deactivated; verified user and DID are bound locally | Migration credentials allow transfer while ordinary Entryway access is restricted |
-| 5. Data transferred | Repository and blobs are copied and source changes caught up | Account remains migration-pending until readiness checks pass |
-| 6. Destination activated | Identity, binding and data checks pass; destination is active | Normal destination access becomes available; the client deactivates the source |
+| Stage                           | Identity and hosting                                                                                                           | Destination access                                                                |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| 1. Arrival prepared             | DID still points to the source; nothing is reserved or claimed                                                                 | Arrival authorization only; no account binding yet                                |
+| 2. Authority handed off         | Source hosting remains unchanged; Entryway has authorized rotation authority; the arrival now claims the DID, handle and email | Destination creation is eligible after canonical PLC observation                  |
+| 3. Destination created          | Repository key is reserved under the claim; PLC points to the destination with that key                                        | Backend account is initially active                                               |
+| 4. Destination paused and bound | Destination is deactivated; verified user and DID are bound locally                                                            | Migration credentials allow transfer while ordinary Entryway access is restricted |
+| 5. Data transferred             | Repository and blobs are copied and source changes caught up                                                                   | Account remains migration-pending until readiness checks pass                     |
+| 6. Destination activated        | Identity, binding and data checks pass; destination is active                                                                  | Normal destination access becomes available; the client deactivates the source    |
 
 ### Sequence diagram
 
@@ -142,13 +142,13 @@ sequenceDiagram
 
 ### Participants
 
-| Component | Responsibility |
-| --- | --- |
-| Browser | Verify the destination email through OTP and hand arrival authorization to the tool |
-| Migration tool | Obtain source authorization, coordinate public requests and transfer user data |
-| Entryway | Admit arrivals, bind accounts, validate and publish PLC operations, provision the destination and guard activation |
-| Source PDS | Authenticate the source account, authorize PLC signing and serve source data |
-| Destination PDS | Store repository and blobs; keep its private repository signing key; apply supported lifecycle operations |
+| Component       | Responsibility                                                                                                     |
+| --------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Browser         | Verify the destination email through OTP and hand arrival authorization to the tool                                |
+| Migration tool  | Obtain source authorization, coordinate public requests and transfer user data                                     |
+| Entryway        | Admit arrivals, bind accounts, validate and publish PLC operations, provision the destination and guard activation |
+| Source PDS      | Authenticate the source account, authorize PLC signing and serve source data                                       |
+| Destination PDS | Store repository and blobs; keep its private repository signing key; apply supported lifecycle operations          |
 
 The migration tool follows an Entryway-specific journey through public APIs and
 unchanged PDS contracts. Compatibility depends on support for this sequence, not
@@ -156,14 +156,14 @@ on a particular tool name or version.
 
 ## Admission proofs and credentials
 
-| Proof or credential | Establishes | Does not establish |
-| --- | --- | --- |
-| Browser OTP/session | Destination login identity | Source DID or PLC authority |
-| Operator invite code | Eligibility when invitations are configured | Email ownership or DID ownership |
-| Arrival code | Access to one prepared destination arrival | Source DID authority by itself |
-| Source service JWT | Incoming DID authorization for one Entryway method | Destination email ownership |
-| Source PLC confirmation and signature | Authorization for the exact PLC handoff | Permission for every endpoint |
-| Destination access/refresh credentials | Access to the admitted migration | Completion or ordinary active-account access |
+| Proof or credential                    | Establishes                                        | Does not establish                           |
+| -------------------------------------- | -------------------------------------------------- | -------------------------------------------- |
+| Browser OTP/session                    | Destination login identity                         | Source DID or PLC authority                  |
+| Operator invite code                   | Eligibility when invitations are configured        | Email ownership or DID ownership             |
+| Arrival code                           | Access to one prepared destination arrival         | Source DID authority by itself               |
+| Source service JWT                     | Incoming DID authorization for one Entryway method | Destination email ownership                  |
+| Source PLC confirmation and signature  | Authorization for the exact PLC handoff            | Permission for every endpoint                |
+| Destination access/refresh credentials | Access to the admitted migration                   | Completion or ordinary active-account access |
 
 ### Invitation policy
 
@@ -330,11 +330,11 @@ The tool uses creation-response credentials rather than requiring a new destinat
 password. Entryway refreshes and recovers the tracked credentials. Access JWTs use
 the backend audience and scopes understood by stock PDS, not an invented scope.
 
-| Request | Send to |
-| --- | --- |
-| Source exports and blob downloads | Explicit original source PDS |
-| Repository imports, blob uploads and transfer status | Explicit selected destination PDS |
-| Admission, credential recovery and guarded activation | Entryway |
+| Request                                               | Send to                           |
+| ----------------------------------------------------- | --------------------------------- |
+| Source exports and blob downloads                     | Explicit original source PDS      |
+| Repository imports, blob uploads and transfer status  | Explicit selected destination PDS |
+| Admission, credential recovery and guarded activation | Entryway                          |
 
 Both data endpoints remain pinned for the transfer. DID resolution now points at
 the destination; retaining the original source endpoint keeps source exports
@@ -486,8 +486,8 @@ preparation, claim, creation, renewal, cancellation and readiness belong to
 `src/features/external-migration`. Arrival-session issuance belongs to the external-migration feature, built on the
 tracked-credential primitives in `src/oauth/legacy-credentials.mjs`. Outbound
 destination requests use the concrete PDS client in `src/pds`. The pending guard is
-consumed by several features, so it lives in the shared `src/accounts` area
-(`src/accounts/pending-arrival.ts`), reading its projection from `src/database`.
+consumed by several features, so it belongs in the shared `src/accounts` area and
+reads its projection from `src/database`.
 Routes and pages belong to the external-migration feature, assembled by the
 composition root.
 
@@ -496,15 +496,15 @@ composition root.
 Contracts below cite existing repository policy rather than inventing limits. A
 consumer must use these named producers, not restate the numbers.
 
-| Policy | Existing producer | Limit |
-| --- | --- | --- |
-| Destination OTP proof | `src/authentication/better-auth.mjs:22-27` | Eight digits, 600-second code lifetime, five attempts, digest-only storage |
-| Extra challenge proof and budget | `src/accounts/challenges.mjs:22-29,36-45` | Default five requests per 600-second bucket per purpose and subject; code digest expires after 600 seconds |
-| Login rate limit | `src/features/email-login/xrpc-routes.mjs:28` | 60 requests per IP |
-| Signup and create rate limits | the `signup-ip:` and `create-ip:` keys in `src/features/account-registration/xrpc-routes.mjs` | 30 requests per IP each |
-| Inbound reservation route limit (not used by arrival preparation) | `src/plc/xrpc-routes.mjs:7` | 30 requests per IP |
-| Password-reset rate limit | `src/features/account-recovery/xrpc-routes.mjs:7` | 30 requests per IP |
-| Pending-operation block | `assertNoMigration` in `src/accounts/primitives.mjs` | 409 `MigrationPending` while any migration is not complete |
+| Policy                                                            | Existing producer                                                                             | Limit                                                                                                      |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Destination OTP proof                                             | `src/authentication/better-auth.mjs:22-27`                                                    | Eight digits, 600-second code lifetime, five attempts, digest-only storage                                 |
+| Extra challenge proof and budget                                  | `src/accounts/challenges.mjs:22-29,36-45`                                                     | Default five requests per 600-second bucket per purpose and subject; code digest expires after 600 seconds |
+| Login rate limit                                                  | `src/features/email-login/xrpc-routes.mjs:28`                                                 | 60 requests per IP                                                                                         |
+| Signup and create rate limits                                     | the `signup-ip:` and `create-ip:` keys in `src/features/account-registration/xrpc-routes.mjs` | 30 requests per IP each                                                                                    |
+| Inbound reservation route limit (not used by arrival preparation) | `src/plc/xrpc-routes.mjs:7`                                                                   | 30 requests per IP                                                                                         |
+| Password-reset rate limit                                         | `src/features/account-recovery/xrpc-routes.mjs:7`                                             | 30 requests per IP                                                                                         |
+| Pending-operation block                                           | `assertNoMigration` in `src/accounts/primitives.mjs`                                          | 409 `MigrationPending` while any migration is not complete                                                 |
 
 The accepted 24-hour arrival code lifetime is the lifetime of an unclaimed
 preparation's code. It does not bound a claimed arrival. It is not an OTP freshness window and does not extend any proof above.
@@ -518,12 +518,12 @@ standard XRPC bodies.
 Proposed Entryway-only POST surfaces. These are Entryway extensions, not AT Protocol
 methods. They never accept or export browser cookies on behalf of a tool.
 
-| Path | Request body | Response |
-| --- | --- | --- |
-| `/incoming/prepare` | `{did, handle}` | `{operationId, version, arrivalCode, expiresAt, entrywayDid, sourceEndpoint, destinationEndpoint, expectedPlcHead, handoff}` |
-| `/incoming/renew` | `{operationId, expectedVersion}` | `{operationId, version, arrivalCode, expiresAt}` |
-| `/incoming/cancel` | `{operationId, expectedVersion}` | `{operationId, version, state}` |
-| `/incoming/recover` | `{operationId, expectedVersion}` | Standard tracked credential fields, only after C3 prerequisites |
+| Path                | Request body                     | Response                                                                                                                     |
+| ------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `/incoming/prepare` | `{did, handle}`                  | `{operationId, version, arrivalCode, expiresAt, entrywayDid, sourceEndpoint, destinationEndpoint, expectedPlcHead, handoff}` |
+| `/incoming/renew`   | `{operationId, expectedVersion}` | `{operationId, version, arrivalCode, expiresAt}`                                                                             |
+| `/incoming/cancel`  | `{operationId, expectedVersion}` | `{operationId, version, state}`                                                                                              |
+| `/incoming/recover` | `{operationId, expectedVersion}` | Standard tracked credential fields, only after C3 prerequisites                                                              |
 
 Authentication per surface:
 
@@ -559,21 +559,21 @@ C3 instead.
 
 Errors. Each code is stable and mapped explicitly, and no message carries a secret.
 
-| Condition | Error code | HTTP status |
-| --- | --- | --- |
-| Body fails schema | `InvalidRequest` | 400 |
-| Missing or stale OTP proof | `ArrivalProofRequired` | 403 |
-| Unknown arrival or verified principal does not own it | `AccountNotFound` | 404 |
-| Saved arrival is no longer actionable | `ArrivalExpired` | 409 |
-| `expectedVersion` differs from the saved version | `OperationConflict` | 409 |
-| Concurrent claimed work for the DID, at `prepare` or at handoff admission | `OperationPending` | 409 |
-| Per-IP or per-subject budget exhausted | `RateLimitExceeded` | 429 |
-| Arrival is claimed (`cancel`) or its reservation is uncertain (`renew`) | `OperationRecoveryRequired` | 409 |
-| `prepare`: DID is hosted or bound | `IdentityConflict` | 409 |
-| `prepare`: email is not available | `EmailNotAvailable` | 409 |
-| Handoff admission: handle taken since preparation | `HandleNotAvailable` | 409 |
-| Handoff admission: email taken since preparation | `EmailNotAvailable` | 409 |
-| Handoff admission: DID became hosted or bound | `IdentityConflict` | 409 |
+| Condition                                                                 | Error code                  | HTTP status |
+| ------------------------------------------------------------------------- | --------------------------- | ----------- |
+| Body fails schema                                                         | `InvalidRequest`            | 400         |
+| Missing or stale OTP proof                                                | `ArrivalProofRequired`      | 403         |
+| Unknown arrival or verified principal does not own it                     | `AccountNotFound`           | 404         |
+| Saved arrival is no longer actionable                                     | `ArrivalExpired`            | 409         |
+| `expectedVersion` differs from the saved version                          | `OperationConflict`         | 409         |
+| Concurrent claimed work for the DID, at `prepare` or at handoff admission | `OperationPending`          | 409         |
+| Per-IP or per-subject budget exhausted                                    | `RateLimitExceeded`         | 429         |
+| Arrival is claimed (`cancel`) or its reservation is uncertain (`renew`)   | `OperationRecoveryRequired` | 409         |
+| `prepare`: DID is hosted or bound                                         | `IdentityConflict`          | 409         |
+| `prepare`: email is not available                                         | `EmailNotAvailable`         | 409         |
+| Handoff admission: handle taken since preparation                         | `HandleNotAvailable`        | 409         |
+| Handoff admission: email taken since preparation                          | `EmailNotAvailable`         | 409         |
+| Handoff admission: DID became hosted or bound                             | `IdentityConflict`          | 409         |
 
 Handoff admission takes the DID claim only after the source JWT verifies, so
 `OperationPending` at that site requires DID authority.
@@ -722,7 +722,7 @@ Every field derives from saved records. `complete` is true only when the activat
 checkpoint is complete and is never inferred from account status alone.
 
 Shared guard. Proposed predicate, owned by the shared `src/accounts` area
-(`src/accounts/pending-arrival.ts`) over the `src/database` projection:
+over the `src/database` projection:
 
 ```text
 requireArrivalAction(projection, action) -> allowed, or a stable refusal
