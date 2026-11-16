@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, ne, or, sql } from "drizzle-orm";
 import {
   assertAccountShape,
   assertBindingMatchesAccount,
@@ -195,6 +195,7 @@ export function createAccountStorage(
     const arrivals = await db.read("arrivals", {
       where: and(
         eq(t.arrivals.active, 1),
+        isNotNull(t.arrivals.did_root),
         or(
           eq(sql`lower(${t.arrivals.email})`, normalizeEmail(email)),
           did ? eq(t.arrivals.did, did) : undefined,
@@ -279,6 +280,7 @@ export function createAccountStorage(
         "arrivals",
         and(
           eq(t.arrivals.active, 1),
+          isNotNull(t.arrivals.did_root),
           or(
             eq(sql`lower(${t.arrivals.handle})`, handle),
             eq(t.arrivals.did, did),
@@ -674,10 +676,7 @@ export function createAccountStorage(
             ne(t.migration_reservations.state, "complete"),
           )!,
         ),
-        one(
-          "arrivals",
-          and(eq(t.arrivals.did, did), eq(t.arrivals.active, 1))!,
-        ),
+        one("arrivals", eq(t.arrivals.did_root, did)),
       ]);
       return Boolean(adopting || arrival);
     },
