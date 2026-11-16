@@ -98,10 +98,20 @@ for node in entryway $([[ "$ENTRYWAY_PROFILE_NODE_COUNT" == 2 ]] && echo entrywa
 done
 sha256sum "$SANDBOX_CHECKOUT/compose.yaml" "$SANDBOX_CHECKOUT/state/manifest.json" > "$ACCEPTANCE_REPORT_DIR/generated-inputs.sha256"
 run readiness-initial probe ready readiness-initial.json
+if [[ "$ENTRYWAY_PROFILE_NODE_COUNT" == 2 ]]; then
+  # worker-takeover waits for the real 120s account lease. It uses a private
+  # PostgreSQL schema and controlled transport, so it shares no rows, accounts or
+  # workers with the live nodes. Start it before any fault step and wait for it
+  # before the first one, so it overlaps only journey and cross-node-signin.
+  run worker-takeover phase_container -e CONTRACT_DATABASE_BACKEND=postgresql -e CONTRACT_DATABASE_URL=postgresql://authority_owner@entryway-postgres/account_authority test timeout --signal=TERM --kill-after=5s 195s node --test tests/contracts/profile-workers.mjs &
+  takeover_pid=$!
+fi
 run journey browser journey journey
 if [[ "$ENTRYWAY_PROFILE_NODE_COUNT" == 2 ]]; then
   run cross-node-signin browser cross-node-signin cross-node-signin
-  run worker-takeover phase_container -e CONTRACT_DATABASE_BACKEND=postgresql -e CONTRACT_DATABASE_URL=postgresql://authority_owner@entryway-postgres/account_authority test timeout --signal=TERM --kill-after=5s 195s node --test tests/contracts/profile-workers.mjs
+  takeover_status=0
+  wait "$takeover_pid" || takeover_status=$?
+  (( takeover_status == 0 )) || { echo "Profile $profile: worker-takeover failed (exit $takeover_status)" >&2; exit "$takeover_status"; }
 fi
 # Graceful stop is bounded separately from the application deadline. Preserve the
 # real container exit and test existing sessions/direct writes on the survivor.

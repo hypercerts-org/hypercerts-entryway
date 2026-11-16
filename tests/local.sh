@@ -152,13 +152,31 @@ case "$command" in
   database-contracts|database-dialects)
     require_state
     compose up -d --wait entryway-postgres
-    for backend in sqlite postgresql; do
-      result=0
-      compose run --rm --no-deps -e "CONTRACT_DATABASE_BACKEND=$backend" -e CONTRACT_DATABASE_URL=postgresql://authority_owner@entryway-postgres/account_authority test node tests/support/run-database-contracts.mjs 2>&1 | tee "$artifacts/database-$backend.log" | python3 "$root/scripts/ci-summary.py" || result=$?
-      printf '%s\n' "$result" > "$artifacts/database-$backend.exit"
-      echo "Database $backend: exit $result"
-      (( result == 0 )) || exit "$result"
+    # The suites share no state: SQLite uses in-memory databases in its own
+    # container, PostgreSQL gives each test a private schema, and each writes
+    # distinct report files. Output goes to per-backend logs so the two runs
+    # cannot interleave; summaries print after both finish.
+    pids=()
+    backends=(sqlite postgresql)
+    for backend in "${backends[@]}"; do
+      (
+        result=0
+        compose run --rm --no-deps -e "CONTRACT_DATABASE_BACKEND=$backend" -e CONTRACT_DATABASE_URL=postgresql://authority_owner@entryway-postgres/account_authority test node tests/support/run-database-contracts.mjs > "$artifacts/database-$backend.log" 2>&1 || result=$?
+        printf '%s\n' "$result" > "$artifacts/database-$backend.exit"
+        exit "$result"
+      ) &
+      pids+=("$!")
     done
+    failed=0
+    for i in "${!backends[@]}"; do
+      backend=${backends[$i]}
+      result=0
+      wait "${pids[$i]}" || result=$?
+      python3 "$root/scripts/ci-summary.py" < "$artifacts/database-$backend.log" || true
+      echo "Database $backend: exit $result"
+      (( result == 0 )) || failed=$result
+    done
+    (( failed == 0 )) || exit "$failed"
     if [[ "$command" == database-contracts ]]; then bash "$root/tests/support/run-postgresql-profile.sh"; fi
     ;;
   resilience-profiles)

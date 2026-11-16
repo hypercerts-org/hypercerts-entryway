@@ -173,9 +173,16 @@ Formatting, lint, syntax, types, architecture, schema, build, unit and lifecycle
 checks each have a visible step. Integration runs browser before contracts,
 then migration, the declared moderation-gap assertion, recovery/crash/authority
 checks and resilience last. Database dialects and the PostgreSQL application
-profile are separate steps. Each deployment profile has its own step followed
-by the aggregate receipt assertion. These gates do not close the pending public
-migration or moderation requirements.
+profile are separate steps: the databases job starts its sandbox on PostgreSQL,
+runs the SQLite and PostgreSQL suites concurrently, and runs the application
+profile in that sandbox (`POSTGRESQL_PROFILE_REUSE_SANDBOX=1`, which leaves
+cleanup to the job; without it the profile owns a fresh sandbox). Each
+deployment profile runs as its own parallel matrix job, `profiles (<profile>)`.
+It uploads only the receipt files the aggregate assertion reads, and the
+`profiles (assert all receipts)` job downloads them and asserts all three. In
+the multi-node profile `worker-takeover` runs beside `journey` and
+`cross-node-signin`, before any fault step. These gates do not close the pending
+public migration or moderation requirements.
 
 Contributors reproduce basic checks directly from the repository root:
 
