@@ -89,7 +89,7 @@ const signed = async (tag = "a", overrides = {}) => {
 async function fixture() {
   const db = await openTestDatabase(":memory:");
   const accounts = createAccountStorage(db, hosts);
-  const arrivals = createArrivalStorage(db, hosts, {
+  const authority = {
     readAccount: (value) => accounts.getByDid(value),
     readBinding: (value) => accounts.getVerifiedBinding(value),
     reserveEmailClaim: (email, value, purpose, userId) =>
@@ -116,7 +116,8 @@ async function fixture() {
         },
         input.userId,
       ),
-  });
+  };
+  const arrivals = createArrivalStorage(db, hosts, authority);
   const ownership = createOperationOwnershipStore(db);
   const claim = await ownership.acquire({
     resource: `arrival:${did}`,
@@ -125,7 +126,7 @@ async function fixture() {
     workerId: "worker-1",
     leaseMs: 120_000,
   });
-  const prepare = (overrides = {}) =>
+  const prepareUnclaimed = (overrides = {}) =>
     arrivals.createArrival({
       operationId: "op-1",
       did,
@@ -139,6 +140,28 @@ async function fixture() {
       codeExpiresAt: Date.now() + day,
       ...overrides,
     });
+  // Claiming is the first admitted step, so every helper that allocates, binds,
+  // signs or replays works on a claimed arrival.
+  const claimArrival = (version, operationId = "op-1", operationDid = did) =>
+    arrivals.claimArrival(claim, version, { operationId, did: operationDid });
+  const prepare = async (overrides = {}) => {
+    const prepared = await prepareUnclaimed(overrides);
+    if (prepared.claimOperationId !== null) return prepared;
+    const claimed = await claimArrival(
+      prepared.version,
+      prepared.operationId,
+      prepared.did,
+    );
+    assert.deepEqual(claimed, {
+      kind: "applied",
+      version: prepared.version + 1,
+    });
+    return {
+      ...prepared,
+      claimOperationId: claim.operationId,
+      version: claimed.version,
+    };
+  };
   const allocate = async (
     version,
     operationId = "op-1",
@@ -180,19 +203,53 @@ async function fixture() {
       ...overrides,
     });
   await verifiedUser(db, "user-a", "dest@example.test");
-  return { db, accounts, arrivals, claim, prepare, allocate, bind };
+  return {
+    db,
+    accounts,
+    arrivals,
+    authority,
+    claim,
+    ownership,
+    prepare,
+    prepareUnclaimed,
+    claimArrival,
+    allocate,
+    bind,
+  };
 }
 
-test("arrival preparation stores only a code hash and admits one active arrival per DID", async () => {
-  const { db, arrivals, prepare } = await fixture();
+const secondUser = {
+  operationId: "op-2",
+  userId: "user-b",
+  email: "second@example.test",
+  handle: "second.entryway.test",
+  codeHash: hash("b"),
+};
+const arrivalRows = (db) =>
+  query(
+    db,
+    "SELECT operation_id, did_root, claim_operation_id, active FROM arrivals ORDER BY operation_id",
+  );
+
+test("preparation stores only a code hash and writes no DID root or claim", async () => {
+  const { db, arrivals, prepareUnclaimed } = await fixture();
   try {
-    const prepared = await prepare();
+    const prepared = await prepareUnclaimed();
     assert.equal(prepared.version, 1);
     assert.equal(prepared.generation, 1);
     assert.equal(prepared.signingKey, null);
+    assert.equal(prepared.claimOperationId, null);
     assert.equal(prepared.codeDelivered, true);
     assert.deepEqual(await query(db, "SELECT code_hash FROM arrival_code"), [
       { code_hash: hash("a") },
+    ]);
+    assert.deepEqual(await arrivalRows(db), [
+      {
+        operation_id: "op-1",
+        did_root: null,
+        claim_operation_id: null,
+        active: 1,
+      },
     ]);
     assert.equal(
       await arrivals.consumeArrivalCode({
@@ -202,50 +259,452 @@ test("arrival preparation stores only a code hash and admits one active arrival 
       }),
       null,
     );
-
-    await assert.rejects(prepare({ operationId: "op-2" }), {
-      code: "EmailNotAvailable",
+    assert.equal(await arrivals.readArrivalAccess(did), null);
+    await assert.rejects(prepareUnclaimed({ codeHash: "not-a-digest" }), {
+      code: "InvalidAccount",
     });
+  } finally {
+    await db.close();
+  }
+});
+
+test("unclaimed preparations for one DID coexist across users and hold no email or handle", async () => {
+  const { db, accounts, prepareUnclaimed } = await fixture();
+  try {
     await verifiedUser(db, "user-b", "second@example.test");
-    await assert.rejects(
-      prepare({
-        operationId: "op-4",
-        did: otherDid,
-        userId: "user-a",
-        email: "dest@example.test",
-        handle: "second.example.test",
-        pdsId: "pds2",
-        endpoint: hosts[1].url,
-      }),
-      { code: "EmailNotAvailable" },
+    await prepareUnclaimed();
+    // Even the same email and handle are free: an unclaimed row reserves nothing.
+    await prepareUnclaimed({ ...secondUser, handle: "dest.entryway.test" });
+    await prepareUnclaimed({
+      ...secondUser,
+      operationId: "op-3",
+      userId: "user-a",
+      email: "dest@example.test",
+    });
+    assert.deepEqual(await arrivalRows(db), [
+      {
+        operation_id: "op-2",
+        did_root: null,
+        claim_operation_id: null,
+        active: 1,
+      },
+      {
+        operation_id: "op-3",
+        did_root: null,
+        claim_operation_id: null,
+        active: 1,
+      },
+    ]);
+    assert.deepEqual(
+      await query(db, "SELECT user_id FROM arrivals ORDER BY user_id"),
+      [{ user_id: "user-a" }, { user_id: "user-b" }],
     );
+    // Ordinary writers are not blocked either.
+    await accounts.insertAccount({
+      ...ordinaryAccount,
+      email: "dest@example.test",
+      handle: "second.entryway.test",
+    });
+  } finally {
+    await db.close();
+  }
+});
+
+test("a claimed DID refuses a second claim and a second preparation with OperationPending", async () => {
+  const { db, claim, prepare, prepareUnclaimed, claimArrival } =
+    await fixture();
+  try {
+    await verifiedUser(db, "user-b", "second@example.test");
+    const competing = await prepareUnclaimed(secondUser);
+    await prepare();
+    for (const attempt of [
+      () => claimArrival(competing.version, "op-2"),
+      () => prepareUnclaimed({ ...secondUser, operationId: "op-7" }),
+      () => prepareUnclaimed({ operationId: "op-8" }),
+    ]) {
+      const before = await claimSnapshot(db);
+      await assert.rejects(attempt(), {
+        code: "OperationPending",
+        status: 409,
+      });
+      assert.deepEqual(await claimSnapshot(db), before);
+    }
+    assert.deepEqual(await arrivalRows(db), [
+      {
+        operation_id: "op-1",
+        did_root: did,
+        claim_operation_id: claim.operationId,
+        active: 1,
+      },
+      {
+        operation_id: "op-2",
+        did_root: null,
+        claim_operation_id: null,
+        active: 1,
+      },
+    ]);
+  } finally {
+    await db.close();
+  }
+});
+
+// The adapter reads can miss a racing writer; the unique indexes still decide,
+// and the caller must see the contract code, never a raw driver error.
+const blindArrivalReads = (db) =>
+  new Proxy(db, {
+    get(target, key) {
+      if (key === "read")
+        return (name, options) =>
+          name === "arrivals" && options?.limit === undefined
+            ? Promise.resolve([])
+            : target.read(name, options);
+      const value = target[key];
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+
+for (const [index, code] of [
+  ["DID", "OperationPending"],
+  ["handle", "HandleNotAvailable"],
+])
+  test(`a ${index} unique violation at claim maps to ${code}`, async () => {
+    const { db, authority, claim, ownership, prepare, prepareUnclaimed } =
+      await fixture();
+    try {
+      await verifiedUser(db, "user-b", "second@example.test");
+      const racing =
+        index === "DID"
+          ? secondUser
+          : { ...secondUser, did: otherDid, handle: "dest.entryway.test" };
+      const competing = await prepareUnclaimed(racing);
+      await prepare();
+      const owner =
+        index === "DID"
+          ? claim
+          : await ownership.acquire({
+              resource: `arrival:${otherDid}`,
+              kind: "public-arrival",
+              requestDigest: hash("e"),
+              workerId: "worker-2",
+              leaseMs: 120_000,
+            });
+      const blind = createArrivalStorage(
+        blindArrivalReads(db),
+        hosts,
+        authority,
+      );
+      const before = await claimSnapshot(db);
+      await assert.rejects(
+        blind.claimArrival(owner, competing.version, {
+          operationId: "op-2",
+          did: racing.did ?? did,
+        }),
+        (error) => {
+          assert.equal(error.code, code);
+          assert.equal(error.name, "DomainError");
+          assert.doesNotMatch(error.message, /second@example|insert into/i);
+          return true;
+        },
+      );
+      assert.deepEqual(await claimSnapshot(db), before);
+    } finally {
+      await db.close();
+    }
+  });
+
+test("re-preparing replaces the same user's unclaimed preparation atomically", async () => {
+  const { db, accounts, prepareUnclaimed } = await fixture();
+  try {
+    await prepareUnclaimed();
+    // A refused replacement leaves the earlier preparation live.
+    await accounts.insertAccount({
+      ...ordinaryAccount,
+      handle: "taken.entryway.test",
+    });
     await assert.rejects(
-      prepare({
-        operationId: "op-5",
-        did: otherDid,
-        userId: "user-b",
-        email: "second@example.test",
-        handle: "dest.entryway.test",
-        pdsId: "pds2",
-        endpoint: hosts[1].url,
-      }),
+      prepareUnclaimed({ operationId: "op-2", handle: "taken.entryway.test" }),
       { code: "HandleNotAvailable" },
     );
+    assert.deepEqual(await arrivalRows(db), [
+      {
+        operation_id: "op-1",
+        did_root: null,
+        claim_operation_id: null,
+        active: 1,
+      },
+    ]);
+    const replacement = await prepareUnclaimed({
+      operationId: "op-3",
+      codeHash: hash("c"),
+    });
+    assert.equal(replacement.operationId, "op-3");
+    assert.deepEqual(await arrivalRows(db), [
+      {
+        operation_id: "op-3",
+        did_root: null,
+        claim_operation_id: null,
+        active: 1,
+      },
+    ]);
+    assert.deepEqual(
+      await query(db, "SELECT operation_id, code_hash FROM arrival_code"),
+      [{ operation_id: "op-3", code_hash: hash("c") }],
+    );
+    assert.equal(
+      await db.read("arrivals").then((rows) => rows.length),
+      1,
+      "no history row remains",
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("concurrent preparations by one user leave one row and only contract errors", async () => {
+  const { db, prepareUnclaimed } = await fixture();
+  try {
+    const results = await Promise.allSettled([
+      prepareUnclaimed({ operationId: "op-1", codeHash: hash("a") }),
+      prepareUnclaimed({ operationId: "op-2", codeHash: hash("b") }),
+      prepareUnclaimed({ operationId: "op-3", codeHash: hash("c") }),
+    ]);
+    assert.equal(
+      results.some(({ status }) => status === "fulfilled"),
+      true,
+    );
+    for (const result of results)
+      if (result.status === "rejected")
+        assert.equal(
+          result.reason.code,
+          "OperationConflict",
+          String(result.reason.stack ?? result.reason),
+        );
     assert.equal(
       (await query(db, "SELECT operation_id FROM arrivals")).length,
       1,
     );
-    const independent = await prepare({
-      operationId: "op-6",
-      did: otherDid,
-      userId: "user-b",
-      email: "second@example.test",
-      handle: "second.example.test",
-      pdsId: "pds2",
-      endpoint: hosts[1].url,
+    assert.equal(
+      (await query(db, "SELECT operation_id FROM arrival_code")).length,
+      1,
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+const lapse = (db, operationId = "op-1") =>
+  query(
+    db,
+    "UPDATE arrival_code SET issued_at = ?, expires_at = ? WHERE operation_id = ?",
+    [Date.now() - day, Date.now() - 1, operationId],
+    "run",
+  );
+
+test("an expired unclaimed preparation is deleted when found", async () => {
+  for (const found of [
+    "read",
+    "consume",
+    "rotate",
+    "claim",
+    "cancel",
+    "prepare",
+  ]) {
+    const { db, arrivals, prepareUnclaimed, claimArrival } = await fixture();
+    try {
+      const prepared = await prepareUnclaimed();
+      await lapse(db);
+      const find = {
+        read: () => arrivals.readArrival("op-1", "user-a"),
+        consume: () =>
+          arrivals.consumeArrivalCode({
+            codeHash: hash("a"),
+            did,
+            method: "com.atproto.server.createAccount",
+          }),
+        rotate: () =>
+          arrivals.rotateArrivalCode({
+            operationId: "op-1",
+            expectedVersion: prepared.version,
+            ownerUserId: "user-a",
+            codeHash: hash("b"),
+            codeExpiresAt: Date.now() + day,
+          }),
+        claim: () => claimArrival(prepared.version),
+        cancel: () =>
+          arrivals.cancelArrival(
+            cancelInput({ expectedVersion: prepared.version }),
+          ),
+        prepare: () => prepareUnclaimed(),
+      }[found];
+      if (["read", "consume"].includes(found)) assert.equal(await find(), null);
+      else if (found === "cancel") await find();
+      else await assert.rejects(find(), { code: "OperationConflict" });
+      assert.deepEqual(await query(db, "SELECT * FROM arrivals"), [], found);
+      assert.deepEqual(
+        await query(db, "SELECT * FROM arrival_code"),
+        [],
+        found,
+      );
+    } finally {
+      await db.close();
+    }
+  }
+});
+
+test("a claimed arrival does not expire with its code", async () => {
+  const { db, arrivals, prepare } = await fixture();
+  try {
+    await prepare();
+    await lapse(db);
+    assert.equal(
+      (await arrivals.readArrival("op-1", "user-a")).operationId,
+      "op-1",
+    );
+    assert.equal((await query(db, "SELECT * FROM arrivals")).length, 1);
+  } finally {
+    await db.close();
+  }
+});
+
+test("claiming is exact, owner-bound and refused for another claim or a stale version", async () => {
+  const { db, arrivals, claim, ownership, prepareUnclaimed, claimArrival } =
+    await fixture();
+  try {
+    const prepared = await prepareUnclaimed();
+    await assert.rejects(claimArrival(prepared.version + 1), {
+      code: "OperationConflict",
     });
-    assert.equal(independent.did, otherDid);
-    assert.equal(independent.userId, "user-b");
+    await assert.rejects(
+      arrivals.claimArrival(
+        { ...claim, fence: claim.fence + 1 },
+        prepared.version,
+        {
+          operationId: "op-1",
+          did,
+        },
+      ),
+      { code: "OperationLeaseLost" },
+    );
+    await assert.rejects(claimArrival(prepared.version, "op-1", otherDid), {
+      code: "OperationConflict",
+    });
+    await assert.rejects(claimArrival(prepared.version, "op-missing"), {
+      code: "AccountNotFound",
+    });
+    const unrelated = await ownership.acquire({
+      resource: `arrival:${otherDid}`,
+      kind: "public-arrival",
+      requestDigest: hash("e"),
+      workerId: "worker-2",
+      leaseMs: 120_000,
+    });
+    await assert.rejects(
+      arrivals.claimArrival(unrelated, prepared.version, {
+        operationId: "op-1",
+        did,
+      }),
+      { code: "OperationConflict" },
+    );
+    assert.deepEqual(await arrivalRows(db), [
+      {
+        operation_id: "op-1",
+        did_root: null,
+        claim_operation_id: null,
+        active: 1,
+      },
+    ]);
+    assert.equal(await persistedVersion(db, "op-1"), prepared.version);
+
+    const claimed = await claimArrival(prepared.version);
+    assert.deepEqual(claimed, {
+      kind: "applied",
+      version: prepared.version + 1,
+    });
+    assert.deepEqual(await arrivalRows(db), [
+      {
+        operation_id: "op-1",
+        did_root: did,
+        claim_operation_id: claim.operationId,
+        active: 1,
+      },
+    ]);
+    assert.deepEqual(await claimArrival(prepared.version), {
+      kind: "already-settled",
+      version: claimed.version,
+    });
+    assert.equal(await persistedVersion(db, "op-1"), claimed.version);
+    await assert.rejects(
+      arrivals.claimArrival(unrelated, claimed.version, {
+        operationId: "op-1",
+        did,
+      }),
+      { code: "OperationConflict" },
+    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("the claim owner cannot write a sibling unclaimed preparation for the same DID", async () => {
+  const { db, arrivals, claim, prepare, prepareUnclaimed } = await fixture();
+  try {
+    await verifiedUser(db, "user-b", "second@example.test");
+    const sibling = await prepareUnclaimed(secondUser);
+    await prepare();
+    const tuple = { operationId: "op-2", did, pdsId: "pds1", endpoint };
+    const signedHandoff = await signed();
+    const before = await claimSnapshot(db);
+    for (const write of [
+      () => arrivals.recordAllocationIntent(claim, sibling.version, tuple),
+      () =>
+        arrivals.recordSignedOperation(claim, sibling.version, {
+          ...tuple,
+          kind: "handoff",
+          ...signedHandoff,
+        }),
+      () =>
+        arrivals.retainUncertainAttempt(claim, sibling.version, {
+          ...tuple,
+          reason: "lost-response",
+        }),
+    ])
+      await assert.rejects(write(), { code: "OperationConflict" });
+    assert.deepEqual(await claimSnapshot(db), before);
+  } finally {
+    await db.close();
+  }
+});
+
+test("the access projection reads claimed arrivals only", async () => {
+  const { db, arrivals, prepareUnclaimed, claimArrival } = await fixture();
+  try {
+    await verifiedUser(db, "user-b", "second@example.test");
+    const earlier = await prepareUnclaimed();
+    const later = await prepareUnclaimed(secondUser);
+    assert.equal(await arrivals.readArrivalAccess(did), null);
+    await claimArrival(later.version, "op-2");
+    const access = await arrivals.readArrivalAccess(did);
+    assert.equal(access.operationId, "op-2");
+    assert.equal(access.userId, "user-b");
+    assert.equal(earlier.operationId, "op-1");
+  } finally {
+    await db.close();
+  }
+});
+
+test("preparation rejects an approved rotation list that removes or over-extends the predecessor keys", async () => {
+  const { db, prepareUnclaimed } = await fixture();
+  try {
+    for (const approvedRotationKeys of [
+      [hotKey.did(), reservedKey.did()],
+      [reservedKey.did(), sourceKey.did(), hotKey.did()],
+      [sourceKey.did(), hotKey.did(), reservedKey.did()],
+    ])
+      await assert.rejects(prepareUnclaimed({ approvedRotationKeys }), {
+        code: "InvalidAccount",
+      });
+    assert.deepEqual(await query(db, "SELECT * FROM arrivals"), []);
+    await prepareUnclaimed();
   } finally {
     await db.close();
   }
@@ -296,7 +755,7 @@ test("arrival code expiry is bounded to 24 hours by the database, not only by th
       [
         "op-direct",
         did,
-        did,
+        null,
         "user-a",
         "direct@example.test",
         "direct.entryway.test",
@@ -350,9 +809,11 @@ test("arrival code expiry is bounded to 24 hours by the database, not only by th
 for (const action of ["rotateArrivalCode", "cancelArrival"])
   test(`${action} hides unknown and nonowner arrivals without mutation`, async () => {
     for (const state of ["pending", "intent", "reserved", "cancelled"]) {
-      const { db, arrivals, claim, prepare, allocate } = await fixture();
+      const { db, arrivals, claim, prepare, prepareUnclaimed, allocate } =
+        await fixture();
       try {
-        const prepared = await prepare();
+        const prepared =
+          state === "cancelled" ? await prepareUnclaimed() : await prepare();
         let version = prepared.version;
         if (state === "intent")
           version = (
@@ -367,12 +828,9 @@ for (const action of ["rotateArrivalCode", "cancelArrival"])
         if (state === "cancelled")
           version = (
             await arrivals.cancelArrival({
-              owner: claim,
               operationId: "op-1",
               expectedVersion: version,
               ownerUserId: "user-a",
-              noRemoteObligation: true,
-              plcStateUnchanged: true,
             })
           ).version;
         const snapshot = async () => ({
@@ -515,7 +973,7 @@ test("allocation intent is durable before dispatch and the tuple is immutable", 
       prepared.version,
       { operationId: "op-1", did, pdsId: "pds1", endpoint },
     );
-    assert.deepEqual(intent, { kind: "applied", version: 2 });
+    assert.deepEqual(intent, { kind: "applied", version: 3 });
     assert.deepEqual(
       await query(
         db,
@@ -550,7 +1008,7 @@ test("allocation intent is durable before dispatch and the tuple is immutable", 
       );
     assert.deepEqual(await arrivals.readArrivalAccess(did), {
       operationId: "op-1",
-      version: 2,
+      version: 3,
       did,
       userId: "user-a",
       pdsId: "pds1",
@@ -565,8 +1023,8 @@ test("allocation intent is durable before dispatch and the tuple is immutable", 
   }
 });
 
-test("a validated reservation result is conditional and a changed key never overwrites it", async () => {
-  const { db, arrivals, claim, prepare, allocate } = await fixture();
+test("a validated reservation result is conditional and a changed key is recorded as uncertain", async () => {
+  const { db, arrivals, claim, prepare, allocate, bind } = await fixture();
   try {
     const prepared = await prepare();
     const version = await allocate(prepared.version);
@@ -580,38 +1038,105 @@ test("a validated reservation result is conditional and a changed key never over
       }),
       { kind: "applied", version: version + 1 },
     );
+    const handoff = await signed();
+    const handedOff = await arrivals.recordSignedOperation(claim, version + 1, {
+      kind: "handoff",
+      operationId: "op-1",
+      did,
+      ...handoff,
+    });
+    const differing = {
+      operationId: "op-1",
+      did,
+      pdsId: "pds1",
+      endpoint,
+      signingKey: publicKey("n"),
+    };
     assert.deepEqual(
-      await arrivals.recordReservationResult(claim, version + 1, {
-        operationId: "op-1",
-        did,
-        pdsId: "pds1",
-        endpoint,
-        signingKey: publicKey("n"),
-      }),
+      await arrivals.recordReservationResult(
+        claim,
+        handedOff.version,
+        differing,
+      ),
       { kind: "reconciliation-required", reason: "saved-key-differs" },
     );
+    const divergedVersion = await persistedVersion(db, "op-1");
+    assert.equal(divergedVersion, handedOff.version + 1);
+    assert.deepEqual(
+      await query(
+        db,
+        "SELECT signing_key, uncertain_reason FROM arrival_reservations",
+      ),
+      [
+        {
+          signing_key: reservedKey.did(),
+          uncertain_reason: "saved-key-differs",
+        },
+      ],
+    );
+    assert.deepEqual(
+      (await query(db, "SELECT reason FROM arrival_attempts")).map(
+        ({ reason }) => reason,
+      ),
+      ["saved-key-differs"],
+    );
+    assert.equal(
+      (await arrivals.readArrivalAccess(did)).unresolvedAttempt,
+      true,
+    );
+
+    // Every later step refuses and writes nothing.
+    const before = {
+      arrivals: await query(db, "SELECT * FROM arrivals"),
+      signed: await query(db, "SELECT * FROM arrival_signed_operations"),
+      accounts: await query(db, "SELECT * FROM accounts"),
+    };
+    await assert.rejects(bind(divergedVersion), {
+      code: "OperationRecoveryRequired",
+    });
+    await assert.rejects(
+      arrivals.recordSignedOperation(claim, divergedVersion, {
+        kind: "destination-move",
+        operationId: "op-1",
+        did,
+        repositoryKey: reservedKey.did(),
+        ...(await signed("b")),
+      }),
+      { code: "OperationRecoveryRequired" },
+    );
+    await assert.rejects(
+      arrivals.rotateArrivalCode({
+        operationId: "op-1",
+        expectedVersion: divergedVersion,
+        ownerUserId: "user-a",
+        codeHash: hash("b"),
+        codeExpiresAt: Date.now() + day,
+      }),
+      { code: "OperationRecoveryRequired" },
+    );
+    await assert.rejects(
+      arrivals.recordReservationResult(claim, divergedVersion, differing),
+      { code: "OperationRecoveryRequired" },
+    );
+    assert.deepEqual(
+      {
+        arrivals: await query(db, "SELECT * FROM arrivals"),
+        signed: await query(db, "SELECT * FROM arrival_signed_operations"),
+        accounts: await query(db, "SELECT * FROM accounts"),
+      },
+      before,
+    );
+
     await assert.rejects(
       arrivals.recordReservationResult(
         { ...claim, fence: claim.fence - 1 },
-        version + 1,
-        {
-          operationId: "op-1",
-          did,
-          pdsId: "pds1",
-          endpoint,
-          signingKey: reservedKey.did(),
-        },
+        divergedVersion,
+        { ...differing, signingKey: reservedKey.did() },
       ),
       { code: "OperationLeaseLost" },
     );
     await assert.rejects(
-      arrivals.recordReservationResult(claim, version, {
-        operationId: "op-1",
-        did,
-        pdsId: "pds1",
-        endpoint,
-        signingKey: publicKey("n"),
-      }),
+      arrivals.recordReservationResult(claim, version, differing),
       { code: "OperationConflict" },
     );
     assert.equal(
@@ -720,13 +1245,19 @@ test("allocation intent rolls back with any later failure in the same transactio
       await query(db, "SELECT operation_id FROM arrival_reservations"),
       [],
     );
-    assert.equal((await arrivals.readArrival("op-1", "user-a")).version, 1);
+    assert.equal(
+      (await arrivals.readArrival("op-1", "user-a")).version,
+      prepared.version,
+    );
     const retried = await arrivals.recordAllocationIntent(
       claim,
       prepared.version,
       { operationId: "op-1", did, pdsId: "pds1", endpoint },
     );
-    assert.deepEqual(retried, { kind: "applied", version: 2 });
+    assert.deepEqual(retried, {
+      kind: "applied",
+      version: prepared.version + 1,
+    });
     assert.equal(await persistedVersion(db, "op-1"), retried.version);
   } finally {
     await db.close();
@@ -907,23 +1438,23 @@ test("immutable method admission checks proof once, permits handoff then creatio
       }),
       { code: "AccountMismatch" },
     );
-    assert.equal(await persistedVersion(db, "op-1"), 1);
+    assert.equal(await persistedVersion(db, "op-1"), prepared.version);
     assert.deepEqual(
-      await arrivals.recordArrivalReplay(claim, 1, facts, proof),
+      await arrivals.recordArrivalReplay(claim, prepared.version, facts, proof),
       { operationId: "op-1", generation: 1 },
     );
     assert.deepEqual(
-      await arrivals.recordArrivalReplay(claim, 1, facts, {
+      await arrivals.recordArrivalReplay(claim, 2, facts, {
         codeHash: "expired",
         codeGeneration: 0,
       }),
       { operationId: "op-1", generation: 1 },
     );
-    assert.equal(await persistedVersion(db, "op-1"), 2);
+    assert.equal(await persistedVersion(db, "op-1"), 3);
     await assert.rejects(
       arrivals.recordArrivalReplay(
         claim,
-        2,
+        3,
         { ...facts, requestDigest: hash("e") },
         proof,
       ),
@@ -932,7 +1463,7 @@ test("immutable method admission checks proof once, permits handoff then creatio
     await assert.rejects(
       arrivals.recordArrivalReplay(
         claim,
-        2,
+        3,
         { ...facts, method: "com.atproto.server.createAccount" },
         proof,
       ),
@@ -940,7 +1471,7 @@ test("immutable method admission checks proof once, permits handoff then creatio
     );
     await arrivals.recordArrivalReplay(
       claim,
-      2,
+      3,
       {
         ...facts,
         method: "com.atproto.server.createAccount",
@@ -951,7 +1482,7 @@ test("immutable method admission checks proof once, permits handoff then creatio
     await assert.rejects(
       arrivals.recordArrivalReplay(
         { ...claim, fence: claim.fence + 1 },
-        1,
+        2,
         facts,
         proof,
       ),
@@ -1296,171 +1827,88 @@ test("credential family association and revocation are rejected when the operati
   }
 });
 
-test("cancellation releases local reservations only before a remote obligation exists", async () => {
-  const { db, arrivals, claim, prepare, allocate } = await fixture();
+const cancelInput = (overrides = {}) => ({
+  operationId: "op-1",
+  expectedVersion: 1,
+  ownerUserId: "user-a",
+  ...overrides,
+});
+
+test("cancelling an unclaimed preparation deletes it without an owner and is repeatable as not found", async () => {
+  const { db, arrivals, prepareUnclaimed } = await fixture();
   try {
-    const prepared = await prepare();
-    for (const evidence of [
-      { noRemoteObligation: true, plcStateUnchanged: false },
-      { noRemoteObligation: false, plcStateUnchanged: true },
-    ])
-      await assert.rejects(
-        arrivals.cancelArrival({
-          owner: claim,
-          operationId: "op-1",
-          expectedVersion: prepared.version,
-          ownerUserId: "user-a",
-          ...evidence,
-        }),
-        { code: "OperationRecoveryRequired" },
-      );
+    const prepared = await prepareUnclaimed();
     await assert.rejects(
-      arrivals.cancelArrival({
-        owner: claim,
-        operationId: "op-1",
-        expectedVersion: prepared.version - 1,
-        ownerUserId: "user-a",
-        noRemoteObligation: true,
-        plcStateUnchanged: true,
-      }),
+      arrivals.cancelArrival(cancelInput({ expectedVersion: 99 })),
       { code: "OperationConflict", status: 409 },
     );
     await assert.rejects(
-      arrivals.cancelArrival({
-        owner: { ...claim, fence: claim.fence - 1 },
-        operationId: "op-1",
-        expectedVersion: prepared.version,
-        ownerUserId: "user-a",
-        noRemoteObligation: true,
-        plcStateUnchanged: true,
-      }),
-      { code: "OperationLeaseLost" },
+      arrivals.cancelArrival(cancelInput({ ownerUserId: "user-b" })),
+      { code: "AccountNotFound", status: 404 },
     );
-    const cancelled = await arrivals.cancelArrival({
-      owner: claim,
-      operationId: "op-1",
-      expectedVersion: prepared.version,
-      ownerUserId: "user-a",
-      noRemoteObligation: true,
-      plcStateUnchanged: true,
-    });
-    assert.deepEqual(cancelled, {
-      kind: "applied",
-      version: prepared.version + 1,
-    });
-    const [released] = await query(
-      db,
-      "SELECT active, did_root, cancelled_at, version FROM arrivals WHERE operation_id = ?",
-      ["op-1"],
-    );
+    assert.equal((await query(db, "SELECT * FROM arrivals")).length, 1);
     assert.deepEqual(
-      { active: released.active, did_root: released.did_root },
-      { active: 0, did_root: null },
+      await arrivals.cancelArrival(
+        cancelInput({ expectedVersion: prepared.version }),
+      ),
+      { kind: "applied", version: prepared.version },
     );
-    assert.equal(released.cancelled_at > 0, true);
-    assert.equal(released.version, cancelled.version);
-    assert.deepEqual(
-      await query(db, "SELECT operation_id FROM arrival_reservations"),
-      [],
-    );
-    assert.deepEqual(
-      await arrivals.cancelArrival({
-        owner: claim,
-        operationId: "op-1",
-        expectedVersion: cancelled.version,
-        ownerUserId: "user-a",
-        noRemoteObligation: true,
-        plcStateUnchanged: true,
-      }),
-      { kind: "already-settled", version: cancelled.version },
-    );
+    assert.deepEqual(await query(db, "SELECT * FROM arrivals"), []);
+    assert.deepEqual(await query(db, "SELECT * FROM arrival_code"), []);
     assert.equal(await arrivals.readArrival("op-1", "user-a"), null);
-
-    await verifiedUser(db, "user-b", "second@example.test");
-    const next = await prepare({
-      operationId: "op-2",
-      userId: "user-b",
-      email: "second@example.test",
-      handle: "second.example.test",
-      codeHash: hash("b"),
+    await assert.rejects(arrivals.cancelArrival(cancelInput()), {
+      code: "AccountNotFound",
     });
-    assert.equal(next.operationId, "op-2");
-    const version = await allocate(next.version, "op-2");
-    await assert.rejects(
-      arrivals.cancelArrival({
-        owner: claim,
-        operationId: "op-2",
-        expectedVersion: version,
-        ownerUserId: "user-b",
-        noRemoteObligation: true,
-        plcStateUnchanged: true,
-      }),
-      { code: "OperationRecoveryRequired" },
-    );
+  } finally {
+    await db.close();
+  }
+});
+
+test("a claimed arrival is never cancelled and keeps its reservation", async () => {
+  const { db, arrivals, prepare, allocate } = await fixture();
+  try {
+    const prepared = await prepare();
+    const version = await allocate(prepared.version);
+    for (const expectedVersion of [prepared.version, version])
+      await assert.rejects(
+        arrivals.cancelArrival(cancelInput({ expectedVersion })),
+        { code: "OperationRecoveryRequired" },
+      );
     assert.equal(
-      (await arrivals.readArrival("op-2", "user-b")).signingKey,
+      (await arrivals.readArrival("op-1", "user-a")).signingKey,
       reservedKey.did(),
     );
-    assert.equal(
-      (
-        await query(
-          db,
-          "SELECT operation_id FROM arrivals ORDER BY operation_id",
-        )
-      ).length,
-      2,
+    assert.deepEqual(
+      await query(db, "SELECT active, did_root, cancelled_at FROM arrivals"),
+      [{ active: 1, did_root: did, cancelled_at: null }],
     );
   } finally {
     await db.close();
   }
 });
 
-test("a saved allocation intent alone blocks cancellation while dispatch is in flight", async () => {
-  const { db, arrivals, claim, prepare } = await fixture();
+test("allocation intent requires a claimed arrival", async () => {
+  const { db, arrivals, claim, prepareUnclaimed, claimArrival } =
+    await fixture();
   try {
-    const prepared = await prepare();
+    const prepared = await prepareUnclaimed();
+    const tuple = { operationId: "op-1", did, pdsId: "pds1", endpoint };
+    await assert.rejects(
+      arrivals.recordAllocationIntent(claim, prepared.version, tuple),
+      { code: "OperationConflict" },
+    );
+    assert.deepEqual(await query(db, "SELECT * FROM arrival_reservations"), []);
+    assert.equal(await persistedVersion(db, "op-1"), prepared.version);
+    const claimed = await claimArrival(prepared.version);
     const intent = await arrivals.recordAllocationIntent(
       claim,
-      prepared.version,
-      { operationId: "op-1", did, pdsId: "pds1", endpoint },
+      claimed.version,
+      tuple,
     );
-    assert.deepEqual(intent, {
-      kind: "applied",
-      version: prepared.version + 1,
-    });
-    assert.deepEqual(
-      await query(
-        db,
-        "SELECT signing_key, uncertain_reason FROM arrival_reservations WHERE operation_id = ?",
-        ["op-1"],
-      ),
-      [{ signing_key: null, uncertain_reason: null }],
-    );
+    assert.deepEqual(intent, { kind: "applied", version: claimed.version + 1 });
     await assert.rejects(
-      arrivals.cancelArrival({
-        owner: claim,
-        operationId: "op-1",
-        expectedVersion: intent.version,
-        ownerUserId: "user-a",
-        noRemoteObligation: true,
-        plcStateUnchanged: true,
-      }),
+      arrivals.cancelArrival(cancelInput({ expectedVersion: intent.version })),
       { code: "OperationRecoveryRequired" },
-    );
-    assert.deepEqual(
-      await query(
-        db,
-        "SELECT active, did_root, cancelled_at, version FROM arrivals WHERE operation_id = ?",
-        ["op-1"],
-      ),
-      [
-        {
-          active: 1,
-          did_root: did,
-          cancelled_at: null,
-          version: intent.version,
-        },
-      ],
     );
     assert.deepEqual(
       await query(
@@ -1542,9 +1990,13 @@ test(
         workerId: "worker-1",
         leaseMs: 120_000,
       });
+      const claimed = await initial.claimArrival(claim, prepared.version, {
+        operationId: "op-1",
+        did,
+      });
       const intent = await initial.recordAllocationIntent(
         claim,
-        prepared.version,
+        claimed.version,
         { operationId: "op-1", did, pdsId: "pds1", endpoint },
       );
       const [firstAttempt, secondAttempt] = await Promise.allSettled([
@@ -1599,7 +2051,7 @@ test(
 );
 
 test(
-  "a dispatch holding the operation fence cannot be released by a concurrent cancel",
+  "a claimed arrival held by a dispatching worker refuses a concurrent cancel without writing",
   { skip: process.env.CONTRACT_DATABASE_BACKEND !== "postgresql" },
   async () => {
     const { openDatabase } =
@@ -1664,14 +2116,18 @@ test(
         workerId: "worker-1",
         leaseMs: 120_000,
       });
+      const claimed = await dispatching.claimArrival(claim, prepared.version, {
+        operationId: "op-1",
+        did,
+      });
       const intent = await dispatching.recordAllocationIntent(
         claim,
-        prepared.version,
+        claimed.version,
         { operationId: "op-1", did, pdsId: "pds1", endpoint },
       );
       assert.deepEqual(intent, {
         kind: "applied",
-        version: prepared.version + 1,
+        version: claimed.version + 1,
       });
 
       const held = Promise.withResolvers();
@@ -1685,36 +2141,23 @@ test(
         }),
       );
       await reached.promise;
-      const cancelFlight = canceling.cancelArrival({
-        owner: claim,
-        operationId: "op-1",
-        expectedVersion: intent.version,
-        ownerUserId: "user-a",
-        noRemoteObligation: true,
-        plcStateUnchanged: true,
-      });
-      let cancelSettled = false;
-      void cancelFlight.then(
-        () => {
-          cancelSettled = true;
-        },
-        () => {
-          cancelSettled = true;
-        },
-      );
-      const settled = Promise.allSettled([dispatchFlight, cancelFlight]);
-      await new Promise((resolve) => setTimeout(resolve, 400));
-      assert.equal(
-        cancelSettled,
-        false,
-        "Cancellation must wait for the held operation fence",
-      );
-      gate.open = true;
-      gate.resume();
-      const [dispatchOutcome, cancelOutcome] = await settled;
-      assert.equal(dispatchOutcome.status, "fulfilled");
+      // Cancelling a claimed arrival is refused before it needs the fence, so
+      // it does not wait behind the dispatch and cannot release anything.
+      const cancelOutcome = await canceling
+        .cancelArrival({
+          operationId: "op-1",
+          expectedVersion: intent.version,
+          ownerUserId: "user-a",
+        })
+        .then(
+          (value) => ({ status: "fulfilled", value }),
+          (reason) => ({ status: "rejected", reason }),
+        );
       assert.equal(cancelOutcome.status, "rejected");
       assert.equal(cancelOutcome.reason.code, "OperationRecoveryRequired");
+      gate.open = true;
+      gate.resume();
+      await dispatchFlight;
       assert.deepEqual(
         await query(
           dispatcher,
@@ -1774,7 +2217,7 @@ test("access projection prefers the active arrival and breaks identical millisec
     for (const operationId of ["op-0", "op-2"]) {
       await query(
         db,
-        "INSERT INTO arrivals (operation_id, did, did_root, active, user_id, email, handle, pds_id, endpoint, source_plc_head, source_predecessor, source_facts, approved_rotation_keys, version, generation, created_at, updated_at, cancelled_at) VALUES (?, ?, NULL, 0, ?, ?, ?, 'pds1', ?, ?, '{}', '{}', '[]', 1, 1, ?, ?, ?)",
+        "INSERT INTO arrivals (operation_id, did, claim_operation_id, did_root, active, user_id, email, handle, pds_id, endpoint, source_plc_head, source_predecessor, source_facts, approved_rotation_keys, version, generation, created_at, updated_at, cancelled_at) VALUES (?, ?, 'earlier-claim', NULL, 0, ?, ?, ?, 'pds1', ?, ?, '{}', '{}', '[]', 1, 1, ?, ?, ?)",
         [
           operationId,
           did,
@@ -2255,7 +2698,7 @@ test("signed journal rejects privateKey on otherwise valid signed authority with
   }
 });
 
-test("signed operation rows are immutable at the database boundary on both dialects", async () => {
+test("signed operation rows reject duplicates, invalid kinds and orphans on both dialects", async () => {
   const { db, arrivals, claim, prepare, allocate } = await fixture();
   try {
     const prepared = await prepare();
@@ -2346,6 +2789,18 @@ const claimSnapshot = async (db) => {
   return result;
 };
 
+test("only a claimed arrival makes its DID pending", async () => {
+  const { db, accounts, prepareUnclaimed, claimArrival } = await fixture();
+  try {
+    const prepared = await prepareUnclaimed();
+    assert.equal(await accounts.hasPendingExternalMigration(did), false);
+    await claimArrival(prepared.version);
+    assert.equal(await accounts.hasPendingExternalMigration(did), true);
+  } finally {
+    await db.close();
+  }
+});
+
 for (const kind of ["primary", "pending", "backup", "handle"])
   test(`active arrival DID blocks an alternate ${kind} claim without mutation`, async () => {
     const { db, accounts, prepare, allocate, bind } = await fixture();
@@ -2377,14 +2832,25 @@ for (const kind of ["primary", "pending", "backup", "handle"])
 for (const state of [
   "prepared",
   "expired",
+  "cancelled",
+  "claimed",
   "allocated",
   "uncertain",
   "bound",
-  "cancelled",
 ])
-  test(`ordinary writers respect ${state} arrival claims regardless of DID or owner`, async () => {
-    const { db, accounts, arrivals, claim, prepare, allocate, bind } =
-      await fixture();
+  test(`ordinary writers ${["prepared", "expired", "cancelled"].includes(state) ? "are not blocked by" : "respect"} ${state} arrival ${["prepared", "expired", "cancelled"].includes(state) ? "preparations" : "claims"} regardless of DID or owner`, async () => {
+    const {
+      db,
+      accounts,
+      arrivals,
+      claim,
+      prepare,
+      prepareUnclaimed,
+      allocate,
+      bind,
+    } = await fixture();
+    // An unclaimed preparation holds nothing; only a claim reserves.
+    const holds = !["prepared", "expired", "cancelled"].includes(state);
     try {
       await accounts.insertAccount(ordinaryAccount);
       await browserSession(
@@ -2394,7 +2860,7 @@ for (const state of [
         Date.now(),
         Date.now() + day,
       );
-      const prepared = await prepare();
+      const prepared = holds ? await prepare() : await prepareUnclaimed();
       if (state === "expired")
         await query(
           db,
@@ -2416,18 +2882,15 @@ for (const state of [
       }
       if (state === "cancelled")
         await arrivals.cancelArrival({
-          owner: claim,
           operationId: "op-1",
           expectedVersion: prepared.version,
           ownerUserId: "user-a",
-          noRemoteObligation: true,
-          plcStateUnchanged: true,
         });
       for (const writerDid of [did, otherDid]) {
         for (const ownerUserId of [undefined, "user-a", "unrelated-owner"]) {
           for (const purpose of ["primary", "pending", "backup"]) {
             const before = await claimSnapshot(db);
-            if (state !== "cancelled") {
+            if (holds) {
               await assert.rejects(
                 accounts.reserveEmail(
                   " DEST@EXAMPLE.TEST ",
@@ -2446,7 +2909,7 @@ for (const state of [
             }
           }
         }
-        if (state !== "cancelled") {
+        if (holds) {
           const before = await claimSnapshot(db);
           await assert.rejects(
             accounts.reserveHandle(" DEST.ENTRYWAY.TEST ", writerDid),
@@ -2487,7 +2950,7 @@ for (const state of [
             targetPdsUrl: endpoint,
           }),
       ];
-      if (state !== "cancelled") {
+      if (holds) {
         for (const write of writes) {
           const before = await claimSnapshot(db);
           await assert.rejects(write, (error) =>
@@ -2520,63 +2983,76 @@ for (const kind of [
   "migration-handle",
   "migration-did",
 ])
-  test(`arrival admission rejects an earlier ${kind} writer without mutation`, async () => {
-    const { db, accounts, prepare } = await fixture();
-    try {
-      await accounts.insertAccount(ordinaryAccount);
-      if (["primary", "pending", "backup"].includes(kind))
-        await accounts.reserveEmail("dest@example.test", otherDid, kind);
-      if (kind === "handle")
-        await accounts.reserveHandle("dest.entryway.test", otherDid);
-      if (kind === "account-email") {
-        await accounts.saveAccount({
-          ...ordinaryAccount,
-          email: "dest@example.test",
-        });
-        await accounts.reserveEmail("dest@example.test", otherDid, "primary");
-      }
-      if (kind === "account-handle")
-        await accounts.saveAccount({
-          ...ordinaryAccount,
-          handle: "dest.entryway.test",
-        });
-      if (kind.startsWith("migration-")) {
-        const owner = kind === "migration-email" ? "user-a" : "migration-owner";
-        if (owner !== "user-a")
-          await verifiedUser(db, owner, "migration@example.test");
-        await browserSession(
-          db,
-          "migration-session",
-          owner,
-          Date.now(),
-          Date.now() + day,
+  for (const atClaim of [false, true])
+    test(`arrival ${atClaim ? "claim" : "preparation"} rejects an earlier ${kind} writer without mutation`, async () => {
+      const { db, accounts, arrivals, prepareUnclaimed, claimArrival } =
+        await fixture();
+      try {
+        // A preparation made before the writer holds nothing, so the writer is
+        // admitted and the claim is where the conflict surfaces.
+        const preparedEarlier = atClaim ? await prepareUnclaimed() : null;
+        await accounts.insertAccount(ordinaryAccount);
+        if (["primary", "pending", "backup"].includes(kind))
+          await accounts.reserveEmail("dest@example.test", otherDid, kind);
+        if (kind === "handle")
+          await accounts.reserveHandle("dest.entryway.test", otherDid);
+        if (kind === "account-email") {
+          await accounts.saveAccount({
+            ...ordinaryAccount,
+            email: "dest@example.test",
+          });
+          await accounts.reserveEmail("dest@example.test", otherDid, "primary");
+        }
+        if (kind === "account-handle")
+          await accounts.saveAccount({
+            ...ordinaryAccount,
+            handle: "dest.entryway.test",
+          });
+        if (kind.startsWith("migration-")) {
+          const owner =
+            kind === "migration-email" ? "user-a" : "migration-owner";
+          if (owner !== "user-a")
+            await verifiedUser(db, owner, "migration@example.test");
+          await browserSession(
+            db,
+            "migration-session",
+            owner,
+            Date.now(),
+            Date.now() + day,
+          );
+          await accounts.reserveExternalMigration({
+            workflowId: "earlier",
+            did: kind === "migration-did" ? did : "did:plc:earliermigration",
+            handle:
+              kind === "migration-handle"
+                ? "dest.entryway.test"
+                : "migration.entryway.test",
+            userId: owner,
+            sessionId: "migration-session",
+            targetPdsId: "pds1",
+            targetPdsUrl: endpoint,
+          });
+        }
+        const before = await claimSnapshot(db);
+        await assert.rejects(
+          atClaim ? claimArrival(preparedEarlier.version) : prepareUnclaimed(),
+          (error) =>
+            [
+              "EmailNotAvailable",
+              "HandleNotAvailable",
+              "IdentityConflict",
+            ].includes(error.code),
         );
-        await accounts.reserveExternalMigration({
-          workflowId: "earlier",
-          did: kind === "migration-did" ? did : "did:plc:earliermigration",
-          handle:
-            kind === "migration-handle"
-              ? "dest.entryway.test"
-              : "migration.entryway.test",
-          userId: owner,
-          sessionId: "migration-session",
-          targetPdsId: "pds1",
-          targetPdsUrl: endpoint,
-        });
+        assert.deepEqual(await claimSnapshot(db), before);
+        if (atClaim)
+          assert.equal(
+            (await arrivals.readArrival("op-1", "user-a")).claimOperationId,
+            null,
+          );
+      } finally {
+        await db.close();
       }
-      const before = await claimSnapshot(db);
-      await assert.rejects(prepare(), (error) =>
-        [
-          "EmailNotAvailable",
-          "HandleNotAvailable",
-          "IdentityConflict",
-        ].includes(error.code),
-      );
-      assert.deepEqual(await claimSnapshot(db), before);
-    } finally {
-      await db.close();
-    }
-  });
+    });
 
 test("exact pending arrival binding restores all claims if the binding write fails", async () => {
   const { db, accounts, prepare, allocate, bind } = await fixture();
@@ -2600,7 +3076,7 @@ test("exact pending arrival binding restores all claims if the binding write fai
   }
 });
 
-test("a signed handoff without an allocation blocks cancellation despite caller booleans", async () => {
+test("a claimed arrival with a signed handoff and no allocation still refuses cancellation", async () => {
   const { db, arrivals, claim, prepare } = await fixture();
   try {
     const prepared = await prepare();
@@ -2613,12 +3089,9 @@ test("a signed handoff without an allocation blocks cancellation despite caller 
     const before = await claimSnapshot(db);
     await assert.rejects(
       arrivals.cancelArrival({
-        owner: claim,
         operationId: "op-1",
         expectedVersion: recorded.version,
         ownerUserId: "user-a",
-        noRemoteObligation: true,
-        plcStateUnchanged: true,
       }),
       { code: "OperationRecoveryRequired" },
     );
@@ -2878,10 +3351,10 @@ test("owner aggregate retains exact authority, signed journal, observation and e
 test("signed journal and its version roll back under a later outer failure", async () => {
   const { db, arrivals, claim, prepare } = await fixture();
   try {
-    await prepare();
+    const prepared = await prepare();
     await assert.rejects(
       db.transact(async () => {
-        await arrivals.recordSignedOperation(claim, 1, {
+        await arrivals.recordSignedOperation(claim, prepared.version, {
           operationId: "op-1",
           did,
           kind: "handoff",
@@ -2892,16 +3365,16 @@ test("signed journal and its version roll back under a later outer failure", asy
       /InjectedJournalFailure/,
     );
     assert.equal((await db.read("arrival_signed_operations")).length, 0);
-    assert.equal(await persistedVersion(db, "op-1"), 1);
+    assert.equal(await persistedVersion(db, "op-1"), prepared.version);
   } finally {
     await db.close();
   }
 });
 
 test("credential identity cannot authorize an unrelated operation and new admissions require current generation", async () => {
-  const { db, arrivals, claim, prepare } = await fixture();
+  const { db, arrivals, claim, prepare, prepareUnclaimed } = await fixture();
   try {
-    await prepare();
+    const prepared = await prepare();
     const facts = {
       operationId: "op-1",
       did,
@@ -2910,21 +3383,21 @@ test("credential identity cannot authorize an unrelated operation and new admiss
       credentialIssuer: did,
       credentialJti: "unique-source-jti",
     };
-    await arrivals.recordArrivalReplay(claim, 1, facts, {
+    await arrivals.recordArrivalReplay(claim, prepared.version, facts, {
       codeHash: hash("a"),
       codeGeneration: 1,
     });
     await arrivals.rotateArrivalCode({
       operationId: "op-1",
       ownerUserId: "user-a",
-      expectedVersion: 2,
+      expectedVersion: prepared.version + 1,
       codeHash: hash("b"),
       codeExpiresAt: Date.now() + day,
     });
     await assert.rejects(
       arrivals.recordArrivalReplay(
         claim,
-        3,
+        prepared.version + 2,
         {
           ...facts,
           method: "com.atproto.server.createAccount",
@@ -2935,7 +3408,7 @@ test("credential identity cannot authorize an unrelated operation and new admiss
       { code: "AccountMismatch" },
     );
     await verifiedUser(db, "user-b", "second@example.test");
-    await prepare({
+    await prepareUnclaimed({
       operationId: "op-2",
       did: otherDid,
       userId: "user-b",
@@ -2970,14 +3443,12 @@ for (const action of [
   "recordArrivalReplay",
   "bindProvisionedArrival",
   "completeArrivalActivation",
-  "cancelArrival",
   "recordCredentialFamily",
   "revokeArrivalCredentialFamilies",
   "repeatPendingBinding",
   "repeatSignedOperation",
   "repeatCanonicalHandoff",
   "repeatArrivalReplay",
-  "repeatCancellation",
 ]) {
   for (const ownershipState of [
     "unrelated",
@@ -2991,7 +3462,7 @@ for (const action of [
       const { db, arrivals, claim } = f;
       const ownership = createOperationOwnershipStore(db);
       try {
-        await f.prepare();
+        const claimedVersion = (await f.prepare()).version;
         const tuple = { operationId: "op-1", did, pdsId: "pds1", endpoint };
         const handoff = { ...tuple, kind: "handoff", ...(await signed()) };
         const facts = {
@@ -3003,13 +3474,7 @@ for (const action of [
           credentialJti: "ownership-regression-jti",
         };
         const proof = { codeHash: hash("a"), codeGeneration: 1 };
-        const cancellation = {
-          operationId: "op-1",
-          ownerUserId: "user-a",
-          noRemoteObligation: true,
-          plcStateUnchanged: true,
-        };
-        let version = 1;
+        let version = claimedVersion;
         if (
           ["recordReservationResult", "retainUncertainAttempt"].includes(action)
         )
@@ -3062,14 +3527,6 @@ for (const action of [
           await arrivals.recordArrivalReplay(claim, version, facts, proof);
           version += 1;
         }
-        if (action === "repeatCancellation")
-          version = (
-            await arrivals.cancelArrival({
-              owner: claim,
-              ...cancellation,
-              expectedVersion: version,
-            })
-          ).version;
 
         let owner = claim;
         if (
@@ -3114,11 +3571,19 @@ for (const action of [
               });
             case "recordSignedOperation":
             case "repeatSignedOperation":
-              return arrivals.recordSignedOperation(owner, 1, handoff);
+              return arrivals.recordSignedOperation(
+                owner,
+                claimedVersion,
+                handoff,
+              );
             case "recordCanonicalHandoff":
               return arrivals.recordCanonicalHandoff(owner, version, handoff);
             case "repeatCanonicalHandoff":
-              return arrivals.recordCanonicalHandoff(owner, 1, handoff);
+              return arrivals.recordCanonicalHandoff(
+                owner,
+                claimedVersion,
+                handoff,
+              );
             case "retainUncertainAttempt":
               return arrivals.retainUncertainAttempt(owner, version, {
                 ...tuple,
@@ -3126,7 +3591,12 @@ for (const action of [
               });
             case "recordArrivalReplay":
             case "repeatArrivalReplay":
-              return arrivals.recordArrivalReplay(owner, 1, facts, proof);
+              return arrivals.recordArrivalReplay(
+                owner,
+                claimedVersion,
+                facts,
+                proof,
+              );
             case "bindProvisionedArrival":
               return f.bind(version, { owner });
             case "repeatPendingBinding":
@@ -3142,13 +3612,6 @@ for (const action of [
                   method: "com.atproto.server.activateAccount",
                   observedAt: Date.now(),
                 },
-              });
-            case "cancelArrival":
-            case "repeatCancellation":
-              return arrivals.cancelArrival({
-                owner,
-                ...cancellation,
-                expectedVersion: version,
               });
             case "recordCredentialFamily":
               return arrivals.recordCredentialFamily({
@@ -3176,20 +3639,14 @@ for (const action of [
           admissions: await db.read("operation_admissions"),
         });
         const before = await snapshot();
-        if (ownershipState === "additional-binding") {
-          await invoke();
-          assert.equal(
-            await persistedVersion(db, "op-1"),
-            version + (action.startsWith("repeat") ? 0 : 1),
-          );
-        } else {
-          await assert.rejects(invoke(), {
-            code: ["stale", "expired"].includes(ownershipState)
-              ? "OperationLeaseLost"
-              : "OperationConflict",
-          });
-          assert.deepEqual(await snapshot(), before);
-        }
+        // An operation bound to the resource afterwards is not the arrival's own
+        // claim, so it is refused like any other foreign owner.
+        await assert.rejects(invoke(), {
+          code: ["stale", "expired"].includes(ownershipState)
+            ? "OperationLeaseLost"
+            : "OperationConflict",
+        });
+        assert.deepEqual(await snapshot(), before);
       } finally {
         await db.close();
       }

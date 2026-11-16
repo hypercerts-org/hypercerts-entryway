@@ -53,6 +53,8 @@ export interface ArrivalPreparationAuthority {
 export interface ArrivalRecord extends ArrivalPreparationAuthority {
   readonly operationId: string;
   readonly did: string;
+  /** Null for an unclaimed preparation, which holds nothing. */
+  readonly claimOperationId: string | null;
   readonly userId: string;
   readonly email: string;
   readonly handle: string;

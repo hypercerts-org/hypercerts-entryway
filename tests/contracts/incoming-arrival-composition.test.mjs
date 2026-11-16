@@ -9,10 +9,10 @@ import {
 } from "../../dist/src/features/external-migration/incoming-authorization.js";
 import { arrivalCodeHash } from "../../dist/src/features/external-migration/prepare-arrival.js";
 import { parseArrivalRequest } from "../../dist/src/features/external-migration/arrival-request.js";
+import { eq } from "drizzle-orm";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { eq } from "drizzle-orm";
 import { Secp256k1Keypair } from "@atproto/crypto";
 import { cidForCbor } from "@atproto/common";
 import * as plc from "@did-plc/lib";
@@ -142,10 +142,6 @@ async function fixture(t, mode = "modern", mutation = "", fault = "") {
         ),
     });
   const arrivals = arrivalStorage();
-  if (fault.startsWith("after-commit"))
-    arrivals.recordAllocationIntent = async () => {
-      throw new Error("interrupted before allocation intent");
-    };
   await verifiedUser(db, "destination-user", email);
   const principal = {
     userId: "destination-user",
@@ -186,25 +182,16 @@ async function fixture(t, mode = "modern", mutation = "", fault = "") {
     store: {
       ...store,
       async checkpoint(...args) {
-        if (
-          fault === "after-commit-complete-fails" &&
-          args[1].phase === "complete" &&
-          !completionFailed
-        ) {
-          completionFailed = true;
-          throw new Error("completion interrupted");
-        }
         if (fault === "before-checkpoint") throw new Error("checkpoint fault");
         await store.checkpoint(...args);
         if (fault === "after-checkpoint") throw new Error("checkpoint fault");
       },
-      release: fault === "after-commit-crash" ? async () => {} : store.release,
     },
     heartbeatMs: 0,
   });
-  let completionFailed = false;
   let publicationMode = "normal";
   let directoryReads = 0;
+  let plcReads = 0;
   let credentialsIssued = 0;
   const publicationAttempts = [];
   const accounts = {
@@ -217,6 +204,7 @@ async function fixture(t, mode = "modern", mutation = "", fault = "") {
     plcClient: {
       url: "https://plc.example.test",
       getAuditableLog: async () => {
+        plcReads++;
         if (
           backendState.mode === "directory-outage" &&
           backendState.creates > 0
@@ -226,6 +214,7 @@ async function fixture(t, mode = "modern", mutation = "", fault = "") {
       },
       getDocument: async () => {
         directoryReads++;
+        plcReads++;
         return plc.formatDidDoc({
           did,
           ...plc.normalizeOp(audit.at(-1).operation),
@@ -258,10 +247,12 @@ async function fixture(t, mode = "modern", mutation = "", fault = "") {
         if (publicationMode === "lost-applied")
           throw new Error("response lost");
       },
-      getLastOp: async () =>
-        mutation === "race"
+      getLastOp: async () => {
+        plcReads++;
+        return mutation === "race"
           ? { ...predecessor, sig: "changed" }
-          : audit.at(-1).operation,
+          : audit.at(-1).operation;
+      },
     },
   };
   const browserFlow = createBrowserFlow({
@@ -280,6 +271,7 @@ async function fixture(t, mode = "modern", mutation = "", fault = "") {
     creates: 0,
     pauses: 0,
     mode: "normal",
+    reservation: mutation,
     exactMove: null,
     adminExtras: {},
   };
@@ -370,8 +362,10 @@ async function fixture(t, mode = "modern", mutation = "", fault = "") {
     const rows = await query(db, "SELECT * FROM arrival_reservations");
     assert.equal(rows.length, 1);
     assert.equal(rows[0].signing_key, null);
-    if (mutation === "lost") throw new Error("reservation response lost");
-    if (mutation === "http") return new Response("{}", { status: 503 });
+    if (backendState.reservation === "lost")
+      throw new Error("reservation response lost");
+    if (backendState.reservation === "http")
+      return new Response("{}", { status: 503 });
     return Response.json({ signingKey: repository.did() });
   };
   const composed = await composeIncomingArrival({
@@ -404,6 +398,7 @@ async function fixture(t, mode = "modern", mutation = "", fault = "") {
       publicationMode = value;
     },
     directoryReads: () => directoryReads,
+    plcReads: () => plcReads,
     credentialsIssued: () => credentialsIssued,
     async credential(method = incomingHandoffMethod, overrides = {}) {
       credentialsIssued++;
@@ -442,7 +437,7 @@ async function fixture(t, mode = "modern", mutation = "", fault = "") {
 }
 
 for (const mode of ["modern", "legacy"]) {
-  test(`composed ${mode} preparation retains signed predecessor and reserves only after durable intent`, async (t) => {
+  test(`composed ${mode} preparation retains signed predecessor and holds nothing`, async (t) => {
     const f = await fixture(t, mode);
     const result = await f.prepare();
     const saved = await f.arrivals.readArrival(
@@ -499,11 +494,17 @@ for (const mode of ["modern", "legacy"]) {
       approvedRotationKeys: saved.approvedRotationKeys,
       source: saved.source,
     });
-    const claim = await query(f.db, "SELECT * FROM operation_admissions");
-    assert.ok(
-      claim.some((row) => Object.values(row).includes(`arrival:${f.did}`)),
+    // An unclaimed preparation holds no DID claim, key reservation or handle.
+    assert.equal(saved.claimOperationId, null);
+    assert.equal(
+      (await query(f.db, "SELECT * FROM operation_admissions")).length,
+      0,
     );
-    assert.equal(f.reservations(), 1);
+    assert.equal(
+      (await query(f.db, "SELECT * FROM arrival_reservations")).length,
+      0,
+    );
+    assert.equal(f.reservations(), 0);
   });
 }
 
@@ -525,21 +526,6 @@ for (const mutation of [
   });
 }
 
-for (const mutation of ["lost", "http"]) {
-  test(`composed preparation retains placement and obligation after ${mutation} reservation response`, async (t) => {
-    const f = await fixture(t, "modern", mutation);
-    await assert.rejects(f.prepare());
-    const rows = await query(f.db, "SELECT * FROM arrivals");
-    assert.equal(rows.length, 1);
-    assert.equal(rows[0].endpoint, endpoint);
-    assert.equal(
-      (await query(f.db, "SELECT * FROM arrival_reservations")).length,
-      1,
-    );
-    assert.equal(f.reservations(), 1);
-  });
-}
-
 test("preparation rejects missing/stale OTP and existing origin/CSRF violations", async (t) => {
   const f = await fixture(t);
   await assert.rejects(f.prepare(""));
@@ -553,89 +539,116 @@ test("preparation rejects missing/stale OTP and existing origin/CSRF violations"
   assert.equal((await query(f.db, "SELECT * FROM arrivals")).length, 0);
 });
 
+test("preparing again replaces the user's unclaimed preparation without remote calls", async (t) => {
+  const f = await fixture(t);
+  const first = await f.prepare();
+  const second = await f.prepare();
+  assert.notEqual(first.operationId, second.operationId);
+  const rows = await query(f.db, "SELECT * FROM arrivals WHERE active = 1");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].operation_id, second.operationId);
+  assert.equal(f.reservations(), 0);
+  assert.equal(
+    (await query(f.db, "SELECT * FROM operation_admissions")).length,
+    0,
+  );
+});
+
 for (const fault of ["before-checkpoint", "after-checkpoint"]) {
-  test(`preparation rolls back arrival and code on ${fault} failure`, async (t) => {
+  test(`handoff admission rolls back claim, replay and handoff on ${fault} failure`, async (t) => {
     const f = await fixture(t, "modern", "", fault);
-    await assert.rejects(f.prepare(), /checkpoint fault/);
-    assert.equal(f.reservations(), 0);
+    const prepared = await f.prepare();
+    const operation = await plc.signOperation(prepared.handoff, f.source);
+    await assert.rejects(
+      f.composed.admitIncoming(f.request, {
+        operationId: prepared.operationId,
+        method: incomingHandoffMethod,
+        body: { operation },
+        presentation: await f.credential(),
+        arrivalCode: prepared.arrivalCode,
+      }),
+      /checkpoint fault/,
+    );
+    assert.equal(f.publicationAttempts.length, 0);
     await f.reopen();
+    const saved = (await query(f.db, "SELECT * FROM arrivals"))[0];
+    assert.equal(saved.claim_operation_id, null);
+    assert.equal(saved.did_root, null);
     for (const table of [
-      "arrivals",
-      "arrival_code",
+      "arrival_replay",
+      "arrival_signed_operations",
       "arrival_reservations",
       "operation_admissions",
     ])
       assert.equal((await query(f.db, `SELECT * FROM ${table}`)).length, 0);
-    const operations = await query(f.db, "SELECT * FROM authority_operations");
-    assert.equal(operations.length, 1);
-    assert.equal(Boolean(operations[0].pending), false);
-    assert.equal(operations[0].state, "complete");
+    for (const operation of await query(
+      f.db,
+      "SELECT * FROM authority_operations",
+    ))
+      assert.equal(Boolean(operation.pending), false);
   });
 }
 
-for (const fault of ["after-commit-release", "after-commit-crash"]) {
-  test(`committed preparation remains recoverable after ${fault} and database reopen`, async (t) => {
-    const f = await fixture(t, "modern", "", fault);
-    await assert.rejects(f.prepare(), /interrupted before allocation intent/);
-    assert.equal(f.reservations(), 0);
-    const arrivals = await f.reopen();
-    const saved = (await query(f.db, "SELECT * FROM arrivals"))[0];
-    const operation = (
-      await query(f.db, "SELECT * FROM authority_operations")
-    )[0];
-    assert.equal(saved.operation_id, operation.id);
-    assert.equal(Boolean(operation.pending), true);
-    assert.equal(operation.phase, "arrival-prepared");
-    const admissions = await query(f.db, "SELECT * FROM operation_admissions");
-    assert.equal(admissions.length, 1);
-    assert.equal(admissions[0].operation_id, saved.operation_id);
-    if (fault === "after-commit-crash") {
-      assert.ok(operation.worker_id);
-      await f.db.update(
-        "authority_operations",
-        {
-          lease_expires_at: (await f.db.databaseTime()) - 1,
-        },
-        eq(f.db.tables.authority_operations.id, operation.id),
-      );
-    } else assert.equal(operation.worker_id, null);
-    const owner = createOperationOwnership({
-      store: createOperationOwnershipStore(f.db),
-      heartbeatMs: 0,
-    });
-    await owner.run(
-      `arrival:${f.did}`,
-      {
-        kind: "public-arrival",
-        request: { did: f.did, handle, userId: "destination-user" },
-      },
-      async () => {
-        const claim = owner.currentClaim;
-        assert.equal(claim.resumed, true);
-        assert.equal(claim.operationId, saved.operation_id);
-        assert.equal(claim.attempt, 2);
-        const result = await arrivals.cancelArrival({
-          owner: claim,
-          operationId: saved.operation_id,
-          expectedVersion: saved.version,
-          ownerUserId: "destination-user",
-          noRemoteObligation: true,
-          plcStateUnchanged: true,
-        });
-        assert.equal(result.kind, "applied");
-        await owner.checkpoint("complete", null);
-      },
-    );
-    assert.equal(
-      (await query(f.db, "SELECT * FROM operation_admissions")).length,
-      0,
-    );
-    assert.equal(
-      (await query(f.db, "SELECT * FROM arrivals WHERE active = 1")).length,
-      0,
-    );
+test("handoff admission claims the DID with its pending checkpoint in one transaction", async (t) => {
+  const f = await fixture(t);
+  const prepared = await f.prepare();
+  const operation = await plc.signOperation(prepared.handoff, f.source);
+  await f.composed.admitIncoming(f.request, {
+    operationId: prepared.operationId,
+    method: incomingHandoffMethod,
+    body: { operation },
+    presentation: await f.credential(),
+    arrivalCode: prepared.arrivalCode,
   });
-}
+  const saved = (await query(f.db, "SELECT * FROM arrivals"))[0];
+  const claim = (await query(f.db, "SELECT * FROM operation_admissions"))[0];
+  assert.equal(saved.claim_operation_id, claim.operation_id);
+  assert.equal(saved.did_root, f.did);
+  assert.equal(f.reservations(), 0);
+  const operations = await query(f.db, "SELECT * FROM authority_operations");
+  assert.equal(operations.length, 1);
+  assert.equal(Boolean(operations[0].pending), true);
+});
+
+test("an unverified source credential never takes the DID claim", async (t) => {
+  const f = await fixture(t);
+  const prepared = await f.prepare();
+  const operation = await plc.signOperation(prepared.handoff, f.source);
+  await assert.rejects(
+    f.composed.admitIncoming(f.request, {
+      operationId: prepared.operationId,
+      method: incomingHandoffMethod,
+      body: { operation },
+      presentation: `Bearer ${"a".repeat(20)}.${"b".repeat(20)}.${"c".repeat(20)}`,
+      arrivalCode: prepared.arrivalCode,
+    }),
+  );
+  assert.equal(
+    (await query(f.db, "SELECT * FROM operation_admissions")).length,
+    0,
+  );
+  assert.equal(
+    (await query(f.db, "SELECT * FROM authority_operations")).length,
+    0,
+  );
+});
+
+test("creation admission on an unclaimed arrival keeps OperationRecoveryRequired", async (t) => {
+  const f = await fixture(t);
+  const prepared = await f.prepare();
+  await assert.rejects(
+    f.composed.admitIncoming(f.request, {
+      operationId: prepared.operationId,
+      method: incomingCreationMethod,
+      body: { handle },
+      presentation: await f.credential(incomingCreationMethod),
+      arrivalCode: prepared.arrivalCode,
+    }),
+    { code: "OperationRecoveryRequired" },
+  );
+  assert.equal((await query(f.db, "SELECT * FROM arrival_replay")).length, 0);
+  assert.equal(f.reservations(), 0);
+});
 
 for (const mode of ["normal", "lost-applied", "lost-unapplied"]) {
   test(`authenticated handoff ${mode} retains exact journal and uses fenced recovery`, async (t) => {
@@ -816,7 +829,7 @@ test("unresolved accepted handoff stays pending after a signed destination key c
   assert.deepEqual(f.publicationAttempts, [operation]);
   assert.equal(f.audit.length, 3);
   assert.equal(f.audit.at(-1).cid, cutoverCid);
-  assert.equal(f.reservations(), 1);
+  assert.equal(f.reservations(), 0);
   assert.equal((await query(f.db, "SELECT * FROM account_bindings")).length, 0);
 });
 
@@ -924,6 +937,13 @@ test("fresh bodies have semantic server digests and reject unsupported fields", 
 test("authenticated creation uses real invitation producer atomically without storing request secrets", async (t) => {
   const f = await fixture(t);
   const prepared = await f.prepare();
+  await f.composed.admitIncoming(f.request, {
+    operationId: prepared.operationId,
+    method: incomingHandoffMethod,
+    body: { operation: await plc.signOperation(prepared.handoff, f.source) },
+    presentation: await f.credential(),
+    arrivalCode: prepared.arrivalCode,
+  });
   const input = {
     operationId: prepared.operationId,
     method: incomingCreationMethod,
@@ -935,7 +955,7 @@ test("authenticated creation uses real invitation producer atomically without st
     f.composed.admitIncoming(f.request, input),
     /An invite code is required/,
   );
-  assert.equal((await query(f.db, "SELECT * FROM arrival_replay")).length, 0);
+  assert.equal((await query(f.db, "SELECT * FROM arrival_replay")).length, 1);
   const { createInvites } =
     await import("../../dist/src/features/account-registration/invites.mjs");
   const invites = await createInvites({
@@ -950,20 +970,10 @@ test("authenticated creation uses real invitation producer atomically without st
     "admitted",
   );
   const admissions = await query(f.db, "SELECT * FROM arrival_replay");
-  assert.equal(admissions.length, 1);
+  assert.equal(admissions.length, 2);
   for (const secret of [code, prepared.arrivalCode, input.presentation])
     assert.equal(JSON.stringify(admissions).includes(secret), false);
-  assert.equal(f.publicationAttempts.length, 0);
-  // Admission is durable, but creation cannot proceed without the separately
-  // accepted signed handoff. B3 no longer returns a metadata-only continuation.
-  await assert.rejects(
-    f.composed.continueCreation(f.request, prepared.operationId),
-    { code: "OperationRecoveryRequired" },
-  );
-  assert.equal(
-    (await query(f.db, "SELECT * FROM arrival_replay"))[0].request_digest,
-    admissions[0].request_digest,
-  );
+  assert.equal(f.publicationAttempts.length, 1);
 });
 
 test("composed creation rejects a submit-scoped credential before admission or destination effects", async (t) => {
@@ -1081,7 +1091,7 @@ async function admitProvisioning(f, interruptHandoff = false) {
     presentation: await f.credential(incomingCreationMethod),
     arrivalCode: prepared.arrivalCode,
   });
-  return prepared;
+  return { ...prepared, inviteCode: code };
 }
 
 test("reconciliation publishes the accepted unpublished handoff before admitted creation", async (t) => {
@@ -1165,7 +1175,7 @@ for (const state of ["divergent", "tombstone", "unavailable"]) {
     assert.equal(f.backendState.creates, 0);
     assert.equal(f.backendState.pauses, 0);
     assert.equal(f.publicationAttempts.length, 0);
-    assert.equal(f.reservations(), 1);
+    assert.equal(f.reservations(), 0);
     assert.equal(f.credentialsIssued(), 2);
   });
 }
@@ -1323,6 +1333,92 @@ for (const mode of [
     }
   });
 }
+
+for (const mode of ["creation-rejected", "pause-rejected"]) {
+  for (const approvals of [["retry-if-safe"], ["observe", "retry-if-safe"]]) {
+    test(`a ${mode} destination effect recovers through ${approvals.join(" then ")} without a new reservation`, async (t) => {
+      const f = await fixture(t, "modern", "distinct-handle");
+      const prepared = await admitProvisioning(f);
+      const continuation = () =>
+        f.composed.continueCreation(f.request, prepared.operationId);
+      f.backendState.mode = mode;
+      await assert.rejects(continuation());
+      // The failure leaves nothing for an unsupervised retry to resend.
+      await assert.rejects(continuation(), {
+        code: "OperationRecoveryRequired",
+      });
+      f.backendState.mode = "normal";
+      for (const action of approvals) {
+        const pending = await f.store.pendingExternal(`arrival:${f.did}`);
+        await f.store.approveRecovery({
+          operationId: pending.operationId,
+          externalAttemptId: pending.id,
+          executionAttemptId: pending.executionAttemptId,
+          target: pending.target,
+          dispatcherIsolationReference: "test-dispatcher-isolated",
+          upstreamDrainReference: "test-upstream-drained",
+          action,
+          ...(pending.recovery
+            ? {
+                previousAuthorization: {
+                  id: pending.recovery.id,
+                  version: pending.recovery.version,
+                },
+              }
+            : {}),
+        });
+        if (action === "observe")
+          await assert.rejects(continuation(), {
+            code: "OperationRecoveryRequired",
+          });
+      }
+      assert.equal((await continuation()).state, "pending");
+      const access = await f.arrivals.readArrivalAccess(f.did);
+      assert.equal(access.bound, true);
+      assert.equal(access.unresolvedAttempt, false);
+      assert.equal(
+        f.backendState.creates,
+        mode === "creation-rejected" ? 2 : 1,
+      );
+      assert.equal(f.backendState.pauses, mode === "pause-rejected" ? 2 : 1);
+      assert.equal(f.reservations(), 1);
+      assert.equal(await f.store.pendingExternal(`arrival:${f.did}`), null);
+    });
+  }
+}
+
+test("a lost reservation response recovers through the operator path and reserves under the claim", async (t) => {
+  const f = await fixture(t, "modern", "distinct-handle");
+  const prepared = await admitProvisioning(f);
+  const continuation = () =>
+    f.composed.continueCreation(f.request, prepared.operationId);
+  f.backendState.reservation = "lost";
+  await assert.rejects(continuation());
+  assert.equal(f.reservations(), 1);
+  assert.equal(f.backendState.creates, 0);
+  await assert.rejects(continuation(), { code: "OperationRecoveryRequired" });
+  assert.equal(f.reservations(), 1);
+  f.backendState.reservation = "normal";
+  const pending = await f.store.pendingExternal(`arrival:${f.did}`);
+  assert.equal(pending.step, "incoming-reservation");
+  await f.store.approveRecovery({
+    operationId: pending.operationId,
+    externalAttemptId: pending.id,
+    executionAttemptId: pending.executionAttemptId,
+    target: pending.target,
+    dispatcherIsolationReference: "test-dispatcher-isolated",
+    upstreamDrainReference: "test-upstream-drained",
+    action: "retry-if-safe",
+  });
+  assert.equal((await continuation()).state, "pending");
+  assert.equal(f.reservations(), 2);
+  assert.equal(f.backendState.creates, 1);
+  const aggregate = await f.arrivals.readArrivalAggregate(
+    prepared.operationId,
+    f.principal.userId,
+  );
+  assert.equal(aggregate.reservation.signingKey, f.repository.did());
+});
 
 test("durable bind rollback retries exact saved move without another remote effect", async (t) => {
   const f = await fixture(t);
@@ -1579,10 +1675,10 @@ const stored = async (f) => ({
   reservations: await query(f.db, "SELECT * FROM arrival_reservations"),
 });
 
-test("renewal recovers a lost preparation response without another allocation", async (t) => {
+test("renewing an unclaimed preparation issues a new code and takes no lease", async (t) => {
   const f = await fixture(t);
   const prepared = await f.prepare();
-  assert.equal(f.reservations(), 1);
+  assert.equal(f.reservations(), 0);
   const renewed = await renew(f, prepared.operationId, prepared.version);
   assert.deepEqual(Object.keys(renewed).sort(), [
     "arrivalCode",
@@ -1601,33 +1697,20 @@ test("renewal recovers a lost preparation response without another allocation", 
   );
   const rows = await stored(f);
   assert.equal(rows.arrivals.length, 1);
-  assert.equal(rows.reservations.length, 1);
-  assert.equal(f.reservations(), 1);
+  assert.equal(rows.reservations.length, 0);
+  assert.equal(f.reservations(), 0);
   assert.equal(
     JSON.stringify(rows).includes(renewed.arrivalCode),
     false,
     "only a hash is persisted",
   );
-  // The reservation obligation is untouched and no second operation exists.
-  assert.equal(rows.reservations[0].signing_key, f.repository.did());
+  // An unclaimed preparation holds no DID claim, so renewal leased nothing.
+  assert.equal(await admissionRows(f), 0);
   assert.equal(
-    (await query(f.db, "SELECT * FROM operation_admissions")).length,
-    1,
+    (await query(f.db, "SELECT * FROM authority_operations")).length,
+    0,
   );
 });
-
-test("renewal after a lost reservation response keeps the pending allocation", async (t) => {
-  const f = await fixture(t, "modern", "lost");
-  await assert.rejects(f.prepare());
-  const saved = (await stored(f)).arrivals[0];
-  const renewed = await renew(f, saved.operation_id, saved.version);
-  assert.equal(renewed.version, saved.version + 1);
-  assert.equal(f.reservations(), 1);
-  const rows = await stored(f);
-  assert.equal(rows.reservations.length, 1);
-  assert.equal(rows.reservations[0].signing_key, null);
-});
-
 test("stale or simultaneous renewal conflicts and one generation survives", async (t) => {
   const f = await fixture(t);
   const prepared = await f.prepare();
@@ -1709,7 +1792,7 @@ for (const operation of [renew, cancel]) {
         { error: "InvalidRequest", status: 400 },
       );
     assert.deepEqual(await stored(f), before);
-    assert.equal(f.reservations(), 1);
+    assert.equal(f.reservations(), 0);
   });
 }
 
@@ -1764,7 +1847,7 @@ test("renewal after the handoff admission keeps its continuation and supersedes 
     await query(f.db, "SELECT * FROM arrival_signed_operations"),
     signed,
   );
-  assert.equal(f.reservations(), 1);
+  assert.equal(f.reservations(), 0);
   assert.equal(f.publicationAttempts.length, 1);
   assert.equal(admissions[0].generation, 1);
   const continued = await f.composed.continueHandoff(
@@ -1847,26 +1930,30 @@ test("an admission recorded above the current generation is never continued", as
   assert.equal(f.backendState.creates, 0);
 });
 
-test("cancelling a prepared arrival retains every obligation", async (t) => {
+test("cancelling an unclaimed preparation deletes it in one commit without a PLC read", async (t) => {
   const f = await fixture(t);
   const prepared = await f.prepare();
-  const before = await stored(f);
-  const admissions = await query(f.db, "SELECT * FROM operation_admissions");
-  await assert.rejects(cancel(f, prepared.operationId, prepared.version), {
-    code: "OperationRecoveryRequired",
-    status: 409,
+  const reads = f.plcReads();
+  const cancelled = await cancel(f, prepared.operationId, prepared.version);
+  assert.deepEqual(cancelled, {
+    operationId: prepared.operationId,
+    version: prepared.version,
+    state: "cancelled",
   });
-  assert.deepEqual(await stored(f), before);
-  assert.deepEqual(
-    await query(f.db, "SELECT * FROM operation_admissions"),
-    admissions,
-  );
-  assert.equal((await stored(f)).arrivals[0].cancelled_at, null);
-  assert.notEqual(await consume(f, prepared.arrivalCode), null);
-  assert.equal(f.reservations(), 1);
+  assert.equal(f.plcReads(), reads);
+  const rows = await stored(f);
+  assert.deepEqual(rows, { arrivals: [], code: [], reservations: [] });
+  assert.equal(await admissionRows(f), 0);
+  assert.equal(await consume(f, prepared.arrivalCode), null);
+  assert.equal(f.reservations(), 0);
+  // A repeat finds nothing, as does renewing the deleted preparation.
+  for (const retry of [cancel, renew])
+    await assert.rejects(retry(f, prepared.operationId, prepared.version), {
+      code: "AccountNotFound",
+      status: 404,
+    });
 });
-
-test("cancelling an admitted arrival with signed facts retains every obligation", async (t) => {
+test("cancelling a claimed arrival is refused without a PLC read", async (t) => {
   const g = await fixture(t);
   const admitted = await admitProvisioning(g);
   const saved = await g.arrivals.readArrival(
@@ -1874,12 +1961,15 @@ test("cancelling an admitted arrival with signed facts retains every obligation"
     "destination-user",
   );
   const kept = await stored(g);
+  const reads = g.plcReads();
   await assert.rejects(cancel(g, admitted.operationId, saved.version), {
     code: "OperationRecoveryRequired",
+    status: 409,
   });
+  assert.equal(g.plcReads(), reads);
   assert.deepEqual(await stored(g), kept);
+  assert.equal(await pendingOperations(g), 1);
 });
-
 test("cancelling a stale version conflicts before any obligation check", async (t) => {
   const f = await fixture(t);
   const prepared = await f.prepare();
@@ -1888,69 +1978,6 @@ test("cancelling a stale version conflicts before any obligation check", async (
   });
 });
 
-test("pre-intent cancellation releases local state only with unchanged canonical PLC head and is idempotent", async (t) => {
-  const f = await fixture(t, "modern", "", "after-commit-release");
-  await assert.rejects(f.prepare(), /interrupted before allocation intent/);
-  const saved = (await stored(f)).arrivals[0];
-  assert.equal((await stored(f)).reservations.length, 0);
-  // A changed canonical head blocks cancellation.
-  const { sig: _signature, ...unsigned } = f.predecessor;
-  const descendant = await plc.signOperation(
-    {
-      ...unsigned,
-      prev: f.head,
-      alsoKnownAs: ["at://changed.example.test"],
-    },
-    f.source,
-  );
-  f.audit.push({
-    did: f.did,
-    operation: descendant,
-    cid: String(await cidForCbor(descendant)),
-    nullified: false,
-    createdAt: new Date().toISOString(),
-  });
-  await assert.rejects(cancel(f, saved.operation_id, saved.version), {
-    code: "OperationRecoveryRequired",
-  });
-  assert.equal((await stored(f)).arrivals[0].active, 1);
-  f.audit.pop();
-  const cancelled = await cancel(f, saved.operation_id, saved.version);
-  assert.deepEqual(cancelled, {
-    operationId: saved.operation_id,
-    version: saved.version + 1,
-    state: "cancelled",
-  });
-  const rows = await stored(f);
-  assert.equal(rows.arrivals[0].active, 0);
-  assert.notEqual(rows.arrivals[0].cancelled_at, null);
-  assert.equal(rows.reservations.length, 0);
-  assert.equal(
-    (await query(f.db, "SELECT * FROM operation_admissions")).length,
-    0,
-  );
-  assert.equal(f.reservations(), 0);
-  // History is retained and an exact retry is idempotent, even after the
-  // saved version has advanced.
-  assert.deepEqual(
-    await cancel(f, saved.operation_id, saved.version),
-    cancelled,
-  );
-  assert.deepEqual(
-    await cancel(f, saved.operation_id, cancelled.version),
-    cancelled,
-  );
-  await assert.rejects(renew(f, saved.operation_id, cancelled.version), {
-    error: "ArrivalExpired",
-    status: 409,
-  });
-});
-
-const preIntent = async (t, fault = "after-commit-release") => {
-  const f = await fixture(t, "modern", "", fault);
-  await assert.rejects(f.prepare(), /interrupted before allocation intent/);
-  return { f, saved: (await stored(f)).arrivals[0] };
-};
 const pendingOperations = async (f) =>
   (await query(f.db, "SELECT * FROM authority_operations")).filter((row) =>
     Boolean(row.pending),
@@ -1958,56 +1985,65 @@ const pendingOperations = async (f) =>
 const admissionRows = async (f) =>
   (await query(f.db, "SELECT * FROM operation_admissions")).length;
 
-test("concurrent cancellations are both idempotent and never leak a lost-claim error", async (t) => {
-  const { f, saved } = await preIntent(t);
+test("simultaneous cancellations delete once and the loser is not found", async (t) => {
+  const f = await fixture(t);
+  const prepared = await f.prepare();
   const results = await Promise.allSettled([
-    cancel(f, saved.operation_id, saved.version),
-    cancel(f, saved.operation_id, saved.version),
+    cancel(f, prepared.operationId, prepared.version),
+    cancel(f, prepared.operationId, prepared.version),
   ]);
-  assert.deepEqual(
-    results.map((item) => item.status),
-    ["fulfilled", "fulfilled"],
-  );
-  assert.deepEqual(results[1].value, results[0].value);
-  assert.equal(results[0].value.state, "cancelled");
-  assert.equal(await pendingOperations(f), 0);
+  assert.equal(results.filter((item) => item.status === "fulfilled").length, 1);
+  const lost = results.find((item) => item.status === "rejected").reason;
+  assert.ok(["AccountNotFound", "OperationConflict"].includes(lost.code));
+  assert.equal((await stored(f)).arrivals.length, 0);
 });
-
-test("renewal racing a cancellation reports the arrival as no longer actionable", async (t) => {
-  const { f, saved } = await preIntent(t);
+test("renewal racing a cancellation never leaves a live preparation behind", async (t) => {
+  const f = await fixture(t);
+  const prepared = await f.prepare();
   const [cancelled, renewed] = await Promise.allSettled([
-    cancel(f, saved.operation_id, saved.version),
-    renew(f, saved.operation_id, saved.version),
+    cancel(f, prepared.operationId, prepared.version),
+    renew(f, prepared.operationId, prepared.version),
   ]);
-  assert.equal(cancelled.status, "fulfilled");
-  assert.equal(renewed.status, "rejected");
-  assert.equal(renewed.reason.error, "ArrivalExpired");
-  assert.equal(renewed.reason.status, 409);
+  // Cancellation deletes the row, so whichever order won, nothing remains.
+  assert.equal((await stored(f)).arrivals.length, 0);
+  if (renewed.status === "rejected")
+    assert.ok(
+      ["AccountNotFound", "ArrivalExpired", "OperationConflict"].includes(
+        renewed.reason.code ?? renewed.reason.error,
+      ),
+    );
+  else assert.equal(cancelled.status, "rejected");
 });
 
-test("a crash after the local cancel commit leaves the claim pending until an exact retry completes it", async (t) => {
-  const { f, saved } = await preIntent(t, "after-commit-complete-fails");
-  assert.equal(await pendingOperations(f), 1);
-  assert.equal(await admissionRows(f), 1);
-  await assert.rejects(
-    cancel(f, saved.operation_id, saved.version),
-    /completion interrupted/,
+test("cancellation racing the handoff claim has exactly one winner", async (t) => {
+  const f = await fixture(t);
+  const prepared = await f.prepare();
+  const [cancelled, admitted] = await Promise.allSettled([
+    cancel(f, prepared.operationId, prepared.version),
+    admitHandoff(f, prepared),
+  ]);
+  assert.equal(
+    [cancelled, admitted].filter((item) => item.status === "fulfilled").length,
+    1,
   );
-  const rows = (await stored(f)).arrivals[0];
-  assert.notEqual(rows.cancelled_at, null);
-  assert.equal(rows.active, 0);
-  assert.equal(await pendingOperations(f), 1);
-  assert.equal(await admissionRows(f), 1);
-  const retried = await cancel(f, saved.operation_id, saved.version);
-  assert.deepEqual(retried, {
-    operationId: saved.operation_id,
-    version: saved.version + 1,
-    state: "cancelled",
-  });
-  assert.equal(await pendingOperations(f), 0);
-  assert.equal(await admissionRows(f), 0);
+  const rows = (await stored(f)).arrivals;
+  if (cancelled.status === "fulfilled") {
+    assert.equal(rows.length, 0);
+    assert.ok(
+      ["AccountNotFound", "ArrivalExpired"].includes(
+        admitted.reason.code ?? admitted.reason.error,
+      ),
+    );
+  } else {
+    assert.equal(rows.length, 1);
+    assert.notEqual(rows[0].claim_operation_id, null);
+    assert.ok(
+      ["OperationRecoveryRequired", "OperationConflict"].includes(
+        cancelled.reason.code,
+      ),
+    );
+  }
 });
-
 for (const operation of [renew, cancel]) {
   test(`${operation === renew ? "renewal" : "cancellation"} origin and CSRF failures spend no proof or budget`, async (t) => {
     const f = await fixture(t);
@@ -2072,18 +2108,22 @@ test("storage compare-and-swap rejects a stale or racing renewal directly", asyn
   assert.equal((await stored(f)).code[0].generation, 2);
 });
 
-test("renewal refuses a provisioned or completed arrival and an uncertain allocation", async (t) => {
-  const f = await fixture(t);
-  const prepared = await f.prepare();
+test("renewal refuses an uncertain allocation and a bound arrival", async (t) => {
+  const f = await fixture(t, "modern", "lost");
+  const prepared = await admitProvisioning(f);
+  await assert.rejects(
+    f.composed.continueCreation(f.request, prepared.operationId),
+  );
   const table = f.db.tables.arrival_reservations;
   await f.db.update(
     "arrival_reservations",
     { uncertain_reason: "response-lost", uncertain_at: Date.now() },
     eq(table.operation_id, prepared.operationId),
   );
-  await assert.rejects(renew(f, prepared.operationId, prepared.version), {
-    code: "OperationRecoveryRequired",
-  });
+  await assert.rejects(
+    renew(f, prepared.operationId, await versionOf(f, prepared)),
+    { code: "OperationRecoveryRequired" },
+  );
   await f.db.update(
     "arrival_reservations",
     { uncertain_reason: null, uncertain_at: null },
@@ -2092,16 +2132,8 @@ test("renewal refuses a provisioned or completed arrival and an uncertain alloca
   const now = Date.now();
   await f.db.update(
     "arrivals",
-    { provisioned_at: now },
-    eq(f.db.tables.arrivals.operation_id, prepared.operationId),
-  );
-  await assert.rejects(renew(f, prepared.operationId, prepared.version), {
-    error: "ArrivalExpired",
-    status: 409,
-  });
-  await f.db.update(
-    "arrivals",
     {
+      provisioned_at: now,
       deactivated_at: now,
       bound_at: now,
       activation_at: now,
@@ -2110,23 +2142,91 @@ test("renewal refuses a provisioned or completed arrival and an uncertain alloca
     },
     eq(f.db.tables.arrivals.operation_id, prepared.operationId),
   );
+  await assert.rejects(
+    renew(f, prepared.operationId, await versionOf(f, prepared)),
+    { error: "ArrivalExpired", status: 409 },
+  );
+});
+
+test("a lapsed unclaimed preparation renews as expired and a repeat is not found", async (t) => {
+  const f = await fixture(t);
+  const prepared = await f.prepare();
+  await f.db.update(
+    "arrival_code",
+    { expires_at: (await stored(f)).code[0].issued_at + 1 },
+    eq(f.db.tables.arrival_code.operation_id, prepared.operationId),
+  );
   await assert.rejects(renew(f, prepared.operationId, prepared.version), {
     error: "ArrivalExpired",
     status: 409,
   });
-});
-
-test("cancellation refuses a pending external attempt as a remote obligation", async (t) => {
-  const { f, saved } = await preIntent(t);
-  const pending = f.ownership.pendingExternal;
-  f.ownership.pendingExternal = async () => ({ id: "attempt" });
-  await assert.rejects(cancel(f, saved.operation_id, saved.version), {
-    code: "OperationRecoveryRequired",
+  assert.equal((await stored(f)).arrivals.length, 0);
+  await assert.rejects(renew(f, prepared.operationId, prepared.version), {
+    code: "AccountNotFound",
   });
-  f.ownership.pendingExternal = pending;
-  assert.equal((await stored(f)).arrivals[0].active, 1);
 });
 
+test("renewal between provisioning and binding issues a replay-only code", async (t) => {
+  const f = await fixture(t);
+  const prepared = await admitProvisioning(f);
+  await f.db.update(
+    "arrivals",
+    { provisioned_at: Date.now() },
+    eq(f.db.tables.arrivals.operation_id, prepared.operationId),
+  );
+  const renewed = await renew(
+    f,
+    prepared.operationId,
+    await versionOf(f, prepared),
+  );
+  assert.notEqual(renewed.arrivalCode, prepared.arrivalCode);
+  assert.equal(await consume(f, prepared.arrivalCode), null);
+  const admissions = await query(f.db, "SELECT * FROM arrival_replay");
+  const accepted = admissions.find(
+    (row) => row.method === incomingCreationMethod,
+  );
+  const creation = async (inviteCode, overrides) =>
+    f.composed.admitIncoming(f.request, {
+      operationId: prepared.operationId,
+      method: incomingCreationMethod,
+      body: { handle, inviteCode },
+      presentation: await f.credential(incomingCreationMethod, overrides),
+      arrivalCode: renewed.arrivalCode,
+    });
+  // The accepted createAccount replays exactly, with the renewed code.
+  const replayed = await creation(prepared.inviteCode, {
+    jti: accepted.credential_jti,
+  });
+  assert.equal(replayed.state, "admitted");
+  assert.deepEqual(
+    await query(f.db, "SELECT * FROM arrival_replay"),
+    admissions,
+  );
+  // Any other body for that method conflicts instead of admitting anew.
+  await assert.rejects(creation("different"), { code: "OperationConflict" });
+});
+
+test("a provisioned arrival refuses a new admission even with the current code", async (t) => {
+  const f = await fixture(t);
+  const prepared = await f.prepare();
+  await admitHandoff(f, prepared);
+  await f.db.update(
+    "arrivals",
+    { provisioned_at: Date.now() },
+    eq(f.db.tables.arrivals.operation_id, prepared.operationId),
+  );
+  const renewed = await renew(
+    f,
+    prepared.operationId,
+    await versionOf(f, prepared),
+  );
+  const before = await query(f.db, "SELECT * FROM arrival_replay");
+  await assert.rejects(
+    admitCreation(f, prepared, renewed.arrivalCode, await inviteFor(f)),
+    { error: "ArrivalExpired", status: 409 },
+  );
+  assert.deepEqual(await query(f.db, "SELECT * FROM arrival_replay"), before);
+});
 test("a superseded, garbage or expired code fails identically with the contract's expired error", async (t) => {
   const f = await fixture(t);
   const prepared = await f.prepare();
@@ -2191,14 +2291,27 @@ test("a superseded, garbage or expired code fails identically with the contract'
     await outcome({ ...creation, arrivalCode: prepared.arrivalCode }),
     expired,
   );
-  // An admitted body re-submitted with the new code can never match again and
-  // is told to resume instead of "reload and retry".
+  // An admitted body re-submitted with the new code is an exact replay: the
+  // recorded admission is compared under the generation it was admitted with.
   const resubmit = await admit({
     ...handoff,
     arrivalCode: renewed.arrivalCode,
+  });
+  assert.equal(resubmit.state, "published");
+  assert.equal(f.publicationAttempts.length, 1);
+  // Any other body for that method conflicts and is told to resume.
+  const other = await admit({
+    ...handoff,
+    body: {
+      operation: await plc.signOperation(
+        { ...prepared.handoff, alsoKnownAs: ["at://other.example.test"] },
+        f.source,
+      ),
+    },
+    arrivalCode: renewed.arrivalCode,
   }).catch((e) => e);
-  assert.equal(resubmit.error, "OperationConflict");
-  assert.match(resubmit.message, /already admitted; resume/);
+  assert.equal(other.code, "OperationConflict");
+  assert.match(other.message, /already admitted; resume/);
   // An expired current code is refused the same way.
   await f.db.update(
     "arrival_code",

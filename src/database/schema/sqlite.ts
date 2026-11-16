@@ -169,14 +169,16 @@ export const migration_reservations = table(
   ],
 );
 // Immutable arrival tuple and secret-safe lifecycle; only its hash reaches
-// arrival_code. did_root retains one active arrival per DID while completed
-// rows become history. active is 1 for a live, admitted arrival.
+// arrival_code. An unclaimed preparation (claim_operation_id and did_root NULL)
+// holds nothing; one per user may be live. A claim sets did_root, which retains
+// one active arrival per DID while completed rows become history.
 export const arrivals = table(
   "arrivals",
   {
     operation_id: text("operation_id").primaryKey(),
     did: text("did").notNull(),
     did_root: text("did_root"),
+    claim_operation_id: text("claim_operation_id"),
     active: integer("active").notNull(),
     user_id: text("user_id").notNull(),
     email: text("email").notNull(),
@@ -203,6 +205,9 @@ export const arrivals = table(
   },
   (t) => [
     uniqueIndex("arrivals_did_active").on(t.did_root),
+    uniqueIndex("arrivals_user_unclaimed")
+      .on(t.user_id)
+      .where(sql`${t.active} = 1 AND ${t.claim_operation_id} IS NULL`),
     index("arrivals_did").on(t.did, t.created_at),
     index("arrivals_user").on(t.user_id, t.created_at),
     index("arrivals_email").on(sql`lower(${t.email})`),
@@ -215,7 +220,7 @@ export const arrivals = table(
     check("arrival_active", sql`${t.active} IN (0, 1)`),
     check(
       "arrival_tuple",
-      sql`(${t.active} = 1 AND ${t.did_root} = ${t.did}) OR (${t.active} = 0 AND ${t.did_root} IS NULL)`,
+      sql`(${t.active} = 1 AND ${t.claim_operation_id} IS NOT NULL AND ${t.did_root} IS NOT NULL AND ${t.did_root} = ${t.did}) OR (${t.active} = 1 AND ${t.claim_operation_id} IS NULL AND ${t.did_root} IS NULL) OR (${t.active} = 0 AND ${t.did_root} IS NULL)`,
     ),
     check(
       "arrival_cancel",

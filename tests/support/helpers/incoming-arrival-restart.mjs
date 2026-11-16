@@ -507,6 +507,12 @@ try {
       assert.equal(proof.signal, "SIGKILL");
       assert.equal(proof.boundary, cut);
       assert.throws(() => process.kill(proof.pid, 0), { code: "ESRCH" });
+      // A reservation that may not have reached the PDS is safe to resend;
+      // every other lost effect is only observed.
+      const action =
+        before.external.step === "incoming-reservation"
+          ? "retry-if-safe"
+          : "observe";
       await store.approveRecovery({
         operationId: before.external.operationId,
         externalAttemptId: before.external.id,
@@ -514,12 +520,12 @@ try {
         target: before.external.target,
         dispatcherIsolationReference: `exited-child:${proof.pid}`,
         upstreamDrainReference: `synchronous-durable-mock-drained-at:${proof.boundary}:pid:${proof.pid}`,
-        action: "observe",
+        action,
       });
       const approved = await snapshot();
       assert.equal(approved.external.id, before.external.id);
       assert.equal(approved.external.state, "recovery-approved");
-      assert.equal(approved.external.recovery.action, "observe");
+      assert.equal(approved.external.recovery.action, action);
       assert.deepEqual(approved.counts, before.counts);
       gateEvidence = {
         code: "OperationRecoveryRequired",
