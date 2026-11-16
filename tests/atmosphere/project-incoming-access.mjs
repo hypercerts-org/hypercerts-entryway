@@ -45,12 +45,8 @@ export function projectIncomingAccess(access, project, routes) {
   }
   const expected = [
     ["pds", "pds3", origin(routes.sourceUrl)],
-    // The CORS ingress (or a multi-node profile ingress) serves the Entryway route.
-    [
-      "application",
-      ["entryway", "entryway-ingress", "profile-ingress"],
-      origin(routes.entrywayUrl),
-    ],
+    // The CORS ingress serves the Entryway route in every profile.
+    ["application", "entryway-ingress", origin(routes.entrywayUrl)],
     ["application", "pds1", origin(routes.destinationUrls[0])],
     ["application", "pds2", origin(routes.destinationUrls[1])],
     ["plc", "plc", origin(routes.plcUrl)],

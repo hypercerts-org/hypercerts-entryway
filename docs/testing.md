@@ -245,7 +245,9 @@ The sandbox puts a Caddy proxy in front of Entryway
 (`tests/support/entryway-ingress.Caddyfile`, the block from the "Browser access to
 XRPC" section of the deployment profiles guide with only the site address changed,
 plus lines for the sandbox gateway's extra proxy hop and no admin endpoint). All Entryway routes in the
-sandbox go through it. The `browser` suite asserts the ingress directly with plain
+sandbox go through it, including the resilience profiles, where the Caddy upstream
+(`ENTRYWAY_UPSTREAM`) is the profile ingress and the chain is gateway, Caddy, profile
+ingress, nodes. The `browser` suite asserts the ingress directly with plain
 requests (`tests/browser/entryway-ingress-cors.spec.mjs`): a preflight carrying
 `entryway-arrival-code` on `/xrpc/*` and `/.well-known/atproto-did`,
 `Access-Control-Expose-Headers` and one `Access-Control-Allow-Origin` on `/xrpc/*`,

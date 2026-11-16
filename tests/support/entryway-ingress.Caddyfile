@@ -33,7 +33,8 @@
 
 :8080 {
 	import atproto_cors
-	reverse_proxy entryway:3000 {
+	# ENTRYWAY_UPSTREAM is set by the resilience profiles (one or two nodes), to point at their node ingress.
+	reverse_proxy {$ENTRYWAY_UPSTREAM:entryway:3000} {
 		# Entryway trusts one hop. Forward only the real client address, not
 		# "client, gateway", so per-IP budgets keep seeing the client (added for the extra hop).
 		header_up X-Forwarded-For {client_ip}

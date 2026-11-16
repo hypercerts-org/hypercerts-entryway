@@ -55,7 +55,7 @@ function route(definition, id, service) {
   if (matches.length !== 1 || !matches[0].host || matches[0].hostname) throw new Error('Invalid configured route')
   return `https://${matches[0].host}.${manifest.domain}`
 }
-console.log([source[0].url, route(entryway, 'entryway', ['entryway', 'entryway-ingress', 'profile-ingress']), route(entryway, 'cluster1', 'pds1'), route(entryway, 'cluster2', 'pds2'), manifest.plc, route(fixtures, 'mailpit', 'mail-capture')].join(' '))
+console.log([source[0].url, route(entryway, 'entryway', 'entryway-ingress'), route(entryway, 'cluster1', 'pds1'), route(entryway, 'cluster2', 'pds2'), manifest.plc, route(fixtures, 'mailpit', 'mail-capture')].join(' '))
 JS
   ) || return
   local -a origins
