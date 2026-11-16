@@ -248,7 +248,10 @@ the actual source-signed PLC operation object. It is not an encoded string.
 Entryway independently verifies the source credential and destination arrival
 ownership, then validates the operation signature, expected predecessor and exact
 handoff facts. All of this happens before any claim on the DID, so a holder of an
-arrival code without authority over the DID can never affect it.
+arrival code without authority over the DID can never affect it. This holds for new
+admissions. An exact replay of an already accepted admission with the current code
+can drive only the saved, already-authorized steps (see
+[the replay rules](#credential-renewal) and the admission-code paragraph under C1).
 
 Only then does Entryway claim the DID for this arrival. In one transaction it
 records the claim on the arrival, the replay binding, the signed operation, CID and

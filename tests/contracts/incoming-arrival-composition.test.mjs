@@ -2194,6 +2194,44 @@ test("a lapsed unclaimed preparation renews as expired and a repeat is not found
   });
 });
 
+test("an exact replay resumes an unmarked pause without any operator step", async (t) => {
+  const f = await fixture(t);
+  const prepared = await admitProvisioning(f);
+  const dispatch = f.ownership.dispatch;
+  f.ownership.dispatch = (input, callbacks) => {
+    if (input.step === "incoming-pause")
+      throw new Error("interrupted before pause marker");
+    return dispatch(input, callbacks);
+  };
+  await assert.rejects(
+    f.composed.continueCreation(f.request, prepared.operationId),
+    /interrupted before pause marker/,
+  );
+  f.ownership.dispatch = dispatch;
+  assert.equal(f.backendState.creates, 1);
+  assert.equal(f.backendState.pauses, 0);
+  assert.equal(await f.store.pendingExternal(`arrival:${f.did}`), null);
+  const renewed = await renew(
+    f,
+    prepared.operationId,
+    await versionOf(f, prepared),
+  );
+  await f.composed.admitIncoming(f.request, {
+    operationId: prepared.operationId,
+    method: incomingCreationMethod,
+    body: { handle, inviteCode: prepared.inviteCode },
+    presentation: "Bearer unusable",
+    arrivalCode: renewed.arrivalCode,
+  });
+  const after = await f.arrivals.readArrivalAggregate(
+    prepared.operationId,
+    f.principal.userId,
+  );
+  assert.ok(after.progress.boundAt);
+  assert.equal(f.backendState.creates, 1);
+  assert.equal(f.backendState.pauses, 1);
+});
+
 test("an exact replay with a renewed code resumes provisioning without verifying the source", async (t) => {
   const f = await fixture(t);
   const prepared = await admitProvisioning(f);
