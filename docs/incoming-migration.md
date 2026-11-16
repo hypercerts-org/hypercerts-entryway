@@ -1,6 +1,6 @@
 # How incoming account migration works
 
-**Status:** accepted design, November 4, 2026; not yet implemented or qualified.
+**Status:** accepted design, November 4, 2026; amended November 16, 2026; not yet implemented or qualified.
 
 Incoming migration moves an existing account from an external PDS to a PDS behind
 Entryway. The account keeps its DID and data. Its hosting endpoint, repository
@@ -250,8 +250,9 @@ arrival code without authority over the DID can never affect it.
 Only then does Entryway claim the DID for this arrival. In one transaction it
 records the claim on the arrival, the replay binding, the signed operation, CID and
 publication obligation, and the claim checkpoint, and then submits directly to the
-configured PLC directory. If any part fails, the whole transaction rolls back, the
-DID is free again and the credential is not consumed. From the commit on, this is the
+configured PLC directory. If any write in that transaction fails, the whole transaction rolls back, the
+DID is free again and the credential is not consumed. A failure after commit,
+including PLC submission, keeps the claim pending. From the commit on, this is the
 only live claimed arrival for the DID. Handoff admission refuses:
 
 - another claimed arrival for the DID, or a lease held elsewhere on this arrival,
@@ -423,8 +424,9 @@ blindly allocate again after creation, or overwrite a different recorded key: a 
 attempt, and later steps refuse with `OperationRecoveryRequired`.
 The upstream reservation contract exposes no expiry or cancel API. Successful
 creation attempts remote reservation cleanup on a best-effort, nonfatal basis;
-a subsequent reservation is not a safe way to recover the used key. Local
-cancellation does not remove remote private material. The exact retry and fencing
+a subsequent reservation is not a safe way to recover the used key. No
+local state change, including deletion of a preparation or arrival, removes remote
+private material. The exact retry and fencing
 contract is specified in [C2](#c2-persisted-arrival-contract-accepted)
 and [C5](#c5-dispatch-and-recovery-contract-accepted).
 
@@ -432,7 +434,7 @@ and [C5](#c5-dispatch-and-recovery-contract-accepted).
 
 Cancellation is safe exactly while the arrival is unclaimed. An unclaimed
 preparation has no remote obligation, because the PDS has not been called and no
-handoff exists. Cancelling it deletes the row. Expiry and supersession delete it
+handoff has been admitted. Cancelling it deletes the row. Expiry and supersession delete it
 the same way, so a repeated cancel finds nothing and returns `AccountNotFound`.
 
 Once a handoff is admitted the arrival is claimed, and cancellation always returns
@@ -481,10 +483,13 @@ separately pinned 0.5.34 image. No contract may treat the two as interchangeable
 Contracts name owners by repository area. Storage and conditional persistence
 (arrival, reservation, claim and binding writes) belong to `src/database`. Arrival
 preparation, claim, creation, renewal, cancellation and readiness belong to
-`src/features/external-migration`. Tracked credentials belong to
-`src/oauth/legacy-credentials.mjs`. Outbound destination requests use the concrete
-PDS client in `src/pds`. Routes, pages and the shared guard are assembled by the
-external-migration feature and the composition root.
+`src/features/external-migration`. Arrival-session issuance belongs to the external-migration feature, built on the
+tracked-credential primitives in `src/oauth/legacy-credentials.mjs`. Outbound
+destination requests use the concrete PDS client in `src/pds`. The pending guard is
+consumed by several features, so it lives in the shared `src/accounts` area
+(`src/accounts/pending-arrival.ts`), reading its projection from `src/database`.
+Routes and pages belong to the external-migration feature, assembled by the
+composition root.
 
 ### Existing policy these contracts reuse
 
@@ -496,13 +501,13 @@ consumer must use these named producers, not restate the numbers.
 | Destination OTP proof | `src/authentication/better-auth.mjs:22-27` | Eight digits, 600-second code lifetime, five attempts, digest-only storage |
 | Extra challenge proof and budget | `src/accounts/challenges.mjs:22-29,36-45` | Default five requests per 600-second bucket per purpose and subject; code digest expires after 600 seconds |
 | Login rate limit | `src/features/email-login/xrpc-routes.mjs:28` | 60 requests per IP |
-| Signup and create rate limits | `src/features/account-registration/xrpc-routes.mjs:61,68` | 30 requests per IP each |
+| Signup and create rate limits | the `signup-ip:` and `create-ip:` keys in `src/features/account-registration/xrpc-routes.mjs` | 30 requests per IP each |
 | Inbound reservation route limit (not used by arrival preparation) | `src/plc/xrpc-routes.mjs:7` | 30 requests per IP |
 | Password-reset rate limit | `src/features/account-recovery/xrpc-routes.mjs:7` | 30 requests per IP |
 | Pending-operation block | `assertNoMigration` in `src/accounts/primitives.mjs` | 409 `MigrationPending` while any migration is not complete |
 
-The accepted 24-hour arrival code lifetime is a reservation lifetime for one
-arrival. It is not an OTP freshness window and does not extend any proof above.
+The accepted 24-hour arrival code lifetime is the lifetime of an unclaimed
+preparation's code. It does not bound a claimed arrival. It is not an OTP freshness window and does not extend any proof above.
 
 ### C1 wire and admission contract (ACCEPTED)
 
@@ -545,7 +550,8 @@ saved hash cannot reproduce the code. Before a handoff is admitted, recovery is 
 `prepare` again or to `renew` from a fresh destination proof, which issues a new code
 and generation for the same arrival and invalidates the previous code. An expired
 unclaimed preparation gives `ArrivalExpired`; prepare again. After handoff admission,
-and while the reservation is uncertain, renewal gives `OperationRecoveryRequired`.
+renewal remains available and gives `OperationRecoveryRequired` only while the
+reservation is uncertain.
 Renewal is allowed in the provisioned-but-unbound state, where it issues a code valid
 only for exact replay of the already accepted `createAccount`; it never authorizes a
 new admission. Once the arrival is bound, the caller resumes through `recover` from
@@ -562,7 +568,12 @@ Errors. Each code is stable and mapped explicitly, and no message carries a secr
 | `expectedVersion` differs from the saved version | `OperationConflict` | 409 |
 | Concurrent claimed work for the DID, at `prepare` or at handoff admission | `OperationPending` | 409 |
 | Per-IP or per-subject budget exhausted | `RateLimitExceeded` | 429 |
-| Dispatch state makes cancellation unsafe | `OperationRecoveryRequired` | 409 |
+| Arrival is claimed (`cancel`) or its reservation is uncertain (`renew`) | `OperationRecoveryRequired` | 409 |
+| `prepare`: DID is hosted or bound | `IdentityConflict` | 409 |
+| `prepare`: email is not available | `EmailNotAvailable` | 409 |
+| Handoff admission: handle taken since preparation | `HandleNotAvailable` | 409 |
+| Handoff admission: email taken since preparation | `EmailNotAvailable` | 409 |
+| Handoff admission: DID became hosted or bound | `IdentityConflict` | 409 |
 
 Handoff admission takes the DID claim only after the source JWT verifies, so
 `OperationPending` at that site requires DID authority.
@@ -657,7 +668,7 @@ Prohibitions the implementation must preserve:
 - No network call belongs inside a database transaction. Intent and result are
   separate fenced transactions around the external call.
 - Reconciliation may not race a live or possibly delayed reservation. Sequential
-  same-DID retry observed in the bounded run is not concurrency fencing.
+  same-DID retry asserted by the committed contract test is not concurrency fencing.
 - Do not switch placement, reallocate blindly after creation, or treat a new public
   key as proof that the earlier allocation was unapplied.
 
@@ -710,7 +721,8 @@ readArrivalAccess(did) -> {operationId, version, did, userId, pdsId, provisioned
 Every field derives from saved records. `complete` is true only when the activation
 checkpoint is complete and is never inferred from account status alone.
 
-Shared guard. Proposed predicate, owned jointly by `src/database` and the composition root:
+Shared guard. Proposed predicate, owned by the shared `src/accounts` area
+(`src/accounts/pending-arrival.ts`) over the `src/database` projection:
 
 ```text
 requireArrivalAction(projection, action) -> allowed, or a stable refusal
@@ -750,7 +762,8 @@ Package-relative paths below are under
   universal migration-only permission, and this contract must not promise one.
 
 Credential interfaces. Proposed extensions of the tracked legacy credentials in
-`src/oauth/legacy-credentials.mjs`, owned by the external-migration feature:
+`src/oauth/legacy-credentials.mjs`, owned by the external-migration feature, built on the
+existing primitives:
 
 ```text
 issueArrivalSession(owner, expectedVersion, arrivalId)
@@ -866,8 +879,8 @@ Rules:
   after JWT expiry or key cutover is continuation, not fresh authorization. A lost
   credential uses saved-user recovery from C3.
 
-Admission order. Handoff admission runs verify, then claim, then record and
-checkpoint in one transaction, then dispatch. See
+Admission order. Handoff admission runs verify; then claim, record and checkpoint
+in one transaction; then dispatch. See
 [handoff](#2-source-authorized-authority-handoff).
 
 Uncertainty and recovery. Any interruption after the dispatch marker requires
@@ -885,7 +898,7 @@ only where the shared-operation rules deem it safe, retrying. Without approval t
 arrival retains `OperationRecoveryRequired`.
 
 Cancellation safe point. Cancellation is safe exactly while the arrival is
-unclaimed, because no allocation intent, remote reservation or handoff exists. Once a
+unclaimed, because no allocation intent, remote reservation or admitted handoff exists. Once a
 handoff is admitted the arrival is claimed and stays pending for reconciliation, and
 cancellation gives `OperationRecoveryRequired`. Once publication is possible,
 observed or uncertain, custody and admission are retained.
