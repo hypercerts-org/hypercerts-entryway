@@ -69,6 +69,7 @@ export interface ArrivalTransactor {
     expectedVersion: number,
     input: { operationId: string; did: string; cid: string },
   ): Promise<ArrivalOutcome>;
+  /** Records an unclaimed preparation and deletes the user's earlier one. */
   createArrival(
     input: ArrivalPreparationAuthority & {
       operationId: string;
@@ -83,6 +84,14 @@ export interface ArrivalTransactor {
       codeExpiresAt: number;
     },
   ): Promise<ArrivalRecord>;
+  /** Claims the DID for this owner at handoff admission. Preparing holds
+   * nothing; the claim takes the DID, handle and email, and an exact retry by the
+   * same owner is already settled. */
+  claimArrival(
+    owner: OperationClaim,
+    expectedVersion: number,
+    input: { operationId: string; did: string },
+  ): Promise<ArrivalOutcome>;
   /** Selects only this user's live arrival; another owner reads as not found. */
   readArrival(
     operationId: string,
@@ -166,14 +175,12 @@ export interface ArrivalTransactor {
   }): Promise<ArrivalOutcome>;
   /** Migration-pending projection derived from the current operation. */
   readArrivalAccess(did: string): Promise<ArrivalAccess | null>;
-  /** Releases local reservations only from caller-supplied safe-point evidence. */
+  /** Deletes an unclaimed preparation, which holds nothing remote. A claimed
+   * arrival is refused with OperationRecoveryRequired. */
   cancelArrival(input: {
-    owner: OperationClaim;
     operationId: string;
     expectedVersion: number;
     ownerUserId: string;
-    noRemoteObligation: boolean;
-    plcStateUnchanged: boolean;
   }): Promise<ArrivalOutcome>;
   /** Never signs or mints a credential; records the association only. */
   recordCredentialFamily(input: {
