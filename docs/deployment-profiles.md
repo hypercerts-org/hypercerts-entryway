@@ -78,6 +78,47 @@ under a supervisor that forwards signals; the repository container and templates
 do this. The account lease remains 120 seconds, with renewal every 30 seconds; mail
 claims remain 30 seconds. Existing recovery requirements are unchanged.
 
+## Browser access to XRPC
+
+Entryway sends no CORS headers on `/xrpc/*`. A stock PDS allows any origin there,
+and browser clients such as web migration tools and apps that sign in with a
+password depend on it. Deployments that serve browser clients put a reverse
+proxy in front of Entryway that adds CORS to `/xrpc/*` only.
+
+The OAuth provider already sends its own CORS headers on `/oauth/*` and the
+OAuth metadata documents. Adding them again produces a duplicate
+`Access-Control-Allow-Origin`, which browsers reject. Account pages, `/incoming`
+and the other browser routes are same-origin and must not get CORS.
+
+The policy matches the stock PDS: any origin, no credentials, the request's
+preflight headers reflected (this covers `Authorization`, `DPoP`, `Content-Type`
+and `Entryway-Arrival-Code`), and a one-day preflight cache. Because
+`Access-Control-Allow-Origin` is `*` and credentials are not allowed, browsers do
+not send Entryway cookies on these requests. A Caddy configuration:
+
+```caddyfile
+entryway.example.com {
+	@xrpcPreflight {
+		method OPTIONS
+		path /xrpc/*
+	}
+	handle @xrpcPreflight {
+		header Access-Control-Allow-Origin "*"
+		header Access-Control-Allow-Methods "GET, HEAD, PUT, PATCH, POST, DELETE"
+		header Access-Control-Allow-Headers "{http.request.header.Access-Control-Request-Headers}"
+		header Access-Control-Max-Age "86400"
+		header Vary "Access-Control-Request-Headers"
+		respond 204
+	}
+	header /xrpc/* >Access-Control-Allow-Origin "*"
+	reverse_proxy entryway:3000
+}
+```
+
+Replace the site address and upstream with the deployment's own. The proxy also
+terminates TLS and must forward the client address for the per-IP request budgets
+(`trust proxy` is set to one hop).
+
 ## Repeatable profile checks
 
 Run `./tests/local.sh resilience-profiles` through the repository's pinned
