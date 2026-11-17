@@ -18,4 +18,5 @@ RUN if out=$(/out/goat account migrate --pds-host https://pds.invalid --new-hand
     echo "$out" | grep -q -- "--handoff requires --arrival-code"
 
 FROM scratch
+USER 65534:65534
 COPY --from=build /out/goat /goat

@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   call,
+  createSourceAccount,
+  expectDestinationServes,
   json,
   ok,
   prepareArrival,
@@ -26,10 +28,6 @@ const destinationEmail = `public-arrival-${unique}@example.com`;
 const sourceEmail = `public-source-${unique}@example.com`;
 const handoffMethod = "com.atproto.identity.submitPlcOperation";
 const creationMethod = "com.atproto.server.createAccount";
-const pixel = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
-  "base64",
-);
 const run = {};
 // Generated per run and never logged: the migrated account password and the
 // public did:key of a recovery keypair the test holds.
@@ -52,42 +50,17 @@ test.beforeAll(() => {
 });
 
 test("a standalone source account has a record and a blob", async () => {
-  const description = json(
-    await call(access.sourceUrl, "com.atproto.server.describeServer"),
-  );
-  run.sourceHandle = `s${unique}${description.availableUserDomains[0]}`;
+  const created = await createSourceAccount(access, {
+    unique,
+    email: sourceEmail,
+    password: `Public-${randomUUID()}!`,
+    displayName: "Public arrival journey",
+  });
+  run.source = created.source;
+  run.blob = created.blob;
+  run.sourceHandle = created.handle;
   run.destinationHandle = `d${unique}${config.handleDomains[0]}`;
   expect(run.sourceHandle).not.toBe(run.destinationHandle);
-  const created = await call(access.sourceUrl, creationMethod, {
-    body: {
-      email: sourceEmail,
-      password: `Public-${randomUUID()}!`,
-      handle: run.sourceHandle,
-    },
-  });
-  ok(created, "source account");
-  run.source = json(created);
-  const blob = await call(access.sourceUrl, "com.atproto.repo.uploadBlob", {
-    token: run.source.accessJwt,
-    bytes: pixel,
-    type: "image/png",
-  });
-  ok(blob, "source blob");
-  run.blob = json(blob).blob;
-  const record = await call(access.sourceUrl, "com.atproto.repo.putRecord", {
-    token: run.source.accessJwt,
-    body: {
-      repo: run.source.did,
-      collection: "app.bsky.actor.profile",
-      rkey: "self",
-      record: {
-        $type: "app.bsky.actor.profile",
-        displayName: "Public arrival journey",
-        avatar: run.blob,
-      },
-    },
-  });
-  ok(record, "source record");
 });
 
 test("the browser verifies the destination email and prepares the arrival", async ({
@@ -317,29 +290,13 @@ test("the tracked credential refreshes, then activates through the stock destina
 });
 
 test("the activated account serves the transferred state and the client deactivates the source", async () => {
-  const record = json(
-    await call(run.prepared.destinationEndpoint, "com.atproto.repo.getRecord", {
-      params: {
-        repo: run.source.did,
-        collection: "app.bsky.actor.profile",
-        rkey: "self",
-      },
-    }),
-  );
-  expect(record.value.displayName).toBe("Public arrival journey");
-  const blob = await call(
-    run.prepared.destinationEndpoint,
-    "com.atproto.sync.getBlob",
-    { params: { did: run.source.did, cid: run.blob.ref.$link } },
-  );
-  ok(blob, "destination blob");
-  expect(blob.content.equals(pixel)).toBe(true);
-  const directory = await fetch(new URL(`/${run.source.did}`, access.plcUrl));
-  const document = await directory.json();
-  expect(
-    document.service.find((service) => service.id === "#atproto_pds")
-      .serviceEndpoint,
-  ).toBe(run.prepared.destinationEndpoint);
+  await expectDestinationServes(access, {
+    endpoint: run.prepared.destinationEndpoint,
+    did: run.source.did,
+    blob: run.blob,
+    displayName: "Public arrival journey",
+    handle: run.destinationHandle,
+  });
   // The recovery key leads the destination move, followed by the approved list.
   const data = await (
     await fetch(new URL(`/${run.source.did}/data`, access.plcUrl))
