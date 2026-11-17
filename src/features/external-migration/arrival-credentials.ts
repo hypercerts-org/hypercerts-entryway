@@ -52,6 +52,7 @@ export interface ArrivalFamilyCredentials {
   readAccess(
     input: unknown,
   ): Promise<{ familyId: string; did: string; pdsDid: string }>;
+  assertLive(familyId: string): Promise<void>;
   readRefresh(input: unknown): Promise<{ familyId: string; did: string }>;
   refresh(
     input: unknown,
@@ -59,6 +60,7 @@ export interface ArrivalFamilyCredentials {
       account: (family: {
         id: string;
         did: string;
+        pdsDid: string;
       }) => Promise<{ did: string }>;
       details: (account: { did: string }) => Promise<Record<string, unknown>>;
     },
@@ -386,6 +388,9 @@ export function createArrivalCredentials({
             account: async (family) => {
               await stillTracked(family);
               if (family.did !== current.arrival.did) throw invalidToken();
+              // Configuration drift must not rotate a family for another host.
+              if (family.pdsDid !== placement(current.arrival.pdsId)?.did)
+                throw invalidToken();
               return { did: family.did };
             },
             details: async () => sessionFields(current.arrival),

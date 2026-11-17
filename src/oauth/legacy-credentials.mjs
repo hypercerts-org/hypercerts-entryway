@@ -681,6 +681,11 @@ export async function createLegacy({ db, config, accounts }) {
         throw invalid();
       return { familyId: family.id, did: family.did, pdsDid: family.pdsDid };
     },
+    /** Re-reads one family under the caller's fence: refuses unless it is still
+     * live, which covers logout and expiry that tracking metadata cannot see. */
+    async assertLive(familyId) {
+      if (!familyActive(await get("sessions", familyId))) throw revoked();
+    },
     /** Verifies a refresh credential's signature, type, audience and shape only. */
     async readRefresh(input) {
       const payload = await parseToken(input, "refresh");

@@ -498,6 +498,22 @@ test("a family replaced before the fence cannot activate", async (t) => {
   assert.equal((await activationAttempts(f)).length, 0);
 });
 
+test("a family revoked by logout before the fence cannot activate", async (t) => {
+  const { f, session } = await bound(t);
+  const resume = f.ownership.resumePending.bind(f.ownership);
+  f.ownership.resumePending = async (...args) => {
+    f.ownership.resumePending = resume;
+    await f.legacy.deleteSession(session.refreshJwt);
+    return resume(...args);
+  };
+  await assert.rejects(
+    f.composed.activateArrivalWithCredential(session.accessJwt),
+    hasCode("ExpiredToken"),
+  );
+  assert.equal(f.backendState.activations, 0);
+  assert.equal((await activationAttempts(f)).length, 0);
+});
+
 test("a delayed data write is neither serialized nor certified by activation", async (t) => {
   const { f, op } = await bound(t);
   const before = f.backendState.calls.length;

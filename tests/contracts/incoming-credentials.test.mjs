@@ -776,3 +776,29 @@ test("resuming an unclaimed arrival is no longer pending and takes no lease", as
   for (const table of ["operation_admissions", "authority_operations"])
     assert.equal((await query(f.db, `SELECT * FROM ${table}`)).length, 0);
 });
+
+test("refresh refuses a drifted destination DID without consuming the credential", async (t) => {
+  const { f, op } = await bound(t);
+  const session = await issue(f, op);
+  const sid = decodeJwt(session.refreshJwt).sid;
+  const configured = f.config.pds[0].did;
+  f.config.pds[0].did = "did:web:drifted.example.test";
+  await assert.rejects(
+    f.composed.refreshArrivalSession(session.refreshJwt),
+    hasCode("InvalidToken"),
+  );
+  f.config.pds[0].did = configured;
+  const family = await f.db.get("legacy:sessions", sid);
+  assert.equal(family.revokedAt, undefined);
+  assert.equal(
+    (await f.db.get("legacy:refresh", family.currentJti)).usedAt,
+    undefined,
+  );
+  assert.equal(
+    (await families(f)).filter((r) => r.revoked_at === null).length,
+    1,
+  );
+  assert.ok(
+    (await f.composed.refreshArrivalSession(session.refreshJwt)).accessJwt,
+  );
+});

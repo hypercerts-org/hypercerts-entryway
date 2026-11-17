@@ -66,6 +66,7 @@ export function createArrivalActivation({
   placement,
   backend,
   authorizeAccess,
+  assertCredentialLive,
   authentication,
   checkCsrf,
   loadBrowser,
@@ -87,6 +88,7 @@ export function createArrivalActivation({
     activate(): Promise<void>;
   };
   authorizeAccess: (bearer: unknown) => Promise<AuthorizedArrivalAccess>;
+  assertCredentialLive: (familyId: string) => Promise<void>;
   authentication: BrowserAuthentication;
   checkCsrf: (request: BrowserRequest, browser: unknown) => void;
   loadBrowser: (request: BrowserRequest) => Promise<unknown>;
@@ -143,6 +145,8 @@ export function createArrivalActivation({
           "ExpiredToken",
           "Session expired or was revoked",
         );
+      // Logout revokes the credential family without touching tracking rows.
+      await assertCredentialLive(intent.access.familyId);
     }
     // Only this operation's own journaled activation may remain unresolved.
     if (
