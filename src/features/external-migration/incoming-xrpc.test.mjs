@@ -12,6 +12,11 @@ import {
   incomingCreationMethod,
   incomingHandoffMethod,
 } from "../../../dist/src/features/external-migration/incoming-authorization.js";
+import { createHash, createHmac } from "node:crypto";
+import {
+  canonicalArrivalValue,
+  parseArrivalRequest,
+} from "../../../dist/src/features/external-migration/arrival-request.js";
 import { createInvites } from "../../../dist/src/features/account-registration/invites.mjs";
 
 const submitPath = "/xrpc/com.atproto.identity.submitPlcOperation";
@@ -975,7 +980,12 @@ test("createAccount refuses an invalid recoveryKey and password with no effect",
   }
   const typed = await create(s, { handle, inviteCode, recoveryKey: 7 });
   assert.equal(typed.status, 400);
-  for (const bad of ["short", "x".repeat(257)]) {
+  for (const bad of [7, true, ["a"], { a: 1 }, null]) {
+    const response = await create(s, { handle, inviteCode, password: bad });
+    assert.equal(response.status, 400);
+    assert.equal(response.json.error, "InvalidPassword");
+  }
+  for (const bad of ["short", "x".repeat(257), "x".repeat(2000)]) {
     const response = await create(s, { handle, inviteCode, password: bad });
     assert.equal(response.status, 400);
     assert.equal(response.json.error, "InvalidPassword");
@@ -1151,4 +1161,93 @@ test("a replay must match the password and recoveryKey exactly", async (t) => {
   assert.equal(await f.legacy.hasPassword(f.did), true);
   assert.equal(f.backendState.creates, 1);
   assert.deepEqual((await savedMove(f)).rotationKeys[0], recoveryKey);
+});
+
+test("the password commitment is keyed: the digest depends on the server key and never on the plaintext or an unkeyed hash", async (t) => {
+  const s = await published(t);
+  const { f } = s;
+  const inviteCode = await invite(f);
+  const response = await create(s, { handle, inviteCode, password });
+  assert.equal(response.status, 200, response.text);
+  const aggregate = await f.arrivals.readArrivalAggregate(
+    s.prepared.operationId,
+    f.principal.userId,
+  );
+  const saved = aggregate.arrival;
+  const stored = (await rows(f, "arrival_replay")).find(
+    (row) => row.method === incomingCreationMethod,
+  ).request_digest;
+  const digestFor = (passwordProof) =>
+    createHash("sha256")
+      .update(
+        JSON.stringify(
+          canonicalArrivalValue({
+            version: 1,
+            operationId: saved.operationId,
+            method: incomingCreationMethod,
+            did: saved.did,
+            tuple: {
+              userId: saved.userId,
+              email: saved.email,
+              handle: saved.handle,
+              pdsId: saved.pdsId,
+              endpoint: saved.endpoint,
+              sourcePlcHead: saved.sourcePlcHead,
+              generation: aggregate.admissions.find(
+                (item) => item.method === incomingCreationMethod,
+              ).generation,
+            },
+            semantic: {
+              did: saved.did,
+              email: saved.email,
+              handle: saved.handle.toLowerCase(),
+              inviteHash: createHash("sha256").update(inviteCode).digest("hex"),
+              passwordProof,
+              recoveryKey: null,
+            },
+          }),
+        ),
+      )
+      .digest("hex");
+  // The reconstruction is exact: it reproduces the stored digest from the
+  // keyed proof, so the mismatches below are about the proof alone.
+  const keyed = createHmac("sha256", f.config.betterAuthSecret)
+    .update(`incoming-arrival-password:${saved.operationId}\0`)
+    .update(password)
+    .digest("hex");
+  assert.equal(stored, digestFor(keyed));
+  assert.notEqual(stored, digestFor(password));
+  assert.notEqual(
+    stored,
+    digestFor(createHash("sha256").update(password).digest("hex")),
+  );
+  const parse = (key) =>
+    parseArrivalRequest(
+      saved,
+      incomingCreationMethod,
+      { handle, password },
+      key,
+    ).requestDigest;
+  assert.notEqual(parse("key-one"), parse("key-two"));
+  assert.equal(parse("key-one"), parse("key-one"));
+});
+
+test("a replay finds the password already set and does not set it again", async (t) => {
+  const s = await published(t);
+  const { f } = s;
+  const body = { handle, inviteCode: await invite(f), password };
+  const jwt = await f.credential(incomingCreationMethod);
+  const bind = f.storage.bindPlacedAccount;
+  f.storage.bindPlacedAccount = async () => {
+    throw new Error("local commit lost");
+  };
+  await create(s, body, { jwt });
+  f.storage.bindPlacedAccount = bind;
+  const set = t.mock.method(f.legacy, "setPassword");
+  const first = await create(s, body);
+  assert.equal(first.status, 200, first.text);
+  assert.equal(set.mock.callCount(), 1);
+  const again = await create(s, body);
+  assert.notEqual(again.status, 200);
+  assert.equal(set.mock.callCount(), 1);
 });

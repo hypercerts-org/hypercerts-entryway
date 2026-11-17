@@ -33,7 +33,7 @@ const create = z.strictObject({
   email: z.string().min(1).max(320).optional(),
   inviteCode: z.string().min(1).max(200).optional(),
   // Rules are applied by admission (12 to 256 characters; a public did:key).
-  password: z.string().max(1024).optional(),
+  password: z.unknown().optional(),
   recoveryKey: z.string().max(200).optional(),
 });
 
