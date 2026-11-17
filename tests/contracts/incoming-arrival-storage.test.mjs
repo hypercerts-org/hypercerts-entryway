@@ -137,7 +137,7 @@ async function fixture() {
       endpoint,
       ...preparationAuthority,
       codeHash: hash("a"),
-      codeExpiresAt: Date.now() + day,
+      codeLifetimeMs: day,
       ...overrides,
     });
   // Claiming is the first admitted step, so every helper that allocates, binds,
@@ -527,7 +527,7 @@ test("an expired unclaimed preparation is deleted when found", async () => {
             expectedVersion: prepared.version,
             ownerUserId: "user-a",
             codeHash: hash("b"),
-            codeExpiresAt: Date.now() + day,
+            codeLifetimeMs: day,
           }),
         claim: () => claimArrival(prepared.version),
         cancel: () =>
@@ -725,21 +725,37 @@ test("arrival preparation requires the saved verified user, a configured host an
     await assert.rejects(prepare({ endpoint: hosts[1].url }), {
       code: "InvalidAccount",
     });
-    for (const codeExpiresAt of [
-      Date.now() + day + 60_000,
-      Date.now() + 8 * day,
-      Date.now(),
-      Date.now() - day,
-    ])
-      await assert.rejects(prepare({ codeExpiresAt }), {
+    for (const codeLifetimeMs of [day + 1, 8 * day, 0, -day, 1.5])
+      await assert.rejects(prepare({ codeLifetimeMs }), {
         code: "InvalidAccount",
       });
     assert.equal(
       (await query(db, "SELECT operation_id FROM arrivals")).length,
       0,
     );
-    const shorter = await prepare({ codeExpiresAt: Date.now() + 3_600_000 });
+    const shorter = await prepare({ codeLifetimeMs: 3_600_000 });
     assert.equal(shorter.codeExpiresAt > Date.now(), true);
+  } finally {
+    await db.close();
+  }
+});
+
+test("arrival code expiry is issued from database time, not the application clock", async () => {
+  const { db, prepare, arrivals } = await fixture();
+  try {
+    // Application clock ahead of the database clock by a few seconds.
+    const databaseNow = Date.now() - 5_000;
+    db.databaseTime = async () => databaseNow;
+    const prepared = await prepare({ codeLifetimeMs: day });
+    assert.equal(prepared.codeExpiresAt, databaseNow + day);
+    const rotated = await arrivals.rotateArrivalCode({
+      operationId: prepared.operationId,
+      expectedVersion: prepared.version,
+      ownerUserId: "user-a",
+      codeHash: hash("b"),
+      codeLifetimeMs: day,
+    });
+    assert.equal(rotated.codeExpiresAt, databaseNow + day);
   } finally {
     await db.close();
   }
@@ -850,7 +866,7 @@ for (const action of ["rotateArrivalCode", "cancelArrival"])
                 expectedVersion,
                 ownerUserId: "user-b",
                 codeHash: hash("b"),
-                codeExpiresAt: Date.now() + day,
+                codeLifetimeMs: day,
                 noRemoteObligation: true,
                 plcStateUnchanged: true,
               }),
@@ -888,7 +904,7 @@ test("arrival code rotation invalidates the previous generation and cannot redir
       expectedVersion: prepared.version,
       ownerUserId: "user-a",
       codeHash: hash("b"),
-      codeExpiresAt: Date.now() + day,
+      codeLifetimeMs: day,
     });
     assert.equal(rotated.generation, 2);
     for (const [codeHash, expected] of [
@@ -912,7 +928,7 @@ test("arrival code rotation invalidates the previous generation and cannot redir
         expectedVersion: prepared.version,
         ownerUserId: "user-a",
         codeHash: hash("c"),
-        codeExpiresAt: Date.now() + day,
+        codeLifetimeMs: day,
       }),
       { code: "OperationConflict" },
     );
@@ -922,7 +938,7 @@ test("arrival code rotation invalidates the previous generation and cannot redir
         expectedVersion: rotated.version,
         ownerUserId: "user-b",
         codeHash: hash("c"),
-        codeExpiresAt: Date.now() + day,
+        codeLifetimeMs: day,
       }),
       { code: "AccountNotFound", status: 404, message: "Arrival not found" },
     );
@@ -935,7 +951,7 @@ test("arrival code rotation invalidates the previous generation and cannot redir
       expectedVersion: rotated.version,
       ownerUserId: "user-a",
       codeHash: hash("c"),
-      codeExpiresAt: Date.now() + day,
+      codeLifetimeMs: day,
     });
     assert.equal(rotatedAgain.generation, 3);
     assert.equal(
@@ -1110,7 +1126,7 @@ test("a validated reservation result is conditional and a changed key is recorde
         expectedVersion: divergedVersion,
         ownerUserId: "user-a",
         codeHash: hash("b"),
-        codeExpiresAt: Date.now() + day,
+        codeLifetimeMs: day,
       }),
       { code: "OperationRecoveryRequired" },
     );
@@ -1980,7 +1996,7 @@ test(
         endpoint,
         ...preparationAuthority,
         codeHash: hash("a"),
-        codeExpiresAt: Date.now() + day,
+        codeLifetimeMs: day,
       });
       const ownership = createOperationOwnershipStore(first);
       const claim = await ownership.acquire({
@@ -2106,7 +2122,7 @@ test(
         endpoint,
         ...preparationAuthority,
         codeHash: hash("a"),
-        codeExpiresAt: Date.now() + day,
+        codeLifetimeMs: day,
       });
       const ownership = createOperationOwnershipStore(dispatcher);
       const claim = await ownership.acquire({
@@ -3392,7 +3408,7 @@ test("credential identity cannot authorize an unrelated operation and new admiss
       ownerUserId: "user-a",
       expectedVersion: prepared.version + 1,
       codeHash: hash("b"),
-      codeExpiresAt: Date.now() + day,
+      codeLifetimeMs: day,
     });
     await assert.rejects(
       arrivals.recordArrivalReplay(

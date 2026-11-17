@@ -81,7 +81,8 @@ export interface ArrivalTransactor {
       endpoint: string;
       sourcePlcHead: string;
       codeHash: string;
-      codeExpiresAt: number;
+      /** Storage issues the expiry from database time; at most 24 hours. */
+      codeLifetimeMs: number;
     },
   ): Promise<ArrivalRecord>;
   /** Claims the DID for this owner at handoff admission. Preparing holds
@@ -108,7 +109,7 @@ export interface ArrivalTransactor {
     expectedVersion: number;
     ownerUserId: string;
     codeHash: string;
-    codeExpiresAt: number;
+    codeLifetimeMs: number;
   }): Promise<ArrivalRecord>;
   recordAllocationIntent(
     owner: OperationClaim,

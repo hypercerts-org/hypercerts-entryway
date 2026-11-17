@@ -109,7 +109,7 @@ async function fixture() {
       endpoint,
       ...preparationAuthority,
       codeHash: hash("a"),
-      codeExpiresAt: Date.now() + day,
+      codeLifetimeMs: day,
       ...overrides,
     });
   const allocate = async (

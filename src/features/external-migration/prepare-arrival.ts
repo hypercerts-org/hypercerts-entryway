@@ -105,13 +105,13 @@ export function createIncomingPreparation({
       source: observed.source,
       approvedRotationKeys,
       codeHash: code.hash,
-      codeExpiresAt: code.expiresAt,
+      codeLifetimeMs: code.lifetimeMs,
     });
     return {
       operationId: saved.operationId,
       version: saved.version,
       arrivalCode: code.code,
-      expiresAt: code.expiresAt,
+      expiresAt: saved.codeExpiresAt,
       entrywayDid,
       sourceEndpoint: observed.source.services.atproto_pds!.endpoint,
       destinationEndpoint: saved.endpoint,
@@ -126,17 +126,17 @@ export function createIncomingPreparation({
   };
 }
 
-/** One-time displayed arrival code. Only its hash and expiry are persisted. */
+/** One-time displayed arrival code. Only its hash is persisted; storage issues the expiry. */
 export function generateArrivalCode(): {
   readonly code: string;
   readonly hash: string;
-  readonly expiresAt: number;
+  readonly lifetimeMs: number;
 } {
   const code = randomBytes(24).toString("base64url");
   return {
     code,
     hash: arrivalCodeHash(code),
-    expiresAt: Date.now() + 86_400_000,
+    lifetimeMs: 86_400_000,
   };
 }
 

@@ -267,11 +267,12 @@ export function createArrivalStorage(
       throw new DomainError("InvalidAccount", 400, "Unknown target data host");
   };
 
-  const assertExpiry = async (issuedAt: number, expiresAt: number) => {
+  /** Expiry is issued from database time, the one authoritative clock. */
+  const assertCodeLifetime = (lifetimeMs: number) => {
     if (
-      !Number.isSafeInteger(expiresAt) ||
-      expiresAt <= issuedAt ||
-      expiresAt > issuedAt + arrivalLifetimeMs
+      !Number.isSafeInteger(lifetimeMs) ||
+      lifetimeMs <= 0 ||
+      lifetimeMs > arrivalLifetimeMs
     )
       throw new DomainError(
         "InvalidAccount",
@@ -648,7 +649,7 @@ export function createArrivalStorage(
           "Invalid arrival operation",
         );
       assertConfiguredHost(input.pdsId, input.endpoint);
-      await assertExpiry(await db.databaseTime(), input.codeExpiresAt);
+      assertCodeLifetime(input.codeLifetimeMs);
       const saved = await row(input.operationId);
       if (saved) {
         if (
@@ -744,7 +745,7 @@ export function createArrivalStorage(
             code_hash: input.codeHash,
             generation: 1,
             issued_at: now,
-            expires_at: input.codeExpiresAt,
+            expires_at: now + input.codeLifetimeMs,
           });
         } catch (error) {
           translateArrivalViolation(error);
@@ -819,7 +820,7 @@ export function createArrivalStorage(
           input.expectedVersion,
         );
         if (saved.active === 0) throw notActionable();
-        await assertExpiry(await db.databaseTime(), input.codeExpiresAt);
+        assertCodeLifetime(input.codeLifetimeMs);
         const binding = await reservation(input.operationId);
         if (binding?.uncertain_reason) throw recoveryRequired();
         if (saved.provisioned_at !== null) throw notActionable();
@@ -831,7 +832,7 @@ export function createArrivalStorage(
             code_hash: input.codeHash,
             generation,
             issued_at: now,
-            expires_at: input.codeExpiresAt,
+            expires_at: now + input.codeLifetimeMs,
           },
           eq(codeTable.operation_id, input.operationId),
         );
@@ -844,7 +845,7 @@ export function createArrivalStorage(
             code_hash: input.codeHash,
             generation,
             issued_at: now,
-            expires_at: input.codeExpiresAt,
+            expires_at: now + input.codeLifetimeMs,
           },
         );
       });
