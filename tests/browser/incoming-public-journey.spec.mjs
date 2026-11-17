@@ -4,11 +4,10 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   call,
-  createSourceAccount,
   expectDestinationServes,
   json,
   ok,
-  prepareArrival,
+  registerArrivalSetup,
 } from "../support/helpers/incoming-journey.mjs";
 import { Secp256k1Keypair } from "@atproto/crypto";
 import { waitForStockPlcMessage } from "../support/helpers/stock-plc-mailpit.mjs";
@@ -49,30 +48,14 @@ test.beforeAll(() => {
   config = JSON.parse(readFileSync(process.env.SERVICE_CONFIG_PATH, "utf8"));
 });
 
-test("a standalone source account has a record and a blob", async () => {
-  const created = await createSourceAccount(access, {
-    unique,
-    email: sourceEmail,
-    password: `Public-${randomUUID()}!`,
-    displayName: "Public arrival journey",
-  });
-  run.source = created.source;
-  run.blob = created.blob;
-  run.sourceHandle = created.handle;
-  run.destinationHandle = `d${unique}${config.handleDomains[0]}`;
-  expect(run.sourceHandle).not.toBe(run.destinationHandle);
-});
-
-test("the browser verifies the destination email and prepares the arrival", async ({
-  page,
-}) => {
-  run.prepared = await prepareArrival(page, {
-    issuer: config.issuer,
-    mailpitUrl: access.mailpitUrl,
-    did: run.source.did,
-    handle: run.destinationHandle,
-    email: destinationEmail,
-  });
+registerArrivalSetup(test, {
+  context: () => ({ access, config }),
+  run,
+  unique,
+  sourceEmail,
+  sourcePassword: `Public-${randomUUID()}!`,
+  destinationEmail,
+  displayName: "Public arrival journey",
 });
 
 test("the source signs the authority handoff and Entryway publishes only that", async () => {

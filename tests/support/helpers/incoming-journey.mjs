@@ -197,3 +197,52 @@ export async function expectDestinationServes(
   ).toBe(endpoint);
   expect(document.alsoKnownAs).toContain(`at://${handle}`);
 }
+
+/**
+ * Registers the two opening steps every incoming journey shares: a standalone
+ * source account with a record and a blob, then the browser email proof and
+ * arrival preparation. `context` returns the sandbox access and service config
+ * loaded by the spec's own `beforeAll`; `onPrepared` runs after preparation.
+ */
+export function registerArrivalSetup(
+  test,
+  {
+    context,
+    run,
+    unique,
+    sourceEmail,
+    sourcePassword,
+    destinationEmail,
+    displayName,
+    onPrepared,
+  },
+) {
+  test("a standalone source account has a record and a blob", async () => {
+    const { access, config } = context();
+    const created = await createSourceAccount(access, {
+      unique,
+      email: sourceEmail,
+      password: sourcePassword,
+      displayName,
+    });
+    run.source = created.source;
+    run.blob = created.blob;
+    run.sourceHandle = created.handle;
+    run.destinationHandle = `d${unique}${config.handleDomains[0]}`;
+    expect(run.sourceHandle).not.toBe(run.destinationHandle);
+  });
+
+  test("the browser verifies the destination email and prepares the arrival", async ({
+    page,
+  }) => {
+    const { access, config } = context();
+    run.prepared = await prepareArrival(page, {
+      issuer: config.issuer,
+      mailpitUrl: access.mailpitUrl,
+      did: run.source.did,
+      handle: run.destinationHandle,
+      email: destinationEmail,
+    });
+    await onPrepared?.(page);
+  });
+}
