@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { Secp256k1Keypair } from "@atproto/crypto";
 import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
 import { waitForStockPlcMessage } from "../support/helpers/stock-plc-mailpit.mjs";
 
@@ -25,6 +26,9 @@ const pixel = Buffer.from(
   "base64",
 );
 const run = {};
+// Generated per run and never logged: the migrated account password and the
+// public did:key of a recovery keypair the test holds.
+const destinationPassword = `Arrive-${randomUUID()}-${randomUUID()}`;
 
 async function call(origin, method, { token, body, params, bytes, type } = {}) {
   const url = new URL(`/xrpc/${method}`, origin);
@@ -265,7 +269,12 @@ test("creation returns tracked credentials for a paused destination", async () =
     "entryway-arrival-code": run.prepared.arrivalCode,
     "content-type": "application/json",
   };
-  const body = { handle: run.destinationHandle };
+  run.recoveryKey = (await Secp256k1Keypair.create()).did();
+  const body = {
+    handle: run.destinationHandle,
+    password: destinationPassword,
+    recoveryKey: run.recoveryKey,
+  };
   if (config.inviteCodeRequired) {
     const invite = await fetch(
       new URL("/xrpc/com.atproto.server.createInviteCode", config.issuer),
@@ -412,6 +421,24 @@ test("the activated account serves the transferred state and the client deactiva
     document.service.find((service) => service.id === "#atproto_pds")
       .serviceEndpoint,
   ).toBe(run.prepared.destinationEndpoint);
+  // The recovery key leads the destination move, followed by the approved list.
+  const data = await (
+    await fetch(new URL(`/${run.source.did}/data`, access.plcUrl))
+  ).json();
+  expect(data.rotationKeys[0]).toBe(run.recoveryKey);
+  expect(data.rotationKeys.slice(1)).toEqual(run.prepared.handoff.rotationKeys);
+  // Ordinary password sign-in at Entryway works once the account is active.
+  for (const identifier of [run.destinationHandle, run.source.did]) {
+    const session = await call(
+      config.issuer,
+      "com.atproto.server.createSession",
+      {
+        body: { identifier, password: destinationPassword },
+      },
+    );
+    expect(session.status, "password createSession status").toBe(200);
+    expect(json(session).did).toBe(run.source.did);
+  }
   ok(
     await call(access.sourceUrl, "com.atproto.server.deactivateAccount", {
       token: run.source.accessJwt,
