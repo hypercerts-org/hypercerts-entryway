@@ -6,7 +6,7 @@ Entryway now accepts an existing account from an external PDS. Earlier incoming
 changes shipped dormant; this release mounts the whole flow, so the lifecycle,
 tracked-credential and activation behavior they describe is now reachable.
 It does not certify that an account's data transferred completely, and it adds
-no schema change or configuration key. The routes are mounted on every
+one nullable schema column (the recovery key) and no configuration key. The routes are mounted on every
 deployment (single-node SQLite, multi-node, and deployments with no migration
 intent) with no configuration key or opt-out. Multi-node PostgreSQL deployments
 are not yet qualified for incoming migration.
@@ -28,12 +28,16 @@ What operators and users now see:
   to that method, to Entryway's DID and to the arrival's DID. Without the header
   those routes behave as before. `createAccount` returns the standard tracked
   access and refresh credentials only after the account is bound; its supported
-  body is `handle` plus optional `did`, `email` and `inviteCode`. Other stock
-  fields, including `password`, are rejected with `InvalidRequest`, so an
-  unmodified stock tool that sends `password` does not work (pending owner
-  decision). `refreshSession` and `activateAccount` serve a tracked
-  arrival credential and otherwise fall through unchanged, after one family
-  lookup on every such request (pending owner decision). Once a migration is
+  body is `handle` plus optional `did`, `email`, `inviteCode`, `password` and
+  `recoveryKey`. A `password` (12 to 256 characters) becomes the account password
+  and works for sign-in once the account is active; without it the account keeps
+  email-code login. A `recoveryKey` must be a public secp256k1 or P-256 `did:key`
+  (`InvalidRequest` otherwise) and is placed first in the rotation keys of the
+  destination move, ahead of the approved list; activation accepts exactly that
+  list. A replay must repeat both exactly. `verificationCode`, `verificationPhone`
+  and `plcOp` are rejected with `InvalidRequest`. `refreshSession` and
+  `activateAccount` serve a tracked arrival credential and otherwise fall through
+  unchanged, after one family lookup on every such request. Once a migration is
   finished, a later ordinary deactivation and reactivation use the ordinary route.
 - **Arrival code selects the arrival.** The tool surfaces carry no cookie, so
   the presented current arrival code selects the arrival and the user saved on
@@ -44,8 +48,8 @@ What operators and users now see:
   that user's own `operationId` and `version`. Never an arrival code, and never
   for another user's arrival.
 - **Extra surfaces.** `/incoming/resume`, `/incoming/activate`, `/incoming/code`
-  and the `GET /incoming` status page are not in the accepted contract (pending
-  owner decision).
+  and the `GET /incoming` status page are extra browser surfaces beyond the
+  accepted contract.
 - **Lifecycle.** An arrival code lasts 24 hours and is renewable with a fresh
   email code. Cancelling deletes an unclaimed preparation; once a handoff is
   admitted, cancel returns `OperationRecoveryRequired`. An exact replay of an
@@ -72,13 +76,15 @@ What operators and users now see:
   key stays on their DID: Entryway does not remove it, and the user removes it
   through their source PDS. Rotating or replacing credentials does not revoke
   an access token already issued: the stock PDS accepts it until it expires
-  (five minutes). Request budgets reuse existing producers: 30 requests per IP
-  per ten minutes for each of the browser and tool groups (submit and create
-  share one tool bucket, so retries after `OperationRecoveryRequired` spend it), and five fresh-code
-  requests per ten minutes per purpose and user. New stable error codes in
+  (five minutes). Request budgets reuse existing producers: browser preparation spends the
+  ordinary signup per-IP budget and incoming `createAccount` the ordinary
+  `createAccount` per-IP budget (30 per ten minutes each, so retries after
+  `OperationRecoveryRequired` spend it); `submitPlcOperation` and the other
+  browser forms have no per-IP budget; and five fresh-code requests per ten
+  minutes per purpose and user. New stable error codes in
   failure logs: `ArrivalExpired`, `ArrivalProofRequired`, `OperationConflict`,
   `OperationLeaseLost`, `OperationNoLongerPending`, `OperationRecoveryRequired`.
 
 See the [incoming migration guide](https://github.com/hypercerts-org/hypercerts-entryway/blob/main/docs/incoming-migration.md)
-for the accepted contract and the open decisions. Independent public
+for the accepted contract. Independent public
 qualification of the whole journey has not been completed.

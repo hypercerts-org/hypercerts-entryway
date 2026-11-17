@@ -11,6 +11,7 @@ import {
 import type { OperationOwnership } from "../../accounts/operation-ownership.js";
 import type { OperationOwnershipStore } from "../../database/operation-ownership.port.js";
 import {
+  destinationRotationKeys,
   isRecordedAdmissionGeneration,
   type ArrivalAggregate,
 } from "./arrival-types.js";
@@ -198,6 +199,7 @@ export function createDurableArrivalProvisioning({
           repositoryKey: saved.signingKey,
           endpoint: saved.endpoint,
           handle: saved.handle,
+          rotationKeys: destinationRotationKeys(saved),
         },
         async (operation, _facts, cid) => {
           const current = await read();
@@ -225,7 +227,7 @@ export function createDurableArrivalProvisioning({
       parsedMove.services.atproto_pds?.type !== "AtprotoPersonalDataServer" ||
       !parsedMove.alsoKnownAs.includes(`at://${saved.handle}`) ||
       JSON.stringify(parsedMove.rotationKeys) !==
-        JSON.stringify(saved.approvedRotationKeys)
+        JSON.stringify(destinationRotationKeys(saved))
     )
       return conflict(
         "The saved destination move differs from the accepted arrival",

@@ -28,6 +28,7 @@ export function createArrivalAdmission({
         readonly facts: ArrivalReplayFacts;
         readonly proof: ArrivalAdmissionProof;
         readonly inviteCode: unknown;
+        readonly recoveryKey?: string | null;
       },
     ) {
       return db.transact(async () =>
@@ -53,6 +54,7 @@ export function createArrivalAdmission({
             expectedVersion,
             input.facts,
             input.proof,
+            { recoveryKey: input.recoveryKey },
           );
           if (!accepted)
             await invitation.reserveInvite(

@@ -61,13 +61,18 @@ export async function createLegacy({ db, config, accounts }) {
     const normalized = password.replaceAll("-", "").toLowerCase();
     return /^[a-z]{16}$/.test(normalized) ? normalized : null;
   };
-  const accountFor = async (did, { allowDeactivated = false } = {}) => {
+  const accountFor = async (
+    did,
+    { allowDeactivated = false, allowProvisioning = false } = {},
+  ) => {
     const account = await accounts.get(did);
     if (
       !account ||
-      !["active", ...(allowDeactivated ? ["deactivated"] : [])].includes(
-        account.status,
-      )
+      ![
+        "active",
+        ...(allowDeactivated ? ["deactivated"] : []),
+        ...(allowProvisioning ? ["provisioning"] : []),
+      ].includes(account.status)
     )
       throw new HttpError(403, "AccountUnavailable", "Account is unavailable");
     if (!config.pds.some((pds) => pds.id === account.pdsId))
@@ -107,8 +112,11 @@ export async function createLegacy({ db, config, accounts }) {
         for (const { key } of await appsFor(did)) await del("apps", key);
     });
   const hasPassword = async (did) => Boolean(await get("passwords", did));
-  const setPassword = async (did, password) => {
-    await accountFor(did, { allowDeactivated: true });
+  // `provisioning` is for an incoming arrival's own placed account only; the
+  // credential cannot sign in until the account is active or deactivated.
+  const setPassword = async (did, password, { provisioning = false } = {}) => {
+    const allowed = { allowDeactivated: true, allowProvisioning: provisioning };
+    await accountFor(did, allowed);
     if (
       typeof password !== "string" ||
       password.length < 12 ||
@@ -121,7 +129,7 @@ export async function createLegacy({ db, config, accounts }) {
       );
     const hash = await hashPassword(password);
     await transaction(async () => {
-      await accountFor(did, { allowDeactivated: true });
+      await accountFor(did, allowed);
       await set("passwords", did, {
         hash,
         revision: identifier(),
