@@ -193,10 +193,15 @@ export async function composeIncomingArrival({
     continueCreation: authenticated.continueCreation,
     issueCreationSession: credentials.issueCreationSession,
     // An exact replay re-sends the same password, so an existing credential on
-    // the arrival's own account is already this request's.
+    // the arrival's own account is already this request's. The install itself
+    // is conditional in one authority transaction, so concurrent replays and a
+    // late installer after activation cannot overwrite or revoke anything.
     setArrivalPassword: async ({ did, password }) => {
       if (!(await legacy.hasPassword(did)))
-        await legacy.setPassword(did, password, { provisioning: true });
+        await legacy.installInitialPassword(did, password, {
+          isPending: (account) =>
+            accounts.storage.hasPendingExternalMigration(account.did),
+        });
     },
   });
   const activation = createArrivalActivation({

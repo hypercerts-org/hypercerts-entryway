@@ -1243,11 +1243,105 @@ test("a replay finds the password already set and does not set it again", async 
   };
   await create(s, body, { jwt });
   f.storage.bindPlacedAccount = bind;
-  const set = t.mock.method(f.legacy, "setPassword");
+  const set = t.mock.method(f.legacy, "installInitialPassword");
   const first = await create(s, body);
   assert.equal(first.status, 200, first.text);
   assert.equal(set.mock.callCount(), 1);
   const again = await create(s, body);
   assert.notEqual(again.status, 200);
   assert.equal(set.mock.callCount(), 1);
+});
+
+const savedFamilies = async (f) =>
+  (
+    await query(
+      f.db,
+      "SELECT value FROM key_value_state WHERE namespace = 'legacy:sessions'",
+    )
+  ).map((row) => JSON.parse(row.value));
+const savedPassword = (f) => f.db.get("legacy:passwords", f.did);
+
+test("concurrent matching replays install the password once and revoke no credentials", async (t) => {
+  const s = await published(t);
+  const { f } = s;
+  const body = { handle, inviteCode: await invite(f), password };
+  const jwt = await f.credential(incomingCreationMethod);
+  const bind = f.storage.bindPlacedAccount;
+  f.storage.bindPlacedAccount = async () => {
+    throw new Error("local commit lost");
+  };
+  await create(s, body, { jwt });
+  f.storage.bindPlacedAccount = bind;
+  // Request A has passed the replay guard and is hashing (held before the
+  // install) while request B installs the password and receives credentials.
+  const install = f.legacy.installInitialPassword;
+  let entered;
+  const aEntered = new Promise((resolve) => (entered = resolve));
+  let release;
+  const held = new Promise((resolve) => (release = resolve));
+  let calls = 0;
+  const results = [];
+  t.mock.method(f.legacy, "installInitialPassword", async (...args) => {
+    const mine = ++calls;
+    results.push(mine);
+    if (mine === 1) {
+      entered();
+      await held;
+    }
+    const installed = await install(...args);
+    results.push(installed);
+    return installed;
+  });
+  const a = create(s, body);
+  await aEntered;
+  const b = await create(s, body);
+  assert.equal(b.status, 200, b.text);
+  const installedByB = await savedPassword(f);
+  assert.ok(installedByB);
+  assert.equal((await savedFamilies(f)).length, 1);
+  release();
+  const first = await a;
+  // Credentials are issued once: the second finisher is refused, not revoked-over.
+  assert.equal(first.status, 409, first.text);
+  assert.equal(calls, 2);
+  assert.deepEqual(
+    results.filter((value) => typeof value === "boolean"),
+    [true, false],
+  );
+  assert.deepEqual(await savedPassword(f), installedByB);
+  const families = await savedFamilies(f);
+  assert.equal(families.length, 1);
+  assert.equal(families.filter((family) => family.revokedAt).length, 0);
+  assert.equal(
+    families.some((family) => family.revocationReason === "password-changed"),
+    false,
+  );
+});
+
+test("a late initial-password install never overwrites an activated account's changed password", async (t) => {
+  const s = await published(t);
+  const { f, h } = s;
+  const response = await create(s, {
+    handle,
+    inviteCode: await invite(f),
+    password,
+  });
+  assert.equal(response.status, 200, response.text);
+  const activated = await h.call(activatePath, {
+    headers: { authorization: `Bearer ${response.json.accessJwt}` },
+  });
+  assert.equal(activated.status, 200, activated.text);
+  const changed = "a different long password";
+  await f.legacy.setPassword(f.did, changed);
+  const stored = await savedPassword(f);
+  // Even when the pending check wrongly passes, an active account is refused.
+  assert.equal(
+    await f.legacy.installInitialPassword(f.did, password, {
+      isPending: async () => true,
+    }),
+    false,
+  );
+  assert.deepEqual(await savedPassword(f), stored);
+  assert.equal(await f.legacy.verifyPassword(f.did, changed), true);
+  assert.equal(await f.legacy.verifyPassword(f.did, password), false);
 });
