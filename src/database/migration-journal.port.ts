@@ -152,6 +152,8 @@ export interface ArrivalTransactor {
     expectedVersion: number,
     facts: ArrivalReplayFacts,
     proof: ArrivalAdmissionProof,
+    /** Saved with a new creation admission only; validated before this call. */
+    options?: { readonly recoveryKey?: string | null | undefined },
   ): Promise<ArrivalReplayReuse>;
   /** One fenced transaction: saved user, placement evidence, account and claims. */
   bindProvisionedArrival(input: {

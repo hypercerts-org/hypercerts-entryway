@@ -16,7 +16,10 @@ import { normalizeEmail } from "../../accounts/rules.js";
 import type { ArrivalTransactor } from "../migration-journal.port.js";
 import type { OperationClaim } from "../operation-ownership.port.js";
 import type { DatabaseExecutor, StoredRow } from "../executor.js";
-import { isObservedArrivalActivation } from "../../features/external-migration/arrival-types.js";
+import {
+  destinationRotationKeys,
+  isObservedArrivalActivation,
+} from "../../features/external-migration/arrival-types.js";
 import type {
   ArrivalAccess,
   ArrivalCredentialFamily,
@@ -178,6 +181,7 @@ function arrivalRecord(
     sourcePredecessor: JSON.parse(row.source_predecessor),
     source: JSON.parse(row.source_facts),
     approvedRotationKeys: JSON.parse(row.approved_rotation_keys),
+    recoveryKey: row.recovery_key,
     version: row.version,
     codeHash: code?.code_hash ?? "",
     codeGeneration: code?.generation ?? 0,
@@ -1134,7 +1138,13 @@ export function createArrivalStorage(
               move.services.atproto_pds?.endpoint !== saved.endpoint ||
               move.services.atproto_pds?.type !== "AtprotoPersonalDataServer" ||
               !move.alsoKnownAs.includes(`at://${saved.handle}`) ||
-              canonicalFact(move.rotationKeys) !== canonicalFact(approved)
+              canonicalFact(move.rotationKeys) !==
+                canonicalFact(
+                  destinationRotationKeys({
+                    approvedRotationKeys: approved,
+                    recoveryKey: saved.recovery_key,
+                  }),
+                )
             )
               throw immutableTuple();
             try {
@@ -1317,7 +1327,7 @@ export function createArrivalStorage(
       );
     },
 
-    async recordArrivalReplay(owner, expectedVersion, facts, proof) {
+    async recordArrivalReplay(owner, expectedVersion, facts, proof, options) {
       assertClaim(owner);
       if (
         !facts.operationId ||
@@ -1412,7 +1422,15 @@ export function createArrivalStorage(
             generation: saved.generation,
             accepted_at: await db.databaseTime(),
           });
-          await advance(saved, {});
+          // The recovery key belongs to the creation admission and is saved
+          // atomically with it, so every continuation signs the same list.
+          await advance(
+            saved,
+            facts.method === "com.atproto.server.createAccount" &&
+              options?.recoveryKey
+              ? { recovery_key: options.recoveryKey }
+              : {},
+          );
           return {
             operationId: facts.operationId,
             generation: saved.generation,

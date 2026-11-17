@@ -33,7 +33,10 @@ export function createAuthenticatedArrival({
   client,
   admitCreation,
   provision,
+  digestKey,
 }: {
+  /** Server secret that keys the password commitment inside the request digest. */
+  digestKey: string | Buffer;
   arrivals: ArrivalTransactor;
   ownership: OperationOwnership;
   transact: <T>(work: () => Promise<T>) => Promise<T>;
@@ -51,6 +54,7 @@ export function createAuthenticatedArrival({
       facts: import("./arrival-types.js").ArrivalReplayFacts;
       proof: import("./arrival-types.js").ArrivalAdmissionProof;
       inviteCode: unknown;
+      recoveryKey: string | null;
     },
   ) => Promise<unknown>;
 }) {
@@ -229,6 +233,7 @@ export function createAuthenticatedArrival({
         recorded ? { ...saved, generation: recorded.generation } : saved,
         input.method,
         input.body,
+        digestKey,
       );
       if (recorded && recorded.requestDigest !== parsed.requestDigest)
         throw new DomainError(
@@ -275,6 +280,7 @@ export function createAuthenticatedArrival({
                 facts: authorization.replayFacts,
                 proof,
                 inviteCode: parsed.inviteCode,
+                recoveryKey: parsed.recoveryKey,
               });
             });
             return {

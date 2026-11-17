@@ -127,14 +127,16 @@ export function mountIncomingRoutes({
   const origin = new URL(issuer).origin;
   // A cross-site form must not be able to spend a victim IP's budget, so the
   // same-origin check precedes it. CSRF is still verified by each operation.
-  const budget = async (request: Request) => {
+  // Only preparation spends the ordinary signup per-IP budget (same key and
+  // limit as ordinary signup); every other form is limited per user.
+  const budget = async (request: Request, perIp: boolean) => {
     if (request.headers.origin !== origin)
       throw new HttpError(
         400,
         "InvalidRequest",
         "Invalid form origin or CSRF token",
       );
-    await rateLimit(`incoming-browser-ip:${request.ip}`, 30);
+    if (perIp) await rateLimit(`signup-ip:${request.ip}`, 30);
   };
   const failure = (
     request: Request,
@@ -192,10 +194,11 @@ export function mountIncomingRoutes({
     ) => Promise<Record<string, unknown>>,
     title: string,
     secret: boolean,
+    perIp = false,
   ) =>
     app.post(`/incoming/${name}`, form, async (req, res, next) => {
       try {
-        await budget(req);
+        await budget(req, perIp);
         const json = Boolean(req.is("application/json"));
         const parsed = schemas[name].safeParse(normalize(req.body, json));
         if (!parsed.success) throw invalid();
@@ -215,6 +218,7 @@ export function mountIncomingRoutes({
         handle: body.handle,
       }),
     "Arrival prepared",
+    true,
     true,
   );
   post(

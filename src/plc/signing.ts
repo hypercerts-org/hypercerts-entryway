@@ -189,6 +189,8 @@ export class Secp256k1MigrationPlcSigner {
       repositoryKey: string;
       endpoint: string;
       handle?: string;
+      /** Replaces the handoff's ordered list; the caller owns its policy. */
+      rotationKeys?: readonly string[];
     },
     persist: (
       operation: Readonly<plc.Operation>,
@@ -205,6 +207,9 @@ export class Secp256k1MigrationPlcSigner {
     await this.#signAuthorizedUpdate(
       previous,
       {
+        ...(input.rotationKeys
+          ? { rotationKeys: [...input.rotationKeys] }
+          : {}),
         verificationMethods: {
           ...facts.verificationMethods,
           atproto: input.repositoryKey,

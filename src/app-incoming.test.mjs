@@ -155,7 +155,7 @@ test("through the real application, the arrival-code header reaches the incoming
   // The header never makes an incoming request fall through to ordinary routes.
   const shape = await call("/xrpc/com.atproto.server.createAccount", {
     headers,
-    json: { email: "x@example.test", handle: "x.example.test", password: "p" },
+    json: { email: "x@example.test", handle: "x.example.test", plcOp: {} },
   });
   assert.equal(shape.status, 400);
   assert.equal(shape.body.error, "InvalidRequest");

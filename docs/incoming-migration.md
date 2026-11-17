@@ -372,7 +372,8 @@ permissions of reachable backend endpoints remain an interoperability considerat
 Activation requires intent from an authorized client or the saved verified user
 under the existing C1/C3 permissions, not an unauthenticated completion claim.
 Entryway independently checks canonical PLC identity, destination endpoint,
-reserved repository key, approved rotation custody and handle; expected placement,
+reserved repository key, rotation custody (the approved list, preceded by the
+recovery key when one was supplied, and nothing else) and handle; expected placement,
 saved-user binding, backend state and durable operation ownership must agree.
 Unresolved external writes retain the C5 isolation/drain and recovery requirements.
 
@@ -527,14 +528,36 @@ request digest is `{did, operationId}`, built by one helper, so another arrival 
 never resume it. Continuations resume that claim by its recorded operation ID.
 
 Fresh handoff bodies must be exactly `{operation}` with the signed object. Creation
-admission supports stock `handle` plus optional `did`, `email` and `inviteCode`.
-Omitted DID/email use the saved arrival; supplied values must match it. Handle case
-and email whitespace/case normalize for comparison. Other stock optional fields
-(`password`, `verificationCode`, `verificationPhone`, `recoveryKey`, `plcOp`) and
-unknown fields are rejected, not stripped. Incoming admission does not implement
-password registration, phone verification or caller-selected destination custody.
+admission supports stock `handle` plus optional `did`, `email`, `inviteCode`,
+`password` and `recoveryKey`. Omitted DID/email use the saved arrival; supplied
+values must match it. Handle case and email whitespace/case normalize for
+comparison. The other stock optional fields (`verificationCode`,
+`verificationPhone`, `plcOp`) and unknown fields are rejected, not stripped.
+Incoming admission does not implement phone verification or a caller-supplied PLC
+operation.
+
+`password` is optional and checked with the hosted-account rule (12 to 256
+characters, `InvalidPassword` 400). It becomes the account's password, as for
+ordinary registration, in the creation continuation after the pending account is
+bound and before any credential is issued; it only signs in once the account is
+active. Without it the account keeps email-code login. The password is transient: it
+is never stored in a journal or digest and never logged. Because the request digest
+is stored, it carries only a keyed commitment (HMAC-SHA256 under a server secret and
+the operation ID) of the password, so an exact replay must repeat the same password,
+a different one is `OperationConflict`, and the digest is no offline guessing oracle.
+A replay finds the password already set and sets nothing again.
+
+`recoveryKey` is optional and must be a public secp256k1 or P-256 `did:key`
+(`InvalidRequest` 400 otherwise, never echoed). It is saved with the creation
+admission and becomes the highest-priority rotation key of the destination move
+Entryway signs: the list is the recovery key first, then the approved list, with no
+duplicate. A list longer than the PLC limit of five keys is `InvalidRequest` before
+any effect. The key can only arrive here, after the handoff, which is why only the
+move carries it.
+
 No caller digest is accepted. A version-1 server digest binds the saved tuple,
-operation, method, DID and normalized semantic request, sorting object keys while
+operation, method, DID and normalized semantic request (including the password
+commitment and the recovery key), sorting object keys while
 preserving array order. Invitation identity contributes a hash, not its raw code.
 
 Fresh source JWTs must verify against that DID document's unique `#atproto` method
@@ -686,8 +709,9 @@ user or from a live tracked access credential for the arrival (exact subject,
 audience, type, main-access scope, unrevoked family, bound unfinished arrival,
 re-proved under the fence). No client ready flag, count or digest is read. Under live
 ownership it checks, before journaling anything: the canonical PLC head is the exact
-saved destination move and its endpoint, repository key, ordered rotation custody and
-handle equal the saved facts (`IdentityConflict`; an unreadable directory is
+saved destination move and its endpoint, repository key, ordered rotation custody (the
+recovery key first when supplied, then the approved list; any other foreign key is
+refused) and handle equal the saved facts (`IdentityConflict`; an unreadable directory is
 `AccountUnavailable`); the configured host (a changed or removed placement is `OperationConflict` for
 saved-user activation; a credential for a removed host fails its own authorization
 first),
@@ -741,8 +765,7 @@ approved safe retry, and `readArrivalFamilies` and `readArrivalFamily` are read-
 ### Development: mounted surfaces and pending guard
 
 **Status: implemented. Multi-node PostgreSQL deployments are not yet qualified for
-incoming migration.** Everything marked "pending owner decision" below is this
-change's choice, not accepted contract. `src/app.mjs` mounts the feature on every
+incoming migration.** `src/app.mjs` mounts the feature on every
 deployment (single-node SQLite, multi-node, and deployments with no migration
 intent) with no configuration key or opt-out; this is decided. It is mounted through `createIncomingArrival` in
 `src/compose-incoming-arrival.mjs` (production arrival storage over the account
@@ -754,12 +777,13 @@ explicitly and never by fall-through.
 Browser surfaces, all under the issuer host. Each POST takes a strict body, rejects
 an unknown field as `InvalidRequest` (400), checks origin and the CSRF `csrf` field
 before any code is spent, and sets `Cache-Control: no-store`. A JSON request gets a
-JSON response; a form post gets an HTML page. All spend the per-IP budget
-`incoming-browser-ip` (30 per ten minutes, the existing producer's 30-per-IP limit)
-only after the same-origin check, so a cross-origin post spends nothing. `GET
-/incoming` has no budget, like the other GET pages. The `/incoming/resume`,
-`/activate` and `/code` surfaces and the `GET /incoming` status page are not in the
-C1 table (pending owner decision).
+JSON response; a form post gets an HTML page. Only `/incoming/prepare` spends the
+ordinary signup per-IP budget (`signup-ip`, 30 per ten minutes, the key and limit
+ordinary signup uses), only after the same-origin check, so a cross-origin post
+spends nothing. The other forms are limited per user by their fresh-code budgets,
+and `GET /incoming` has no budget, like the other GET pages. The
+`/incoming/resume`, `/activate` and `/code` surfaces and the `GET /incoming` status
+page are extra browser surfaces beyond the C1 table; keeping them is decided.
 
 Lost operation ID. Preparing again replaces the saved user's own unclaimed
 preparation, so a lost preparation response is recovered by preparing again. When the
@@ -795,23 +819,23 @@ user's operation and an already deleted preparation, identical), `ArrivalExpired
 
 Tool surfaces (no cookie, no CSRF), on the standard XRPC paths:
 
-| Request                                        | Incoming when                                | Needs                                                                                         | Success                              |
-| ---------------------------------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------ |
-| `POST com.atproto.identity.submitPlcOperation` | `Entryway-Arrival-Code` header               | Source JWT bound to that method, Entryway as audience, the arrival's DID; body `{operation}`  | `{}` once canonical                  |
-| `POST com.atproto.server.createAccount`        | `Entryway-Arrival-Code` header               | Source JWT bound to `createAccount`; body `handle` plus optional `did`, `email`, `inviteCode` | Tracked credentials, `active: false` |
-| `POST com.atproto.server.refreshSession`       | refresh token of a tracked unfinished family | The refresh credential                                                                        | Rotated credentials                  |
-| `POST com.atproto.server.activateAccount`      | access token of a tracked arrival family     | The tracked access credential (also the stock PDS's forwarded call)                           | `{}`                                 |
+| Request                                        | Incoming when                                | Needs                                                                                                                    | Success                              |
+| ---------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------ |
+| `POST com.atproto.identity.submitPlcOperation` | `Entryway-Arrival-Code` header               | Source JWT bound to that method, Entryway as audience, the arrival's DID; body `{operation}`                             | `{}` once canonical                  |
+| `POST com.atproto.server.createAccount`        | `Entryway-Arrival-Code` header               | Source JWT bound to `createAccount`; body `handle` plus optional `did`, `email`, `inviteCode`, `password`, `recoveryKey` | Tracked credentials, `active: false` |
+| `POST com.atproto.server.refreshSession`       | refresh token of a tracked unfinished family | The refresh credential                                                                                                   | Rotated credentials                  |
+| `POST com.atproto.server.activateAccount`      | access token of a tracked arrival family     | The tracked access credential (also the stock PDS's forwarded call)                                                      | `{}`                                 |
 
-A tool must send exactly those fields. The strict subset rejects `password`,
-`verificationCode`, `verificationPhone`, `recoveryKey` and `plcOp` with
-`InvalidRequest`, and stock tools commonly send `password`, so an unmodified stock
-tool does not work against this surface. Whether to accept or ignore them is a
-pending owner decision.
+A tool must send only those fields. The strict subset rejects `verificationCode`,
+`verificationPhone` and `plcOp` with `InvalidRequest`. An invalid `recoveryKey` is
+`InvalidRequest` 400 and an invalid `password` is `InvalidPassword` 400, both before
+any effect. A replay must repeat `password` and `recoveryKey` exactly; a different
+value or an omission is `OperationConflict`.
 
 `refreshSession` and `activateAccount` now look up the credential's family before the
 ordinary route (an ordinary refresh does that one lookup and no arrival read), and
-fall through on `InvalidToken` or `ArrivalExpired`; that fall-through design is a
-pending owner decision. The lookup happens only after the
+fall through on `InvalidToken` or `ArrivalExpired`; this fall-through design is
+decided. The lookup happens only after the
 credential's signature is verified (expiry tolerated), so a genuine credential is
 judged "tracked or not" before its expiry or revocation is judged. An ordinary
 credential that is expired, revoked, replayed or untracked always reaches the
@@ -826,11 +850,11 @@ reaches the ordinary route. With the header present these never fall through to 
 an invalid incoming credential is refused, not rerouted. Without it, and for any
 token that is not a tracked arrival credential, the ordinary route runs unchanged;
 a source service JWT is never offered to activation and cannot reach hosted
-authority for a pending DID. The per-IP budget `incoming-tool-ip` (30 per ten
-minutes) applies before admission. Submit and create share that one bucket, and
-every retry, including one after `OperationRecoveryRequired`, spends from it, so a
-tool that retries aggressively can exhaust it (`RateLimitExceeded`) for all callers
-behind the same address. The method is fixed by the route, so an
+authority for a pending DID. Incoming `createAccount`
+spends the ordinary `createAccount` per-IP budget (`create-ip`, 30 per ten minutes,
+the same key and limit as ordinary `createAccount`) before admission, so retries
+after `OperationRecoveryRequired` spend it. `submitPlcOperation` with the arrival
+header is not rate limited. The method is fixed by the route, so an
 unsupported method cannot reach admission. Identity-layer failures are
 `InvalidPlcOperation` 400 and `IdentityConflict` 409 only for a definitive
 refusal. A transient directory outage or a head change during observation is
@@ -886,13 +910,11 @@ accepts an access token already issued until it expires (five minutes). The brow
 `recover` response contains credentials and is `no-store`. Nothing here deletes the
 source account, and activation makes no claim about repository or blob completeness.
 
-Open for owner confirmation (pending owner decisions):
-
-- the refresh and activate fall-through design and its extra arrival lookup;
-- the strict `createAccount` subset that rejects `password`;
-- the extra browser surfaces: `/incoming/activate`, `/incoming/resume`,
-  `/incoming/code` and the `GET /incoming` status page;
-- the per-IP budget keys `incoming-browser-ip` and `incoming-tool-ip`.
+Decided by the owner: the refresh and activate fall-through design with its extra
+arrival lookup, the extra browser surfaces (`/incoming/activate`, `/incoming/resume`,
+`/incoming/code` and the `GET /incoming` status page), the optional `password` and
+`recoveryKey` on `createAccount`, and sharing Entryway's existing per-IP signup and
+`createAccount` limiters. No incoming-specific per-IP bucket exists.
 
 ## Contract qualification gates for implementers
 
@@ -1103,6 +1125,12 @@ immutable tuple defined in [destination creation](#3-destination-creation-and-id
 The allocation intent and reservation run in the creation continuation, under the
 arrival's claim, after the canonical handoff is observed and before the destination
 move is signed. Preparation persists no intent and calls no PDS.
+
+The optional `recoveryKey` is saved on the arrival row (`recovery_key`, null when
+absent) by the same transaction that records the creation admission, so the signed
+move, its saved-move comparison and the activation check all use one custody list:
+the recovery key first, then the approved list. Storage refuses a signed
+destination move whose rotation keys differ from that list.
 
 Required persistence order. Intent is durable before any network call, and the
 validated result is durable against that same tuple:

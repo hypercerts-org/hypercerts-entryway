@@ -32,6 +32,9 @@ const create = z.strictObject({
   did: z.string().min(1).max(200).optional(),
   email: z.string().min(1).max(320).optional(),
   inviteCode: z.string().min(1).max(200).optional(),
+  // Rules are applied by admission (12 to 256 characters; a public did:key).
+  password: z.string().max(1024).optional(),
+  recoveryKey: z.string().max(200).optional(),
 });
 
 const bearer = (request: Request): string | undefined =>
@@ -74,9 +77,10 @@ export function mountIncomingXrpc({
         body: unknown;
       }) => Promise<unknown>,
       schema: z.ZodType,
+      limit?: (request: Request) => Promise<void>,
     ) =>
     async (request: Request) => {
-      await protocolOperations.rateLimit(`incoming-tool-ip:${request.ip}`, 30);
+      await limit?.(request);
       const parsed = schema.safeParse(request.body);
       if (!parsed.success)
         throw new HttpError(400, "InvalidRequest", "Invalid request");
@@ -98,7 +102,14 @@ export function mountIncomingXrpc({
   app.post(
     "/xrpc/com.atproto.server.createAccount",
     handle(
-      admitted((input) => incoming.createIncomingAccount(input), create),
+      // The ordinary createAccount per-IP limiter: same key and limit. Handoff
+      // submission is not rate limited.
+      admitted(
+        (input) => incoming.createIncomingAccount(input),
+        create,
+        (request) =>
+          protocolOperations.rateLimit(`create-ip:${request.ip}`, 30),
+      ),
       {
         onlyWithCode: true,
       },

@@ -112,6 +112,7 @@ CREATE TABLE "arrivals" (
 	"source_predecessor" text NOT NULL,
 	"source_facts" text NOT NULL,
 	"approved_rotation_keys" text NOT NULL,
+	"recovery_key" text,
 	"version" bigint NOT NULL,
 	"generation" bigint NOT NULL,
 	"created_at" bigint NOT NULL,

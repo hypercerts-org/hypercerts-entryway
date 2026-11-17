@@ -154,6 +154,7 @@ export async function composeIncomingArrival({
     }),
     verify,
     client: accounts.plcClient,
+    digestKey: config.betterAuthSecret,
   });
   // Browser callables: browser authentication supplies the saved user, never
   // claim.resource or a user ID from the request body.
@@ -191,6 +192,12 @@ export async function composeIncomingArrival({
     admit: authenticated.admit,
     continueCreation: authenticated.continueCreation,
     issueCreationSession: credentials.issueCreationSession,
+    // An exact replay re-sends the same password, so an existing credential on
+    // the arrival's own account is already this request's.
+    setArrivalPassword: async ({ did, password }) => {
+      if (!(await legacy.hasPassword(did)))
+        await legacy.setPassword(did, password, { provisioning: true });
+    },
   });
   const activation = createArrivalActivation({
     arrivals,

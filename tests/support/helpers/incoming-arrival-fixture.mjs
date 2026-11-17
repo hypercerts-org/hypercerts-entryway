@@ -55,8 +55,8 @@ export async function fixture(t, mode = "modern", mutation = "", fault = "") {
     );
   } else {
     const keys = [recovery.did(), source.did()];
-    if (mutation === "full")
-      for (let index = 0; index < 3; index++)
+    if (mutation === "full" || mutation === "near-full")
+      for (let index = 0; index < (mutation === "full" ? 3 : 2); index++)
         keys.push((await Secp256k1Keypair.create()).did());
     predecessor = await plc.signOperation(
       plc.formatAtprotoOp({
