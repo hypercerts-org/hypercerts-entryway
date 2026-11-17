@@ -4,11 +4,10 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   call,
-  createSourceAccount,
   expectDestinationServes,
   json,
   ok,
-  prepareArrival,
+  registerArrivalSetup,
 } from "../support/helpers/incoming-journey.mjs";
 import { waitForStockPlcMessage } from "../support/helpers/stock-plc-mailpit.mjs";
 
@@ -139,32 +138,19 @@ test.beforeAll(() => {
   assert.equal(new URL(moover).protocol, "https:");
 });
 
-test("a standalone source account has a record and a blob", async () => {
-  const created = await createSourceAccount(access, {
-    unique,
-    email: sourceEmail,
-    password: sourcePassword,
-    displayName: "PDS MOOver arrival journey",
-  });
-  run.source = created.source;
-  run.blob = created.blob;
-  run.sourceHandle = created.handle;
-  run.destinationHandle = `d${unique}${config.handleDomains[0]}`;
-});
-
-test("the browser verifies the destination email and prepares the arrival", async ({
-  page,
-}) => {
-  run.prepared = await prepareArrival(page, {
-    issuer: config.issuer,
-    mailpitUrl: access.mailpitUrl,
-    did: run.source.did,
-    handle: run.destinationHandle,
-    email: destinationEmail,
-  });
-  // The whole block as the page shows it, for the user to copy.
-  run.block = await page.locator("dl.identity").innerText();
-  expect(run.block.includes(run.prepared.arrivalCode)).toBe(true);
+registerArrivalSetup(test, {
+  context: () => ({ access, config }),
+  run,
+  unique,
+  sourceEmail,
+  sourcePassword,
+  destinationEmail,
+  displayName: "PDS MOOver arrival journey",
+  onPrepared: async (page) => {
+    // The whole block as the page shows it, for the user to copy.
+    run.block = await page.locator("dl.identity").innerText();
+    expect(run.block.includes(run.prepared.arrivalCode)).toBe(true);
+  },
 });
 
 test("PDS MOOver migrates the account into Entryway", async ({ page }) => {
