@@ -197,6 +197,7 @@ export const arrivals = table(
     source_predecessor: text("source_predecessor").notNull(),
     source_facts: text("source_facts").notNull(),
     approved_rotation_keys: text("approved_rotation_keys").notNull(),
+    recovery_key: text("recovery_key"),
     version: count("version").notNull(),
     generation: count("generation").notNull(),
     created_at: count("created_at").notNull(),

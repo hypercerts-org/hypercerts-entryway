@@ -67,6 +67,8 @@ export interface ArrivalRecord extends ArrivalPreparationAuthority {
   readonly codeExpiresAt: number;
   readonly generation: number;
   readonly signingKey: string | null;
+  /** Optional public did:key from the creation admission; null until admitted. */
+  readonly recoveryKey: string | null;
   readonly codeDelivered: boolean;
   readonly cancelledAt: number | null;
 }
@@ -200,4 +202,20 @@ export function isRecordedAdmissionGeneration(
     admissionGeneration >= 1 &&
     admissionGeneration <= arrivalGeneration
   );
+}
+
+/** Rotation custody of the destination move, which is also the only list
+ * activation accepts: the optional recovery key first (highest priority, as in
+ * the reference Entryway), then the approved list without a duplicate. */
+export function destinationRotationKeys(arrival: {
+  readonly approvedRotationKeys: readonly string[];
+  readonly recoveryKey: string | null;
+}): string[] {
+  const { recoveryKey } = arrival;
+  return recoveryKey
+    ? [
+        recoveryKey,
+        ...arrival.approvedRotationKeys.filter((key) => key !== recoveryKey),
+      ]
+    : [...arrival.approvedRotationKeys];
 }

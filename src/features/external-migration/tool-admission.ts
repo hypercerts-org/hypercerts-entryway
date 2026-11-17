@@ -109,6 +109,7 @@ export function createToolAdmission({
   admit,
   continueCreation,
   issueCreationSession,
+  setArrivalPassword,
 }: {
   arrivals: Pick<ArrivalTransactor, "consumeArrivalCode">;
   admit: (input: {
@@ -123,6 +124,12 @@ export function createToolAdmission({
     operationId: string;
     userId: string;
   }) => Promise<unknown>;
+  /** Sets the saved account's password for the exact admitted request, unless
+   * already set by it. Never logs or returns the password. */
+  setArrivalPassword: (input: {
+    did: string;
+    password: string;
+  }) => Promise<void>;
   issueCreationSession: (input: {
     did: string;
     operationId: string;
@@ -203,6 +210,11 @@ export function createToolAdmission({
             operationId: record.operationId,
             userId: record.userId,
           });
+        // The body already matched the admitted request, whose digest commits to
+        // the password: set it here, before any credential is issued.
+        const { password } = input.body as { password?: unknown };
+        if (typeof password === "string")
+          await setArrivalPassword({ did: record.did, password });
         return issueCreationSession({
           did: record.did,
           operationId: record.operationId,

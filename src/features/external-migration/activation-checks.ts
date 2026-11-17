@@ -1,6 +1,9 @@
 import { DomainError } from "../../accounts/errors.js";
 import type { AccountRow } from "../../accounts/types.js";
-import type { ArrivalRecord } from "./arrival-types.js";
+import {
+  destinationRotationKeys,
+  type ArrivalRecord,
+} from "./arrival-types.js";
 
 /** Facts read independently of the caller. A client "ready" flag, record or blob
  * counts and transfer diagnostics are deliberately absent: they are intent, never
@@ -62,11 +65,12 @@ export function assertActivationReady(facts: ActivationFacts): void {
     directory.source.verificationMethods.atproto !== arrival.signingKey
   )
     throw identity("The canonical repository key is not the saved reservation");
+  // The approved list, preceded by the optional recovery key from the creation
+  // admission: no other foreign key is ever accepted.
+  const custody = destinationRotationKeys(arrival);
   if (
-    directory.rotationKeys.length !== arrival.approvedRotationKeys.length ||
-    directory.rotationKeys.some(
-      (key, index) => key !== arrival.approvedRotationKeys[index],
-    )
+    directory.rotationKeys.length !== custody.length ||
+    directory.rotationKeys.some((key, index) => key !== custody[index])
   )
     throw identity("The canonical rotation custody is not the approved list");
   if (!directory.source.alsoKnownAs.includes(`at://${arrival.handle}`))

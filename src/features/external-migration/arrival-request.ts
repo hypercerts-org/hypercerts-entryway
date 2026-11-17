@@ -1,5 +1,8 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
+import { parseDidKey } from "@atproto/crypto";
 import { DomainError } from "../../accounts/errors.js";
+import { HttpError } from "../../http/http-error.mjs";
+import { destinationRotationKeys } from "./arrival-types.js";
 import type { ArrivalRecord } from "./arrival-types.js";
 import {
   incomingCreationMethod,
@@ -37,12 +40,50 @@ export function canonicalArrivalValue(value: unknown): unknown {
   return invalid();
 }
 
+/** The curves a PLC rotation key may use, as in the reference Entryway. */
+const rotationAlgorithms = new Set(["ES256K", "ES256"]);
+/** The PLC rotation-key limit. */
+const maximumRotationKeys = 5;
+
+const invalidRecoveryKey = (): never => {
+  throw new HttpError(
+    400,
+    "InvalidRequest",
+    "recoveryKey must be a public secp256k1 or P-256 key as a did:key",
+  );
+};
+
+/** A public secp256k1 or P-256 did:key, never echoed when refused. */
+function recoveryKeyValue(value: unknown): string {
+  if (typeof value !== "string" || !value.startsWith("did:key:"))
+    return invalidRecoveryKey();
+  try {
+    if (!rotationAlgorithms.has(parseDidKey(value).jwtAlg))
+      return invalidRecoveryKey();
+  } catch {
+    return invalidRecoveryKey();
+  }
+  return value;
+}
+
+/** Entryway's hosted-account password rule, as ordinary registration applies it. */
+function passwordValue(value: unknown): string {
+  if (typeof value !== "string" || value.length < 12 || value.length > 256)
+    throw new HttpError(
+      400,
+      "InvalidPassword",
+      "Password must contain 12 to 256 characters",
+    );
+  return value;
+}
+
 /** Parse a fresh standard body. Secrets remain transient; only this server digest
  * crosses admission. Password/phone proof and caller PLC creation are unsupported. */
 export function parseArrivalRequest(
   saved: ArrivalRecord,
   method: IncomingMethod,
   body: unknown,
+  digestKey: string | Buffer,
 ) {
   if (!body || typeof body !== "object" || Array.isArray(body))
     return invalid();
@@ -50,6 +91,7 @@ export function parseArrivalRequest(
   let semantic: unknown;
   let operation: Record<string, unknown> | undefined;
   let inviteCode: string | undefined;
+  let recoveryKey: string | null = null;
   if (method === incomingHandoffMethod) {
     if (
       Object.keys(fields).length !== 1 ||
@@ -68,7 +110,15 @@ export function parseArrivalRequest(
     // optional fields are explicitly rejected, not silently discarded.
     if (
       Object.keys(fields).some(
-        (key) => !["did", "email", "handle", "inviteCode"].includes(key),
+        (key) =>
+          ![
+            "did",
+            "email",
+            "handle",
+            "inviteCode",
+            "password",
+            "recoveryKey",
+          ].includes(key),
       )
     )
       return invalid();
@@ -90,6 +140,30 @@ export function parseArrivalRequest(
     )
       return invalid();
     inviteCode = fields.inviteCode as string | undefined;
+    // A key-protected commitment: the digest is stored, so it can neither hold
+    // the password nor a bare hash of it. It is keyed by a server secret and
+    // bound to this operation, which makes a replay with another password a
+    // conflict without making the stored digest an offline guessing oracle.
+    const passwordProof =
+      fields.password === undefined
+        ? null
+        : createHmac("sha256", digestKey)
+            .update(`incoming-arrival-password:${saved.operationId}\0`)
+            .update(passwordValue(fields.password))
+            .digest("hex");
+    if (fields.recoveryKey !== undefined) {
+      recoveryKey = recoveryKeyValue(fields.recoveryKey);
+      const custody = destinationRotationKeys({
+        approvedRotationKeys: saved.approvedRotationKeys,
+        recoveryKey,
+      });
+      if (custody.length > maximumRotationKeys)
+        throw new HttpError(
+          400,
+          "InvalidRequest",
+          "recoveryKey would exceed the PLC rotation key limit",
+        );
+    }
     semantic = {
       did: saved.did,
       email: saved.email,
@@ -98,6 +172,8 @@ export function parseArrivalRequest(
         inviteCode === undefined
           ? null
           : createHash("sha256").update(inviteCode).digest("hex"),
+      passwordProof,
+      recoveryKey,
     };
   } else return invalid();
   const requestDigest = createHash("sha256")
@@ -122,7 +198,7 @@ export function parseArrivalRequest(
       ),
     )
     .digest("hex");
-  return { requestDigest, operation, inviteCode };
+  return { requestDigest, operation, inviteCode, recoveryKey };
 }
 
 /** The one description of an arrival's DID claim. The digest names the arrival

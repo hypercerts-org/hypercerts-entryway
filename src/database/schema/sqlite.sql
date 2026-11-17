@@ -120,6 +120,7 @@ CREATE TABLE `arrivals` (
 	`source_predecessor` text NOT NULL,
 	`source_facts` text NOT NULL,
 	`approved_rotation_keys` text NOT NULL,
+	`recovery_key` text,
 	`version` integer NOT NULL,
 	`generation` integer NOT NULL,
 	`created_at` integer NOT NULL,

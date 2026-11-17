@@ -240,7 +240,7 @@ test("recover and activate refuse before binding and spend no backend effect", a
   assert.equal(f.backendState.creates, 0);
 });
 
-test("budgets: the browser IP budget answers 429 with the existing code", async (t) => {
+test("budgets: preparation shares the ordinary signup per-IP budget; other forms have no IP bucket", async (t) => {
   const f = await fixture(t);
   const h = await incomingHttp(t, f);
   let last;
@@ -248,6 +248,22 @@ test("budgets: the browser IP budget answers 429 with the existing code", async 
     last = await h.browser("/incoming/prepare", { bad: true });
   assert.equal(last.status, 429);
   assert.equal(last.json.error, "RateLimitExceeded");
+  const keys = (
+    await query(
+      f.db,
+      "SELECT key FROM key_value_state WHERE namespace = 'entryway:limits'",
+    )
+  ).map((row) => row.key);
+  assert.ok(keys.some((key) => key.startsWith("signup-ip:")));
+  assert.equal(
+    keys.some((key) => key.startsWith("incoming-browser-ip")),
+    false,
+  );
+  // No other browser form spends an IP bucket (per-user budgets still apply).
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const refused = await h.browser("/incoming/renew", { bad: true });
+    assert.equal(refused.status, 400);
+  }
 });
 
 test("the status page shows only the saved user's facts and honest wording", async (t) => {

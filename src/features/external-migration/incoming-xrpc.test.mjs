@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as plc from "@did-plc/lib";
-import { Secp256k1Keypair } from "@atproto/crypto";
+import { P256Keypair, Secp256k1Keypair } from "@atproto/crypto";
 import {
   fixture,
   handle,
@@ -12,6 +12,11 @@ import {
   incomingCreationMethod,
   incomingHandoffMethod,
 } from "../../../dist/src/features/external-migration/incoming-authorization.js";
+import { createHash, createHmac } from "node:crypto";
+import {
+  canonicalArrivalValue,
+  parseArrivalRequest,
+} from "../../../dist/src/features/external-migration/arrival-request.js";
 import { createInvites } from "../../../dist/src/features/account-registration/invites.mjs";
 
 const submitPath = "/xrpc/com.atproto.identity.submitPlcOperation";
@@ -307,7 +312,6 @@ test("createAccount accepts only the supported strict subset", async (t) => {
   const s = await published(t);
   const inviteCode = await invite(s.f);
   for (const body of [
-    { handle, inviteCode, password: "correct horse battery" },
     { handle, inviteCode, plcOp: {} },
     { handle, inviteCode, verificationCode: "1" },
     { inviteCode },
@@ -621,15 +625,37 @@ test("a cross-origin post spends no browser budget", async (t) => {
   assert.equal(ok.status, 200);
 });
 
-test("the tool request budget answers 429 with the existing code", async (t) => {
+test("incoming createAccount spends the ordinary createAccount per-IP budget; handoff submission is not limited", async (t) => {
   const s = await begin(t);
+  // The handoff route has no IP budget: far more refusals than any limit.
+  for (let attempt = 0; attempt < 40; attempt++)
+    assert.equal(
+      (await submit(s, { code: "A".repeat(32) })).status,
+      409,
+      "handoff refusals are never rate limited",
+    );
+  const limited = async () =>
+    (
+      await query(
+        s.f.db,
+        "SELECT key FROM key_value_state WHERE namespace = 'entryway:limits'",
+      )
+    ).map((row) => row.key);
+  assert.deepEqual(await limited(), ["incoming-prepare:destination-user"]);
   let last;
   for (let attempt = 0; attempt < 31; attempt++)
-    last = await submit(s, { code: "A".repeat(32) });
+    last = await create(s, { handle }, { code: "A".repeat(32) });
   assert.equal(last.status, 429);
   assert.equal(last.json.error, "RateLimitExceeded");
+  const keys = (await limited()).filter((key) => key.includes("-ip:"));
+  assert.equal(keys.length, 1);
+  assert.match(keys[0], /^create-ip:/);
+  assert.equal(
+    keys.some((key) => key.startsWith("incoming-tool-ip")),
+    false,
+  );
   // The budget is shared with a legitimate request from the same address.
-  const legitimate = await submit(s);
+  const legitimate = await create(s, { handle });
   assert.equal(legitimate.status, 429);
   await untouched(s.f);
 });
@@ -910,4 +936,318 @@ test("an expired code is ArrivalExpired 409 and an unknown operation on a browse
   });
   assert.equal(unknown.status, 404);
   assert.equal(unknown.json.error, "AccountNotFound");
+});
+
+const password = "correct horse battery staple";
+const everything = async (f) => {
+  const tables =
+    process.env.CONTRACT_DATABASE_BACKEND === "postgresql"
+      ? "SELECT tablename AS name FROM pg_tables WHERE schemaname = current_schema()"
+      : "SELECT name FROM sqlite_master WHERE type = 'table'";
+  const dump = [];
+  for (const { name } of await query(f.db, tables))
+    dump.push(JSON.stringify(await rows(f, name)));
+  return dump.join("\n");
+};
+const approved = async (f) =>
+  JSON.parse((await rows(f, "arrivals"))[0].approved_rotation_keys);
+const savedMove = async (f) =>
+  JSON.parse(
+    (await rows(f, "arrival_signed_operations")).find(
+      (row) => row.kind === "destination-move",
+    ).operation,
+  );
+
+test("createAccount refuses an invalid recoveryKey and password with no effect", async (t) => {
+  const s = await published(t);
+  const inviteCode = await invite(s.f);
+  const ed25519 = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+  for (const recoveryKey of [
+    "",
+    "not-a-key",
+    "did:key:zNotAKey",
+    ed25519,
+    "did:web:example.test",
+    s.f.source.did().slice(0, -3),
+  ]) {
+    const response = await create(s, { handle, inviteCode, recoveryKey });
+    assert.equal(response.status, 400, recoveryKey);
+    assert.equal(response.json.error, "InvalidRequest", recoveryKey);
+    assert.equal(
+      response.text.includes(recoveryKey) && recoveryKey !== "",
+      false,
+    );
+  }
+  const typed = await create(s, { handle, inviteCode, recoveryKey: 7 });
+  assert.equal(typed.status, 400);
+  for (const bad of [7, true, ["a"], { a: 1 }, null]) {
+    const response = await create(s, { handle, inviteCode, password: bad });
+    assert.equal(response.status, 400);
+    assert.equal(response.json.error, "InvalidPassword");
+  }
+  for (const bad of ["short", "x".repeat(257), "x".repeat(2000)]) {
+    const response = await create(s, { handle, inviteCode, password: bad });
+    assert.equal(response.status, 400);
+    assert.equal(response.json.error, "InvalidPassword");
+    assert.equal(response.text.includes(bad), false);
+  }
+  assert.equal(s.f.backendState.creates, 0);
+  assert.equal((await rows(s.f, "arrival_replay")).length, 1);
+});
+
+test("a recoveryKey that would exceed the PLC rotation-key limit is refused before any effect", async (t) => {
+  const f = await fixture(t, "modern", "near-full");
+  const h = await incomingHttp(t, f);
+  const prepared = await f.prepare();
+  const operation = await plc.signOperation(prepared.handoff, f.source);
+  const s = { f, h, prepared, operation };
+  assert.equal((await submit(s)).status, 200);
+  assert.equal((await approved(f)).length, 5);
+  const response = await create(s, {
+    handle,
+    inviteCode: await invite(f),
+    recoveryKey: (await Secp256k1Keypair.create()).did(),
+  });
+  assert.equal(response.status, 400);
+  assert.equal(response.json.error, "InvalidRequest");
+  assert.equal(f.backendState.creates, 0);
+  assert.equal((await rows(f, "arrival_replay")).length, 1);
+});
+
+for (const [name, keypair] of [
+  ["secp256k1", () => Secp256k1Keypair.create()],
+  ["P-256", () => P256Keypair.create()],
+])
+  test(`a ${name} recoveryKey is signed first in the destination move and activation accepts it`, async (t) => {
+    const s = await published(t);
+    const { f, h } = s;
+    const recoveryKey = (await keypair()).did();
+    const response = await create(s, {
+      handle,
+      inviteCode: await invite(f),
+      recoveryKey,
+    });
+    assert.equal(response.status, 200, response.text);
+    const list = await approved(f);
+    const move = await savedMove(f);
+    assert.deepEqual(move.rotationKeys, [recoveryKey, ...list]);
+    assert.deepEqual(f.backendState.exactMove.rotationKeys, move.rotationKeys);
+    assert.equal((await rows(f, "arrivals"))[0].recovery_key, recoveryKey);
+    const activated = await h.call(activatePath, {
+      headers: { authorization: `Bearer ${response.json.accessJwt}` },
+    });
+    assert.equal(activated.status, 200, activated.text);
+    assert.equal(f.backendState.activations, 1);
+  });
+
+test("a recoveryKey already in the approved list is not duplicated", async (t) => {
+  const s = await published(t);
+  const [existing] = await approved(s.f);
+  const response = await create(s, {
+    handle,
+    inviteCode: await invite(s.f),
+    recoveryKey: existing,
+  });
+  assert.equal(response.status, 200, response.text);
+  const { rotationKeys } = await savedMove(s.f);
+  assert.equal(new Set(rotationKeys).size, rotationKeys.length);
+  assert.equal(rotationKeys[0], existing);
+  assert.equal(rotationKeys.length, (await approved(s.f)).length);
+});
+
+test("without a recoveryKey the move keeps exactly the approved list", async (t) => {
+  const { f } = await created(t);
+  assert.deepEqual((await savedMove(f)).rotationKeys, await approved(f));
+  assert.equal((await rows(f, "arrivals"))[0].recovery_key, null);
+});
+
+test("an optional password becomes the account password and signs in after activation", async (t) => {
+  const s = await published(t);
+  const { f, h } = s;
+  const response = await create(s, {
+    handle,
+    inviteCode: await invite(f),
+    password,
+  });
+  assert.equal(response.status, 200, response.text);
+  assert.equal(await f.legacy.hasPassword(f.did), true);
+  // Not usable while the arrival is unfinished.
+  assert.equal(await f.legacy.verifyPassword(f.did, password), false);
+  const activated = await h.call(activatePath, {
+    headers: { authorization: `Bearer ${response.json.accessJwt}` },
+  });
+  assert.equal(activated.status, 200, activated.text);
+  assert.equal(await f.legacy.verifyPassword(f.did, password), true);
+  assert.equal(await f.legacy.verifyPassword(f.did, `${password}!`), false);
+});
+
+test("without a password the account has none and keeps email-code login", async (t) => {
+  const { f } = await created(t);
+  assert.equal(await f.legacy.hasPassword(f.did), false);
+});
+
+test("the password never reaches logs, responses, journals or the stored digest", async (t) => {
+  const s = await published(t);
+  const { f } = s;
+  const captured = [];
+  const spies = [];
+  for (const stream of [process.stdout, process.stderr])
+    spies.push(
+      t.mock.method(stream, "write", (chunk) => {
+        captured.push(String(chunk));
+        return true;
+      }),
+    );
+  for (const method of ["log", "info", "warn", "error", "debug"])
+    spies.push(
+      t.mock.method(console, method, (...args) =>
+        captured.push(args.join(" ")),
+      ),
+    );
+  const response = await create(s, {
+    handle,
+    inviteCode: await invite(f),
+    password,
+  });
+  assert.equal(response.status, 200, response.text);
+  // Restore only these spies; the fixture's own fetch mock stays installed.
+  for (const spy of spies) spy.mock.restore();
+  assert.equal(response.text.includes(password), false);
+  assert.equal(captured.join("\n").includes(password), false);
+  const dump = await everything(f);
+  assert.equal(dump.includes(password), false);
+  const { createHash } = await import("node:crypto");
+  for (const encoding of ["hex", "base64", "base64url"])
+    assert.equal(
+      dump.includes(createHash("sha256").update(password).digest(encoding)),
+      false,
+    );
+});
+
+test("a replay must match the password and recoveryKey exactly", async (t) => {
+  const s = await published(t);
+  const { f } = s;
+  const recoveryKey = (await Secp256k1Keypair.create()).did();
+  const inviteCode = await invite(f);
+  const jwt = await f.credential(incomingCreationMethod);
+  const bind = f.storage.bindPlacedAccount;
+  f.storage.bindPlacedAccount = async () => {
+    throw new Error("local commit lost");
+  };
+  const lost = await create(
+    s,
+    { handle, inviteCode, password, recoveryKey },
+    { jwt },
+  );
+  f.storage.bindPlacedAccount = bind;
+  assert.notEqual(lost.status, 200);
+  const body = { handle, inviteCode, password, recoveryKey };
+  for (const [name, changed] of [
+    ["another password", { ...body, password: `${password}!` }],
+    ["no password", { handle, inviteCode, recoveryKey }],
+    [
+      "another recoveryKey",
+      { ...body, recoveryKey: (await Secp256k1Keypair.create()).did() },
+    ],
+    ["no recoveryKey", { handle, inviteCode, password }],
+  ]) {
+    const response = await create(s, changed);
+    assert.equal(response.status, 409, name);
+    assert.equal(response.json.error, "OperationConflict", name);
+  }
+  assert.equal(await f.legacy.hasPassword(f.did), false);
+  const replay = await create(s, body);
+  assert.equal(replay.status, 200, replay.text);
+  assert.equal(await f.legacy.hasPassword(f.did), true);
+  assert.equal(f.backendState.creates, 1);
+  assert.deepEqual((await savedMove(f)).rotationKeys[0], recoveryKey);
+});
+
+test("the password commitment is keyed: the digest depends on the server key and never on the plaintext or an unkeyed hash", async (t) => {
+  const s = await published(t);
+  const { f } = s;
+  const inviteCode = await invite(f);
+  const response = await create(s, { handle, inviteCode, password });
+  assert.equal(response.status, 200, response.text);
+  const aggregate = await f.arrivals.readArrivalAggregate(
+    s.prepared.operationId,
+    f.principal.userId,
+  );
+  const saved = aggregate.arrival;
+  const stored = (await rows(f, "arrival_replay")).find(
+    (row) => row.method === incomingCreationMethod,
+  ).request_digest;
+  const digestFor = (passwordProof) =>
+    createHash("sha256")
+      .update(
+        JSON.stringify(
+          canonicalArrivalValue({
+            version: 1,
+            operationId: saved.operationId,
+            method: incomingCreationMethod,
+            did: saved.did,
+            tuple: {
+              userId: saved.userId,
+              email: saved.email,
+              handle: saved.handle,
+              pdsId: saved.pdsId,
+              endpoint: saved.endpoint,
+              sourcePlcHead: saved.sourcePlcHead,
+              generation: aggregate.admissions.find(
+                (item) => item.method === incomingCreationMethod,
+              ).generation,
+            },
+            semantic: {
+              did: saved.did,
+              email: saved.email,
+              handle: saved.handle.toLowerCase(),
+              inviteHash: createHash("sha256").update(inviteCode).digest("hex"),
+              passwordProof,
+              recoveryKey: null,
+            },
+          }),
+        ),
+      )
+      .digest("hex");
+  // The reconstruction is exact: it reproduces the stored digest from the
+  // keyed proof, so the mismatches below are about the proof alone.
+  const keyed = createHmac("sha256", f.config.betterAuthSecret)
+    .update(`incoming-arrival-password:${saved.operationId}\0`)
+    .update(password)
+    .digest("hex");
+  assert.equal(stored, digestFor(keyed));
+  assert.notEqual(stored, digestFor(password));
+  assert.notEqual(
+    stored,
+    digestFor(createHash("sha256").update(password).digest("hex")),
+  );
+  const parse = (key) =>
+    parseArrivalRequest(
+      saved,
+      incomingCreationMethod,
+      { handle, password },
+      key,
+    ).requestDigest;
+  assert.notEqual(parse("key-one"), parse("key-two"));
+  assert.equal(parse("key-one"), parse("key-one"));
+});
+
+test("a replay finds the password already set and does not set it again", async (t) => {
+  const s = await published(t);
+  const { f } = s;
+  const body = { handle, inviteCode: await invite(f), password };
+  const jwt = await f.credential(incomingCreationMethod);
+  const bind = f.storage.bindPlacedAccount;
+  f.storage.bindPlacedAccount = async () => {
+    throw new Error("local commit lost");
+  };
+  await create(s, body, { jwt });
+  f.storage.bindPlacedAccount = bind;
+  const set = t.mock.method(f.legacy, "setPassword");
+  const first = await create(s, body);
+  assert.equal(first.status, 200, first.text);
+  assert.equal(set.mock.callCount(), 1);
+  const again = await create(s, body);
+  assert.notEqual(again.status, 200);
+  assert.equal(set.mock.callCount(), 1);
 });
