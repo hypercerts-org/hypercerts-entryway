@@ -114,3 +114,86 @@ export async function prepareArrival(
   expect(page.url().includes(arrival.arrivalCode)).toBe(false);
   return arrival;
 }
+
+export const pixel = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+const profile = {
+  repo: undefined,
+  collection: "app.bsky.actor.profile",
+  rkey: "self",
+};
+
+// Creates the standalone source account with a profile record that references
+// an uploaded avatar blob. Returns the session, the blob reference and the
+// source handle. Credentials are passed through and never logged.
+export async function createSourceAccount(
+  access,
+  { unique, email, password, displayName },
+) {
+  const description = json(
+    await call(access.sourceUrl, "com.atproto.server.describeServer"),
+  );
+  const handle = `s${unique}${description.availableUserDomains[0]}`;
+  const created = await call(
+    access.sourceUrl,
+    "com.atproto.server.createAccount",
+    {
+      body: { email, password, handle },
+    },
+  );
+  ok(created, "source account");
+  const source = json(created);
+  const uploaded = await call(access.sourceUrl, "com.atproto.repo.uploadBlob", {
+    token: source.accessJwt,
+    bytes: pixel,
+    type: "image/png",
+  });
+  ok(uploaded, "source blob");
+  const blob = json(uploaded).blob;
+  ok(
+    await call(access.sourceUrl, "com.atproto.repo.putRecord", {
+      token: source.accessJwt,
+      body: {
+        ...profile,
+        repo: source.did,
+        record: {
+          $type: "app.bsky.actor.profile",
+          displayName,
+          avatar: blob,
+        },
+      },
+    }),
+    "source record",
+  );
+  return { source, blob, handle };
+}
+
+// The destination serves the record and the blob byte for byte, and the PLC
+// directory names the destination endpoint and handle.
+export async function expectDestinationServes(
+  access,
+  { endpoint, did, blob, displayName, handle },
+) {
+  const record = json(
+    await call(endpoint, "com.atproto.repo.getRecord", {
+      params: { ...profile, repo: did },
+    }),
+  );
+  expect(record.value.displayName).toBe(displayName);
+  const served = await call(endpoint, "com.atproto.sync.getBlob", {
+    params: { did, cid: blob.ref.$link },
+  });
+  ok(served, "destination blob");
+  expect(served.content.equals(pixel)).toBe(true);
+  const document = await (
+    await fetch(new URL(`/${did}`, access.plcUrl))
+  ).json();
+  expect(
+    document.service.find((service) => service.id === "#atproto_pds")
+      .serviceEndpoint,
+  ).toBe(endpoint);
+  expect(document.alsoKnownAs).toContain(`at://${handle}`);
+}

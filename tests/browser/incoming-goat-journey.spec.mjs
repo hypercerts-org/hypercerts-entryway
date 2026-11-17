@@ -8,6 +8,8 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import {
   call,
+  createSourceAccount,
+  expectDestinationServes,
   json,
   ok,
   prepareArrival,
@@ -28,11 +30,6 @@ const unique = randomUUID().replaceAll("-", "").slice(0, 16);
 const destinationEmail = `goat-arrival-${unique}@example.com`;
 const sourceEmail = `goat-source-${unique}@example.com`;
 const sourcePassword = `Goat-${randomUUID()}!`;
-const creationMethod = "com.atproto.server.createAccount";
-const pixel = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
-  "base64",
-);
 const run = {};
 
 function redact(text, secrets) {
@@ -83,43 +80,16 @@ test.afterAll(() => {
 });
 
 test("a standalone source account has a record and a blob", async () => {
-  const description = json(
-    await call(access.sourceUrl, "com.atproto.server.describeServer"),
-  );
-  run.sourceHandle = `s${unique}${description.availableUserDomains[0]}`;
+  const created = await createSourceAccount(access, {
+    unique,
+    email: sourceEmail,
+    password: sourcePassword,
+    displayName: "Goat arrival journey",
+  });
+  run.source = created.source;
+  run.blob = created.blob;
+  run.sourceHandle = created.handle;
   run.destinationHandle = `d${unique}${config.handleDomains[0]}`;
-  const created = await call(access.sourceUrl, creationMethod, {
-    body: {
-      email: sourceEmail,
-      password: sourcePassword,
-      handle: run.sourceHandle,
-    },
-  });
-  ok(created, "source account");
-  run.source = json(created);
-  const blob = await call(access.sourceUrl, "com.atproto.repo.uploadBlob", {
-    token: run.source.accessJwt,
-    bytes: pixel,
-    type: "image/png",
-  });
-  ok(blob, "source blob");
-  run.blob = json(blob).blob;
-  ok(
-    await call(access.sourceUrl, "com.atproto.repo.putRecord", {
-      token: run.source.accessJwt,
-      body: {
-        repo: run.source.did,
-        collection: "app.bsky.actor.profile",
-        rkey: "self",
-        record: {
-          $type: "app.bsky.actor.profile",
-          displayName: "Goat arrival journey",
-          avatar: run.blob,
-        },
-      },
-    }),
-    "source record",
-  );
 });
 
 test("the browser verifies the destination email and prepares the arrival", async ({
@@ -232,29 +202,13 @@ test("goat migrates the account through Entryway's incoming flow", async () => {
 
 test("the destination is active and serves the state; the source is deactivated", async () => {
   const endpoint = run.prepared.destinationEndpoint;
-  const record = json(
-    await call(endpoint, "com.atproto.repo.getRecord", {
-      params: {
-        repo: run.source.did,
-        collection: "app.bsky.actor.profile",
-        rkey: "self",
-      },
-    }),
-  );
-  expect(record.value.displayName).toBe("Goat arrival journey");
-  const blob = await call(endpoint, "com.atproto.sync.getBlob", {
-    params: { did: run.source.did, cid: run.blob.ref.$link },
+  await expectDestinationServes(access, {
+    endpoint,
+    did: run.source.did,
+    blob: run.blob,
+    displayName: "Goat arrival journey",
+    handle: run.destinationHandle,
   });
-  ok(blob, "destination blob");
-  expect(blob.content.equals(pixel)).toBe(true);
-  const document = await (
-    await fetch(new URL(`/${run.source.did}`, access.plcUrl))
-  ).json();
-  expect(
-    document.service.find((service) => service.id === "#atproto_pds")
-      .serviceEndpoint,
-  ).toBe(endpoint);
-  expect(document.alsoKnownAs).toContain(`at://${run.destinationHandle}`);
   const hosted = json(
     await call(endpoint, "com.atproto.repo.describeRepo", {
       params: { repo: run.source.did },
