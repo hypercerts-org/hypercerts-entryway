@@ -8,11 +8,10 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import {
   call,
-  createSourceAccount,
   expectDestinationServes,
   json,
   ok,
-  prepareArrival,
+  registerArrivalSetup,
 } from "../support/helpers/incoming-journey.mjs";
 import { waitForStockPlcMessage } from "../support/helpers/stock-plc-mailpit.mjs";
 
@@ -79,29 +78,14 @@ test.afterAll(() => {
   if (run.goatHome) rmSync(run.goatHome, { recursive: true, force: true });
 });
 
-test("a standalone source account has a record and a blob", async () => {
-  const created = await createSourceAccount(access, {
-    unique,
-    email: sourceEmail,
-    password: sourcePassword,
-    displayName: "Goat arrival journey",
-  });
-  run.source = created.source;
-  run.blob = created.blob;
-  run.sourceHandle = created.handle;
-  run.destinationHandle = `d${unique}${config.handleDomains[0]}`;
-});
-
-test("the browser verifies the destination email and prepares the arrival", async ({
-  page,
-}) => {
-  run.prepared = await prepareArrival(page, {
-    issuer: config.issuer,
-    mailpitUrl: access.mailpitUrl,
-    did: run.source.did,
-    handle: run.destinationHandle,
-    email: destinationEmail,
-  });
+registerArrivalSetup(test, {
+  context: () => ({ access, config }),
+  run,
+  unique,
+  sourceEmail,
+  sourcePassword: sourcePassword,
+  destinationEmail,
+  displayName: "Goat arrival journey",
 });
 
 test("goat migrates the account through Entryway's incoming flow", async () => {
