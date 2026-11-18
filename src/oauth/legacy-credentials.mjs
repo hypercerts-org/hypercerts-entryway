@@ -139,7 +139,13 @@ export async function createLegacy({ db, config, accounts }) {
   // the account is still the pending arrival and has no password. This is not a
   // password change, so no credential family is revoked, and a late or repeated
   // installer never overwrites a password or touches an activated account.
-  const installInitialPassword = async (did, password, { isPending }) => {
+  // `assertOwner` runs inside that same transaction, before the insert, and
+  // throws when the caller's operation owner or arrival state is stale.
+  const installInitialPassword = async (
+    did,
+    password,
+    { isPending, assertOwner },
+  ) => {
     const hash = await hashPassword(checkedPassword(password));
     return await transaction(async () => {
       const account = await accounts.get(did);
@@ -150,6 +156,7 @@ export async function createLegacy({ db, config, accounts }) {
         (await get("passwords", did))
       )
         return false;
+      if (assertOwner) await assertOwner();
       await set("passwords", did, {
         hash,
         revision: identifier(),

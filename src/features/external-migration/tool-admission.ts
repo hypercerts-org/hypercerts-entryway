@@ -10,6 +10,9 @@ import {
 import type { ArrivalRecord } from "./arrival-types.js";
 import { arrivalCodeHash } from "./prepare-arrival.js";
 import { PlcError } from "../../plc/errors.js";
+import type { OperationOwnership } from "../../accounts/operation-ownership.js";
+import type { OperationClaim } from "../../database/operation-ownership.port.js";
+import { createArrivalOwner } from "./arrival-owner.js";
 
 /** Directory evidence that was unavailable or moved during observation says
  * nothing about the identity. No dispatch marker is written before the handoff
@@ -106,12 +109,17 @@ export interface ToolAdmissionInput {
 
 export function createToolAdmission({
   arrivals,
+  ownership,
   admit,
   continueCreation,
   issueCreationSession,
   setArrivalPassword,
 }: {
-  arrivals: Pick<ArrivalTransactor, "consumeArrivalCode">;
+  arrivals: Pick<
+    ArrivalTransactor,
+    "consumeArrivalCode" | "readArrivalAggregate"
+  >;
+  ownership: OperationOwnership;
   admit: (input: {
     operationId: string;
     userId: string;
@@ -125,10 +133,16 @@ export function createToolAdmission({
     userId: string;
   }) => Promise<unknown>;
   /** Sets the saved account's password for the exact admitted request, unless
-   * already set by it. Never logs or returns the password. */
+   * already set by it. It runs under the arrival's recorded claim, and its write
+   * transaction must verify `owner` and the arrival `version` itself. Never logs
+   * or returns the password. */
   setArrivalPassword: (input: {
     did: string;
+    operationId: string;
+    userId: string;
     password: string;
+    owner: OperationClaim;
+    version: number;
   }) => Promise<void>;
   issueCreationSession: (input: {
     did: string;
@@ -136,6 +150,7 @@ export function createToolAdmission({
     arrivalCode: string;
   }) => Promise<TrackedArrivalSession>;
 }) {
+  const arrivalOwner = createArrivalOwner({ arrivals, ownership });
   /** The one selection point. Method first, then a current code. The code only
    * selects; `admit` verifies the source credential before any lease. */
   const select = async (
@@ -213,8 +228,22 @@ export function createToolAdmission({
         // The body already matched the admitted request, whose digest commits to
         // the password: set it here, before any credential is issued.
         const { password } = input.body as { password?: unknown };
-        if (typeof password === "string")
-          await setArrivalPassword({ did: record.did, password });
+        if (typeof password === "string") {
+          const saved = await arrivalOwner.read(
+            record.operationId,
+            record.userId,
+          );
+          await arrivalOwner.resume(saved.arrival, (owner, current) =>
+            setArrivalPassword({
+              did: record.did,
+              operationId: record.operationId,
+              userId: record.userId,
+              password,
+              owner,
+              version: current.arrival.version,
+            }),
+          );
+        }
         return issueCreationSession({
           did: record.did,
           operationId: record.operationId,

@@ -1272,8 +1272,8 @@ test("concurrent matching replays install the password once and revoke no creden
   };
   await create(s, body, { jwt });
   f.storage.bindPlacedAccount = bind;
-  // Request A has passed the replay guard and is hashing (held before the
-  // install) while request B installs the password and receives credentials.
+  // Request A holds the arrival's claim while installing; request B's install
+  // waits on that same claim, then finds the password already set.
   const install = f.legacy.installInitialPassword;
   let entered;
   const aEntered = new Promise((resolve) => (entered = resolve));
@@ -1283,7 +1283,6 @@ test("concurrent matching replays install the password once and revoke no creden
   const results = [];
   t.mock.method(f.legacy, "installInitialPassword", async (...args) => {
     const mine = ++calls;
-    results.push(mine);
     if (mine === 1) {
       entered();
       await held;
@@ -1294,21 +1293,15 @@ test("concurrent matching replays install the password once and revoke no creden
   });
   const a = create(s, body);
   await aEntered;
-  const b = await create(s, body);
-  assert.equal(b.status, 200, b.text);
-  const installedByB = await savedPassword(f);
-  assert.ok(installedByB);
-  assert.equal((await savedFamilies(f)).length, 1);
+  const b = create(s, body);
+  await new Promise((resolve) => setTimeout(resolve, 100));
   release();
-  const first = await a;
-  // Credentials are issued once: the second finisher is refused, not revoked-over.
-  assert.equal(first.status, 409, first.text);
-  assert.equal(calls, 2);
-  assert.deepEqual(
-    results.filter((value) => typeof value === "boolean"),
-    [true, false],
-  );
-  assert.deepEqual(await savedPassword(f), installedByB);
+  const [first, second] = [await a, await b];
+  // Credentials are issued once: the other finisher is refused, not revoked-over.
+  assert.deepEqual([first.status, second.status].sort(), [200, 409]);
+  assert.equal(calls, 1);
+  assert.deepEqual(results, [true]);
+  assert.ok(await savedPassword(f));
   const families = await savedFamilies(f);
   assert.equal(families.length, 1);
   assert.equal(families.filter((family) => family.revokedAt).length, 0);
@@ -1316,6 +1309,30 @@ test("concurrent matching replays install the password once and revoke no creden
     families.some((family) => family.revocationReason === "password-changed"),
     false,
   );
+});
+
+test("an execution whose lease expired before the install cannot install the password", async (t) => {
+  const s = await published(t);
+  const { f } = s;
+  const body = { handle, inviteCode: await invite(f), password };
+  const install = f.legacy.installInitialPassword;
+  t.mock.method(f.legacy, "installInitialPassword", async (...args) => {
+    // Another worker took over: this execution's lease is no longer live.
+    await query(
+      f.db,
+      "UPDATE authority_operations SET lease_expires_at = 1 WHERE state = 'running'",
+      [],
+      "run",
+    );
+    return await install(...args);
+  });
+  const response = await create(s, body);
+  assert.notEqual(response.status, 200, response.text);
+  assert.equal(response.status, 409, response.text);
+  assert.equal(response.json?.error, "OperationLeaseLost", response.text);
+  assert.equal(await savedPassword(f), null);
+  assert.equal(await f.legacy.hasPassword(f.did), false);
+  assert.equal((await savedFamilies(f)).length, 0);
 });
 
 test("a late initial-password install never overwrites an activated account's changed password", async (t) => {
