@@ -2176,14 +2176,21 @@ test("renewal refuses an uncertain allocation and a bound arrival", async (t) =>
   );
 });
 
+// Both stamps move behind the issue time, so the code is already lapsed on
+// the database clock however quickly the next read follows.
+const lapseCode = async (f, operationId) => {
+  const { issued_at: issuedAt } = (await stored(f)).code[0];
+  await f.db.update(
+    "arrival_code",
+    { issued_at: issuedAt - 2, expires_at: issuedAt - 1 },
+    eq(f.db.tables.arrival_code.operation_id, operationId),
+  );
+};
+
 test("a lapsed unclaimed preparation is deleted when renewal finds it, and a repeat is not found", async (t) => {
   const f = await fixture(t);
   const prepared = await f.prepare();
-  await f.db.update(
-    "arrival_code",
-    { expires_at: (await stored(f)).code[0].issued_at + 1 },
-    eq(f.db.tables.arrival_code.operation_id, prepared.operationId),
-  );
+  await lapseCode(f, prepared.operationId);
   // The first read deletes the lapsed preparation, so renewal finds nothing
   // (C1 allows ArrivalExpired or AccountNotFound for an expired preparation).
   await assert.rejects(renew(f, prepared.operationId, prepared.version), {
@@ -2394,11 +2401,7 @@ test("a superseded, garbage or expired code fails identically with the contract'
   assert.equal(other.code, "OperationConflict");
   assert.match(other.message, /already admitted; resume/);
   // An expired current code is refused the same way.
-  await f.db.update(
-    "arrival_code",
-    { expires_at: (await stored(f)).code[0].issued_at + 1 },
-    eq(f.db.tables.arrival_code.operation_id, prepared.operationId),
-  );
+  await lapseCode(f, prepared.operationId);
   assert.deepEqual(
     await outcome({ ...creation, arrivalCode: renewed.arrivalCode }),
     expired,
