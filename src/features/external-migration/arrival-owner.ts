@@ -28,7 +28,7 @@ export function createArrivalOwner({
   arrivals,
   ownership,
 }: {
-  arrivals: ArrivalTransactor;
+  arrivals: Pick<ArrivalTransactor, "readArrivalAggregate">;
   ownership: OperationOwnership;
 }) {
   /** Unknown operation and another user's operation are the same 404. */
