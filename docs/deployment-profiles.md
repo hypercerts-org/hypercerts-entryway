@@ -103,8 +103,10 @@ rate limits and which Entryway sends while draining.
 The wildcard origin without credentials keeps a cross-origin page from reading
 responses that depend on a cookie. It does not stop a browser from attaching
 cookies to a simple cross-origin request. `com.atproto.server.createAccount` reads
-the browser session. With a `did` it also requires Entryway's Origin check against
-the issuer and a body CSRF token. Without one, a verified session whose email
+the browser session. With a `did`, a request carrying a verified session must also
+pass Entryway's Origin check against the issuer and send a body CSRF token; a
+request with no such session authenticates its own credential, and the `did` must
+be that credential's account. Without a `did`, a verified session whose email
 matches replaces the email code, and that path relies on `SameSite=Lax` session
 cookies and its JSON-only body, which forces a preflight that fails without
 `Access-Control-Allow-Credentials`. Any future cookie-authenticated XRPC route
@@ -136,8 +138,10 @@ entryway.example.com, *.handles.example.com {
 ```
 
 Replace the site addresses and upstream with the deployment's own; the second
-address stands for the hosted handle domain (a wildcard site needs a certificate
-that covers it). The proxy also terminates TLS and must forward the client
+address stands for the hosted handle domain. A wildcard site needs a certificate
+that covers it: Caddy issues one only through the ACME DNS challenge, so configure
+a DNS provider module for that site or load a certificate with the `tls`
+directive. The proxy also terminates TLS and must forward the client
 address for the per-IP request budgets (`trust proxy` is set to one hop).
 
 ## Repeatable profile checks
