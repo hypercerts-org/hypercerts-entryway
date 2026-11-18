@@ -408,6 +408,19 @@ test("refreshSession serves a tracked arrival family and leaves everything else 
   void f;
 });
 
+test("a tracked arrival credential is served under any casing of the Bearer scheme", async (t) => {
+  const { f, h, session } = await created(t);
+  const refreshed = await h.call(refreshPath, {
+    headers: { authorization: `bearer ${session.refreshJwt}` },
+  });
+  assert.equal(refreshed.status, 200, refreshed.text);
+  const activated = await h.call(activatePath, {
+    headers: { authorization: `BEARER ${refreshed.json.accessJwt}` },
+  });
+  assert.equal(activated.status, 200, activated.text);
+  assert.equal(f.backendState.activations, 1);
+});
+
 test("activateAccount activates a pending arrival with its tracked access credential, once", async (t) => {
   const { f, h, session } = await created(t);
   const response = await h.call(activatePath, {

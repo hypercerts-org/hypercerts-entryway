@@ -506,3 +506,32 @@ test("a revoked OAuth token cannot call Entryway account methods before it expir
   });
   assert.deepEqual(f.statusChanges, []);
 });
+
+test("a lowercase DPoP scheme authenticates the same OAuth token", async (t) => {
+  const f = await oauthFixture(t);
+  await f.token("lowercase-scheme-token");
+  assert.deepEqual(
+    await f.invoke("server.deactivateAccount", {
+      authorization: "dpop access-token",
+      body: {},
+    }),
+    {},
+  );
+  assert.deepEqual(f.statusChanges, [
+    { did: f.alice.did, status: "deactivated" },
+  ]);
+});
+
+test("a lowercase Bearer scheme authenticates the same session credential", async (t) => {
+  const { alice, legacy, invoke } = await fixture(t);
+  await legacy.setPassword(alice.did, "a password for the scheme case");
+  const session = await legacy.createSession({
+    identifier: alice.did,
+    password: "a password for the scheme case",
+  });
+  const created = await invoke("server.createAppPassword", {
+    authorization: `bearer ${session.accessJwt}`,
+    body: { name: "lowercase-scheme" },
+  });
+  assert.equal(created.name, "lowercase-scheme");
+});

@@ -2,6 +2,7 @@ import type { Express, NextFunction, Request, Response } from "express";
 import { decodeProtectedHeader } from "jose";
 import { z } from "zod";
 import { HttpError } from "../../http/http-error.mjs";
+import { schemeCredential } from "../../http/authorization-scheme.js";
 import type { TrackedArrivalSession } from "./arrival-credentials.js";
 
 /** Tool-facing surfaces. Authentication here is never a browser cookie. */
@@ -37,8 +38,10 @@ const create = z.strictObject({
   recoveryKey: z.string().max(200).optional(),
 });
 
-const bearer = (request: Request): string | undefined =>
-  /^Bearer (\S+)$/.exec(request.headers.authorization ?? "")?.[1];
+const bearer = (request: Request): string | undefined => {
+  const token = schemeCredential(request.headers.authorization, "Bearer");
+  return token && /^\S+$/.test(token) ? token : undefined;
+};
 
 /** Registered before the ordinary protocol routes. `createAccount` and
  * `submitPlcOperation` are incoming only when the arrival-code header is

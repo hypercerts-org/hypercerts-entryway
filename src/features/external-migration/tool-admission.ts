@@ -3,6 +3,7 @@ import type { ArrivalTransactor } from "../../database/migration-journal.port.js
 import { DomainError } from "../../accounts/errors.js";
 import type { TrackedArrivalSession } from "./arrival-credentials.js";
 import {
+  bearerToken,
   incomingCreationMethod,
   incomingHandoffMethod,
   type IncomingMethod,
@@ -71,7 +72,6 @@ async function stableIdentity<T>(work: () => Promise<T>): Promise<T> {
  * operation or user.
  */
 const codeShape = /^[A-Za-z0-9_-]{16,128}$/;
-const bearerShape = /^Bearer ([A-Za-z0-9._~+/-]+=*)$/;
 const issuerShape = /^(did:plc:[a-z2-7]{24})(?:#atproto)?$/;
 
 const expired = () =>
@@ -82,7 +82,7 @@ const expired = () =>
  * method, the audience and that this DID is the arrival's DID. */
 function claimedDid(presentation: unknown): string | null {
   if (typeof presentation !== "string") return null;
-  const token = bearerShape.exec(presentation.trim())?.[1];
+  const token = bearerToken(presentation);
   const payload = token?.split(".")[1];
   if (!payload) return null;
   try {

@@ -5,6 +5,7 @@ import {
 } from "../authentication/password-crypto.mjs";
 import { importJWK, jwtVerify, SignJWT } from "jose";
 import { HttpError } from "../http/http-error.mjs";
+import { schemeCredential } from "../http/authorization-scheme.js";
 
 export const LEGACY_SCOPES = Object.freeze({
   access: "com.atproto.access",
@@ -369,10 +370,7 @@ export async function createLegacy({ db, config, accounts }) {
       account: await accountFor(did, { allowDeactivated: true }),
     });
   const parseToken = async (input, kind, { allowExpired = false } = {}) => {
-    const token =
-      typeof input === "string" && input.startsWith("Bearer ")
-        ? input.slice(7)
-        : input;
+    const token = schemeCredential(input, "Bearer") ?? input;
     if (
       typeof token !== "string" ||
       token.length > 8192 ||
