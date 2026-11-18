@@ -137,7 +137,7 @@ async function fixture() {
       endpoint,
       ...preparationAuthority,
       codeHash: hash("a"),
-      codeExpiresAt: Date.now() + day,
+      codeLifetimeMs: day,
       ...overrides,
     });
   // Claiming is the first admitted step, so every helper that allocates, binds,
@@ -503,6 +503,7 @@ const lapse = (db, operationId = "op-1") =>
 test("an expired unclaimed preparation is deleted when found", async () => {
   for (const found of [
     "read",
+    "aggregate",
     "consume",
     "rotate",
     "claim",
@@ -515,6 +516,7 @@ test("an expired unclaimed preparation is deleted when found", async () => {
       await lapse(db);
       const find = {
         read: () => arrivals.readArrival("op-1", "user-a"),
+        aggregate: () => arrivals.readArrivalAggregate("op-1", "user-a"),
         consume: () =>
           arrivals.consumeArrivalCode({
             codeHash: hash("a"),
@@ -527,7 +529,7 @@ test("an expired unclaimed preparation is deleted when found", async () => {
             expectedVersion: prepared.version,
             ownerUserId: "user-a",
             codeHash: hash("b"),
-            codeExpiresAt: Date.now() + day,
+            codeLifetimeMs: day,
           }),
         claim: () => claimArrival(prepared.version),
         cancel: () =>
@@ -536,7 +538,8 @@ test("an expired unclaimed preparation is deleted when found", async () => {
           ),
         prepare: () => prepareUnclaimed(),
       }[found];
-      if (["read", "consume"].includes(found)) assert.equal(await find(), null);
+      if (["read", "aggregate", "consume"].includes(found))
+        assert.equal(await find(), null);
       else if (found === "cancel") await find();
       else await assert.rejects(find(), { code: "OperationConflict" });
       assert.deepEqual(await query(db, "SELECT * FROM arrivals"), [], found);
@@ -561,6 +564,34 @@ test("a claimed arrival does not expire with its code", async () => {
       "op-1",
     );
     assert.equal((await query(db, "SELECT * FROM arrivals")).length, 1);
+  } finally {
+    await db.close();
+  }
+});
+
+test("a claimed retry is settled only under the current fence and admission", async () => {
+  const { db, arrivals, claim, prepareUnclaimed, claimArrival } =
+    await fixture();
+  try {
+    const prepared = await prepareUnclaimed();
+    const claimed = await claimArrival(prepared.version);
+    const retry = (owner) =>
+      arrivals.claimArrival(owner, prepared.version, {
+        operationId: "op-1",
+        did,
+      });
+    await assert.rejects(retry({ ...claim, fence: claim.fence + 1 }), {
+      code: "OperationLeaseLost",
+    });
+    assert.equal(await persistedVersion(db, "op-1"), claimed.version);
+    await query(
+      db,
+      "UPDATE authority_operations SET lease_expires_at = ? WHERE id = ?",
+      [Date.now() - 1_000, claim.operationId],
+      "run",
+    );
+    await assert.rejects(retry(claim), { code: "OperationLeaseLost" });
+    assert.equal(await persistedVersion(db, "op-1"), claimed.version);
   } finally {
     await db.close();
   }
@@ -725,21 +756,37 @@ test("arrival preparation requires the saved verified user, a configured host an
     await assert.rejects(prepare({ endpoint: hosts[1].url }), {
       code: "InvalidAccount",
     });
-    for (const codeExpiresAt of [
-      Date.now() + day + 60_000,
-      Date.now() + 8 * day,
-      Date.now(),
-      Date.now() - day,
-    ])
-      await assert.rejects(prepare({ codeExpiresAt }), {
+    for (const codeLifetimeMs of [day + 1, 8 * day, 0, -day, 1.5])
+      await assert.rejects(prepare({ codeLifetimeMs }), {
         code: "InvalidAccount",
       });
     assert.equal(
       (await query(db, "SELECT operation_id FROM arrivals")).length,
       0,
     );
-    const shorter = await prepare({ codeExpiresAt: Date.now() + 3_600_000 });
+    const shorter = await prepare({ codeLifetimeMs: 3_600_000 });
     assert.equal(shorter.codeExpiresAt > Date.now(), true);
+  } finally {
+    await db.close();
+  }
+});
+
+test("arrival code expiry is issued from database time, not the application clock", async () => {
+  const { db, prepare, arrivals } = await fixture();
+  try {
+    // Application clock ahead of the database clock by a few seconds.
+    const databaseNow = Date.now() - 5_000;
+    db.databaseTime = async () => databaseNow;
+    const prepared = await prepare({ codeLifetimeMs: day });
+    assert.equal(prepared.codeExpiresAt, databaseNow + day);
+    const rotated = await arrivals.rotateArrivalCode({
+      operationId: prepared.operationId,
+      expectedVersion: prepared.version,
+      ownerUserId: "user-a",
+      codeHash: hash("b"),
+      codeLifetimeMs: day,
+    });
+    assert.equal(rotated.codeExpiresAt, databaseNow + day);
   } finally {
     await db.close();
   }
@@ -850,7 +897,7 @@ for (const action of ["rotateArrivalCode", "cancelArrival"])
                 expectedVersion,
                 ownerUserId: "user-b",
                 codeHash: hash("b"),
-                codeExpiresAt: Date.now() + day,
+                codeLifetimeMs: day,
                 noRemoteObligation: true,
                 plcStateUnchanged: true,
               }),
@@ -888,7 +935,7 @@ test("arrival code rotation invalidates the previous generation and cannot redir
       expectedVersion: prepared.version,
       ownerUserId: "user-a",
       codeHash: hash("b"),
-      codeExpiresAt: Date.now() + day,
+      codeLifetimeMs: day,
     });
     assert.equal(rotated.generation, 2);
     for (const [codeHash, expected] of [
@@ -912,7 +959,7 @@ test("arrival code rotation invalidates the previous generation and cannot redir
         expectedVersion: prepared.version,
         ownerUserId: "user-a",
         codeHash: hash("c"),
-        codeExpiresAt: Date.now() + day,
+        codeLifetimeMs: day,
       }),
       { code: "OperationConflict" },
     );
@@ -922,7 +969,7 @@ test("arrival code rotation invalidates the previous generation and cannot redir
         expectedVersion: rotated.version,
         ownerUserId: "user-b",
         codeHash: hash("c"),
-        codeExpiresAt: Date.now() + day,
+        codeLifetimeMs: day,
       }),
       { code: "AccountNotFound", status: 404, message: "Arrival not found" },
     );
@@ -935,7 +982,7 @@ test("arrival code rotation invalidates the previous generation and cannot redir
       expectedVersion: rotated.version,
       ownerUserId: "user-a",
       codeHash: hash("c"),
-      codeExpiresAt: Date.now() + day,
+      codeLifetimeMs: day,
     });
     assert.equal(rotatedAgain.generation, 3);
     assert.equal(
@@ -1110,7 +1157,7 @@ test("a validated reservation result is conditional and a changed key is recorde
         expectedVersion: divergedVersion,
         ownerUserId: "user-a",
         codeHash: hash("b"),
-        codeExpiresAt: Date.now() + day,
+        codeLifetimeMs: day,
       }),
       { code: "OperationRecoveryRequired" },
     );
@@ -1723,6 +1770,54 @@ test("activation completion is separate and requires exact version and observed 
   }
 });
 
+test("activation completion is refused after a divergence is recorded post-binding", async () => {
+  const { db, arrivals, claim, prepare, allocate, bind } = await fixture();
+  try {
+    const prepared = await prepare();
+    const version = await allocate(prepared.version);
+    const bound = await bind(version);
+    assert.deepEqual(
+      await arrivals.recordReservationResult(claim, bound.version, {
+        operationId: "op-1",
+        did,
+        pdsId: "pds1",
+        endpoint,
+        signingKey: publicKey("n"),
+      }),
+      { kind: "reconciliation-required", reason: "saved-key-differs" },
+    );
+    const diverged = await persistedVersion(db, "op-1");
+    const pending = async () => ({
+      rows: await query(
+        db,
+        "SELECT active, did_root, completed_at, activation_method, version FROM arrivals",
+      ),
+      access: await arrivals.readArrivalAccess(did),
+    });
+    const before = await pending();
+    await assert.rejects(
+      arrivals.completeArrivalActivation({
+        owner: claim,
+        operationId: "op-1",
+        expectedVersion: diverged,
+        did,
+        userId: "user-a",
+        activation: {
+          backendActiveObserved: true,
+          method: "com.atproto.server.activateAccount",
+          observedAt: Date.now(),
+        },
+      }),
+      { code: "OperationRecoveryRequired" },
+    );
+    assert.deepEqual(await pending(), before);
+    assert.equal(before.access.complete, false);
+    assert.equal(before.rows[0].active, 1);
+  } finally {
+    await db.close();
+  }
+});
+
 test("activation completion is rejected when the operation owner changed", async () => {
   const { db, arrivals, claim, prepare, allocate, bind } = await fixture();
   try {
@@ -1980,7 +2075,7 @@ test(
         endpoint,
         ...preparationAuthority,
         codeHash: hash("a"),
-        codeExpiresAt: Date.now() + day,
+        codeLifetimeMs: day,
       });
       const ownership = createOperationOwnershipStore(first);
       const claim = await ownership.acquire({
@@ -2106,7 +2201,7 @@ test(
         endpoint,
         ...preparationAuthority,
         codeHash: hash("a"),
-        codeExpiresAt: Date.now() + day,
+        codeLifetimeMs: day,
       });
       const ownership = createOperationOwnershipStore(dispatcher);
       const claim = await ownership.acquire({
@@ -3392,7 +3487,7 @@ test("credential identity cannot authorize an unrelated operation and new admiss
       ownerUserId: "user-a",
       expectedVersion: prepared.version + 1,
       codeHash: hash("b"),
-      codeExpiresAt: Date.now() + day,
+      codeLifetimeMs: day,
     });
     await assert.rejects(
       arrivals.recordArrivalReplay(

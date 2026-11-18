@@ -119,7 +119,7 @@ async function fixture() {
     source: authority.sourceFacts,
     approvedRotationKeys: authority.approved,
     codeHash: code.hash,
-    codeExpiresAt: Date.now() + day,
+    codeLifetimeMs: day,
   });
   const claim = await ownership.acquire({
     resource: userId,
