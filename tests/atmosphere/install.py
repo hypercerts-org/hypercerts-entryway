@@ -31,17 +31,20 @@ for app in ['hypercerts-entryway','entryway-fixtures','entryway-oauth-web-app','
                 # Browser state is private mounted state, excluded from reports.
                 text = text.replace('      - entryway-data:/entryway-data\n', '      - profile-private:/profile\n      - entryway-data:/entryway-data\n')
                 text = text.replace('      - database-profile-data:/profile', '      - profile-private:/profile')
+                # Chain gateway -> entryway-ingress (CORS) -> profile-ingress -> nodes.
+                old_ingress = '      - ../../tests/support/entryway-ingress.Caddyfile:/etc/caddy/Caddyfile:ro,z\n    networks: [atmosinabox]\n    depends_on:\n      entryway: { condition: service_healthy }\n'
+                if text.count(old_ingress) != 1:
+                    raise SystemExit('Unexpected entryway-ingress template')
+                text = text.replace(old_ingress, '      - ../../tests/support/entryway-ingress.Caddyfile:/etc/caddy/Caddyfile:ro,z\n    environment:\n      ENTRYWAY_UPSTREAM: profile-ingress:3000\n    networks: [atmosinabox]\n    depends_on:\n      profile-ingress: { condition: service_healthy }\n')
             else:
                 definition = json.loads(text)
-                for route in definition['routes']:
-                    if route['service'] == 'entryway':
-                        route['service'] = 'profile-ingress'
                 definition['services'].append({'service': 'profile-ingress', 'environment': []})
                 if profile_nodes == '2':
                     definition['services'].append({'service': 'entryway-replica', 'environment': []})
                 text = json.dumps(definition, indent=2) + '\n'
         # Compose paths resolve relative to the generated file in the clone.
         text = text.replace('context: ../..', 'context: ' + json.dumps(str(root)))
+        text = text.replace('../../tests/support/entryway-ingress.Caddyfile', str(root / 'tests/support/entryway-ingress.Caddyfile'))
         text = text.replace('../artifacts:/app/artifacts:z', os.environ.get('ACCEPTANCE_REPORT_DIR', str(root / 'tests/artifacts')) + ':/app/artifacts:z')
         target = sandbox / 'stacks' / (app + suffix)
         if target.exists() and target.read_text() != text and (sandbox / 'state/manifest.json').exists():

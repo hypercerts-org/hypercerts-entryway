@@ -61,10 +61,10 @@ async function fixture() {
       assert.equal(input.handle, "moved.entryway.test");
       calls.push("reserve");
     },
-    async finalizeImportedAccount() {
+    async bindProvisionedArrival() {
       calls.push("bind");
     },
-    async activateImportedAccount() {
+    async activateBoundArrival() {
       assert.equal(state.active, true);
       calls.push("local-active");
     },

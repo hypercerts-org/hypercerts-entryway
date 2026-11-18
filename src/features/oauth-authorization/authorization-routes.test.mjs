@@ -186,6 +186,7 @@ async function fixture(
   });
   await db.set("browser", browser.deviceId, { csrf, createdAt: new Date() });
   const { authenticated, priorConsentSkip } = createConsent({
+    pendingArrival: { isPending: async () => false },
     db,
     provider,
     stores: { account: async () => null },

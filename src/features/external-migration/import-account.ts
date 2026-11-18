@@ -462,7 +462,7 @@ export class ExternalMigrationService {
             {
               const n = advance(w, "account-bound");
               await this.d.transact(async () => {
-                await this.d.accounts.finalizeImportedAccount({
+                await this.d.accounts.bindProvisionedArrival({
                   workflowId: w.id,
                   did: w.did,
                   userId: w.ownerUserId,
@@ -492,7 +492,7 @@ export class ExternalMigrationService {
             {
               const n = advance(w, "complete");
               await this.d.transact(async () => {
-                await this.d.accounts.activateImportedAccount({
+                await this.d.accounts.activateBoundArrival({
                   workflowId: w.id,
                   did: w.did,
                   userId: w.ownerUserId,

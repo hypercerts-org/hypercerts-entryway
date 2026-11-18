@@ -1,28 +1,49 @@
 import { defineConfig } from "@playwright/test";
 
 const publicRun = process.env.PUBLIC_BROWSER_TESTS === "true";
-const artifactPrefix = publicRun ? "public-browser" : "browser";
+// The incoming public journey needs an owned sandbox's access projection, so
+// only `./tests/local.sh incoming-public-journey` selects it.
+const incomingJourney = process.env.INCOMING_PUBLIC_JOURNEY === "1";
+// The goat journey is selected only by `./tests/local.sh incoming-goat-journey`.
+const goatJourney = process.env.INCOMING_GOAT_JOURNEY === "1";
+const defaultMatch = [
+  "browser.spec.mjs",
+  "account-console.spec.mjs",
+  "account-confirm.spec.mjs",
+  "account-console-multi-binding.spec.mjs",
+  "migration-console.spec.mjs",
+  "experience-browser.spec.mjs",
+  "browser-oauth.spec.mjs",
+  "oauth-lifecycle.spec.mjs",
+  "account-chooser.spec.mjs",
+  "oauth-remembered-device.spec.mjs",
+  "oauth-signup-consent-skip.spec.mjs",
+  "oauth-sign-in-hints.spec.mjs",
+  "shared-email-lookups.spec.mjs",
+  "entryway-ingress-cors.spec.mjs",
+  "consent-map.spec.mjs",
+  "hinted-code-limit.spec.mjs",
+];
+// The PDS MOOver journey is selected only by `./tests/local.sh incoming-moover-journey`.
+const mooverJourney = process.env.INCOMING_MOOVER_JOURNEY === "1";
+const selected = [
+  [
+    mooverJourney,
+    "incoming-moover-journey",
+    "incoming-moover-journey.spec.mjs",
+  ],
+  [goatJourney, "incoming-goat-journey", "incoming-goat-journey.spec.mjs"],
+  [
+    incomingJourney,
+    "incoming-public-journey",
+    "incoming-public-journey.spec.mjs",
+  ],
+  [publicRun, "public-browser", "public-browser.spec.mjs"],
+].find(([active]) => active);
+const artifactPrefix = selected?.[1] ?? "browser";
 export default defineConfig({
   testDir: "./browser",
-  testMatch: publicRun
-    ? "public-browser.spec.mjs"
-    : [
-        "browser.spec.mjs",
-        "account-console.spec.mjs",
-        "account-confirm.spec.mjs",
-        "account-console-multi-binding.spec.mjs",
-        "migration-console.spec.mjs",
-        "experience-browser.spec.mjs",
-        "browser-oauth.spec.mjs",
-        "oauth-lifecycle.spec.mjs",
-        "account-chooser.spec.mjs",
-        "oauth-remembered-device.spec.mjs",
-        "oauth-signup-consent-skip.spec.mjs",
-        "oauth-sign-in-hints.spec.mjs",
-        "shared-email-lookups.spec.mjs",
-        "consent-map.spec.mjs",
-        "hinted-code-limit.spec.mjs",
-      ],
+  testMatch: selected?.[2] ?? defaultMatch,
   fullyParallel: false,
   workers: 1,
   retries: 0,

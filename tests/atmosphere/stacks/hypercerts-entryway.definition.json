@@ -46,6 +46,29 @@
       "environment": []
     },
     {
+      "service": "entryway-ingress",
+      "environment": []
+    },
+    {
+      "service": "pds-moover",
+      "environment": [
+        {
+          "name": "PUBLIC_APP_URL",
+          "source": {
+            "kind": "route-url",
+            "route": "moover"
+          }
+        },
+        {
+          "name": "ORIGIN",
+          "source": {
+            "kind": "route-url",
+            "route": "moover"
+          }
+        }
+      ]
+    },
+    {
       "service": "pds1",
       "environment": []
     },
@@ -69,20 +92,20 @@
   "routes": [
     {
       "id": "entryway",
-      "service": "entryway",
+      "service": "entryway-ingress",
       "host": "entryway",
-      "port": 3000
+      "port": 8080
     },
     {
       "id": "handles",
-      "service": "entryway",
+      "service": "entryway-ingress",
       "host": "*.entryway",
-      "port": 3000
+      "port": 8080
     },
     {
       "id": "client",
-      "service": "entryway",
-      "port": 3000,
+      "service": "entryway-ingress",
+      "port": 8080,
       "hostname": "client.entryway.example.com"
     },
     {
@@ -96,6 +119,12 @@
       "service": "pds2",
       "host": "cluster2",
       "port": 3000
+    },
+    {
+      "id": "moover",
+      "service": "pds-moover",
+      "port": 3000,
+      "hostname": "moover.atmosbox.internal"
     }
   ],
   "secrets": []

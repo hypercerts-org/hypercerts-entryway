@@ -75,6 +75,50 @@ services:
       interval: 3s
       timeout: 3s
       retries: 60
+  # Browser-access proxy in front of Entryway (docs/deployment-profiles.md,
+  # "Browser access to XRPC"). The gateway terminates TLS and forwards here.
+  entryway-ingress:
+    image: caddy:2.11.4-alpine
+    volumes:
+      - ../../tests/support/entryway-ingress.Caddyfile:/etc/caddy/Caddyfile:ro,z
+    networks: [atmosinabox]
+    depends_on:
+      entryway: { condition: service_healthy }
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1:8080/_health"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  # PDS MOOver web UI, built from a pinned upstream commit (tests/support/pds-moover).
+  # Started only by `incoming-moover-journey` (profile), never by `up`.
+  pds-moover:
+    image: ${SANDBOX_PROJECT:-hypercerts-entryway}-pds-moover:local
+    build:
+      context: ../..
+      dockerfile: tests/support/pds-moover/Dockerfile
+    profiles: [moover]
+    init: true
+    environment:
+      PORT: "3000"
+      PUBLIC_XRPC_BASE: xrpc.invalid
+      PUBLIC_AVATAR_CDN: https://avatars.invalid
+      PUBLIC_HUBBLE_URL: https://hubble.invalid
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [atmosinabox]
+    healthcheck:
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          'fetch("http://127.0.0.1:3000/oauth-client-metadata.json").then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))',
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 30
   pds1:
     <<: *runtime
     command: node tests/support/start-pds.mjs

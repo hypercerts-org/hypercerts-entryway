@@ -1,0 +1,1390 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import * as plc from "@did-plc/lib";
+import { P256Keypair, Secp256k1Keypair } from "@atproto/crypto";
+import {
+  fixture,
+  handle,
+} from "../../../tests/support/helpers/incoming-arrival-fixture.mjs";
+import { incomingHttp } from "../../../tests/support/helpers/incoming-http.mjs";
+import { query } from "../../../tests/support/database-fixture.mjs";
+import {
+  incomingCreationMethod,
+  incomingHandoffMethod,
+} from "../../../dist/src/features/external-migration/incoming-authorization.js";
+import { createHash, createHmac } from "node:crypto";
+import {
+  canonicalArrivalValue,
+  parseArrivalRequest,
+} from "../../../dist/src/features/external-migration/arrival-request.js";
+import { createInvites } from "../../../dist/src/features/account-registration/invites.mjs";
+
+const submitPath = "/xrpc/com.atproto.identity.submitPlcOperation";
+const createPath = "/xrpc/com.atproto.server.createAccount";
+const refreshPath = "/xrpc/com.atproto.server.refreshSession";
+const activatePath = "/xrpc/com.atproto.server.activateAccount";
+
+async function begin(t, options) {
+  const f = await fixture(t);
+  const h = await incomingHttp(t, f, options);
+  const prepared = await f.prepare();
+  const operation = await plc.signOperation(prepared.handoff, f.source);
+  return { f, h, prepared, operation };
+}
+const submit = async ({ f, h, prepared, operation }, overrides = {}) =>
+  h.tool(submitPath, {
+    code: prepared.arrivalCode,
+    jwt: await f.credential(incomingHandoffMethod),
+    json: { operation },
+    ...overrides,
+  });
+const invite = async (f) => {
+  const invites = await createInvites({
+    db: f.db,
+    config: f.config,
+    accounts: { get: async () => null },
+  });
+  return (await invites.createInviteCode({ useCount: 1 })).code;
+};
+const create = async ({ f, h, prepared }, json, overrides = {}) =>
+  h.tool(createPath, {
+    code: prepared.arrivalCode,
+    jwt: await f.credential(incomingCreationMethod),
+    json,
+    ...overrides,
+  });
+const rows = (f, table) => query(f.db, `SELECT * FROM ${table}`);
+const untouched = async (f) => {
+  assert.equal(f.publicationAttempts.length, 0);
+  assert.equal((await rows(f, "arrival_replay")).length, 0);
+  assert.equal(f.backendState.creates, 0);
+};
+
+/** Handoff published through the real route, then an invitation. */
+async function published(t, options) {
+  const s = await begin(t, options);
+  const ok = await submit(s);
+  assert.equal(ok.status, 200);
+  return s;
+}
+/** A creation accepted through the real route: tracked credentials issued. */
+async function created(t, options = {}) {
+  const s = await published(t, options);
+  const response = await create(s, {
+    handle,
+    inviteCode: await invite(s.f),
+  });
+  assert.equal(response.status, 200, response.text);
+  return { ...s, session: response.json };
+}
+
+test("submitPlcOperation without the arrival-code header is not incoming", async (t) => {
+  const s = await begin(t);
+  const response = await submit(s, { code: undefined });
+  assert.equal(response.status, 418);
+  assert.deepEqual(response.json, { ordinary: "identity.submitPlcOperation" });
+  await untouched(s.f);
+});
+
+test("submitPlcOperation admits the source-signed handoff with no cookie and publishes only that operation", async (t) => {
+  const s = await begin(t);
+  // The exact retry is the same body with the same credential (its replay
+  // identity), until that credential expires. It is not a second publication.
+  const jwt = await s.f.credential(incomingHandoffMethod);
+  const response = await submit(s, { jwt });
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.json, {});
+  assert.equal(response.headers["cache-control"], "no-store");
+  assert.equal(s.f.publicationAttempts.length, 1);
+  assert.deepEqual(s.f.publicationAttempts[0], s.operation);
+  assert.equal((await rows(s.f, "arrival_replay")).length, 1);
+  const retry = await submit(s, { jwt });
+  assert.equal(retry.status, 200);
+  assert.equal(s.f.publicationAttempts.length, 1);
+  assert.equal((await rows(s.f, "arrival_replay")).length, 1);
+});
+
+test("an exact replay of an admitted body passes through without re-admission; a different body conflicts", async (t) => {
+  const s = await begin(t);
+  assert.equal((await submit(s)).status, 200);
+  // A fresh credential for the same body is an exact replay: it resumes the
+  // saved continuation, publishes nothing new and records no second admission.
+  const replay = await submit(s);
+  assert.equal(replay.status, 200);
+  assert.equal(s.f.publicationAttempts.length, 1);
+  assert.equal((await rows(s.f, "arrival_replay")).length, 1);
+  const other = await plc.signOperation(
+    { ...s.prepared.handoff, alsoKnownAs: ["at://other.example.test"] },
+    s.f.source,
+  );
+  const conflict = await submit(s, { json: { operation: other } });
+  assert.equal(conflict.status, 409);
+  assert.equal(conflict.json.error, "OperationConflict");
+  assert.equal(s.f.publicationAttempts.length, 1);
+});
+
+test("submitPlcOperation refuses every wrong credential, code, DID, audience, method and shape without effect", async (t) => {
+  const s = await begin(t);
+  const other = `did:plc:${"b".repeat(24)}`;
+  const cases = [
+    ["garbage code", { code: "A".repeat(32) }, 409, "ArrivalExpired"],
+    ["short code", { code: "x" }, 409, "ArrivalExpired"],
+    ["empty code", { code: "" }, 409, "ArrivalExpired"],
+    [
+      "another DID's credential",
+      { jwt: await s.f.credential(incomingHandoffMethod, { iss: other }) },
+      409,
+      "ArrivalExpired",
+    ],
+    ["no credential", { jwt: undefined }, 409, "ArrivalExpired"],
+    ["malformed bearer", { jwt: "Bearer not-a-jwt" }, 409, "ArrivalExpired"],
+    [
+      "wrong audience",
+      {
+        jwt: await s.f.credential(incomingHandoffMethod, {
+          aud: "did:web:other.example.test",
+        }),
+      },
+      403,
+      "AccountMismatch",
+    ],
+    [
+      "creation-scoped credential",
+      { jwt: await s.f.credential(incomingCreationMethod) },
+      403,
+      "AccountMismatch",
+    ],
+    [
+      "extra body field",
+      { json: { operation: s.operation, extra: true } },
+      400,
+      "InvalidRequest",
+    ],
+    [
+      "operation not an object",
+      { json: { operation: "x" } },
+      400,
+      "InvalidRequest",
+    ],
+    ["empty body", { json: {} }, 400, "InvalidRequest"],
+  ];
+  for (const [name, overrides, status, error] of cases) {
+    const response = await submit(s, overrides);
+    assert.equal(response.status, status, name);
+    assert.equal(response.json.error, error, name);
+    assert.notEqual(response.status, 418, name);
+    assert.equal(response.text.includes(s.prepared.arrivalCode), false, name);
+  }
+  await untouched(s.f);
+});
+
+test("a superseded code fails like an unknown one and the renewed code works", async (t) => {
+  const s = await begin(t);
+  const renewed = await s.h.browser("/incoming/renew", {
+    operationId: s.prepared.operationId,
+    expectedVersion: s.prepared.version,
+  });
+  assert.equal(renewed.status, 200);
+  const old = await submit(s);
+  const unknown = await submit(s, { code: "B".repeat(32) });
+  assert.equal(old.status, 409);
+  assert.equal(old.json.error, "ArrivalExpired");
+  assert.deepEqual(old.json, unknown.json);
+  await untouched(s.f);
+  const fresh = await submit(s, { code: renewed.json.arrivalCode });
+  assert.equal(fresh.status, 200);
+  assert.equal(s.f.publicationAttempts.length, 1);
+});
+
+test("an unsigned or wrongly signed handoff is refused before publication", async (t) => {
+  const s = await begin(t);
+  const stranger = await Secp256k1Keypair.create();
+  const forged = await plc.signOperation(s.prepared.handoff, stranger);
+  const response = await submit(s, { json: { operation: forged } });
+  assert.equal(response.status, 400);
+  assert.equal(response.json.error, "InvalidPlcOperation");
+  await untouched(s.f);
+});
+
+test("createAccount without the header is not incoming", async (t) => {
+  const s = await published(t);
+  const response = await create(s, { handle }, { code: undefined });
+  assert.equal(response.status, 418);
+  assert.equal(s.f.backendState.creates, 0);
+});
+
+test("createAccount returns tracked credentials only after the binding and family committed", async (t) => {
+  const { f, h, prepared, session } = await created(t);
+  void h;
+  assert.equal(session.did, f.did);
+  assert.equal(session.handle, handle);
+  assert.equal(session.active, false);
+  assert.equal(session.status, "deactivated");
+  assert.equal(typeof session.accessJwt, "string");
+  assert.equal(typeof session.refreshJwt, "string");
+  assert.equal(f.backendState.creates, 1);
+  assert.equal(f.backendState.deactivated, true);
+  const account = (await rows(f, "accounts"))[0];
+  assert.equal(account.status, "provisioning");
+  assert.equal((await rows(f, "account_bindings")).length, 1);
+  const families = await f.arrivals.readArrivalFamilies(prepared.operationId);
+  assert.equal(families.length, 1);
+  assert.equal(
+    (await f.composed.authorizeArrivalAccess(session.accessJwt)).did,
+    f.did,
+  );
+});
+
+test("a repeated createAccount cannot mint a second family; recovery is the saved-user path", async (t) => {
+  const s = await created(t);
+  const { f, h, prepared } = s;
+  const again = await create(s, {
+    handle,
+    inviteCode: "ignored-after-admission",
+  });
+  assert.equal(again.status, 409);
+  assert.equal(again.json.error, "OperationConflict");
+  assert.equal(again.text.includes(s.session.accessJwt), false);
+  assert.equal(
+    (await f.arrivals.readArrivalFamilies(prepared.operationId)).length,
+    1,
+  );
+  assert.equal(f.backendState.creates, 1);
+  const recovered = await h.browser("/incoming/recover", {
+    operationId: prepared.operationId,
+    expectedVersion: (
+      await f.arrivals.readArrivalAggregate(
+        prepared.operationId,
+        f.principal.userId,
+      )
+    ).arrival.version,
+  });
+  assert.equal(recovered.status, 200);
+  assert.equal(recovered.headers["cache-control"], "no-store");
+  assert.notEqual(recovered.json.accessJwt, s.session.accessJwt);
+});
+
+test("invitation policy: required without a code is refused before any backend effect", async (t) => {
+  const s = await published(t);
+  assert.equal(s.f.config.inviteCodeRequired, true);
+  const response = await create(s, { handle });
+  assert.equal(response.status, 400);
+  assert.equal(response.json.error, "InvalidInviteCode");
+  assert.equal(s.f.backendState.creates, 0);
+});
+
+test("invitation policy: optional allows omission", async (t) => {
+  const s = await published(t);
+  s.f.config.inviteCodeRequired = false;
+  const response = await create(s, { handle });
+  assert.equal(response.status, 200, response.text);
+  assert.equal(response.json.did, s.f.did);
+});
+
+test("invitation policy: a supplied invalid code is refused even when optional", async (t) => {
+  const s = await published(t);
+  s.f.config.inviteCodeRequired = false;
+  const response = await create(s, { handle, inviteCode: "no-such-code" });
+  assert.equal(response.status, 400);
+  assert.equal(response.json.error, "InvalidInviteCode");
+  assert.equal(s.f.backendState.creates, 0);
+});
+
+test("invitation policy: a supplied valid code is consumed once and no retry after cutover repeats it", async (t) => {
+  const s = await published(t);
+  const code = await invite(s.f);
+  const jwt = await s.f.credential(incomingCreationMethod);
+  const first = await create(s, { handle, inviteCode: code }, { jwt });
+  assert.equal(first.status, 200);
+  // After cutover the source key no longer verifies, but an exact replay is not
+  // verified: it resumes the saved creation, admits nothing again and cannot
+  // mint a second family. The saved user recovers through /incoming/recover.
+  const retry = await create(s, { handle, inviteCode: code }, { jwt });
+  assert.equal(retry.status, 409);
+  assert.equal(retry.json.error, "OperationConflict");
+  const used = await s.f.db.get("entryway:invites", code);
+  assert.equal(used.remaining, 0);
+  assert.equal(used.uses.length, 1);
+  assert.equal(s.f.backendState.creates, 1);
+});
+
+test("createAccount accepts only the supported strict subset", async (t) => {
+  const s = await published(t);
+  const inviteCode = await invite(s.f);
+  for (const body of [
+    { handle, inviteCode, plcOp: {} },
+    { handle, inviteCode, verificationCode: "1" },
+    { inviteCode },
+    { handle: 7 },
+  ]) {
+    const response = await create(s, body);
+    assert.equal(response.status, 400);
+    assert.equal(response.json.error, "InvalidRequest");
+  }
+  // Valid shape but facts that are not the saved arrival's.
+  for (const body of [
+    { handle: "someone.else.example.test", inviteCode },
+    { handle, did: `did:plc:${"c".repeat(24)}`, inviteCode },
+    { handle, email: "another@example.test", inviteCode },
+  ]) {
+    const response = await create(s, body);
+    assert.equal(response.status, 400);
+    assert.equal(response.json.error, "InvalidAccount");
+  }
+  assert.equal(s.f.backendState.creates, 0);
+});
+
+test("createAccount refuses wrong credentials without falling through to managed movement", async (t) => {
+  const s = await published(t);
+  const inviteCode = await invite(s.f);
+  const cases = [
+    [{ code: "A".repeat(32) }, 409, "ArrivalExpired"],
+    [
+      { jwt: await s.f.credential(incomingHandoffMethod) },
+      403,
+      "AccountMismatch",
+    ],
+    [
+      {
+        jwt: await s.f.credential(incomingCreationMethod, {
+          aud: "did:web:other.example.test",
+        }),
+      },
+      403,
+      "AccountMismatch",
+    ],
+    [
+      {
+        jwt: await s.f.credential(incomingCreationMethod, {
+          iss: `did:plc:${"b".repeat(24)}`,
+        }),
+      },
+      409,
+      "ArrivalExpired",
+    ],
+    [{ jwt: undefined }, 409, "ArrivalExpired"],
+  ];
+  for (const [overrides, status, error] of cases) {
+    const response = await create(s, { handle, inviteCode }, overrides);
+    assert.equal(response.status, status);
+    assert.equal(response.json.error, error);
+  }
+  assert.equal(s.f.backendState.creates, 0);
+});
+
+test("createAccount before the handoff is canonical stays saved and creates nothing", async (t) => {
+  const s = await begin(t);
+  const response = await create(s, { handle, inviteCode: await invite(s.f) });
+  assert.equal(response.status, 409);
+  assert.equal(response.json.error, "OperationRecoveryRequired");
+  assert.equal(s.f.backendState.creates, 0);
+});
+
+test("refreshSession serves a tracked arrival family and leaves everything else to the ordinary route", async (t) => {
+  const { f, h, session } = await created(t);
+  const refreshed = await h.call(refreshPath, {
+    headers: { authorization: `Bearer ${session.refreshJwt}` },
+  });
+  assert.equal(refreshed.status, 200, refreshed.text);
+  assert.equal(refreshed.headers["cache-control"], "no-store");
+  assert.notEqual(refreshed.json.refreshJwt, session.refreshJwt);
+  assert.equal(refreshed.json.active, false);
+  // Not an arrival family's credential: the ordinary route answers.
+  for (const authorization of [
+    undefined,
+    "Bearer not-a-token",
+    `Bearer ${session.accessJwt}`,
+  ]) {
+    const ordinary = await h.call(refreshPath, {
+      headers: authorization ? { authorization } : {},
+    });
+    assert.equal(ordinary.status, 418);
+  }
+  // Replaying the rotated-out refresh credential is refused, not served.
+  const replay = await h.call(refreshPath, {
+    headers: { authorization: `Bearer ${session.refreshJwt}` },
+  });
+  assert.notEqual(replay.status, 200);
+  void f;
+});
+
+test("activateAccount activates a pending arrival with its tracked access credential, once", async (t) => {
+  const { f, h, session } = await created(t);
+  const response = await h.call(activatePath, {
+    headers: { authorization: `Bearer ${session.accessJwt}` },
+  });
+  assert.equal(response.status, 200, response.text);
+  assert.deepEqual(response.json, {});
+  assert.equal(response.headers["cache-control"], "no-store");
+  assert.equal(f.backendState.activations, 1);
+  assert.equal((await rows(f, "accounts"))[0].status, "active");
+  // A lost response retries into the committed result with no second write.
+  const retry = await h.call(activatePath, {
+    headers: { authorization: `Bearer ${session.accessJwt}` },
+  });
+  assert.equal(retry.status, 200);
+  assert.equal(f.backendState.activations, 1);
+});
+
+test("activateAccount never activates for a source JWT, refresh token, replaced family or unknown bearer", async (t) => {
+  const { f, h, prepared, session } = await created(t);
+  const sourceJwt = await f.credential(incomingCreationMethod);
+  for (const authorization of [
+    sourceJwt,
+    `Bearer ${session.refreshJwt}`,
+    "Bearer not-a-token",
+    "Basic Zm9vOmJhcg==",
+  ]) {
+    const response = await h.call(activatePath, {
+      headers: { authorization },
+    });
+    assert.equal(response.status, 418, authorization.slice(0, 12));
+  }
+  assert.equal(f.backendState.activations, 0);
+  // A replaced family is refused with the ordinary expired-token code.
+  const recovered = await h.browser("/incoming/recover", {
+    operationId: prepared.operationId,
+    expectedVersion: (
+      await f.arrivals.readArrivalAggregate(
+        prepared.operationId,
+        f.principal.userId,
+      )
+    ).arrival.version,
+  });
+  assert.equal(recovered.status, 200);
+  const stale = await h.call(activatePath, {
+    headers: { authorization: `Bearer ${session.accessJwt}` },
+  });
+  assert.equal(stale.status, 400);
+  assert.equal(stale.json.error, "ExpiredToken");
+  assert.equal(f.backendState.activations, 0);
+  assert.equal((await rows(f, "accounts"))[0].status, "provisioning");
+});
+
+test("browser activation needs a fresh code and the exact version, and activates through the same operation", async (t) => {
+  const { f, h, prepared } = await created(t);
+  const version = (
+    await f.arrivals.readArrivalAggregate(
+      prepared.operationId,
+      f.principal.userId,
+    )
+  ).arrival.version;
+  const input = { operationId: prepared.operationId, expectedVersion: version };
+  const stale = await h.browser("/incoming/activate", input, { otp: "stale" });
+  assert.equal(stale.status, 403);
+  assert.equal(stale.json.error, "ArrivalProofRequired");
+  const wrong = await h.browser("/incoming/activate", {
+    ...input,
+    expectedVersion: version + 1,
+  });
+  assert.equal(wrong.status, 409);
+  assert.equal(wrong.json.error, "OperationConflict");
+  assert.equal(f.backendState.activations, 0);
+  const noCsrf = await h.browser("/incoming/activate", input, {
+    csrf: "forged",
+  });
+  assert.equal(noCsrf.status, 400);
+  const ok = await h.browser("/incoming/activate", input);
+  assert.equal(ok.status, 200, ok.text);
+  assert.equal(ok.json.state, "active");
+  assert.equal(f.backendState.activations, 1);
+  assert.equal((await rows(f, "accounts"))[0].status, "active");
+});
+
+test("resume continues the saved steps for the saved user and sends nothing new", async (t) => {
+  const { f, h, prepared } = await created(t);
+  const effects = [f.backendState.creates, f.backendState.pauses];
+  const response = await h.browser("/incoming/resume", {
+    operationId: prepared.operationId,
+    otp: undefined,
+  });
+  assert.equal(response.status, 200, response.text);
+  assert.equal(response.json.state, "pending");
+  assert.deepEqual([f.backendState.creates, f.backendState.pauses], effects);
+});
+
+test("recover refuses a stale version and a stale proof and leaves the issued family usable", async (t) => {
+  const { f, h, prepared, session } = await created(t);
+  const version = (
+    await f.arrivals.readArrivalAggregate(
+      prepared.operationId,
+      f.principal.userId,
+    )
+  ).arrival.version;
+  const stale = await h.browser("/incoming/recover", {
+    operationId: prepared.operationId,
+    expectedVersion: version - 1,
+  });
+  assert.equal(stale.status, 409);
+  assert.equal(stale.json.error, "OperationConflict");
+  const noProof = await h.browser(
+    "/incoming/recover",
+    { operationId: prepared.operationId, expectedVersion: version },
+    { otp: "stale" },
+  );
+  assert.equal(noProof.status, 403);
+  assert.equal(noProof.json.error, "ArrivalProofRequired");
+  assert.equal(
+    (await f.composed.authorizeArrivalAccess(session.accessJwt)).did,
+    f.did,
+  );
+});
+
+test("only a legacy access token is ever offered to the activation operation", async (t) => {
+  const f = await fixture(t);
+  const offered = [];
+  const real = f.composed.activateArrivalWithCredential;
+  f.composed = {
+    ...f.composed,
+    activateArrivalWithCredential: (bearer) => {
+      offered.push(bearer);
+      return real(bearer);
+    },
+  };
+  const h = await incomingHttp(t, f);
+  const sourceJwt = await f.credential(incomingCreationMethod);
+  for (const authorization of [
+    sourceJwt,
+    "Bearer not-a-token",
+    "Bearer a.b.c",
+    "Basic Zm9vOmJhcg==",
+  ])
+    assert.equal(
+      (await h.call(activatePath, { headers: { authorization } })).status,
+      418,
+    );
+  assert.deepEqual(offered, []);
+});
+
+test("after completion the committed result answers only while the account is active; later reactivation is the ordinary route's", async (t) => {
+  const { f, h, session } = await created(t);
+  const bearer = { authorization: `Bearer ${session.accessJwt}` };
+  assert.equal((await h.call(activatePath, { headers: bearer })).status, 200);
+  // Lost final response while still active: the committed result again.
+  assert.equal((await h.call(activatePath, { headers: bearer })).status, 200);
+  assert.equal(f.backendState.activations, 1);
+  // The user later deactivates through the ordinary route.
+  const row = await f.storage.getByDid(f.did);
+  await f.storage.saveAccount({ ...row, status: "deactivated" });
+  const later = await h.call(activatePath, { headers: bearer });
+  assert.equal(later.status, 418);
+  assert.deepEqual(later.json, { ordinary: "server.activateAccount" });
+  assert.equal(f.backendState.activations, 1);
+  // The same tracked family's ordinary refresh is also not an arrival's.
+  const refreshed = await h.call(refreshPath, {
+    headers: { authorization: `Bearer ${session.refreshJwt}` },
+  });
+  assert.equal(refreshed.status, 418);
+});
+
+test("after completion an expired or revoked session of the migrated family is the ordinary route's to refuse", async (t) => {
+  const { f, h, session } = await created(t);
+  const bearer = { authorization: `Bearer ${session.accessJwt}` };
+  assert.equal((await h.call(activatePath, { headers: bearer })).status, 200);
+  const ordinary = { ordinary: "server.activateAccount" };
+  // Ordinary deactivation revokes the session family in the legacy store only.
+  const { sid } = JSON.parse(
+    Buffer.from(session.accessJwt.split(".")[1], "base64url").toString(),
+  );
+  await f.legacy.arrivalSessions.revoke([sid], "test");
+  const revoked = await h.call(activatePath, { headers: bearer });
+  assert.equal(revoked.status, 418);
+  assert.deepEqual(revoked.json, ordinary);
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  t.mock.timers.tick(6 * 60 * 1000);
+  const expired = await h.call(activatePath, { headers: bearer });
+  assert.equal(expired.status, 418);
+  assert.deepEqual(expired.json, ordinary);
+  assert.equal(f.backendState.activations, 1);
+});
+
+test("after completion an expired session of the migrated family alone falls through", async (t) => {
+  const { f, h, session } = await created(t);
+  const bearer = { authorization: `Bearer ${session.accessJwt}` };
+  assert.equal((await h.call(activatePath, { headers: bearer })).status, 200);
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  t.mock.timers.tick(6 * 60 * 1000);
+  const expired = await h.call(activatePath, { headers: bearer });
+  assert.equal(expired.status, 418);
+  assert.equal(f.backendState.activations, 1);
+});
+
+test("a cross-origin post spends no browser budget", async (t) => {
+  const f = await fixture(t);
+  const h = await incomingHttp(t, f);
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const refused = await h.browser(
+      "/incoming/prepare",
+      { did: f.did, handle },
+      { origin: "https://evil.example.test" },
+    );
+    assert.equal(refused.status, 400);
+    assert.equal(refused.json.error, "InvalidRequest");
+  }
+  const ok = await h.browser("/incoming/prepare", { did: f.did, handle });
+  assert.equal(ok.status, 200);
+});
+
+test("incoming createAccount spends the ordinary createAccount per-IP budget; handoff submission is not limited", async (t) => {
+  const s = await begin(t);
+  // The handoff route has no IP budget: far more refusals than any limit.
+  for (let attempt = 0; attempt < 40; attempt++)
+    assert.equal(
+      (await submit(s, { code: "A".repeat(32) })).status,
+      409,
+      "handoff refusals are never rate limited",
+    );
+  const limited = async () =>
+    (
+      await query(
+        s.f.db,
+        "SELECT key FROM key_value_state WHERE namespace = 'entryway:limits'",
+      )
+    ).map((row) => row.key);
+  assert.deepEqual(await limited(), ["incoming-prepare:destination-user"]);
+  let last;
+  for (let attempt = 0; attempt < 31; attempt++)
+    last = await create(s, { handle }, { code: "A".repeat(32) });
+  assert.equal(last.status, 429);
+  assert.equal(last.json.error, "RateLimitExceeded");
+  const keys = (await limited()).filter((key) => key.includes("-ip:"));
+  assert.equal(keys.length, 1);
+  assert.match(keys[0], /^create-ip:/);
+  assert.equal(
+    keys.some((key) => key.startsWith("incoming-tool-ip")),
+    false,
+  );
+  // The budget is shared with a legitimate request from the same address.
+  const legitimate = await create(s, { handle });
+  assert.equal(legitimate.status, 429);
+  await untouched(s.f);
+});
+
+test("a valid code with an invalid credential takes no lease and writes nothing", async (t) => {
+  const s = await begin(t);
+  let leases = 0;
+  for (const name of ["run", "resumePending"]) {
+    const original = s.f.ownership[name];
+    s.f.ownership[name] = (...args) => {
+      leases++;
+      return original(...args);
+    };
+  }
+  const bad = [
+    await s.f.credential(incomingHandoffMethod, {
+      aud: "did:web:other.example.test",
+    }),
+    await s.f.credential(incomingCreationMethod),
+    "Bearer a.b.c",
+  ];
+  for (const jwt of bad) {
+    const response = await submit(s, { jwt });
+    assert.equal(response.status === 403 || response.status === 409, true);
+  }
+  assert.equal(leases, 0);
+  await untouched(s.f);
+  // The legitimate request still takes the lease exactly as before.
+  assert.equal((await submit(s)).status, 200);
+  assert.equal(leases > 0, true);
+});
+
+test("a completed arrival is not reported on a repeat prepare", async (t) => {
+  const { f, h, prepared, session } = await created(t);
+  const activated = await h.call(activatePath, {
+    headers: { authorization: `Bearer ${session.accessJwt}` },
+  });
+  assert.equal(activated.status, 200);
+  const repeat = await h.browser("/incoming/prepare", {
+    did: f.did,
+    handle,
+  });
+  assert.equal(repeat.status >= 400, true);
+  assert.equal(repeat.json.operationId, undefined);
+  assert.equal(repeat.text.includes(prepared.operationId), false);
+});
+
+/** A family in the shared legacy store that no arrival tracks: what an
+ * ordinary hosted account's session looks like to the incoming handlers. */
+async function ordinaryFamily(f) {
+  const minted = await f.legacy.arrivalSessions.prepare({
+    did: f.did,
+    pdsId: f.config.pds[0].id,
+  });
+  await f.legacy.arrivalSessions.persist(minted);
+  return minted;
+}
+const familyRow = (f, id) => f.db.get("legacy:sessions", id);
+const refreshRow = async (f, token) =>
+  f.db.get(
+    "legacy:refresh",
+    JSON.parse(Buffer.from(token.split(".")[1], "base64url")).jti,
+  );
+
+test("activateAccount leaves an ordinary credential to the ordinary route in any condition", async (t) => {
+  const { f, h } = await created(t);
+  const ordinary = await ordinaryFamily(f);
+  const call = (jwt) =>
+    h.call(activatePath, { headers: { authorization: `Bearer ${jwt}` } });
+  assert.equal((await call(ordinary.tokens.accessJwt)).status, 418);
+  // Revoked family: the live regression answered 400 instead of the ordinary 401.
+  await f.legacy.arrivalSessions.revoke([ordinary.familyId], "test");
+  assert.deepEqual((await call(ordinary.tokens.accessJwt)).json, {
+    ordinary: "server.activateAccount",
+  });
+  // Expired access token of a live family.
+  const live = await ordinaryFamily(f);
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  t.mock.timers.tick(6 * 60 * 1000);
+  assert.deepEqual((await call(live.tokens.accessJwt)).json, {
+    ordinary: "server.activateAccount",
+  });
+  assert.equal(f.backendState.activations, 0);
+});
+
+test("activateAccount still refuses a tracked arrival credential whose family is expired", async (t) => {
+  const { f, h, session } = await created(t);
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  t.mock.timers.tick(6 * 60 * 1000);
+  const response = await h.call(activatePath, {
+    headers: { authorization: `Bearer ${session.accessJwt}` },
+  });
+  assert.equal(response.status, 400);
+  assert.equal(response.json.error, "ExpiredToken");
+  assert.equal(f.backendState.activations, 0);
+});
+
+test("refreshSession leaves ordinary revoked, expired and replayed refresh tokens untouched for the ordinary route", async (t) => {
+  const { f, h } = await created(t);
+  const call = (jwt) =>
+    h.call(refreshPath, { headers: { authorization: `Bearer ${jwt}` } });
+  const ordinaryAnswer = { ordinary: "server.refreshSession" };
+  // An untracked family costs no arrival read at all.
+  const readAccess = f.arrivals.readArrivalAccess;
+  let accessReads = 0;
+  f.arrivals.readArrivalAccess = (...args) => {
+    accessReads++;
+    return readAccess(...args);
+  };
+  const plain = await ordinaryFamily(f);
+  assert.deepEqual((await call(plain.tokens.refreshJwt)).json, ordinaryAnswer);
+  f.arrivals.readArrivalAccess = readAccess;
+  assert.equal(accessReads, 0);
+  // Replayed: the arrival path performs no replay revocation or rotation.
+  const replayed = await ordinaryFamily(f);
+  await f.legacy.arrivalSessions.refresh(replayed.tokens.refreshJwt, {
+    account: async (family) => ({ did: family.did }),
+    details: async () => ({}),
+  });
+  const before = await familyRow(f, replayed.familyId);
+  assert.deepEqual(
+    (await call(replayed.tokens.refreshJwt)).json,
+    ordinaryAnswer,
+  );
+  assert.deepEqual(await familyRow(f, replayed.familyId), before);
+  assert.equal(
+    (await refreshRow(f, replayed.tokens.refreshJwt)).usedAt !== undefined,
+    true,
+  );
+  // Revoked.
+  const revoked = await ordinaryFamily(f);
+  await f.legacy.arrivalSessions.revoke([revoked.familyId], "test");
+  const revokedRow = await familyRow(f, revoked.familyId);
+  assert.deepEqual(
+    (await call(revoked.tokens.refreshJwt)).json,
+    ordinaryAnswer,
+  );
+  assert.deepEqual(await familyRow(f, revoked.familyId), revokedRow);
+  // Expired refresh token (family lifetime elapsed).
+  const expired = await ordinaryFamily(f);
+  const unused = await refreshRow(f, expired.tokens.refreshJwt);
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  t.mock.timers.tick(91 * 24 * 60 * 60 * 1000);
+  assert.deepEqual(
+    (await call(expired.tokens.refreshJwt)).json,
+    ordinaryAnswer,
+  );
+  assert.deepEqual(await refreshRow(f, expired.tokens.refreshJwt), unused);
+});
+
+test("refreshSession still refuses an expired tracked refresh credential with the expired-token code", async (t) => {
+  const { h, session, f } = await created(t);
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  t.mock.timers.tick(91 * 24 * 60 * 60 * 1000);
+  const response = await h.call(refreshPath, {
+    headers: { authorization: `Bearer ${session.refreshJwt}` },
+  });
+  assert.equal(response.status, 400);
+  assert.equal(response.json.error, "ExpiredToken");
+  void f;
+});
+
+test("an exact createAccount replay after the identity moved resumes the saved creation without verifying the credential", async (t) => {
+  const s = await published(t);
+  const { f } = s;
+  const body = { handle, inviteCode: await invite(f) };
+  const jwt = await f.credential(incomingCreationMethod);
+  // The destination move is published and acknowledged, then the local binding
+  // commit is lost: the saved continuation is all that remains.
+  const bind = f.storage.bindPlacedAccount;
+  f.storage.bindPlacedAccount = async () => {
+    throw new Error("local commit lost");
+  };
+  const lost = await create(s, body, { jwt });
+  f.storage.bindPlacedAccount = bind;
+  assert.notEqual(lost.status, 200);
+  assert.equal(f.backendState.creates, 1);
+  // The move is canonical, so the source credential no longer verifies.
+  const unverified = await create(s, { handle }, { jwt });
+  assert.notEqual(unverified.status, 200);
+  const replay = await create(s, body, { jwt });
+  assert.equal(replay.status, 200, replay.text);
+  assert.equal(replay.json.did, f.did);
+  assert.equal(typeof replay.json.accessJwt, "string");
+  assert.equal(f.backendState.creates, 1);
+  assert.equal(
+    (await f.arrivals.readArrivalFamilies(s.prepared.operationId)).length,
+    1,
+  );
+});
+
+test("an exact replay of an admitted handoff is not verified after the identity moved; a different body conflicts", async (t) => {
+  const s = await created(t);
+  const { f } = s;
+  // The destination move is canonical: the source key no longer verifies, so a
+  // credential refusal would mean the request was verified. The replay is not;
+  // it reaches the saved continuation, which reports the moved head as saved
+  // but not observed, and it records and publishes nothing.
+  const replay = await submit(s, { jwt: await f.credential() });
+  assert.equal(replay.status, 409, replay.text);
+  assert.equal(replay.json.error, "OperationRecoveryRequired");
+  assert.equal(f.publicationAttempts.length, 1);
+  assert.equal((await rows(f, "arrival_replay")).length, 2);
+  // A different body for the admitted method is a conflict, never admitted.
+  const other = await plc.signOperation(
+    { ...s.prepared.handoff, alsoKnownAs: ["at://other.example.test"] },
+    f.source,
+  );
+  const fresh = await submit(s, {
+    jwt: await f.credential(),
+    json: { operation: other },
+  });
+  assert.equal(fresh.status, 409);
+  assert.equal(fresh.json.error, "OperationConflict");
+});
+
+for (const fault of ["unavailable", "head-race"])
+  test(`a ${fault} directory during handoff dispatch is retryable, never an identity conflict`, async (t) => {
+    const s = await begin(t);
+    s.f.setDirectoryFault(fault);
+    const response = await submit(s);
+    assert.equal(response.status, 409);
+    assert.equal(response.json.error, "OperationRecoveryRequired");
+    assert.notEqual(response.json.error, "IdentityConflict");
+    assert.equal(s.f.publicationAttempts.length, 0);
+    // No dispatch marker was written, so the exact retry completes.
+    s.f.setDirectoryFault("");
+    const retry = await submit(s);
+    assert.equal(retry.status, 200, retry.text);
+    assert.deepEqual(retry.json, {});
+    assert.equal(s.f.publicationAttempts.length, 1);
+    assert.equal(await s.f.store.pendingExternal(`arrival:${s.f.did}`), null);
+  });
+
+/** A hosted account that appeared after the arrival was prepared. */
+const host = (f, fields) =>
+  f.storage.insertAccount(
+    {
+      did: `did:plc:${"b".repeat(24)}`,
+      email: "someone-else@example.test",
+      emailVerified: true,
+      handle: "someone.example.test",
+      pdsId: "pds1",
+      pdsUrl: "https://destination.example.test",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      ...fields,
+    },
+    undefined,
+  );
+
+// One fixture per test: each replaces globalThis.fetch and restores it after.
+for (const [expected, taken] of [
+  ["IdentityConflict", (f) => ({ did: f.did })],
+  ["HandleNotAvailable", () => ({ handle })],
+  ["EmailNotAvailable", (f) => ({ email: f.principal.email })],
+])
+  test(`admission refuses ${expected} with 409 when it arose since preparation`, async (t) => {
+    const s = await begin(t);
+    await host(s.f, taken(s.f));
+    const refused = await submit(s);
+    assert.equal(refused.status, 409);
+    assert.equal(refused.json.error, expected);
+    assert.equal(s.f.publicationAttempts.length, 0);
+    // The claim was refused: nothing is claimed or recorded.
+    assert.equal((await rows(s.f, "arrival_replay")).length, 0);
+    assert.equal((await rows(s.f, "arrivals"))[0].claim_operation_id, null);
+  });
+
+test("an expired code is ArrivalExpired 409 and an unknown operation on a browser route is AccountNotFound 404", async (t) => {
+  const s = await begin(t);
+  const expired = await submit(s, { code: "Z".repeat(32) });
+  assert.equal(expired.status, 409);
+  assert.equal(expired.json.error, "ArrivalExpired");
+  const unknown = await s.h.browser("/incoming/cancel", {
+    operationId: "no-such-operation",
+    expectedVersion: 1,
+  });
+  assert.equal(unknown.status, 404);
+  assert.equal(unknown.json.error, "AccountNotFound");
+});
+
+const password = "correct horse battery staple";
+const everything = async (f) => {
+  const tables =
+    process.env.CONTRACT_DATABASE_BACKEND === "postgresql"
+      ? "SELECT tablename AS name FROM pg_tables WHERE schemaname = current_schema()"
+      : "SELECT name FROM sqlite_master WHERE type = 'table'";
+  const dump = [];
+  for (const { name } of await query(f.db, tables))
+    dump.push(JSON.stringify(await rows(f, name)));
+  return dump.join("\n");
+};
+const approved = async (f) =>
+  JSON.parse((await rows(f, "arrivals"))[0].approved_rotation_keys);
+const savedMove = async (f) =>
+  JSON.parse(
+    (await rows(f, "arrival_signed_operations")).find(
+      (row) => row.kind === "destination-move",
+    ).operation,
+  );
+
+test("createAccount refuses an invalid recoveryKey and password with no effect", async (t) => {
+  const s = await published(t);
+  const inviteCode = await invite(s.f);
+  const ed25519 = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+  for (const recoveryKey of [
+    "",
+    "not-a-key",
+    "did:key:zNotAKey",
+    ed25519,
+    "did:web:example.test",
+    s.f.source.did().slice(0, -3),
+  ]) {
+    const response = await create(s, { handle, inviteCode, recoveryKey });
+    assert.equal(response.status, 400, recoveryKey);
+    assert.equal(response.json.error, "InvalidRequest", recoveryKey);
+    assert.equal(
+      response.text.includes(recoveryKey) && recoveryKey !== "",
+      false,
+    );
+  }
+  const typed = await create(s, { handle, inviteCode, recoveryKey: 7 });
+  assert.equal(typed.status, 400);
+  for (const bad of [7, true, ["a"], { a: 1 }, null]) {
+    const response = await create(s, { handle, inviteCode, password: bad });
+    assert.equal(response.status, 400);
+    assert.equal(response.json.error, "InvalidPassword");
+  }
+  for (const bad of ["short", "x".repeat(257), "x".repeat(2000)]) {
+    const response = await create(s, { handle, inviteCode, password: bad });
+    assert.equal(response.status, 400);
+    assert.equal(response.json.error, "InvalidPassword");
+    assert.equal(response.text.includes(bad), false);
+  }
+  assert.equal(s.f.backendState.creates, 0);
+  assert.equal((await rows(s.f, "arrival_replay")).length, 1);
+});
+
+test("a recoveryKey that would exceed the PLC rotation-key limit is refused before any effect", async (t) => {
+  const f = await fixture(t, "modern", "near-full");
+  const h = await incomingHttp(t, f);
+  const prepared = await f.prepare();
+  const operation = await plc.signOperation(prepared.handoff, f.source);
+  const s = { f, h, prepared, operation };
+  assert.equal((await submit(s)).status, 200);
+  assert.equal((await approved(f)).length, 5);
+  const response = await create(s, {
+    handle,
+    inviteCode: await invite(f),
+    recoveryKey: (await Secp256k1Keypair.create()).did(),
+  });
+  assert.equal(response.status, 400);
+  assert.equal(response.json.error, "InvalidRequest");
+  assert.equal(f.backendState.creates, 0);
+  assert.equal((await rows(f, "arrival_replay")).length, 1);
+});
+
+for (const [name, keypair] of [
+  ["secp256k1", () => Secp256k1Keypair.create()],
+  ["P-256", () => P256Keypair.create()],
+])
+  test(`a ${name} recoveryKey is signed first in the destination move and activation accepts it`, async (t) => {
+    const s = await published(t);
+    const { f, h } = s;
+    const recoveryKey = (await keypair()).did();
+    const response = await create(s, {
+      handle,
+      inviteCode: await invite(f),
+      recoveryKey,
+    });
+    assert.equal(response.status, 200, response.text);
+    const list = await approved(f);
+    const move = await savedMove(f);
+    assert.deepEqual(move.rotationKeys, [recoveryKey, ...list]);
+    assert.deepEqual(f.backendState.exactMove.rotationKeys, move.rotationKeys);
+    assert.equal((await rows(f, "arrivals"))[0].recovery_key, recoveryKey);
+    const activated = await h.call(activatePath, {
+      headers: { authorization: `Bearer ${response.json.accessJwt}` },
+    });
+    assert.equal(activated.status, 200, activated.text);
+    assert.equal(f.backendState.activations, 1);
+  });
+
+test("a recoveryKey already in the approved list is not duplicated", async (t) => {
+  const s = await published(t);
+  const [existing] = await approved(s.f);
+  const response = await create(s, {
+    handle,
+    inviteCode: await invite(s.f),
+    recoveryKey: existing,
+  });
+  assert.equal(response.status, 200, response.text);
+  const { rotationKeys } = await savedMove(s.f);
+  assert.equal(new Set(rotationKeys).size, rotationKeys.length);
+  assert.equal(rotationKeys[0], existing);
+  assert.equal(rotationKeys.length, (await approved(s.f)).length);
+});
+
+test("without a recoveryKey the move keeps exactly the approved list", async (t) => {
+  const { f } = await created(t);
+  assert.deepEqual((await savedMove(f)).rotationKeys, await approved(f));
+  assert.equal((await rows(f, "arrivals"))[0].recovery_key, null);
+});
+
+test("an optional password becomes the account password and signs in after activation", async (t) => {
+  const s = await published(t);
+  const { f, h } = s;
+  const response = await create(s, {
+    handle,
+    inviteCode: await invite(f),
+    password,
+  });
+  assert.equal(response.status, 200, response.text);
+  assert.equal(await f.legacy.hasPassword(f.did), true);
+  // Not usable while the arrival is unfinished.
+  assert.equal(await f.legacy.verifyPassword(f.did, password), false);
+  const activated = await h.call(activatePath, {
+    headers: { authorization: `Bearer ${response.json.accessJwt}` },
+  });
+  assert.equal(activated.status, 200, activated.text);
+  assert.equal(await f.legacy.verifyPassword(f.did, password), true);
+  assert.equal(await f.legacy.verifyPassword(f.did, `${password}!`), false);
+});
+
+test("without a password the account has none and keeps email-code login", async (t) => {
+  const { f } = await created(t);
+  assert.equal(await f.legacy.hasPassword(f.did), false);
+});
+
+test("the password never reaches logs, responses, journals or the stored digest", async (t) => {
+  const s = await published(t);
+  const { f } = s;
+  const captured = [];
+  const spies = [];
+  for (const stream of [process.stdout, process.stderr])
+    spies.push(
+      t.mock.method(stream, "write", (chunk) => {
+        captured.push(String(chunk));
+        return true;
+      }),
+    );
+  for (const method of ["log", "info", "warn", "error", "debug"])
+    spies.push(
+      t.mock.method(console, method, (...args) =>
+        captured.push(args.join(" ")),
+      ),
+    );
+  const response = await create(s, {
+    handle,
+    inviteCode: await invite(f),
+    password,
+  });
+  assert.equal(response.status, 200, response.text);
+  // Restore only these spies; the fixture's own fetch mock stays installed.
+  for (const spy of spies) spy.mock.restore();
+  assert.equal(response.text.includes(password), false);
+  assert.equal(captured.join("\n").includes(password), false);
+  const dump = await everything(f);
+  assert.equal(dump.includes(password), false);
+  const { createHash } = await import("node:crypto");
+  for (const encoding of ["hex", "base64", "base64url"])
+    assert.equal(
+      dump.includes(createHash("sha256").update(password).digest(encoding)),
+      false,
+    );
+});
+
+test("a replay must match the password and recoveryKey exactly", async (t) => {
+  const s = await published(t);
+  const { f } = s;
+  const recoveryKey = (await Secp256k1Keypair.create()).did();
+  const inviteCode = await invite(f);
+  const jwt = await f.credential(incomingCreationMethod);
+  const bind = f.storage.bindPlacedAccount;
+  f.storage.bindPlacedAccount = async () => {
+    throw new Error("local commit lost");
+  };
+  const lost = await create(
+    s,
+    { handle, inviteCode, password, recoveryKey },
+    { jwt },
+  );
+  f.storage.bindPlacedAccount = bind;
+  assert.notEqual(lost.status, 200);
+  const body = { handle, inviteCode, password, recoveryKey };
+  for (const [name, changed] of [
+    ["another password", { ...body, password: `${password}!` }],
+    ["no password", { handle, inviteCode, recoveryKey }],
+    [
+      "another recoveryKey",
+      { ...body, recoveryKey: (await Secp256k1Keypair.create()).did() },
+    ],
+    ["no recoveryKey", { handle, inviteCode, password }],
+  ]) {
+    const response = await create(s, changed);
+    assert.equal(response.status, 409, name);
+    assert.equal(response.json.error, "OperationConflict", name);
+  }
+  assert.equal(await f.legacy.hasPassword(f.did), false);
+  const replay = await create(s, body);
+  assert.equal(replay.status, 200, replay.text);
+  assert.equal(await f.legacy.hasPassword(f.did), true);
+  assert.equal(f.backendState.creates, 1);
+  assert.deepEqual((await savedMove(f)).rotationKeys[0], recoveryKey);
+});
+
+test("the password commitment is keyed: the digest depends on the server key and never on the plaintext or an unkeyed hash", async (t) => {
+  const s = await published(t);
+  const { f } = s;
+  const inviteCode = await invite(f);
+  const response = await create(s, { handle, inviteCode, password });
+  assert.equal(response.status, 200, response.text);
+  const aggregate = await f.arrivals.readArrivalAggregate(
+    s.prepared.operationId,
+    f.principal.userId,
+  );
+  const saved = aggregate.arrival;
+  const stored = (await rows(f, "arrival_replay")).find(
+    (row) => row.method === incomingCreationMethod,
+  ).request_digest;
+  const digestFor = (passwordProof) =>
+    createHash("sha256")
+      .update(
+        JSON.stringify(
+          canonicalArrivalValue({
+            version: 1,
+            operationId: saved.operationId,
+            method: incomingCreationMethod,
+            did: saved.did,
+            tuple: {
+              userId: saved.userId,
+              email: saved.email,
+              handle: saved.handle,
+              pdsId: saved.pdsId,
+              endpoint: saved.endpoint,
+              sourcePlcHead: saved.sourcePlcHead,
+              generation: aggregate.admissions.find(
+                (item) => item.method === incomingCreationMethod,
+              ).generation,
+            },
+            semantic: {
+              did: saved.did,
+              email: saved.email,
+              handle: saved.handle.toLowerCase(),
+              inviteHash: createHash("sha256").update(inviteCode).digest("hex"),
+              passwordProof,
+              recoveryKey: null,
+            },
+          }),
+        ),
+      )
+      .digest("hex");
+  // The reconstruction is exact: it reproduces the stored digest from the
+  // keyed proof, so the mismatches below are about the proof alone.
+  const keyed = createHmac("sha256", f.config.betterAuthSecret)
+    .update(`incoming-arrival-password:${saved.operationId}\0`)
+    .update(password)
+    .digest("hex");
+  assert.equal(stored, digestFor(keyed));
+  assert.notEqual(stored, digestFor(password));
+  assert.notEqual(
+    stored,
+    digestFor(createHash("sha256").update(password).digest("hex")),
+  );
+  const parse = (key) =>
+    parseArrivalRequest(
+      saved,
+      incomingCreationMethod,
+      { handle, password },
+      key,
+    ).requestDigest;
+  assert.notEqual(parse("key-one"), parse("key-two"));
+  assert.equal(parse("key-one"), parse("key-one"));
+});
+
+test("a replay finds the password already set and does not set it again", async (t) => {
+  const s = await published(t);
+  const { f } = s;
+  const body = { handle, inviteCode: await invite(f), password };
+  const jwt = await f.credential(incomingCreationMethod);
+  const bind = f.storage.bindPlacedAccount;
+  f.storage.bindPlacedAccount = async () => {
+    throw new Error("local commit lost");
+  };
+  await create(s, body, { jwt });
+  f.storage.bindPlacedAccount = bind;
+  const set = t.mock.method(f.legacy, "installInitialPassword");
+  const first = await create(s, body);
+  assert.equal(first.status, 200, first.text);
+  assert.equal(set.mock.callCount(), 1);
+  const again = await create(s, body);
+  assert.notEqual(again.status, 200);
+  assert.equal(set.mock.callCount(), 1);
+});
+
+const savedFamilies = async (f) =>
+  (
+    await query(
+      f.db,
+      "SELECT value FROM key_value_state WHERE namespace = 'legacy:sessions'",
+    )
+  ).map((row) => JSON.parse(row.value));
+const savedPassword = (f) => f.db.get("legacy:passwords", f.did);
+
+test("concurrent matching replays install the password once and revoke no credentials", async (t) => {
+  const s = await published(t);
+  const { f } = s;
+  const body = { handle, inviteCode: await invite(f), password };
+  const jwt = await f.credential(incomingCreationMethod);
+  const bind = f.storage.bindPlacedAccount;
+  f.storage.bindPlacedAccount = async () => {
+    throw new Error("local commit lost");
+  };
+  await create(s, body, { jwt });
+  f.storage.bindPlacedAccount = bind;
+  // Request A holds the arrival's claim while installing; request B's install
+  // waits on that same claim, then finds the password already set.
+  const install = f.legacy.installInitialPassword;
+  let entered;
+  const aEntered = new Promise((resolve) => (entered = resolve));
+  let release;
+  const held = new Promise((resolve) => (release = resolve));
+  let calls = 0;
+  const results = [];
+  t.mock.method(f.legacy, "installInitialPassword", async (...args) => {
+    const mine = ++calls;
+    if (mine === 1) {
+      entered();
+      await held;
+    }
+    const installed = await install(...args);
+    results.push(installed);
+    return installed;
+  });
+  const a = create(s, body);
+  await aEntered;
+  const b = create(s, body);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  release();
+  const [first, second] = [await a, await b];
+  // Credentials are issued once: the other finisher is refused, not revoked-over.
+  assert.deepEqual([first.status, second.status].sort(), [200, 409]);
+  assert.equal(calls, 1);
+  assert.deepEqual(results, [true]);
+  assert.ok(await savedPassword(f));
+  const families = await savedFamilies(f);
+  assert.equal(families.length, 1);
+  assert.equal(families.filter((family) => family.revokedAt).length, 0);
+  assert.equal(
+    families.some((family) => family.revocationReason === "password-changed"),
+    false,
+  );
+});
+
+test("an execution whose lease expired before the install cannot install the password", async (t) => {
+  const s = await published(t);
+  const { f } = s;
+  const body = { handle, inviteCode: await invite(f), password };
+  const install = f.legacy.installInitialPassword;
+  t.mock.method(f.legacy, "installInitialPassword", async (...args) => {
+    // Another worker took over: this execution's lease is no longer live.
+    await query(
+      f.db,
+      "UPDATE authority_operations SET lease_expires_at = 1 WHERE state = 'running'",
+      [],
+      "run",
+    );
+    return await install(...args);
+  });
+  const response = await create(s, body);
+  assert.notEqual(response.status, 200, response.text);
+  assert.equal(response.status, 409, response.text);
+  assert.equal(response.json?.error, "OperationLeaseLost", response.text);
+  assert.equal(await savedPassword(f), null);
+  assert.equal(await f.legacy.hasPassword(f.did), false);
+  assert.equal((await savedFamilies(f)).length, 0);
+});
+
+test("a late initial-password install never overwrites an activated account's changed password", async (t) => {
+  const s = await published(t);
+  const { f, h } = s;
+  const response = await create(s, {
+    handle,
+    inviteCode: await invite(f),
+    password,
+  });
+  assert.equal(response.status, 200, response.text);
+  const activated = await h.call(activatePath, {
+    headers: { authorization: `Bearer ${response.json.accessJwt}` },
+  });
+  assert.equal(activated.status, 200, activated.text);
+  const changed = "a different long password";
+  await f.legacy.setPassword(f.did, changed);
+  const stored = await savedPassword(f);
+  // Even when the pending check wrongly passes, an active account is refused.
+  assert.equal(
+    await f.legacy.installInitialPassword(f.did, password, {
+      isPending: async () => true,
+    }),
+    false,
+  );
+  assert.deepEqual(await savedPassword(f), stored);
+  assert.equal(await f.legacy.verifyPassword(f.did, changed), true);
+  assert.equal(await f.legacy.verifyPassword(f.did, password), false);
+});
+
+test("a late initial-password install is refused on an active account with no password", async (t) => {
+  const s = await published(t);
+  const { f, h } = s;
+  const response = await create(s, {
+    handle,
+    inviteCode: await invite(f),
+    password,
+  });
+  assert.equal(response.status, 200, response.text);
+  const activated = await h.call(activatePath, {
+    headers: { authorization: `Bearer ${response.json.accessJwt}` },
+  });
+  assert.equal(activated.status, 200, activated.text);
+  // The user removed their password after activation, so only the account
+  // status guard stands between a stale installer and the active account.
+  await f.legacy.removePassword(f.did);
+  assert.equal(await f.legacy.hasPassword(f.did), false);
+  assert.equal(
+    await f.legacy.installInitialPassword(f.did, password, {
+      isPending: async () => true,
+    }),
+    false,
+  );
+  assert.equal(await f.legacy.hasPassword(f.did), false);
+});

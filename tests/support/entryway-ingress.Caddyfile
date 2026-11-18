@@ -1,0 +1,42 @@
+# Test ingress in front of Entryway: the documented browser-access proxy from
+# docs/deployment-profiles.md ("Browser access to XRPC"). The atproto_cors
+# snippet is copied verbatim. The sandbox gateway terminates TLS and forwards
+# to this plain-HTTP site, so the site address differs, and the additions marked
+# below exist only because the gateway is a second proxy hop or the container
+# needs no admin endpoint.
+{
+	# Not in the documented block: no admin endpoint in the test container.
+	admin off
+	servers {
+		# Keep the gateway's forwarded protocol and host (added for the extra hop).
+		trusted_proxies static private_ranges
+	}
+}
+
+(atproto_cors) {
+	@preflight {
+		method OPTIONS
+		path /xrpc/* /.well-known/atproto-did
+	}
+	handle @preflight {
+		header Access-Control-Allow-Origin "*"
+		header Access-Control-Allow-Methods "GET, HEAD, PUT, PATCH, POST, DELETE"
+		header Access-Control-Allow-Headers "{http.request.header.Access-Control-Request-Headers}"
+		header Access-Control-Max-Age "86400"
+		header Vary "Access-Control-Request-Headers"
+		respond 204
+	}
+	header /xrpc/* >Access-Control-Allow-Origin "*"
+	header /xrpc/* >Access-Control-Expose-Headers "DPoP-Nonce, WWW-Authenticate, Retry-After"
+	header /.well-known/atproto-did >Access-Control-Allow-Origin "*"
+}
+
+:8080 {
+	import atproto_cors
+	# ENTRYWAY_UPSTREAM is set by the resilience profiles (one or two nodes), to point at their node ingress.
+	reverse_proxy {$ENTRYWAY_UPSTREAM:entryway:3000} {
+		# Entryway trusts one hop. Forward only the real client address, not
+		# "client, gateway", so per-IP budgets keep seeing the client (added for the extra hop).
+		header_up X-Forwarded-For {client_ip}
+	}
+}

@@ -62,6 +62,7 @@ export async function createInvites({ db, config, accounts }) {
         return;
       }
       if (!code && !config.inviteCodeRequired) return;
+      if (!code) fail("InvalidInviteCode", "An invite code is required");
       const row = await db.get("entryway:invites", code);
       if (!row || row.disabled)
         fail("InvalidInviteCode", "Invite code is invalid");

@@ -177,6 +177,30 @@ binds login and may use a different address from the source. Whole-PDS joining
 imports established DID/email associations. Neither route adds a bespoke ownership
 proof or permits email matching alone to establish DID authority.
 
+The [incoming migration contract](incoming-migration.md#c4-client-managed-migration-contract-accepted)
+was updated by user decision on 2026-11-11: the client owns record/blob transfer,
+checking its chosen state and choosing when to request activation. Entryway guards
+authorized activation using canonical identity/custody, placement, saved-user binding,
+backend state and durable operation ownership. It does not certify a final source
+head or full inventory, or provide a global verification-to-activation write barrier.
+Concurrent/later source writes and missing blobs may not transfer. Early PLC cutover,
+create-active then pause, pending-account guards and isolation/drain recovery remain
+required. The external-migration feature now owns the mounted incoming routes
+(browser pages and strict JSON, and the tool-facing XRPC surfaces selected by the
+`Entryway-Arrival-Code` header), registered explicitly through
+`compose-incoming-arrival.mjs` and `app.mjs`. A pending arrival is refused by a mix of
+existing checks (`assertNoMigration`, the `provisioning` status) and the explicit
+predicate and action names in `accounts/pending-arrival.ts` (one enforcing caller;
+a single enforced guard is follow-up work); one activation operation
+serves the saved user, an authorized client and the stock PDS's forwarded
+`activateAccount`. Tracked credentials are the existing legacy families, so a stock
+PDS keeps accepting an already-issued access token until it expires (five minutes)
+after recovery. Ordinary refresh and activate now do one family lookup first. The cookie-less tool resolution (arrival code selects the arrival
+and its saved user) is accepted by both developers. Operator recovery over HTTP reaches an arrival's acknowledged activation receipt
+through the `arrival:<did>` resource. This is not stock-PDS
+public journey or recovery qualification, which remains open; see
+[incoming migration](incoming-migration.md#development-mounted-surfaces-and-pending-guard).
+
 The architecture checker resolves real imports, including TS/MJS aliases, dynamic
 imports and require. It rejects extra ports, raw SQL/SMTP/Better Auth access outside
 owned boundaries, feature-internal imports, runtime cycles and impure rule modules.
@@ -337,9 +361,9 @@ rewriting the stored prompt. The decision is repeated on the grant read inside
 the authorization transaction, so a grant revoked in connected apps meanwhile
 shows consent instead.
 
-| Setting                     | Values and behavior                                                                                                        |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `OAUTH_TRUSTED_CLIENTS`     | Comma-separated https client metadata URLs; replaces the config-file list and the primary-client default; `""` trusts none |
+| Setting                 | Values and behavior                                                                                                        |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `OAUTH_TRUSTED_CLIENTS` | Comma-separated https client metadata URLs; replaces the config-file list and the primary-client default; `""` trusts none |
 
 Invalid values fail startup with `InvalidOAuthClientPolicy` and never echo the value.
 

@@ -1,0 +1,5 @@
+services:
+  pds3:
+    environment:
+      PDS_EMAIL_SMTP_URL: smtp://mail-capture:2525
+      PDS_EMAIL_FROM_ADDRESS: pds@atmosbox.test

@@ -6,6 +6,7 @@ import {
   completeAuthorization,
   GrantNoLongerApprovedError,
 } from "./complete-authorization.mjs";
+import { pendingArrivalMessage } from "../../accounts/pending-arrival.js";
 export function createConsent({
   db,
   config,
@@ -13,6 +14,7 @@ export function createConsent({
   stores,
   flows,
   accountAccess,
+  pendingArrival,
   clientRequestsSignupConsentSkip,
 }) {
   const { fields, save, readCurrentIntent, pageForFlow } = flows;
@@ -150,6 +152,16 @@ export function createConsent({
         403,
       );
     commitCookies();
+    // Deny by default: a pending incoming arrival never authorizes an
+    // application and is never offered reactivation.
+    if (await pendingArrival.isPending(authorized.account))
+      return pageForFlow(
+        res,
+        "Migration in progress",
+        `<p role="status">${escapeHtml(pendingArrivalMessage)}</p><p><a href="/incoming">Review your incoming migration</a></p>`,
+        authorized.current,
+        409,
+      );
     if (authorized.account.status !== "active")
       return pageForFlow(
         res,

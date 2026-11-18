@@ -74,6 +74,116 @@ moderation, credential lifetime and production qualification.
 5. **Email coverage:** sending login OTP through SMTP does not prove every XRPC
    email challenge is delivered through the same transport.
 
+## Incoming public mechanism provenance
+
+For maintainers evaluating incoming migration, the reference PDS 0.5.36
+implementation exposes unauthenticated DID-keyed repository-key reservation and
+forwards activation to Entryway when configured. Its repository export captures a
+root before paging blocks; import applies a verified diff, and missing-blob
+pagination operates on a mutable set. These implementation observations do not
+establish source finality or a destination write barrier. The managed standalone
+source image is separately pinned to PDS 0.5.34; inspect its version-specific
+behavior rather than assuming full equivalence. The synthetic migration fixture
+and repository inventory comparison are reuse candidates, not public end-to-end
+qualification or proof of a historical source signature.
+
+The committed contract test (`tests/contracts/incoming-public-mechanisms.test.mjs`)
+asserts, within its explicit byte and phase budgets, a real stock source CAR
+verification, a nonempty snapshot, two export requests started before a write is
+dispatched (request ordering only, not server-side overlap), an Entryway-hosted
+inactive destination accepting a streamed import, and sequential same-DID
+reservation with placement isolation. That does not establish finality, blob
+pagination or an activation barrier. C4 is an accepted client-managed
+responsibility contract, not a claim that those stronger guarantees were proved.
+C1–C5 are accepted design contracts; the mounted incoming routes reuse the existing
+producers (arrival preparation, admission, tracked credentials, guarded activation,
+challenge budgets, invitation policy) and add no dependency or new service port.
+They are not complete readiness: public journey qualification is separate; see the
+contract gates in
+[incoming migration](incoming-migration.md#contract-qualification-gates-for-implementers).
+
+### goat test client provenance
+
+The `incoming-goat-journey` live test builds the public goat CLI as a test-only
+third-party client stack. It is not shipped or reused in `src/`. goat's CLI and
+session handling and indigo's XRPC and auth client are independent code; the
+patch, including the whole Entryway migration flow, is authored in this repository
+against our contract.
+
+- Upstream: <https://github.com/bluesky-social/goat>, tag `v0.2.9`, commit
+  `f6a214a184a206241ace7adbb88b43c620e4ff61`, licensed MIT or Apache-2.0.
+- Handling: `tests/support/goat/Dockerfile` fetches that commit, verifies it,
+  applies `tests/support/goat/entryway-incoming.patch` and runs `go build` in the
+  `golang:1.27.3-alpine` base image. Dependencies resolve from goat's `go.sum`
+  (indigo `a41b056300f5`). The upstream tree is not vendored.
+- Patch: adds `account migrate --arrival-code/--handoff/--destination-endpoint`
+  plus `--skip-preferences` and the test-only `--pause-after-import` (new
+  `account_migrate_entryway.go`), and makes `--new-password` optional in
+  `account_migrate.go`, rejecting it with an arrival code and rejecting the new
+  flags without one. The Entryway path requires a complete handoff, signs exactly
+  its fields, submits the operation and creates the account with the arrival code
+  header and no password, exports the repo and lists blobs before the identity
+  moves, transfers data to the destination endpoint with the
+  tracked credential (refreshing at Entryway; blobs are fetched from the source's
+  public endpoints), skips the stock
+  recommended-credentials cutover, activates through the destination, confirms
+  activation and then deactivates the source. Blob failures are fatal there. The
+  Docker build also checks that stock goat, without `--arrival-code`, refuses the
+  Entryway-only flags.
+- Status: reusable as a harness only; stock unmodified goat does not support the
+  Entryway surface.
+
+### PDS MOOver test client provenance
+
+The `incoming-moover-journey` live test builds the PDS MOOver web UI as a test-only
+third-party client. It is not shipped or reused in `src/`, and nothing of its tree
+is vendored or patched.
+
+- Upstream: <https://tangled.org/pds.dad/pds-moover>. The pinned build comes from
+  the fork <https://tangled.org/kandake.africa/pds-moover>, branch
+  `feat/entryway-incoming-migration`, commit
+  `25a54a75c1347728ff0a8b122aeadad1d6902bb4`. That branch carries this project's
+  own Entryway-mode commits, which are not merged upstream. Licence: MIT (the
+  `LICENSE.md` file, named with a leading space upstream, adds a request that
+  members of `@witchcraft.systems` show a cow in a witch's hat in the UI they
+  create).
+- Handling: `tests/support/pds-moover/Dockerfile` fetches that commit, verifies it
+  and builds the web UI of that commit without local modification, using pnpm (stages mirror upstream
+  `Dockerfiles/web-ui.Dockerfile`, on `node:24-bookworm-slim`). Dependencies resolve
+  from its `pnpm-lock.yaml`. `PUBLIC_APP_URL` and `ORIGIN` are the sandbox route.
+- Status: reusable as a harness only. The Entryway mode is not yet in the
+  upstream default branch.
+
+### Client-managed migration design reference
+
+For maintainers implementing incoming migration, the user accepted the Rust-like
+responsibility contract on 2026-11-11: the client transfers and checks its chosen
+records/blobs and chooses when to request activation. Entryway checks authorization,
+identity, binding, backend state and durable ownership, not a final source head or
+exhaustive inventory. Later source writes and missing blobs may not be transferred.
+See [C4](incoming-migration.md#c4-client-managed-migration-contract-accepted) for the
+retained gates and pending runtime qualification.
+
+This decision draws on the reviewed clean upstream revision
+`d95d4993bba24fbf18d7851c24b3466258ae6e63` of
+[atproto-crates](https://tangled.org/ngerakines.me/atproto-crates), not the older
+custody-only pin below. In `crates/atproto-entryway`, `lifecycle.rs:204–289` performs
+identity preflight without inventory certification; `ops/migrate_in` provisions a
+deactivated account without PLC publication. Its client changes PLC after transfer.
+That sequencing is **not** adopted: our unchanged reference PDS requires the
+accepted early cutover, create-active then pause sequence and its recovery guards.
+
+The Rust PDS wizard's approximate count/revision checks and lost-blob acknowledgement
+are client behavior, separate from its Entryway activation gate. Its
+`portal_migrate:6487–6507` places source deactivation after destination activation.
+We adopt client responsibility and that source-deactivation ordering, not a lost-blob
+waiver, autoactivation timer, custom session-revocation endpoint or forwarding proxy.
+The older `02421130930198fcc0c2636bcffd531c748ef9cf` pin was custody provenance only;
+its `crates/atproto-entryway/src/server/accounts.rs:95–100` rejected incoming
+migration and was never evidence of this newer behavior. No Rust runtime code is
+imported by this policy decision; stock-PDS credential and public journey
+qualification remain outstanding, including the existing access-JWT revocation gap.
+
 ## Custody design reference
 
 The approved model follows [Rust Entryway in atproto-crates](https://tangled.org/ngerakines.me/atproto-crates)

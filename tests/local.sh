@@ -9,17 +9,28 @@ export SANDBOX_CHECKOUT="$sandbox" SANDBOX_PROJECT="$project" ACCEPTANCE_REPORT_
 [[ "$project" =~ ^hypercerts-entryway(-[a-z0-9_-]+)?$ ]] || { echo "Invalid Entryway project name" >&2; exit 2; }
 mkdir -p "$sandbox"
 cd "$sandbox"
+sandbox=$PWD
+export SANDBOX_CHECKOUT="$sandbox"
 command=${1:-help}
 mkdir -p "$artifacts"
 # Phase identity comes from the controller, never from a command or request body.
 case "$command" in
-  fresh|fresh-group|prepare|up|contracts|database-contracts|database-dialects|resilience-profiles|database-profile|browser|migration|migration-resume|resilience|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|all|down|status|help) ;;
+  fresh|fresh-group|prepare|up|contracts|database-contracts|database-dialects|resilience-profiles|database-profile|browser|incoming-public-mechanisms|incoming-public-journey|incoming-goat-journey|incoming-moover-journey|incoming-arrival-live|migration|migration-resume|resilience|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|all|down|status|help) ;;
   *) echo 'code=UNKNOWN_PHASE'; exit 2 ;;
 esac
 printf 'phase=%s status=started\n' "$command"
 trap 'result=$?; printf "phase=%s status=finished exit=%s\n" "$command" "$result"' EXIT
 source "$root/tests/support/rootless-docker.sh"
-compose() { docker --context "$DOCKER_CONTEXT" compose --project-name "$project" -f "$sandbox/compose.yaml" "$@"; }
+compose() { docker --context "$DOCKER_CONTEXT" compose --project-name "$project" -f "$sandbox/compose.yaml" -f "$root/tests/atmosphere/stacks/incoming-source-mail.yaml" "$@"; }
+# The moover service sits behind a compose profile, and `down` without that
+# profile leaves it running while still exiting 0.
+remove_moover() { compose --profile moover rm --stop --force pds-moover; }
+# Scoped by compose project label, so no other project is ever considered.
+assert_project_empty() {
+  local leftover
+  leftover=$(docker --context "$DOCKER_CONTEXT" ps --all --quiet --filter "label=com.docker.compose.project=$1") || return 1
+  [[ -z "$leftover" ]] || { echo "Containers of project $1 survived teardown" >&2; return 1; }
+}
 guard_project() {
   node --input-type=module - "$sandbox/state/manifest.json" "$project" <<'JS'
 import { readFileSync } from 'node:fs'
@@ -32,7 +43,33 @@ require_state() {
   test -f state/manifest.json && test -f compose.yaml || { echo 'Run ./tests/local.sh prepare first' >&2; exit 2; }
   guard_project
 }
-browser() { compose run --rm --no-deps browser npx --no-install playwright test --config tests/playwright.config.mjs "$@"; }
+prepare_incoming_access() {
+  local routes temporary
+  routes=$(node --input-type=module - "$root/tests/sandbox.json" "$root/tests/atmosphere/stacks/hypercerts-entryway.definition.json" "$root/tests/atmosphere/stacks/entryway-fixtures.definition.json" <<'JS'
+import { readFileSync } from 'node:fs'
+const [manifest, entryway, fixtures] = process.argv.slice(2).map(path => JSON.parse(readFileSync(path, 'utf8')))
+const source = manifest.pds.filter(pds => pds.id === 'pds3')
+if (source.length !== 1 || source[0].hostname !== new URL(source[0].url).hostname) throw new Error('Invalid configured standalone PDS')
+function route(definition, id, service) {
+  const matches = definition.routes.filter(item => item.id === id && [service].flat().includes(item.service))
+  if (matches.length !== 1 || !matches[0].host || matches[0].hostname) throw new Error('Invalid configured route')
+  return `https://${matches[0].host}.${manifest.domain}`
+}
+console.log([source[0].url, route(entryway, 'entryway', 'entryway-ingress'), route(entryway, 'cluster1', 'pds1'), route(entryway, 'cluster2', 'pds2'), manifest.plc, route(fixtures, 'mailpit', 'mail-capture')].join(' '))
+JS
+  ) || return
+  local -a origins
+  read -r -a origins <<< "$routes"
+  deno task sandbox access --json > "$sandbox/access.json"
+  node "$root/tests/atmosphere/validate-access.mjs" "$sandbox/access.json" "$project"
+  temporary=$(mktemp "$sandbox/.incoming-access.XXXXXX")
+  if ! node "$root/tests/atmosphere/project-incoming-access.mjs" "$sandbox/access.json" "$project" "${origins[@]}" > "$temporary"; then
+    rm -f -- "$temporary"
+    return 1
+  fi
+  mv -f -- "$temporary" "$sandbox/incoming-access.json"
+}
+browser() { compose run --rm --no-deps --volume "$sandbox/incoming-access.json:/run/incoming-access.json:ro" -e INCOMING_ACCESS_PATH=/run/incoming-access.json browser npx --no-install playwright test --config tests/playwright.config.mjs "$@"; }
 external_browser() { local phase=$1; compose run --rm --no-deps -e "EXTERNAL_PHASE=$phase" browser npx --no-install playwright test --config tests/external.playwright.config.mjs 2>&1 | tee "$artifacts/external-browser-$phase.log" | python3 "$root/scripts/ci-summary.py"; }
 migration_command() { compose exec -T entryway node tests/support/external-migration.mjs "$@"; }
 case "$command" in
@@ -80,7 +117,7 @@ case "$command" in
     (( $# > 0 )) || { echo 'fresh-group needs at least one step' >&2; exit 2; }
     for step in "$@"; do
       case "$step" in
-        browser|contracts|database-contracts|migration|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience) ;;
+        browser|contracts|incoming-public-mechanisms|incoming-public-journey|incoming-goat-journey|incoming-moover-journey|database-contracts|migration|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience) ;;
         *) echo "Unknown fresh-group step: $step" >&2; exit 2 ;;
       esac
     done
@@ -101,7 +138,8 @@ case "$command" in
         echo "Preserved project $SANDBOX_PROJECT at $temp" >&2
       else
         if [[ -f "$SANDBOX_CHECKOUT/compose.yaml" ]] \
-          && ! docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" down --volumes --remove-orphans; then
+          && ! { docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" -f "$root/tests/atmosphere/stacks/incoming-source-mail.yaml" --profile '*' down --volumes --remove-orphans \
+            && assert_project_empty "$SANDBOX_PROJECT"; }; then
           echo "Scoped cleanup failed; preserved $temp for project $SANDBOX_PROJECT" >&2
           (( result != 0 )) || result=1
           echo "Group exit: $result; reports: $ACCEPTANCE_REPORT_DIR"
@@ -141,6 +179,7 @@ case "$command" in
       compose up -d --wait entryway-postgres
     fi
     deno task sandbox up --build
+    compose up -d --wait --no-deps pds3
     compose build test browser
     deno task sandbox access --json > "$sandbox/access.json"
     node "$root/tests/atmosphere/validate-access.mjs" "$sandbox/access.json" "$project"
@@ -187,7 +226,60 @@ case "$command" in
     ;;
   browser)
     require_state
+    prepare_incoming_access
     browser 2>&1 | tee "$artifacts/browser.log" | python3 "$root/scripts/ci-summary.py"
+    ;;
+  incoming-public-mechanisms|incoming-arrival-live)
+    require_state
+    prepare_incoming_access
+    suite=incoming-public-mechanisms
+    if [[ "$command" == incoming-arrival-live ]]; then suite=incoming-arrival-live; fi
+    compose run --rm --no-deps --volume "$sandbox/incoming-access.json:/run/incoming-access.json:ro" -e INCOMING_ACCESS_PATH=/run/incoming-access.json -e "INCOMING_PROJECT=$project" -e INCOMING_PUBLIC_MECHANISMS=1 browser node --test "tests/contracts/$suite.test.mjs"
+    if [[ "$command" == incoming-arrival-live ]]; then
+      # The disposable dispatcher exited above; stop both owned target workers
+      # before permitting observation of either uncertain applied effect.
+      compose stop pds1 pds2
+      compose up -d --wait pds1 pds2
+      compose run --rm --no-deps --volume "$sandbox/incoming-access.json:/run/incoming-access.json:ro" -e INCOMING_ACCESS_PATH=/run/incoming-access.json -e "INCOMING_PROJECT=$project" -e INCOMING_PUBLIC_MECHANISMS=1 -e INCOMING_RECOVERY=1 -e INCOMING_DISPATCHER_EXIT_REFERENCE=owned-dispatcher-container-exited-0-and-removed -e INCOMING_UPSTREAM_DRAIN_REFERENCE=owned-pds1-pds2-stopped-then-healthy browser node --test --test-name-pattern='stock applied' tests/contracts/incoming-arrival-live.test.mjs
+    fi
+    ;;
+  incoming-public-journey)
+    require_state
+    prepare_incoming_access
+    # The public browser/API journey: one Playwright spec, selected explicitly
+    # because it needs this project's access projection and mail capture.
+    compose run --rm --no-deps --volume "$sandbox/incoming-access.json:/run/incoming-access.json:ro" -e INCOMING_ACCESS_PATH=/run/incoming-access.json -e "INCOMING_PROJECT=$project" -e INCOMING_PUBLIC_JOURNEY=1 browser npx --no-install playwright test --config tests/playwright.config.mjs 2>&1 | tee "$artifacts/incoming-public-journey.log" | python3 "$root/scripts/ci-summary.py"
+    ;;
+  incoming-goat-journey)
+    require_state
+    prepare_incoming_access
+    # Build the patched public goat CLI from its pinned commit (tests/support/goat)
+    # and mount only the static binary; the browser container's sandbox CA keeps
+    # TLS verification on.
+    goat_dir="$sandbox/goat-client"
+    mkdir -p "$goat_dir"
+    docker --context "$DOCKER_CONTEXT" build --quiet --output "type=local,dest=$goat_dir" "$root/tests/support/goat"
+    compose run --rm --no-deps --volume "$sandbox/incoming-access.json:/run/incoming-access.json:ro" --volume "$goat_dir/goat:/usr/local/bin/goat:ro" -e INCOMING_ACCESS_PATH=/run/incoming-access.json -e "INCOMING_PROJECT=$project" -e INCOMING_GOAT_JOURNEY=1 browser npx --no-install playwright test --config tests/playwright.config.mjs 2>&1 | tee "$artifacts/incoming-goat-journey.log" | python3 "$root/scripts/ci-summary.py"
+    ;;
+  incoming-moover-journey)
+    require_state
+    prepare_incoming_access
+    # The PDS MOOver web UI, built from its pinned commit (tests/support/pds-moover)
+    # and served at its own sandbox route, so the source PDS can fetch its OAuth
+    # client metadata over the sandbox CA. Started on demand by its profile.
+    moover_url=$(node --input-type=module - "$root/tests/sandbox.json" "$root/tests/atmosphere/stacks/hypercerts-entryway.definition.json" <<'JS'
+import { readFileSync } from 'node:fs'
+const [, definition] = process.argv.slice(2).map(path => JSON.parse(readFileSync(path, 'utf8')))
+const matches = definition.routes.filter(item => item.id === 'moover' && item.service === 'pds-moover')
+// The stock PDS authorization server refuses client IDs on local TLDs such as .test.
+if (matches.length !== 1 || !matches[0].hostname?.endsWith('.atmosbox.internal') || matches[0].host) throw new Error('Invalid configured moover route')
+console.log(`https://${matches[0].hostname}`)
+JS
+    )
+    # Remove the profiled container whatever the outcome of the run.
+    trap 'result=$?; remove_moover || (( result )) || result=1; printf "phase=%s status=finished exit=%s\n" "$command" "$result"; exit "$result"' EXIT
+    compose --profile moover up -d --build --wait --no-deps pds-moover
+    compose run --rm --no-deps --volume "$sandbox/incoming-access.json:/run/incoming-access.json:ro" -e INCOMING_ACCESS_PATH=/run/incoming-access.json -e "INCOMING_PROJECT=$project" -e "MOOVER_URL=$moover_url" -e INCOMING_MOOVER_JOURNEY=1 browser npx --no-install playwright test --config tests/playwright.config.mjs 2>&1 | tee "$artifacts/incoming-moover-journey.log" | python3 "$root/scripts/ci-summary.py"
     ;;
   migration)
     require_state
@@ -260,14 +352,18 @@ case "$command" in
     ;;
   down)
     require_state
+    remove_moover
     deno task sandbox down
+    # Profiled services (database, moover) survive a plain down. No --volumes: down retains state.
+    compose --profile '*' down
+    assert_project_empty "$project"
     ;;
   status)
     require_state
     deno task sandbox status
     ;;
   *)
-    echo 'Usage: ./tests/local.sh fresh|fresh-group <steps...>|prepare|up|browser|contracts|database-contracts|database-profile|resilience-profiles|migration|migration-resume|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience|all|status|down'
+    echo 'Usage: ./tests/local.sh fresh|fresh-group <steps...>|prepare|up|browser|incoming-public-mechanisms|incoming-public-journey|incoming-goat-journey|incoming-moover-journey|contracts|database-contracts|database-profile|resilience-profiles|migration|migration-resume|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience|all|status|down'
     echo 'all requires a fresh project fixture; down retains state and volumes. No implicit reset.'
     ;;
 esac

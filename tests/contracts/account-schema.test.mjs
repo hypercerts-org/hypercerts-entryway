@@ -406,7 +406,7 @@ test("authorized migration can share an email with an unbound DID and roll back 
       "synthetic binding failure",
     );
     await assert.rejects(
-      storage.finalizeImportedAccount({
+      storage.bindProvisionedArrival({
         workflowId: incoming.workflowId,
         did: incoming.did,
         userId: ownerId,
@@ -425,7 +425,7 @@ test("authorized migration can share an email with an unbound DID and roll back 
     });
     await removeFailureTrigger(db, "reject_import_binding", "account_bindings");
 
-    const imported = await storage.finalizeImportedAccount({
+    const imported = await storage.bindProvisionedArrival({
       workflowId: incoming.workflowId,
       did: incoming.did,
       userId: ownerId,
@@ -693,7 +693,7 @@ test("synthetic imported DID binds only a recent verified owner then activates a
     );
     await assert.rejects(
       async () =>
-        await storage.finalizeImportedAccount({
+        await storage.bindProvisionedArrival({
           workflowId: reservation.workflowId,
           did: alice.did,
           userId: "wrong",
@@ -706,7 +706,7 @@ test("synthetic imported DID binds only a recent verified owner then activates a
     );
     await assert.rejects(
       async () =>
-        await storage.finalizeImportedAccount({
+        await storage.bindProvisionedArrival({
           workflowId: reservation.workflowId,
           did: alice.did,
           userId: "owner",
@@ -717,7 +717,7 @@ test("synthetic imported DID binds only a recent verified owner then activates a
         }),
       (error) => error.code === "IdentityConflict",
     );
-    const placed = await storage.finalizeImportedAccount({
+    const placed = await storage.bindProvisionedArrival({
       workflowId: reservation.workflowId,
       did: alice.did,
       userId: "owner",
@@ -741,7 +741,7 @@ test("synthetic imported DID binds only a recent verified owner then activates a
       [hosted.did, alice.did],
     );
     assert.equal(await storage.hasPendingExternalMigration(alice.did), true);
-    const active = await storage.activateImportedAccount({
+    const active = await storage.activateBoundArrival({
       workflowId: reservation.workflowId,
       did: alice.did,
       userId: "owner",
@@ -750,7 +750,7 @@ test("synthetic imported DID binds only a recent verified owner then activates a
     assert.equal(await storage.hasPendingExternalMigration(alice.did), false);
     assert.equal(
       (
-        await storage.activateImportedAccount({
+        await storage.activateBoundArrival({
           workflowId: reservation.workflowId,
           did: alice.did,
           userId: "owner",
@@ -965,6 +965,72 @@ test("failed workflow insert rolls back identity reservation and permits retry",
       did: alice.did,
       purpose: "external",
     });
+  } finally {
+    await db.close();
+  }
+});
+
+test("arrival rows distinguish an unclaimed preparation from a claim, one live preparation per user", async (t) => {
+  const { path } = fixture(t);
+  const db = await openTestDatabase(path);
+  try {
+    const now = Date.now();
+    const insert = (
+      id,
+      { claim = null, root = null, active = 1, user = "user-a", handle = id },
+    ) =>
+      query(
+        db,
+        "INSERT INTO arrivals (operation_id, did, claim_operation_id, did_root, active, user_id, email, handle, pds_id, endpoint, source_plc_head, source_predecessor, source_facts, approved_rotation_keys, version, generation, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pds1', ?, 'head', '{}', '{}', '[]', 1, 1, ?, ?)",
+        [
+          id,
+          alice.did,
+          claim,
+          root,
+          active,
+          user,
+          `${id}@example.test`,
+          `${handle}.example.test`,
+          pds[0].url,
+          now,
+          now,
+        ],
+        "run",
+      );
+    const index =
+      db.backend === "sqlite" ? "arrivals.user_id" : "arrivals_user_unclaimed";
+    const didIndex =
+      db.backend === "sqlite" ? "arrivals.did_root" : "arrivals_did_active";
+    // The tuple check ties a DID root to a claim, in both directions.
+    await assert.rejects(
+      insert("bad-root", { root: alice.did }),
+      hasFailure("arrival_tuple"),
+    );
+    await assert.rejects(
+      insert("bad-claim", { claim: "owner" }),
+      hasFailure("arrival_tuple"),
+    );
+    await assert.rejects(
+      insert("bad-inactive", { claim: "owner", root: alice.did, active: 0 }),
+      hasFailure("arrival_tuple"),
+    );
+    await insert("unclaimed-a", {});
+    await assert.rejects(insert("unclaimed-a2", {}), hasFailure(index));
+    await insert("unclaimed-b", { user: "user-b" });
+    await insert("claimed-a", { claim: "owner", root: alice.did });
+    await assert.rejects(
+      insert("claimed-b", {
+        claim: "owner-2",
+        root: alice.did,
+        user: "user-c",
+      }),
+      hasFailure(didIndex),
+    );
+    await insert("settled", { claim: "owner", active: 0, user: "user-d" });
+    assert.equal(
+      (await query(db, "SELECT operation_id FROM arrivals")).length,
+      4,
+    );
   } finally {
     await db.close();
   }

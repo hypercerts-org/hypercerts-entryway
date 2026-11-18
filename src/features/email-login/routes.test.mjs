@@ -501,6 +501,7 @@ async function verificationFixture(
           },
         };
   const { authenticated } = createConsent({
+    pendingArrival: { isPending: async () => false },
     db,
     provider,
     flows,

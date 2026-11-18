@@ -61,6 +61,11 @@ export interface ExternalAttempt extends ExternalAttemptInput {
   readonly recovery: RecoveryAuthorization | null;
   readonly recoveryHistory: readonly RecoveryAuthorization[];
 }
+/** Steps whose acknowledged receipt does not by itself show the remote state, so
+ * operator recovery may still approve observing or safely retrying them. */
+export const observedAcknowledgedSteps: readonly string[] = [
+  "incoming-activation",
+];
 export interface OperatorRecovery {
   readonly operationId: string;
   readonly externalAttemptId: string;

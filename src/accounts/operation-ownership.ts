@@ -57,7 +57,9 @@ function canonical(value: unknown): unknown {
     );
   return value;
 }
-const requestDigest = (value: unknown) =>
+/** Digest of an operation intent, shared with callers that must name the same
+ * dispatch descriptor ownership derives from it. */
+export const requestDigest = (value: unknown) =>
   createHash("sha256")
     .update(JSON.stringify(canonical(value)) ?? "null")
     .digest("hex");
