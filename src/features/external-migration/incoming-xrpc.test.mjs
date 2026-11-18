@@ -1345,3 +1345,29 @@ test("a late initial-password install never overwrites an activated account's ch
   assert.equal(await f.legacy.verifyPassword(f.did, changed), true);
   assert.equal(await f.legacy.verifyPassword(f.did, password), false);
 });
+
+test("a late initial-password install is refused on an active account with no password", async (t) => {
+  const s = await published(t);
+  const { f, h } = s;
+  const response = await create(s, {
+    handle,
+    inviteCode: await invite(f),
+    password,
+  });
+  assert.equal(response.status, 200, response.text);
+  const activated = await h.call(activatePath, {
+    headers: { authorization: `Bearer ${response.json.accessJwt}` },
+  });
+  assert.equal(activated.status, 200, activated.text);
+  // The user removed their password after activation, so only the account
+  // status guard stands between a stale installer and the active account.
+  await f.legacy.removePassword(f.did);
+  assert.equal(await f.legacy.hasPassword(f.did), false);
+  assert.equal(
+    await f.legacy.installInitialPassword(f.did, password, {
+      isPending: async () => true,
+    }),
+    false,
+  );
+  assert.equal(await f.legacy.hasPassword(f.did), false);
+});
