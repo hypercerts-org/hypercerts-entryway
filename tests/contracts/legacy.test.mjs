@@ -284,6 +284,25 @@ test("refresh rotation is durable and replay revokes only that session family", 
   );
 });
 
+test("refresh and logout accept the credential under any casing of the Bearer scheme", async (t) => {
+  const f = await fixture(t);
+  await f.legacy.setPassword(f.alice.did, PASSWORD);
+  const session = await f.legacy.createSession({
+    identifier: f.alice.handle,
+    password: PASSWORD,
+  });
+  const refreshed = await f.legacy.refreshSession(
+    `bearer ${session.refreshJwt}`,
+  );
+  assert.equal(refreshed.did, f.alice.did);
+  await f.legacy.deleteSession(`BEARER ${refreshed.refreshJwt}`);
+  await assert.rejects(f.legacy.refreshSession(refreshed.refreshJwt), {
+    error: "ExpiredToken",
+  });
+  // Another scheme is not a session credential.
+  await assert.rejects(f.legacy.refreshSession(`DPoP ${session.refreshJwt}`));
+});
+
 test("concurrent refresh consumers cannot fork a usable session family", async (t) => {
   const { legacy, alice } = await fixture(t);
   const session = await legacy.createAccountSession(alice.did);

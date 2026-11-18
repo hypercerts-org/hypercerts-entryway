@@ -408,6 +408,35 @@ test("refreshSession serves a tracked arrival family and leaves everything else 
   void f;
 });
 
+test("a source credential is admitted under any casing of the Bearer scheme", async (t) => {
+  const s = await begin(t);
+  const lower = async (method, scheme) =>
+    (await s.f.credential(method)).replace(/^Bearer /, `${scheme} `);
+  const handoff = await lower(incomingHandoffMethod, "bearer");
+  assert.match(handoff, /^bearer /);
+  const submitted = await submit(s, { jwt: handoff });
+  assert.equal(submitted.status, 200, submitted.text);
+  assert.equal(s.f.publicationAttempts.length, 1);
+  const response = await create(
+    s,
+    { handle, inviteCode: await invite(s.f) },
+    { jwt: await lower(incomingCreationMethod, "BEARER") },
+  );
+  assert.equal(response.status, 200, response.text);
+  assert.equal(s.f.backendState.creates, 1);
+  // Another scheme is still refused before any effect.
+  const other = await begin(t);
+  const refused = await submit(other, {
+    jwt: (await other.f.credential(incomingHandoffMethod)).replace(
+      /^Bearer /,
+      "DPoP ",
+    ),
+  });
+  assert.equal(refused.status, 409);
+  assert.equal(refused.json.error, "ArrivalExpired");
+  await untouched(other.f);
+});
+
 test("a tracked arrival credential is served under any casing of the Bearer scheme", async (t) => {
   const { f, h, session } = await created(t);
   const refreshed = await h.call(refreshPath, {
