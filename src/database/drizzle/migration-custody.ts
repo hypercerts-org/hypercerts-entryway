@@ -15,12 +15,8 @@ import type {
   CustodyInventoryReader,
   CustodyInventoryTransactor,
 } from "../custody.port.js";
+import { canonicalJson } from "../../plc/canonical.js";
 import type { CustodyObservation, CustodyInventory } from "../../plc/types.js";
-function compareKeys(leftKey: string, rightKey: string): number {
-  if (leftKey < rightKey) return -1;
-  if (leftKey > rightKey) return 1;
-  return 0;
-}
 
 function observedKeys(
   observation: CustodyObservation,
@@ -139,21 +135,12 @@ function validateObservationExtension(
 export function createCustodyInventoryStorage(
   db: DatabaseExecutor,
 ): CustodyInventoryReader & CustodyInventoryTransactor {
-  const canonical = (value: unknown): string => {
-    if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-    if (typeof value === "object" && value !== null)
-      return `{${Object.entries(value)
-        .sort(([a], [b]) => compareKeys(a, b))
-        .map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`)
-        .join(",")}}`;
-    return JSON.stringify(value);
-  };
   const retainObservation = async (observation: CustodyObservation) => {
     const row = {
       id: observation.id,
       did: observation.did,
       directory: observation.directory,
-      value: canonical(observation),
+      value: canonicalJson(observation),
     };
     await db.insert("custody_observations", row, { ignoreConflict: true });
     const retained = (
@@ -162,7 +149,7 @@ export function createCustodyInventoryStorage(
         limit: 1,
       })
     )[0];
-    if (canonical(retained) !== canonical(row))
+    if (canonicalJson(retained) !== canonicalJson(row))
       throw new PlcError("CustodyConflict", "Observation retry differs");
   };
   const hasCompleteObservationHistory = async (
@@ -226,7 +213,7 @@ export function createCustodyInventoryStorage(
             support.at !== event.at ||
             support.operationId !== event.operationId ||
             !entry ||
-            canonical(entry.operation) !== canonical(event.operation) ||
+            canonicalJson(entry.operation) !== canonicalJson(event.operation) ||
             event.kind !== (entry.nullified ? "nullified" : "observed")
           )
             throw new PlcError(
@@ -234,7 +221,7 @@ export function createCustodyInventoryStorage(
               "Supporting observation differs",
             );
         }
-        const facts = canonical(event.operation);
+        const facts = canonicalJson(event.operation);
         await db.insert(
           "custody_operations",
           { did: event.did, cid: event.cid, operation: facts },
@@ -271,7 +258,7 @@ export function createCustodyInventoryStorage(
             limit: 1,
           })
         )[0];
-        if (canonical(old) !== canonical(row))
+        if (canonicalJson(old) !== canonicalJson(row))
           throw new PlcError("CustodyConflict", "Custody event retry differs");
         // Authorization is append-only evidence; it never promotes the snapshot.
       });

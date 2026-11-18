@@ -92,7 +92,7 @@ export interface ExternalMigrationReservation {
   targetPdsUrl: string;
 }
 
-export interface BindProvisionedArrival {
+export interface FinalizeImportedAccount {
   workflowId: string;
   did: string;
   userId: string;
@@ -102,7 +102,7 @@ export interface BindProvisionedArrival {
   pdsUrl: string;
 }
 
-export interface ActivateBoundArrival {
+export interface ActivateImportedAccount {
   workflowId: string;
   did: string;
   userId: string;

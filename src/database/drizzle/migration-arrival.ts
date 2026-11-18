@@ -26,6 +26,7 @@ import type {
   ArrivalRecord,
   ArrivalSignedOperationRecord,
 } from "../../features/external-migration/arrival-types.js";
+import { canonicalJson } from "../../plc/canonical.js";
 import { PlcError } from "../../plc/errors.js";
 import {
   validateHistoryOperation,
@@ -140,20 +141,11 @@ export interface ArrivalAuthority {
   }): Promise<void>;
   recordSavedUserBinding(did: string, userId: string): Promise<void>;
   /** Moves the saved placed account from `provisioning` to `active` through the
-   * reviewed account authority, as `activateBoundArrival` does for managed
+   * reviewed account authority, as `activateImportedAccount` does for managed
    * migration. Called only inside the completion transaction. */
   activatePlacedAccount(did: string): Promise<void>;
 }
 
-const canonicalFact = (value: unknown): string => {
-  if (Array.isArray(value)) return `[${value.map(canonicalFact).join(",")}]`;
-  if (typeof value === "object" && value !== null)
-    return `{${Object.entries(value)
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalFact(item)}`)
-      .join(",")}}`;
-  return JSON.stringify(value);
-};
 const carriesPrivateMaterial = (value: Record<string, unknown>): boolean =>
   ["signature", "privateKey", "privateKeys"].some((key) => key in value);
 const sameTuple = (
@@ -162,7 +154,7 @@ const sameTuple = (
 ): boolean =>
   saved.did === input.did &&
   saved.cid === input.cid &&
-  canonicalFact(JSON.parse(saved.operation)) === canonicalFact(input.operation);
+  canonicalJson(JSON.parse(saved.operation)) === canonicalJson(input.operation);
 function arrivalRecord(
   row: StoredRow<"arrivals">,
   reservation: StoredRow<"arrival_reservations"> | undefined,
@@ -634,7 +626,7 @@ export function createArrivalStorage(
       try {
         const predecessor = plc.def.compatibleOp.parse(input.sourcePredecessor);
         if (
-          canonicalFact(predecessor) !== canonicalFact(input.sourcePredecessor)
+          canonicalJson(predecessor) !== canonicalJson(input.sourcePredecessor)
         )
           throw immutableTuple();
         const normalized = plc.normalizeOp(predecessor);
@@ -647,7 +639,7 @@ export function createArrivalStorage(
           verificationMethods: normalized.verificationMethods,
           alsoKnownAs: normalized.alsoKnownAs,
         };
-        if (canonicalFact(source) !== canonicalFact(input.source))
+        if (canonicalJson(source) !== canonicalJson(input.source))
           throw immutableTuple();
         if (
           input.approvedRotationKeys.length < 2 ||
@@ -693,12 +685,12 @@ export function createArrivalStorage(
           saved.pds_id !== input.pdsId ||
           saved.endpoint !== input.endpoint ||
           saved.source_plc_head !== input.sourcePlcHead ||
-          canonicalFact(JSON.parse(saved.source_predecessor)) !==
-            canonicalFact(input.sourcePredecessor) ||
-          canonicalFact(JSON.parse(saved.source_facts)) !==
-            canonicalFact(input.source) ||
-          canonicalFact(JSON.parse(saved.approved_rotation_keys)) !==
-            canonicalFact(input.approvedRotationKeys)
+          canonicalJson(JSON.parse(saved.source_predecessor)) !==
+            canonicalJson(input.sourcePredecessor) ||
+          canonicalJson(JSON.parse(saved.source_facts)) !==
+            canonicalJson(input.source) ||
+          canonicalJson(JSON.parse(saved.approved_rotation_keys)) !==
+            canonicalJson(input.approvedRotationKeys)
         )
           throw immutableTuple();
         if (saved.active === 0 || (await purgeIfLapsed(saved)))
@@ -1146,8 +1138,8 @@ export function createArrivalStorage(
               move.services.atproto_pds?.endpoint !== saved.endpoint ||
               move.services.atproto_pds?.type !== "AtprotoPersonalDataServer" ||
               !move.alsoKnownAs.includes(`at://${saved.handle}`) ||
-              canonicalFact(move.rotationKeys) !==
-                canonicalFact(
+              canonicalJson(move.rotationKeys) !==
+                canonicalJson(
                   destinationRotationKeys({
                     approvedRotationKeys: approved,
                     recoveryKey: saved.recovery_key,

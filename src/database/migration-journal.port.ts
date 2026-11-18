@@ -57,7 +57,7 @@ export interface SnapshotTransactor {
 }
 export type DestinationPrincipalPort = Pick<
   AccountTransactor,
-  "getVerifiedOwner" | "bindProvisionedArrival" | "activateBoundArrival"
+  "getVerifiedOwner" | "finalizeImportedAccount" | "activateImportedAccount"
 >;
 
 export interface ArrivalTransactor {

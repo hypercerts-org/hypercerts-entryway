@@ -5,6 +5,24 @@ import { PlcError } from "./errors.js";
 import { publicUpdateCandidate, validateUnsignedOperation } from "./policy.js";
 
 /** The private rotation key is received only at composition. */
+/** The two facts every PDS move replaces; all other entries are preserved. */
+function relocatedPds(
+  facts: Readonly<plc.UnsignedOperation>,
+  repositoryKey: string,
+  endpoint: string,
+): Pick<plc.UnsignedOperation, "verificationMethods" | "services"> {
+  return {
+    verificationMethods: {
+      ...facts.verificationMethods,
+      atproto: repositoryKey,
+    },
+    services: {
+      ...facts.services,
+      atproto_pds: { type: "AtprotoPersonalDataServer", endpoint },
+    },
+  };
+}
+
 export class Secp256k1MigrationPlcSigner {
   public readonly keyReference: string;
   readonly #key: Secp256k1Keypair;
@@ -146,14 +164,7 @@ export class Secp256k1MigrationPlcSigner {
     return this.#signAuthorizedUpdate(
       previous,
       {
-        verificationMethods: {
-          ...facts.verificationMethods,
-          atproto: repositoryKey,
-        },
-        services: {
-          ...facts.services,
-          atproto_pds: { type: "AtprotoPersonalDataServer", endpoint: pdsUrl },
-        },
+        ...relocatedPds(facts, repositoryKey, pdsUrl),
       },
       persist,
     );
@@ -203,6 +214,7 @@ export class Secp256k1MigrationPlcSigner {
   }> {
     const previous = this.#previous(input.handoffOperation);
     const facts = plc.normalizeOp(previous);
+    const moved = relocatedPds(facts, input.repositoryKey, input.endpoint);
     let saved: { operation: plc.Operation; cid: string } | undefined;
     await this.#signAuthorizedUpdate(
       previous,
@@ -210,10 +222,7 @@ export class Secp256k1MigrationPlcSigner {
         ...(input.rotationKeys
           ? { rotationKeys: [...input.rotationKeys] }
           : {}),
-        verificationMethods: {
-          ...facts.verificationMethods,
-          atproto: input.repositoryKey,
-        },
+        ...moved,
         ...(input.handle
           ? {
               alsoKnownAs: [
@@ -224,13 +233,6 @@ export class Secp256k1MigrationPlcSigner {
               ],
             }
           : {}),
-        services: {
-          ...facts.services,
-          atproto_pds: {
-            type: "AtprotoPersonalDataServer",
-            endpoint: input.endpoint,
-          },
-        },
       },
       async (signed, unsigned, cid) => {
         // The signed CID covers the signature, matching the directory head the
@@ -264,17 +266,11 @@ export class Secp256k1MigrationPlcSigner {
       previous,
       {
         alsoKnownAs: [`at://${input.handle}`],
-        verificationMethods: {
-          ...normalized.verificationMethods,
-          atproto: input.targetRepositoryKey,
-        },
-        services: {
-          ...normalized.services,
-          atproto_pds: {
-            type: "AtprotoPersonalDataServer",
-            endpoint: input.targetPdsUrl,
-          },
-        },
+        ...relocatedPds(
+          normalized,
+          input.targetRepositoryKey,
+          input.targetPdsUrl,
+        ),
       },
       persist,
     );
