@@ -3,10 +3,10 @@ import type {
   EmailClaim,
   StoredEmailClaimPurpose,
   ExternalEmailReservation,
-  ActivateBoundArrival,
+  ActivateImportedAccount,
   BindVerifiedIdentity,
   ExternalMigrationReservation,
-  BindProvisionedArrival,
+  FinalizeImportedAccount,
   LegacyVerifiedEmail,
   OwnerSession,
   VerifiedBinding,
@@ -54,8 +54,8 @@ export interface AccountTransactor extends AccountReader {
   /** Bind an account to its verified email user. Callers must validate mailbox proof first. */
   bindAccountToVerifiedEmailUser(input: LegacyVerifiedEmail): Promise<string>;
   reserveExternalMigration(input: ExternalMigrationReservation): Promise<void>;
-  bindProvisionedArrival(input: BindProvisionedArrival): Promise<AccountRow>;
-  activateBoundArrival(input: ActivateBoundArrival): Promise<AccountRow>;
+  finalizeImportedAccount(input: FinalizeImportedAccount): Promise<AccountRow>;
+  activateImportedAccount(input: ActivateImportedAccount): Promise<AccountRow>;
   /** Bind a placed incoming arrival account to its saved verified user. */
   bindPlacedAccount(did: string, userId: string): Promise<void>;
   /** Incoming-arrival completion: moves the saved placed account from

@@ -9,11 +9,11 @@ export type {
 } from "../database/accounts.port.js";
 export type {
   AccountRow,
-  ActivateBoundArrival,
+  ActivateImportedAccount,
   AccountStatus,
   BindVerifiedIdentity,
   ExternalMigrationReservation,
-  BindProvisionedArrival,
+  FinalizeImportedAccount,
   LegacyVerifiedEmail,
   OwnerSession,
   VerifiedBinding,

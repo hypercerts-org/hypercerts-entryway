@@ -716,7 +716,7 @@ export function createAccountStorage(
         and(eq(t.handle_claims.handle, handle), eq(t.handle_claims.did, did))!,
       );
     },
-    async bindProvisionedArrival(input) {
+    async finalizeImportedAccount(input) {
       return db.transact(async () => {
         const reservation = await one(
           "migration_reservations",
@@ -825,7 +825,7 @@ export function createAccountStorage(
         await saveAccount({ ...row, status: "active" });
       });
     },
-    async activateBoundArrival(input) {
+    async activateImportedAccount(input) {
       return db.transact(async () => {
         const reservation = await one(
           "migration_reservations",

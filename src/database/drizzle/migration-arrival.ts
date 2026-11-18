@@ -140,7 +140,7 @@ export interface ArrivalAuthority {
   }): Promise<void>;
   recordSavedUserBinding(did: string, userId: string): Promise<void>;
   /** Moves the saved placed account from `provisioning` to `active` through the
-   * reviewed account authority, as `activateBoundArrival` does for managed
+   * reviewed account authority, as `activateImportedAccount` does for managed
    * migration. Called only inside the completion transaction. */
   activatePlacedAccount(did: string): Promise<void>;
 }
