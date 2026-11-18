@@ -2433,6 +2433,45 @@ test("credential families associate only after binding and never replace signing
   }
 });
 
+test("a credential family saved for another arrival is refused without advancing", async () => {
+  const { db, arrivals, claim, prepare, allocate, bind } = await fixture();
+  try {
+    const prepared = await prepare();
+    const bound = await bind(await allocate(prepared.version));
+    const earlier = Date.now() - day;
+    await query(
+      db,
+      "INSERT INTO arrivals (operation_id, did, claim_operation_id, did_root, active, user_id, email, handle, pds_id, endpoint, source_plc_head, source_predecessor, source_facts, approved_rotation_keys, version, generation, created_at, updated_at, cancelled_at) VALUES ('op-0', ?, 'earlier-claim', NULL, 0, 'user-a', 'op-0@example.test', 'op-0.entryway.test', 'pds1', ?, ?, '{}', '{}', '[]', 1, 1, ?, ?, ?)",
+      [did, endpoint, head("a"), earlier, earlier, earlier],
+      "run",
+    );
+    await query(
+      db,
+      "INSERT INTO arrival_families (family_id, operation_id, pds_id, created_at) VALUES ('family-0', 'op-0', 'pds1', ?)",
+      [earlier],
+      "run",
+    );
+    await assert.rejects(
+      arrivals.recordCredentialFamily({
+        owner: claim,
+        operationId: "op-1",
+        expectedVersion: bound.version,
+        familyId: "family-0",
+        did,
+        pdsId: "pds1",
+      }),
+      { code: "OperationConflict" },
+    );
+    assert.equal(await persistedVersion(db, "op-1"), bound.version);
+    assert.deepEqual(
+      await query(db, "SELECT family_id, operation_id FROM arrival_families"),
+      [{ family_id: "family-0", operation_id: "op-0" }],
+    );
+  } finally {
+    await db.close();
+  }
+});
+
 test("the arrival row has a source endpoint slot for the approved handoff facts", async () => {
   const { db, prepare } = await fixture();
   try {

@@ -3,6 +3,8 @@ import { page, escapeHtml as esc } from "./html.mjs";
 export const hidden = (name, value) =>
   `<input type="hidden" name="${esc(name)}" value="${esc(value)}">`;
 export const accountUrl = (did) => `/account?did=${encodeURIComponent(did)}`;
+export const settingsLink = (did) =>
+  `<a href="${esc(did ? accountUrl(did) : "/account")}">Return to account settings</a>`;
 // A protected settings page opens its form only for a recent session; see
 // "Confirm it's you" in docs/architecture.md.
 export const manageUrl = (name, did) =>
@@ -15,6 +17,9 @@ const formAction = (action) =>
   action.startsWith("/") ? action : `/account/${action}`;
 export const field = (name, label, type = "text", attributes = "") =>
   `<label>${esc(label)}<input name="${esc(name)}" type="${type}" ${attributes} required></label>`;
+/** A required field for an emailed one-time code. */
+export const codeField = (label) =>
+  field("token", label, "text", 'autocomplete="one-time-code" maxlength="256"');
 export const form = (
   action,
   csrf,
@@ -43,5 +48,5 @@ export const nextStep = (
   page(
     res,
     title,
-    `<p role="status">${esc(message)}</p>${form(action, csrf, contents, button, accountContext)}<a href="${accountContext?.did ? accountUrl(accountContext.did) : "/account"}">Return to account settings</a>`,
+    `<p role="status">${esc(message)}</p>${form(action, csrf, contents, button, accountContext)}${settingsLink(accountContext?.did)}`,
   );
