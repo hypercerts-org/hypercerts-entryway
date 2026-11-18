@@ -94,10 +94,11 @@ test.describe("email login_hint on the authorize redirect", () => {
       identifier: account.handle,
       email: ignored,
     });
+    // The handle hint sends its automatic code to the account's own email.
     await expect(
-      fresh.getByRole("heading", { name: "Sign in to authorize" }),
+      fresh.getByRole("heading", { name: "Check your email" }),
     ).toBeVisible();
-    await expect(fresh.getByLabel("Email address")).toBeVisible();
+    await waitForMailpitCode({ recipient: account.email, since });
     await expect(
       waitForMailpitCode({ recipient: ignored, since, timeoutMs: 2_000 }),
     ).rejects.toThrow("Timed out");
