@@ -1,4 +1,5 @@
 import { HttpError } from "../http/http-error.mjs";
+import { schemeCredential } from "../http/authorization-scheme.js";
 
 export function mountMailXrpc({
   accounts,
@@ -9,7 +10,7 @@ export function mountMailXrpc({
 }) {
   route("post", "admin.sendEmail", async (req) => {
     let a;
-    if (req.headers.authorization?.startsWith("Basic ")) {
+    if (schemeCredential(req.headers.authorization, "Basic") !== undefined) {
       await admin(req, req.body.recipientDid);
       a = await accounts.get(req.body.recipientDid);
     } else {

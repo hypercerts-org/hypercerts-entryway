@@ -5,7 +5,7 @@ import { getVerificationMaterial } from "@atproto/common";
 import { getDidKeyFromMultibase } from "@atproto/identity";
 import { ScopePermissionsTransition } from "@atproto/oauth-scopes";
 import { HttpError } from "./http-error.mjs";
-import { schemeCredential } from "./authorization-scheme.js";
+import { canonicalBasic, schemeCredential } from "./authorization-scheme.js";
 
 export const phaseOneUnsupported = [
   "com.atproto.server.createSession",
@@ -335,7 +335,7 @@ export async function createProtocolRouting({
   };
   const admin = async (req, did, global = false) => {
     const hash = (s) => createHash("sha256").update(String(s)).digest();
-    const supplied = hash(req.headers.authorization ?? "");
+    const supplied = hash(canonicalBasic(req.headers.authorization));
     const candidates = [
       { password: config.adminPassword },
       ...(global

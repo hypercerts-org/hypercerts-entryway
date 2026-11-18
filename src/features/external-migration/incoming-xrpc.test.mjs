@@ -424,17 +424,19 @@ test("a source credential is admitted under any casing of the Bearer scheme", as
   );
   assert.equal(response.status, 200, response.text);
   assert.equal(s.f.backendState.creates, 1);
-  // Another scheme is still refused before any effect.
-  const other = await begin(t);
-  const refused = await submit(other, {
-    jwt: (await other.f.credential(incomingHandoffMethod)).replace(
+});
+
+test("a source credential under another scheme is refused before any effect", async (t) => {
+  const s = await begin(t);
+  const refused = await submit(s, {
+    jwt: (await s.f.credential(incomingHandoffMethod)).replace(
       /^Bearer /,
       "DPoP ",
     ),
   });
   assert.equal(refused.status, 409);
   assert.equal(refused.json.error, "ArrivalExpired");
-  await untouched(other.f);
+  await untouched(s.f);
 });
 
 test("a tracked arrival credential is served under any casing of the Bearer scheme", async (t) => {

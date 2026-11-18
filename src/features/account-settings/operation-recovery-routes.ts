@@ -2,6 +2,7 @@ import type { Express, RequestHandler, Response } from "express";
 import type { OperationOwnership } from "../../accounts/operation-ownership.js";
 import { timingSafeEqual } from "node:crypto";
 import { HttpError } from "../../http/http-error.mjs";
+import { canonicalBasic } from "../../http/authorization-scheme.js";
 
 /** Existing Entryway administrator credentials authorize recovery attestations.
  * PDS administrator credentials confer no authority at these local endpoints. */
@@ -26,7 +27,7 @@ export function mountOperationRecoveryRoutes({
         const expected = Buffer.from(
           `Basic ${Buffer.from(`admin:${config.adminPassword}`).toString("base64")}`,
         );
-        const supplied = Buffer.from(req.get("authorization") ?? "");
+        const supplied = Buffer.from(canonicalBasic(req.get("authorization")));
         if (
           expected.length !== supplied.length ||
           !timingSafeEqual(expected, supplied)

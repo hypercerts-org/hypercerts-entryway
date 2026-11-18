@@ -12,6 +12,7 @@ import { createAccountSecurity } from "./compose-account-security.mjs";
 import { createProtocolOperations } from "./compose-protocol-operations.mjs";
 import { createAccountMigration } from "./features/pds-migration/move-between-pds.mjs";
 import { requestFailureEvent } from "./logging/request-event.js";
+import { canonicalBasic } from "./http/authorization-scheme.js";
 import { createIncomingArrival } from "./compose-incoming-arrival.mjs";
 import { mountIncomingRoutes } from "./features/external-migration/routes.js";
 
@@ -118,7 +119,7 @@ export async function createApp({ config, db, mail, lifecycle }) {
       const expected = Buffer.from(
         `Basic ${Buffer.from(`admin:${config.adminPassword}`).toString("base64")}`,
       );
-      const supplied = Buffer.from(req.get("authorization") ?? "");
+      const supplied = Buffer.from(canonicalBasic(req.get("authorization")));
       if (
         expected.length !== supplied.length ||
         !timingSafeEqual(expected, supplied)
