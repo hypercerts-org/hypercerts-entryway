@@ -1851,7 +1851,7 @@ test("claimed arrivals reject email availability, pending, backup and final auth
     },
     approvedRotationKeys: [sourceKey.did(), hotKey.did()],
     codeHash: "a".repeat(64),
-    codeExpiresAt: Date.now() + 60_000,
+    codeLifetimeMs: 60_000,
   });
   const prepared = await preparing.readArrival("authority-arrival", userId);
   assert.ok(prepared);

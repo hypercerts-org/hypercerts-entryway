@@ -217,6 +217,8 @@ export async function composeIncomingArrival({
     placement,
     backend: arrivalBackend,
     authorizeAccess: credentials.identifyArrivalAccess,
+    assertCredentialLive: (familyId) =>
+      legacy.arrivalSessions.assertLive(familyId),
     authentication,
     checkCsrf: browserFlow.checkCsrf,
     loadBrowser: browserFlow.loadBrowser,
