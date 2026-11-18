@@ -2119,7 +2119,7 @@ test("storage compare-and-swap rejects a stale or racing renewal directly", asyn
       ownerUserId: "destination-user",
       expectedVersion,
       codeHash: arrivalCodeHash(hash),
-      codeExpiresAt: Date.now() + 86_400_000,
+      codeLifetimeMs: 86_400_000,
     });
   const results = await Promise.allSettled([
     rotate("first", prepared.version),
@@ -2176,7 +2176,7 @@ test("renewal refuses an uncertain allocation and a bound arrival", async (t) =>
   );
 });
 
-test("a lapsed unclaimed preparation renews as expired and a repeat is not found", async (t) => {
+test("a lapsed unclaimed preparation is deleted when renewal finds it, and a repeat is not found", async (t) => {
   const f = await fixture(t);
   const prepared = await f.prepare();
   await f.db.update(
@@ -2184,9 +2184,10 @@ test("a lapsed unclaimed preparation renews as expired and a repeat is not found
     { expires_at: (await stored(f)).code[0].issued_at + 1 },
     eq(f.db.tables.arrival_code.operation_id, prepared.operationId),
   );
+  // The first read deletes the lapsed preparation, so renewal finds nothing
+  // (C1 allows ArrivalExpired or AccountNotFound for an expired preparation).
   await assert.rejects(renew(f, prepared.operationId, prepared.version), {
-    error: "ArrivalExpired",
-    status: 409,
+    code: "AccountNotFound",
   });
   assert.equal((await stored(f)).arrivals.length, 0);
   await assert.rejects(renew(f, prepared.operationId, prepared.version), {
