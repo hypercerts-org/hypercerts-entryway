@@ -54,6 +54,46 @@ test("verified registration activates and binds the original browser user", asyn
   );
 });
 
+test("registration rereads an account whose arrival activation completes during the pending check", async (t) => {
+  const f = await fixture(t);
+  const did = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+  await f.accounts.storage.insertAccount({
+    ...alice,
+    did,
+    emailVerified: true,
+    status: "provisioning",
+  });
+  // Activation commits after registration read the row and before the guard
+  // reads the arrival, so the guard finds nothing pending.
+  const { storage } = f.accounts;
+  t.mock.method(storage, "hasPendingExternalMigration", async () => {
+    await query(
+      f.db,
+      "UPDATE accounts SET status = 'active' WHERE did = ?",
+      [did],
+      "run",
+    );
+    return false;
+  });
+  const userId = "unrelated-registration-owner";
+  await verifiedUser(f.db, userId, alice.email);
+
+  await assert.rejects(
+    f.accounts.create({
+      ...alice,
+      registrationIdentity: {
+        kind: "better-auth",
+        userId,
+        email: alice.email,
+        emailVerified: true,
+      },
+    }),
+    { status: 403, error: "AccountMismatch" },
+  );
+  assertNothingPublished(f);
+  assert.equal(await f.db.get("operations", `create:${did}`), null);
+});
+
 test("registration cannot acquire an already active unbound row by verified email", async (t) => {
   const f = await fixture(t);
   const unbound = {
