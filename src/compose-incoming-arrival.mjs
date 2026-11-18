@@ -189,6 +189,7 @@ export async function composeIncomingArrival({
   // tool-admission.ts); browser surfaces below keep the browser-bound forms.
   const toolAdmission = createToolAdmission({
     arrivals,
+    ownership: accounts.ownership,
     admit: authenticated.admit,
     continueCreation: authenticated.continueCreation,
     issueCreationSession: credentials.issueCreationSession,
@@ -196,11 +197,38 @@ export async function composeIncomingArrival({
     // the arrival's own account is already this request's. The install itself
     // is conditional in one authority transaction, so concurrent replays and a
     // late installer after activation cannot overwrite or revoke anything.
-    setArrivalPassword: async ({ did, password }) => {
+    setArrivalPassword: async ({
+      did,
+      operationId,
+      userId,
+      password,
+      owner,
+      version,
+    }) => {
       if (!(await legacy.hasPassword(did)))
         await legacy.installInitialPassword(did, password, {
           isPending: (account) =>
             accounts.storage.hasPendingExternalMigration(account.did),
+          // Inside the install transaction: the arrival's claim fence and its
+          // saved state must still be the ones this execution resumed.
+          assertOwner: async () => {
+            await db.assertOperationFence(owner);
+            const current = await arrivals.readArrivalAggregate(
+              operationId,
+              userId,
+            );
+            if (
+              !current ||
+              current.arrival.version !== version ||
+              current.arrival.cancelledAt !== null ||
+              current.progress.completedAt !== null
+            )
+              throw new DomainError(
+                "OperationLeaseLost",
+                409,
+                "The arrival changed; retry after reconciliation",
+              );
+          },
         });
     },
   });
