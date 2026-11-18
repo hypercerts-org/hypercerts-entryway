@@ -1,11 +1,20 @@
 import { escapeHtml } from "../../ui/html.mjs";
 import { accountChooser } from "../../ui/account-chooser.mjs";
-// k••••@example.com: keeps the first character and the domain so the owner can
-// recognize the address without disclosing it to someone else at this browser.
+// ePDS format: each dot-separated part of the local name and domain keeps only
+// its last character (karma.secret@zoepa.com -> ***a.***t@***a.***m), so the
+// owner can recognize the address without it being disclosed to someone else at
+// this browser.
+const maskDottedSegments = (part) =>
+  part
+    .split(".")
+    .map((segment) => (segment.length <= 1 ? "***" : `***${segment.slice(-1)}`))
+    .join(".");
+
 export function maskEmail(email) {
-  const at = String(email ?? "").lastIndexOf("@");
-  if (at < 1) return "your account email";
-  return `${email[0]}••••${email.slice(at)}`;
+  const text = String(email ?? "");
+  const at = text.lastIndexOf("@");
+  if (at < 1 || at === text.length - 1) return "your account email";
+  return `${maskDottedSegments(text.slice(0, at))}@${maskDottedSegments(text.slice(at + 1))}`;
 }
 
 export function createLoginForms({ fields }) {

@@ -2,7 +2,10 @@ import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { escapeHtml } from "../../ui/html.mjs";
 import { hidden } from "../../ui/forms.mjs";
 import { matchesAuthorizationHint } from "../../accounts/rules.js";
-import { completeAuthorization } from "./complete-authorization.mjs";
+import {
+  completeAuthorization,
+  GrantNoLongerApprovedError,
+} from "./complete-authorization.mjs";
 export function createConsent({
   db,
   config,
@@ -17,18 +20,14 @@ export function createConsent({
     `<form method="post" action="/auth/choose">${fields(flow, browser)}<button class="secondary">Choose a different account</button></form>`;
   const consentForm = (flow, browser, account) =>
     `<div class="account"><strong>${escapeHtml(account.handle ?? account.did)}</strong><br><small>${escapeHtml(account.did)}</small>${flow.authUserId ? chooseAnotherAccountForm(flow, browser) : ""}</div><p><strong>${escapeHtml(flow.clientName ?? "Your application")}</strong> requests access:</p><p><code>${escapeHtml(flow.parameters?.scope)}</code></p><form method="post" action="/auth/consent">${fields(flow, browser)}${hidden("did", account.did)}<button name="decision" value="approve">Allow access</button> <button class="secondary" name="decision" value="deny">Cancel</button></form>`;
-  // ePDS parity: a brand-new account skips consent only when the client is on
-  // the Entryway trusted list and the client's metadata opts in with epds_skip_consent_on_signup. As in ePDS, a
-  // prompt=consent request does not override that opt-in. Every lookup that
-  // precedes issuing the code is inside the try, so any failure shows consent.
-  const signupConsentSkip = async (flow, browser, did) => {
+  // Loads what completeAuthorization needs, then lets the caller's policy decide
+  // whether this sign-in may issue the code without showing consent. Every
+  // lookup that precedes issuing the code is inside the try, so any failure
+  // shows consent. getDeviceAccount throws for a missing device account, so
+  // that case is covered too.
+  const consentSkip = async (flow, browser, did, mayConsentBeSkipped) => {
     try {
       const client = await provider.clientManager.getClient(flow.clientId);
-      if (
-        client.isTrusted !== true ||
-        (await clientRequestsSignupConsentSkip(flow.clientId)) !== true
-      )
-        return null;
       const request = await provider.requestManager.get(
         flow.requestUri,
         browser.deviceId,
@@ -38,10 +37,50 @@ export function createConsent({
         browser.deviceId,
         did,
       );
-      return deviceAccount ? { client, request, deviceAccount } : null;
+      if (!deviceAccount) return null;
+      const skip = { client, request, deviceAccount };
+      return (await mayConsentBeSkipped(skip)) ? skip : null;
     } catch {
       return null;
     }
+  };
+  // ePDS parity: a brand-new account skips consent only when the client is on
+  // the Entryway trusted list and the client's metadata opts in with epds_skip_consent_on_signup. As in ePDS, a
+  // prompt=consent request does not override that opt-in.
+  const signupConsentSkip = (flow, browser, did) =>
+    consentSkip(
+      flow,
+      browser,
+      did,
+      async ({ client }) =>
+        client.isTrusted === true &&
+        (await clientRequestsSignupConsentSkip(flow.clientId)) === true,
+    );
+  // The email hint's sign-on without a code skips consent when the stock
+  // provider policy says this client already holds every requested scope. That policy also keeps
+  // prompt=consent and new scopes on the consent page. An untrusted public
+  // client never skips: the request manager already stores prompt=consent for
+  // it, but Entryway does not rely on that rewrite staying in the provider.
+  const priorGrantApproves = ({ client, request }, grant) =>
+    (client.isConfidential || client.isTrusted) &&
+    !provider.checkConsentRequired(request.parameters, grant);
+  // The grant read here may be revoked before completeAuthorization commits, so
+  // completion reruns the same policy on the grant it reads in its transaction.
+  // A sign-in that showed Entryway's own pages (code, chooser) always shows
+  // consent instead, as a stock PDS does after its sign-in page.
+  const priorConsentSkip = async (flow, browser, did) => {
+    const skip = await consentSkip(flow, browser, did, (found) =>
+      priorGrantApproves(
+        found,
+        found.deviceAccount.authorizedClients.get(found.client.id),
+      ),
+    );
+    return (
+      skip && {
+        ...skip,
+        stillApproved: (grant) => priorGrantApproves(skip, grant),
+      }
+    );
   };
   const authenticated = async (
     req,
@@ -131,17 +170,22 @@ export function createConsent({
           authorized.account.did,
         )
       : null;
-    if (skip)
-      return await completeAuthorization({
-        db,
-        config,
-        provider,
-        refreshFlow: flows.refreshFlow,
-        res,
-        flow: authorized.current,
-        browser,
-        ...skip,
-      });
+    if (skip) {
+      try {
+        return await completeAuthorization({
+          db,
+          config,
+          provider,
+          refreshFlow: flows.refreshFlow,
+          res,
+          flow: authorized.current,
+          browser,
+          ...skip,
+        });
+      } catch (error) {
+        if (!(error instanceof GrantNoLongerApprovedError)) throw error;
+      }
+    }
     return pageForFlow(
       res,
       "Authorize application",
@@ -151,11 +195,7 @@ export function createConsent({
         displayAccount ?? authorized.account,
       ),
       authorized.current,
-      200,
-      {
-        formOrigin: new URL(authorized.current.parameters.redirect_uri).origin,
-      },
     );
   };
-  return { consentForm, authenticated };
+  return { consentForm, authenticated, priorConsentSkip };
 }

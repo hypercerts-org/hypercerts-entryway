@@ -1,7 +1,7 @@
 import express from "express";
 import { page, escapeHtml as esc } from "../ui/html.mjs";
 import { hidden } from "../ui/forms.mjs";
-import { accountUrl, manageUrl } from "../ui/account-forms.mjs";
+import { accountUrl, manageUrl, settingsLink } from "../ui/account-forms.mjs";
 import { accountChooser } from "../ui/account-chooser.mjs";
 import { HttpError } from "./http-error.mjs";
 import {
@@ -203,7 +203,7 @@ export function createAccountConsole({
       return page(
         res,
         "Account change waiting for recovery",
-        `<p role="alert">Your change has an uncertain server outcome. Contact the service operator; retrying alone cannot settle it.</p><p>The saved account is <strong>${esc(ctx.account.handle)}</strong> (<code>${esc(ctx.account.did)}</code>) on ${esc(pending.target)}. Keep this account and the original requested change when continuing after verified recovery.</p><p><a href="${esc(accountUrl(ctx.account.did))}">Return to account settings</a></p>`,
+        `<p role="alert">Your change has an uncertain server outcome. Contact the service operator; retrying alone cannot settle it.</p><p>The saved account is <strong>${esc(ctx.account.handle)}</strong> (<code>${esc(ctx.account.did)}</code>) on ${esc(pending.target)}. Keep this account and the original requested change when continuing after verified recovery.</p><p>${settingsLink(ctx.account.did)}</p>`,
         409,
       );
     }
