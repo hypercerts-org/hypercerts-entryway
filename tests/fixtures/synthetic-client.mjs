@@ -112,21 +112,27 @@ export async function mountClient({ app, config, db }) {
     primary: "/client-metadata.json",
     secondary: "/client-metadata-secondary.json",
     untrusted: "/client-metadata-untrusted.json",
+    public: "/client-metadata-public.json",
   };
   const callbackPaths = {
     primary: "/client/callback",
     secondary: "/client/callback/secondary",
     untrusted: "/client/callback/untrusted",
+    public: "/client/callback/public",
   };
   const clientNames = {
     primary: "Hypercerts test client",
     secondary: "Hypercerts second test client",
     untrusted: "Hypercerts untrusted test client",
+    public: "Hypercerts public test client",
   };
   // ePDS signup consent skip opt-in. The sandbox trusts primary and secondary
   // (OAUTH_TRUSTED_CLIENTS), so secondary skips consent on signup, untrusted
   // opts in without trust and must still show it, and primary does not opt in.
-  const skipsConsentOnSignup = new Set(["secondary", "untrusted"]);
+  // public is an untrusted public client (no client authentication): it also
+  // opts in and must still show consent, as stock PDS forces for such clients.
+  const skipsConsentOnSignup = new Set(["secondary", "untrusted", "public"]);
+  const publicClients = new Set(["public"]);
   for (const id of Object.keys(metadataPaths)) {
     const jwk = await db.transact(async () => {
       const stored = await db.get("client:keys", id);
@@ -153,11 +159,15 @@ export async function mountClient({ app, config, db }) {
         grant_types: ["authorization_code", "refresh_token"],
         response_types: ["code"],
         application_type: "web",
-        token_endpoint_auth_method: "private_key_jwt",
-        token_endpoint_auth_signing_alg: "ES256",
+        ...(publicClients.has(id)
+          ? { token_endpoint_auth_method: "none" }
+          : {
+              token_endpoint_auth_method: "private_key_jwt",
+              token_endpoint_auth_signing_alg: "ES256",
+            }),
         dpop_bound_access_tokens: true,
       },
-      keyset: [await JoseKey.fromJWK(jwk)],
+      keyset: publicClients.has(id) ? undefined : [await JoseKey.fromJWK(jwk)],
       stateStore: stateStores[id],
       sessionStore: store(`client:${id}:sessions`),
       requestLock: (name, fn) =>
@@ -273,7 +283,7 @@ export async function mountClient({ app, config, db }) {
     <form method="post" action="/client/logout">${formFields(browser, id)}<button class="secondary">Sign out of application</button></form>`
         : ""
     }
-    <form method="get" action="/client/login"><label for="identifier">Handle, DID or authorization server</label><input id="identifier" name="identifier" value="${escapeHtml(config.issuer)}" required><label for="email">Email (optional, with an authorization server)</label><input id="email" name="email" type="email" autocomplete="email"><label for="client">Application</label><select id="client" name="client"><option value="primary"${id === "primary" ? " selected" : ""}>Primary client</option><option value="secondary"${id === "secondary" ? " selected" : ""}>Second client</option></select><button>${data ? "Sign in again" : "Sign in"}</button></form>
+    <form method="get" action="/client/login"><label for="identifier">Handle, DID or authorization server</label><input id="identifier" name="identifier" value="${escapeHtml(config.issuer)}" required><label for="email">Email (optional, with an authorization server)</label><input id="email" name="email" type="email" autocomplete="email"><label for="client">Application</label><select id="client" name="client"><option value="primary"${id === "primary" ? " selected" : ""}>Primary client</option><option value="secondary"${id === "secondary" ? " selected" : ""}>Second client (trusted, skips consent on signup)</option><option value="untrusted"${id === "untrusted" ? " selected" : ""}>Untrusted client (opts in, not trusted)</option><option value="public"${id === "public" ? " selected" : ""}>Public client (opts in, not trusted, no client authentication)</option></select><label for="prompt">Prompt</label><select id="prompt" name="prompt"><option value="">(none)</option><option value="none">none (silent sign-in)</option><option value="login">login</option><option value="consent">consent</option><option value="select_account">select_account</option><option value="create">create</option></select><button>${data ? "Sign in again" : "Sign in"}</button></form>
     <p><a href="${escapeHtml(config.issuer)}/account">Manage entryway account</a> · <a href="/client?client=${id === "primary" ? "secondary" : "primary"}">Open other application</a></p>
   `,
       200,
@@ -350,7 +360,8 @@ export async function mountClient({ app, config, db }) {
         createdAt: Date.now(),
       });
       try {
-        const prompt = req.query.prompt;
+        // The form's "(none)" choice submits an empty prompt; omit it.
+        const prompt = req.query.prompt || undefined;
         if (
           prompt != null &&
           (typeof prompt !== "string" ||
