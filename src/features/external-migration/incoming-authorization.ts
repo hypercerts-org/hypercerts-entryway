@@ -3,6 +3,7 @@ import { getDidKeyFromMultibase } from "@atproto/identity";
 import type { DidDocument } from "@atproto/identity";
 import { verifyJwt } from "@atproto/xrpc-server";
 import { DomainError } from "../../accounts/errors.js";
+import { schemeCredential } from "../../http/authorization-scheme.js";
 import type { ArrivalReplayFacts } from "./arrival-types.js";
 
 /** Incoming source credentials authorize one Entryway method for one DID. They
@@ -32,12 +33,16 @@ const rejected = (): never => {
   );
 };
 
+/** The token of a well-formed bearer presentation, in any scheme casing. */
+export const bearerToken = (value: string): string | undefined => {
+  const token = schemeCredential(value.trim(), "Bearer");
+  return token && /^[A-Za-z0-9._~+/-]+=*$/.test(token) ? token : undefined;
+};
+
 /** Accept only a bearer credential; cookies and query parameters never authorize. */
 const presentation = (value: unknown): string => {
   if (typeof value !== "string") return rejected();
-  const match = /^Bearer ([A-Za-z0-9._~+/-]+=*)$/.exec(value.trim());
-  if (!match) return rejected();
-  const token = match[1];
+  const token = bearerToken(value);
   if (!token) return rejected();
   return token;
 };

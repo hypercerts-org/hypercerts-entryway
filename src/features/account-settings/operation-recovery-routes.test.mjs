@@ -56,17 +56,38 @@ test("operator recovery requires Entryway authorization and exact nonreplayable 
   await new Promise((resolve) => server.once("listening", resolve));
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const origin = `http://127.0.0.1:${server.address().port}`;
-  const call = (path, body, password = "entryway-recovery-test") =>
+  const call = (
+    path,
+    body,
+    password = "entryway-recovery-test",
+    scheme = "Basic",
+  ) =>
     fetch(origin + path, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Basic ${Buffer.from(`admin:${password}`).toString("base64")}`,
+        authorization: `${scheme} ${Buffer.from(`admin:${password}`).toString("base64")}`,
       },
       body: JSON.stringify(body),
     });
   assert.equal(
     (await call("/_operations/status", { resource }, "pds-admin")).status,
+    401,
+  );
+  // The scheme is matched without case; the credential still has to match.
+  assert.equal(
+    (await call("/_operations/status", { resource }, undefined, "basic"))
+      .status,
+    200,
+  );
+  assert.equal(
+    (await call("/_operations/status", { resource }, "pds-admin", "basic"))
+      .status,
+    401,
+  );
+  assert.equal(
+    (await call("/_operations/status", { resource }, undefined, "Bearer"))
+      .status,
     401,
   );
   const status = await (await call("/_operations/status", { resource })).json();

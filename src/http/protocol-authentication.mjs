@@ -5,6 +5,7 @@ import { getVerificationMaterial } from "@atproto/common";
 import { getDidKeyFromMultibase } from "@atproto/identity";
 import { ScopePermissionsTransition } from "@atproto/oauth-scopes";
 import { HttpError } from "./http-error.mjs";
+import { canonicalBasic, schemeCredential } from "./authorization-scheme.js";
 
 export const phaseOneUnsupported = [
   "com.atproto.server.createSession",
@@ -127,7 +128,7 @@ export async function createProtocolRouting({
   };
   const authenticate = async (req, nsid) => {
     const method = nsid.split(".").at(-1);
-    if (req.headers.authorization?.startsWith("DPoP ")) {
+    if (schemeCredential(req.headers.authorization, "DPoP") !== undefined) {
       req.res.set("DPoP-Nonce", oauth.provider.nextDpopNonce());
       let payload;
       try {
@@ -167,14 +168,13 @@ export async function createProtocolRouting({
       };
       return account;
     }
-    const match = /^Bearer (\S+)$/.exec(req.headers.authorization ?? "");
-    if (!match)
+    const token = schemeCredential(req.headers.authorization, "Bearer");
+    if (!token || !/^\S+$/.test(token))
       throw new HttpError(
         401,
         "AuthRequired",
         "A supported authorization credential is required",
       );
-    const token = match[1];
     let did;
     try {
       const { typ } = decodeProtectedHeader(token);
@@ -335,7 +335,7 @@ export async function createProtocolRouting({
   };
   const admin = async (req, did, global = false) => {
     const hash = (s) => createHash("sha256").update(String(s)).digest();
-    const supplied = hash(req.headers.authorization ?? "");
+    const supplied = hash(canonicalBasic(req.headers.authorization));
     const candidates = [
       { password: config.adminPassword },
       ...(global
