@@ -493,6 +493,12 @@ export function createRegistration({
       row,
       "registration",
     );
+    // Activation may complete between the two reads above: the guard then sees
+    // no pending arrival while `row` still says `provisioning`. Completion
+    // clears the arrival and activates the account in one transaction, so a row
+    // read after the guard is never older than what the guard saw.
+    if (row?.status === "provisioning")
+      row = await registrationAccountForEmail(storage, email);
     await assertEmailAvailable(email, row);
     if (row) {
       assertSameRegistration(row, { handle, pdsId, recoveryKey });

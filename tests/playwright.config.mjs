@@ -21,6 +21,8 @@ const defaultMatch = [
   "oauth-sign-in-hints.spec.mjs",
   "shared-email-lookups.spec.mjs",
   "entryway-ingress-cors.spec.mjs",
+  "consent-map.spec.mjs",
+  "hinted-code-limit.spec.mjs",
 ];
 // The PDS MOOver journey is selected only by `./tests/local.sh incoming-moover-journey`.
 const mooverJourney = process.env.INCOMING_MOOVER_JOURNEY === "1";
