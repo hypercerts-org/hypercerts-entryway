@@ -512,6 +512,10 @@ export function createArrivalStorage(
       return db.transact(async () => {
         const saved = await row(operationId);
         if (!saved || saved.user_id !== ownerUserId) return null;
+        if (await isLapsed(saved)) {
+          await deleteUnclaimedInTransaction(saved);
+          return null;
+        }
         const binding = await reservation(operationId);
         const signed = await db.read("arrival_signed_operations", {
           where: eq(signedTable.operation_id, operationId),
@@ -869,11 +873,14 @@ export function createArrivalStorage(
           if (saved.did !== input.did) throw immutableTuple();
           if (saved.active === 0) throw notActionable();
           if (saved.claim_operation_id !== null) {
-            if (saved.claim_operation_id === owner.operationId)
+            if (saved.claim_operation_id === owner.operationId) {
+              // A retry is settled only for the current fence and admission.
+              await assertAdmission(owner, saved.did);
               return {
                 kind: "already-settled" as const,
                 version: saved.version,
               };
+            }
             throw versionConflict();
           }
           // The admission is the DID authority; the preparation's own claim is
@@ -1596,6 +1603,8 @@ export function createArrivalStorage(
             "Activation requires observed backend evidence for this arrival",
           );
         return db.withOperationFence(input.owner, async () => {
+          if ((await reservation(input.operationId))?.uncertain_reason)
+            throw recoveryRequired();
           if (!(await authority.readAccount(input.did)))
             throw new DomainError(
               "OperationConflict",
