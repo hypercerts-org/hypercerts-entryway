@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import {
   authorizeBrowserApp,
   browserUrl,
-  completeAuthorizationWithEmail,
+  completeAuthorizationWithHintedCode,
   config,
   createAccount,
   createPost,
@@ -169,14 +169,11 @@ test("forgetting one owned OAuth device and signing out require new identity pro
       .getByLabel("Authorize another handle or DID")
       .fill(identity.handle);
     await page.getByLabel("Account prompt").selectOption("select_account");
+    const since = Date.now();
     await page
       .getByRole("button", { name: "Start another authorization" })
       .click();
-    await expect(
-      page.getByRole("heading", { name: "Sign in to authorize" }),
-    ).toBeVisible();
-    await expect(page.locator('form[action="/auth/consent"]')).toHaveCount(0);
-    await completeAuthorizationWithEmail(page, identity);
+    await completeAuthorizationWithHintedCode(page, identity, since);
   } finally {
     await context.close();
   }
@@ -207,14 +204,11 @@ test("sign out all browsers removes device membership while an existing client g
       .getByLabel("Authorize another handle or DID")
       .fill(identity.handle);
     await page.getByLabel("Account prompt").selectOption("select_account");
+    const since = Date.now();
     await page
       .getByRole("button", { name: "Start another authorization" })
       .click();
-    await expect(
-      page.getByRole("heading", { name: "Sign in to authorize" }),
-    ).toBeVisible();
-    await expect(page.locator('form[action="/auth/consent"]')).toHaveCount(0);
-    await completeAuthorizationWithEmail(page, identity);
+    await completeAuthorizationWithHintedCode(page, identity, since);
   } finally {
     await context.close();
   }

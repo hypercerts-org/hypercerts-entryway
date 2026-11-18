@@ -1810,6 +1810,23 @@ export function createArrivalStorage(
             },
             { ignoreConflict: true },
           );
+          // A skipped insert is an exact repeat only when the saved family is
+          // this arrival's own; another arrival's family is never adopted.
+          const family = (
+            await db.read("arrival_families", {
+              where: eq(familyTable.family_id, input.familyId),
+              limit: 1,
+            })
+          )[0];
+          if (
+            family?.operation_id !== input.operationId ||
+            family.pds_id !== input.pdsId
+          )
+            throw new DomainError(
+              "OperationConflict",
+              409,
+              "This credential family belongs to another arrival",
+            );
           return {
             kind: "applied" as const,
             version: await advance(saved, {}),

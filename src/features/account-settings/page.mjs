@@ -1,6 +1,6 @@
 import { page, escapeHtml as esc } from "../../ui/html.mjs";
 import {
-  accountUrl,
+  codeField,
   field,
   hidden,
   form,
@@ -8,7 +8,14 @@ import {
   stamp,
   section,
   rows,
+  settingsLink,
 } from "../../ui/account-forms.mjs";
+
+/** Fields for the second step of an email change: the code sent to the new address. */
+export const newEmailConfirmFields = (challengeId, email) =>
+  hidden("challengeId", challengeId ?? "") +
+  hidden("email", email) +
+  codeField("New email verification code");
 
 function renderEmailChange({ security, state, csrf, accountContext }) {
   if (!security) return "";
@@ -18,7 +25,7 @@ function renderEmailChange({ security, state, csrf, accountContext }) {
       typeof state.pendingEmail === "string"
         ? state.pendingEmail
         : state.pendingEmail.email;
-    confirmation = `<p>Awaiting verification of ${esc(email)}.</p>${form("email-confirm", csrf, hidden("challengeId", state.pendingEmailChallengeId ?? "") + hidden("email", email) + field("token", "New email verification code", "text", 'autocomplete="one-time-code" maxlength="256"'), "Confirm new email", accountContext)}`;
+    confirmation = `<p>Awaiting verification of ${esc(email)}.</p>${form("email-confirm", csrf, newEmailConfirmFields(state.pendingEmailChallengeId, email), "Confirm new email", accountContext)}`;
   }
   return `<h3>Change primary email</h3><p>Verify your current email, then your new email. Your browser sessions will stay signed in for any other linked accounts. Sign in with your new email to access this account after the change.</p>${form("email-request", csrf, "", "Start email change", accountContext)}${confirmation}`;
 }
@@ -99,7 +106,7 @@ function renderPasswordPanel({
 }
 
 const backLink = (accountContext) =>
-  `<p><a href="${esc(accountUrl(accountContext.did))}">Return to account settings</a></p>`;
+  `<p>${settingsLink(accountContext.did)}</p>`;
 
 const renderPasswordPage = async ({
   res,

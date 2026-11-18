@@ -20,6 +20,8 @@ const defaultMatch = [
   "oauth-signup-consent-skip.spec.mjs",
   "oauth-sign-in-hints.spec.mjs",
   "shared-email-lookups.spec.mjs",
+  "consent-map.spec.mjs",
+  "hinted-code-limit.spec.mjs",
 ];
 const selected = [
   [goatJourney, "incoming-goat-journey", "incoming-goat-journey.spec.mjs"],

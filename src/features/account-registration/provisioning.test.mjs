@@ -15,6 +15,16 @@ import {
   verifiedUser,
 } from "../../../tests/support/database-fixture.mjs";
 
+const createAccountCalls = (calls) =>
+  calls.filter((call) => call.method === "com.atproto.server.createAccount");
+
+/** Nothing reached the PDS or PLC: no remote account, PLC head or createAccount call. */
+function assertNothingPublished(f) {
+  assert.equal(f.remote.size, 0);
+  assert.equal(f.plcHeads.size, 0);
+  assert.equal(createAccountCalls(f.calls).length, 0);
+}
+
 test("verified registration activates and binds the original browser user", async (t) => {
   const { db, accounts } = await fixture(t);
   const userId = "registration-owner";
@@ -42,6 +52,46 @@ test("verified registration activates and binds the original browser user", asyn
       .userId,
     userId,
   );
+});
+
+test("registration rereads an account whose arrival activation completes during the pending check", async (t) => {
+  const f = await fixture(t);
+  const did = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+  await f.accounts.storage.insertAccount({
+    ...alice,
+    did,
+    emailVerified: true,
+    status: "provisioning",
+  });
+  // Activation commits after registration read the row and before the guard
+  // reads the arrival, so the guard finds nothing pending.
+  const { storage } = f.accounts;
+  t.mock.method(storage, "hasPendingExternalMigration", async () => {
+    await query(
+      f.db,
+      "UPDATE accounts SET status = 'active' WHERE did = ?",
+      [did],
+      "run",
+    );
+    return false;
+  });
+  const userId = "unrelated-registration-owner";
+  await verifiedUser(f.db, userId, alice.email);
+
+  await assert.rejects(
+    f.accounts.create({
+      ...alice,
+      registrationIdentity: {
+        kind: "better-auth",
+        userId,
+        email: alice.email,
+        emailVerified: true,
+      },
+    }),
+    { status: 403, error: "AccountMismatch" },
+  );
+  assertNothingPublished(f);
+  assert.equal(await f.db.get("operations", `create:${did}`), null);
 });
 
 test("registration cannot acquire an already active unbound row by verified email", async (t) => {
@@ -322,11 +372,7 @@ test("registration reconciliation uses persisted user ID and atomically retries 
     userId,
     email: alice.email,
   });
-  assert.equal(
-    f.calls.filter((call) => call.method === "com.atproto.server.createAccount")
-      .length,
-    1,
-  );
+  assert.equal(createAccountCalls(f.calls).length, 1);
 });
 
 test("registration rejects malformed and oversized email before external work", async (t) => {
@@ -658,11 +704,7 @@ test("acknowledged registration activates during transient evidence outage and r
   );
   assert.equal(await f.db.get("registration:intents", alice.email), null);
   assert.equal((await f.accounts.create(alice)).did, row.did);
-  assert.equal(
-    f.calls.filter((call) => call.method === "com.atproto.server.createAccount")
-      .length,
-    1,
-  );
+  assert.equal(createAccountCalls(f.calls).length, 1);
   f.accounts.plcClient.getAuditableLog = read;
   const results = await f.accounts.reconcile();
   assert.deepEqual(
@@ -734,9 +776,7 @@ test("provisioning retries reuse the persisted DID and signed operation after a 
   assert.equal(recovered.recoveryKey, keyed.recoveryKey);
   assert.equal(recovered.did, pending.did);
   assert.equal(recovered.status, "active");
-  const creates = calls.filter(
-    (c) => c.method === "com.atproto.server.createAccount",
-  );
+  const creates = createAccountCalls(calls);
   assert.deepEqual(creates[0].body, creates[1].body);
   assert.equal(
     calls.filter((c) => c.method === "com.atproto.server.reserveSigningKey")
@@ -760,10 +800,7 @@ test("concurrent provisioning coalesces matching requests and rejects conflictin
   );
   const [a, b] = await Promise.all([first, duplicate]);
   assert.equal(a.did, b.did);
-  assert.equal(
-    calls.filter((c) => c.method === "com.atproto.server.createAccount").length,
-    1,
-  );
+  assert.equal(createAccountCalls(calls).length, 1);
 });
 test("concurrent accounts cannot acquire the same handle before PDS creation", async (t) => {
   const { accounts, calls } = await fixture(t);
@@ -776,10 +813,7 @@ test("concurrent accounts cannot acquire the same handle before PDS creation", a
     results.filter((r) => r.status === "rejected")[0].reason.status,
     409,
   );
-  assert.equal(
-    calls.filter((c) => c.method === "com.atproto.server.createAccount").length,
-    1,
-  );
+  assert.equal(createAccountCalls(calls).length, 1);
 });
 
 test("pre-DID registration binds public recovery custody while matching requests still coalesce", async (t) => {
@@ -912,9 +946,7 @@ test("signed pending genesis resumes exact bytes after the hot signer changes", 
   );
   await f.reopen();
   await f.accounts.create(alice);
-  const calls = f.calls.filter(
-    (call) => call.method === "com.atproto.server.createAccount",
-  );
+  const calls = createAccountCalls(f.calls);
   assert.deepEqual(calls[1].body.plcOp, original);
   assert.equal(calls[1].body.did, row.did);
 });
@@ -970,13 +1002,7 @@ test("genesis failure before first insert has no publication; saved row replays 
     (await f.accounts.storage.listByEmail(alice.email))[0] ?? null,
     null,
   );
-  assert.equal(f.remote.size, 0);
-  assert.equal(f.plcHeads.size, 0);
-  assert.equal(
-    f.calls.filter((call) => call.method === "com.atproto.server.createAccount")
-      .length,
-    0,
-  );
+  assertNothingPublished(f);
   assert.equal((await f.db.list("operations")).length, 0);
 });
 
@@ -1051,13 +1077,7 @@ test("genesis history failure rolls back the signed row, claims, DID admission a
     ),
     false,
   );
-  assert.equal(f.remote.size, 0);
-  assert.equal(f.plcHeads.size, 0);
-  assert.equal(
-    f.calls.filter((call) => call.method === "com.atproto.server.createAccount")
-      .length,
-    0,
-  );
+  assertNothingPublished(f);
 });
 
 test("crash after signed row commit reuses acknowledged repository key and saved public custody", async (t) => {
@@ -1081,18 +1101,10 @@ test("crash after signed row commit reuses acknowledged repository key and saved
   assert.equal(signedHistory[0].cid, String(await cidForCbor(saved.op)));
   assert.equal(await store.getByDid(saved.did), null);
   assert.deepEqual(saved.op.rotationKeys, saved.genesisRotationKeys);
-  assert.equal(f.remote.size, 0);
-  assert.equal(f.plcHeads.size, 0);
-  assert.equal(
-    f.calls.filter((call) => call.method === "com.atproto.server.createAccount")
-      .length,
-    0,
-  );
+  assertNothingPublished(f);
   f.config.plcRecoveryKeyDid = (await Secp256k1Keypair.create()).did();
   await f.accounts.create(alice);
-  const creates = f.calls.filter(
-    (call) => call.method === "com.atproto.server.createAccount",
-  );
+  const creates = createAccountCalls(f.calls);
   assert.equal(creates.length, 1);
   assert.deepEqual(
     (await store.getHistory(saved.did)).filter(

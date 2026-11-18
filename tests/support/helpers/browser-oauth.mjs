@@ -112,13 +112,21 @@ export async function authorizeBrowserApp(page, identity) {
   await expect(page.locator("#issuer")).toHaveText(config.issuer);
 }
 
-export async function completeAuthorizationWithEmail(page, identity) {
-  await page.getByLabel("Email address").fill(identity.email);
-  const since = Date.now();
-  await page.getByRole("button", { name: "Send sign-in code" }).click();
+// A handle login_hint for an account this browser does not remember opens the
+// code step directly. `since` is taken before the authorization starts, because
+// the code is sent as soon as the authorization page is requested.
+export async function completeAuthorizationWithHintedCode(
+  page,
+  identity,
+  since,
+) {
   await expect(
     page.getByRole("heading", { name: "Check your email" }),
   ).toBeVisible();
+  await expect(page.locator('form[action="/auth/consent"]')).toHaveCount(0);
+  const html = await page.content();
+  expect(html).not.toContain(identity.email);
+  expect(html).not.toContain(identity.email.split("@")[0]);
   const { code } = await waitForMailpitCode({
     recipient: identity.email,
     since,
