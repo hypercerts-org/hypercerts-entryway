@@ -61,18 +61,13 @@ export async function createLegacy({ db, config, accounts }) {
     const normalized = password.replaceAll("-", "").toLowerCase();
     return /^[a-z]{16}$/.test(normalized) ? normalized : null;
   };
-  const accountFor = async (
-    did,
-    { allowDeactivated = false, allowProvisioning = false } = {},
-  ) => {
+  const accountFor = async (did, { allowDeactivated = false } = {}) => {
     const account = await accounts.get(did);
     if (
       !account ||
-      ![
-        "active",
-        ...(allowDeactivated ? ["deactivated"] : []),
-        ...(allowProvisioning ? ["provisioning"] : []),
-      ].includes(account.status)
+      !["active", ...(allowDeactivated ? ["deactivated"] : [])].includes(
+        account.status,
+      )
     )
       throw new HttpError(403, "AccountUnavailable", "Account is unavailable");
     if (!config.pds.some((pds) => pds.id === account.pdsId))
@@ -112,11 +107,7 @@ export async function createLegacy({ db, config, accounts }) {
         for (const { key } of await appsFor(did)) await del("apps", key);
     });
   const hasPassword = async (did) => Boolean(await get("passwords", did));
-  // `provisioning` is for an incoming arrival's own placed account only; the
-  // credential cannot sign in until the account is active or deactivated.
-  const setPassword = async (did, password, { provisioning = false } = {}) => {
-    const allowed = { allowDeactivated: true, allowProvisioning: provisioning };
-    await accountFor(did, allowed);
+  const checkedPassword = (password) => {
     if (
       typeof password !== "string" ||
       password.length < 12 ||
@@ -127,15 +118,44 @@ export async function createLegacy({ db, config, accounts }) {
         "InvalidPassword",
         "Use a password between 12 and 256 characters",
       );
-    const hash = await hashPassword(password);
+    return password;
+  };
+  const setPassword = async (did, password) => {
+    await accountFor(did, { allowDeactivated: true });
+    const hash = await hashPassword(checkedPassword(password));
     await transaction(async () => {
-      await accountFor(did, allowed);
+      await accountFor(did, { allowDeactivated: true });
       await set("passwords", did, {
         hash,
         revision: identifier(),
         updatedAt: new Date(),
       });
       await revokeFamilies(did, "password-changed");
+    });
+  };
+  // The first password of an incoming arrival's own placed account. The credential
+  // cannot sign in until the account is active. Hashing happens first; one
+  // authority transaction (serialized across nodes) then installs it only while
+  // the account is still the pending arrival and has no password. This is not a
+  // password change, so no credential family is revoked, and a late or repeated
+  // installer never overwrites a password or touches an activated account.
+  const installInitialPassword = async (did, password, { isPending }) => {
+    const hash = await hashPassword(checkedPassword(password));
+    return await transaction(async () => {
+      const account = await accounts.get(did);
+      if (
+        !account ||
+        account.status !== "provisioning" ||
+        !(await isPending(account)) ||
+        (await get("passwords", did))
+      )
+        return false;
+      await set("passwords", did, {
+        hash,
+        revision: identifier(),
+        updatedAt: new Date(),
+      });
+      return true;
     });
   };
   const removePassword = async (did) =>
@@ -696,6 +716,11 @@ export async function createLegacy({ db, config, accounts }) {
         throw invalid();
       return { familyId: family.id, did: family.did, pdsDid: family.pdsDid };
     },
+    /** Re-reads one family under the caller's fence: refuses unless it is still
+     * live, which covers logout and expiry that tracking metadata cannot see. */
+    async assertLive(familyId) {
+      if (!familyActive(await get("sessions", familyId))) throw revoked();
+    },
     /** Verifies a refresh credential's signature, type, audience and shape only. */
     async readRefresh(input) {
       const payload = await parseToken(input, "refresh");
@@ -710,6 +735,7 @@ export async function createLegacy({ db, config, accounts }) {
   return {
     arrivalSessions,
     setPassword,
+    installInitialPassword,
     removePassword,
     hasPassword,
     verifyPassword,

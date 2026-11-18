@@ -123,13 +123,14 @@ export function createArrivalLifecycle({
       expectedVersion,
       ownerUserId: userId,
       codeHash: code.hash,
-      codeExpiresAt: code.expiresAt,
+      // Storage sets the expiry from database time.
+      codeLifetimeMs: code.lifetimeMs,
     });
     return {
       operationId: renewed.operationId,
       version: renewed.version,
       arrivalCode: code.code,
-      expiresAt: code.expiresAt,
+      expiresAt: renewed.codeExpiresAt,
     };
   };
   const resumeClaimed = <T>(
