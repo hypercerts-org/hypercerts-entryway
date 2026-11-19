@@ -250,14 +250,17 @@ async function snapshot(endpoint, did) {
   const blobs = [];
   for (const cid of (
     await readPages(endpoint, "com.atproto.sync.listBlobs", { did }, "cids")
-  ).sort()) {
+  ).toSorted((a, b) => a.localeCompare(b))) {
     const response = await call(endpoint, "com.atproto.sync.getBlob", {
       params: { did, cid },
     });
     ok(response, "fetch blob");
     blobs.push({ cid, bytes: response.content });
   }
-  return { records: records.sort((a, b) => a.uri.localeCompare(b.uri)), blobs };
+  return {
+    records: records.toSorted((a, b) => a.uri.localeCompare(b.uri)),
+    blobs,
+  };
 }
 
 // Compare the source's public inventory to the writes, independently of import.
