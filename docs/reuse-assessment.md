@@ -135,8 +135,8 @@ against our contract.
   public endpoints), skips the stock
   recommended-credentials cutover, activates through the destination, confirms
   activation and then deactivates the source. Blob failures are fatal there. The
-  Docker build checks that the patched binary, without `--arrival-code`, refuses the
-  Entryway-only flags.
+  Docker build checks that `goat account migrate` with `--handoff` but without
+  `--arrival-code` exits unsuccessfully and reports `--handoff requires --arrival-code`.
 - Status: reusable as a harness only; stock unmodified goat does not support the
   Entryway surface.
 

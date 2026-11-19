@@ -38,7 +38,7 @@ and requires no host dependency install:
 
 | Command                                       | Purpose and precondition                                                                                                                                                                                   |
 | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `./tests/local.sh fresh`                      | Repeatable full run as four parallel disposable groups; cleanup follows success/failure                                                                                                                   |
+| `./tests/local.sh fresh`                      | Repeatable full run as four parallel disposable groups; cleanup follows success/failure                                                                                                                    |
 | `./tests/local.sh fresh-group <steps>`        | Run the named steps in order in one disposable project, for example `fresh-group browser contracts`                                                                                                        |
 | `./tests/local.sh prepare`                    | Install sandbox CLI dependencies and create/check project configuration                                                                                                                                    |
 | `./tests/local.sh up`                         | Build/start the sandbox and build test/browser images after prepare                                                                                                                                        |
@@ -496,13 +496,12 @@ test container with `CONTRACT_DATABASE_BACKEND=postgresql` and that sandbox's
 child fixture is SQLite-specific; it does not establish PostgreSQL restart coverage.
 Run `./tests/local.sh incoming-public-mechanisms` separately
 for stock runtime evidence. Do not invent a host database URL or report these
-commands as executed from native CI alone. Full public journey and guarded
-activation qualification remain pending, independently of these checks. Follow the
-[accepted C4 contract](incoming-migration.md#c4-client-managed-migration-contract-accepted)
-and [public journey coverage](../tests/flows/incoming-public-migration.md):
-exercise records/blobs, valid empty and blob-free repositories, integrity of the
-chosen transferred state, authorization and refusal across every pending-arrival
-activation entrypoint, and interrupted/lost-response recovery. Preserve canonical
+commands as executed from native CI alone. The [public journey](../tests/flows/incoming-public-migration.md)
+checks one profile and blob, activation and post-move access. Additional qualification
+under the [accepted C4 contract](incoming-migration.md#c4-client-managed-migration-contract-accepted)
+remains outstanding: valid empty and blob-free repositories, broader transfer integrity,
+authorization and refusal across every pending-arrival activation entrypoint, and
+interrupted/lost-response recovery. Preserve canonical
 identity/custody, placement, saved-user binding, backend-state and durable-owner
 checks; do not require the abandoned final-source certification or global write
 barrier as a prerequisite.

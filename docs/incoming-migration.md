@@ -977,7 +977,7 @@ Owner: `src/features/external-migration` prepares and manages the arrival lifecy
 and owns its routes. Consumers: the browser pages and the migration tool through the
 standard XRPC bodies.
 
-Proposed Entryway-only POST surfaces. These are Entryway extensions, not AT Protocol
+Implemented Entryway-only POST surfaces. These are Entryway extensions, not AT Protocol
 methods. They never accept or export browser cookies on behalf of a tool.
 
 | Path                | Request body                     | Response                                                                                                                     |

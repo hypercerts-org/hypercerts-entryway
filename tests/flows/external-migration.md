@@ -7,6 +7,9 @@ It uses a distinct verified destination email; established whole-server shared-e
 associations are a separate contract. The source freeze and private fixture calls
 below are not prerequisites for an individual move.
 
+Outstanding negative case: reject an arrival for an already-claimed destination
+email and verify that the existing account is unchanged.
+
 ## Existing synthetic flow
 
 Prerequisite: `prepare` and `up` have succeeded.
