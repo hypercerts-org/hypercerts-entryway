@@ -373,7 +373,7 @@ Contributors maintain the actual job commands in `.github/workflows/ci.yml`.
 Formatting, lint, syntax, types, architecture, schema, build, unit and lifecycle
 checks each have a visible step. Integration runs browser before contracts,
 then migration, the declared moderation-gap assertion, recovery/crash/authority
-checks and resilience last. Database dialects and the PostgreSQL application
+checks and resilience last. The separate `incoming` job runs the public incoming journey in its own sandbox on every PR. Database dialects and the PostgreSQL application
 profile are separate steps: the databases job starts its sandbox on PostgreSQL,
 runs the SQLite and PostgreSQL suites concurrently, and runs the application
 profile in that sandbox (`POSTGRESQL_PROFILE_REUSE_SANDBOX=1`, which leaves

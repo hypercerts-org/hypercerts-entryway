@@ -381,23 +381,37 @@ test("destination OTP and independent browser OAuth retain access after the move
       "write used a different access token",
     ).toBe(true);
   });
-  const account = await page.context().newPage();
-  await account.goto(`${config.issuer}/account`);
-  const sessions = account.locator("#sessions");
-  await expect(
-    sessions.getByRole("button", { name: "Revoke OAuth session", exact: true }),
-  ).toHaveCount(1);
-  await expectSdkAction(page, {
-    issuer: config.issuer,
-    path: "/oauth/revoke",
-    button: "Revoke this client session",
-  });
-  await expect(page.getByLabel("Handle", { exact: true })).toBeVisible();
+  await test.step("revocation removes the browser SDK client's server session", async () => {
+    const account = await page.context().newPage();
+    await account.goto(`${config.issuer}/account`);
+    const sessions = account.locator("#sessions");
+    const sdkSession = sessions
+      .locator("li")
+      .filter({
+        has: account.getByText(`${sdk.browserUrl}/oauth-client-metadata.json`, {
+          exact: true,
+        }),
+      })
+      .filter({
+        has: account.getByRole("button", {
+          name: "Revoke OAuth session",
+          exact: true,
+        }),
+      });
+    await expect(sdkSession).toHaveCount(1);
+    await expectSdkAction(page, {
+      issuer: config.issuer,
+      path: "/oauth/revoke",
+      button: "Revoke this client session",
+    });
+    await expect(page.getByLabel("Handle", { exact: true })).toBeVisible();
 
-  await account.reload();
-  await expect(account.getByTestId("account-did")).toHaveText(identity.did);
-  await expect(sessions).toContainText("No active OAuth refresh sessions.");
-  await account.close();
+    await account.reload();
+    await expect(account.getByTestId("account-did")).toHaveText(identity.did);
+    await expect(sessions).toContainText("No active OAuth refresh sessions.");
+    await expect(sdkSession).toHaveCount(0);
+    await account.close();
+  });
 
   await test.step("the separate confidential client authorizes and writes as the migrated DID", async () => {
     await confidential.beginAuthorization(page, {
