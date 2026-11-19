@@ -50,6 +50,7 @@ and requires no host dependency install:
 | `./tests/local.sh browser`                    | Run browser scenarios after up                                                                                                                                                                             |
 | `./tests/local.sh incoming-public-mechanisms` | Bounded stock public-mechanism contract test after up: standalone signup, Mailpit, PLC signing, inactive destination and reservation; offline checks plus live-gated cases, not a migration qualification  |
 | `./tests/local.sh incoming-public-failures`   | Public incoming failure cases after up, then a restart of Entryway between two admitted steps of a separate move; see below                                                                                |
+| `./tests/local.sh incoming-two-node`          | The public incoming journey on the two-node PostgreSQL profile, once per node order; run it as `fresh-group incoming-two-node`. One-off evidence, not a CI gate; see below                                 |
 | `./tests/local.sh incoming-goat-journey`      | Second incoming client after up: the public goat CLI, patched to the Entryway incoming contract, migrates a fresh stock source account; see below                                                          |
 | `./tests/local.sh incoming-moover-journey`    | Third incoming client after up: a fork of the PDS MOOver web UI carrying the unmerged Entryway mode, driven in Chromium through the sandbox CORS ingress, migrates a fresh stock source account; see below |
 | `./tests/local.sh migration`                  | Fresh synthetic external-source migration, including two Entryway restarts                                                                                                                                 |
@@ -167,6 +168,85 @@ INCOMING_PUBLIC_SHAPES=1 npx playwright test --config tests/playwright.config.mj
 `fresh-group incoming-public-mechanisms incoming-public-journey contracts` runs the
 same steps in one disposable project. A skipped, synthetic or negative-control
 result is not a public qualification; report only an executed managed run.
+
+### Public incoming journey on two nodes
+
+```sh
+./tests/local.sh fresh-group incoming-two-node
+```
+
+This is one-off evidence, not a CI gate: no workflow runs it, and its result is
+reported with the change it supports, not recorded here. `fresh-group` exports
+`DATABASE_BACKEND=postgresql`, `DEPLOYMENT_MODE=multi-node`,
+`ENTRYWAY_PROFILE_NODE_COUNT=2` and `DATABASE_URL` (the profile scripts' value)
+before `prepare` and `up`. Installation then adds the second node
+(`entryway-replica`) and the profile ingress in front of both nodes, and both
+nodes start against the one PostgreSQL database. The step runs alone in its
+group, because the other steps assume one Entryway container.
+`./tests/local.sh incoming-two-node` runs the same step in an owned project that
+was prepared and started with those four settings exported, and refuses without
+them. It is kept out of `run-resilience-profile.sh`, whose exercise has a
+480-second deadline.
+
+The step runs `tests/browser/incoming-public-journey.spec.mjs` with
+`INCOMING_TWO_NODE=1` as two Playwright projects, `entryway-first` and
+`entryway-replica-first`; the second swaps the node roles. Reports and the log
+use the `incoming-two-node` prefix. The spec reads both nodes' instance IDs from
+the ingress (`/__profile/nodes`) and requires two ready, distinct processes. Each
+Entryway-facing stage is pinned to one node: XRPC calls send the ingress's
+`x-profile-node` header, and browser pages route every request to the issuer
+origin, including redirects and the OAuth SDK's own fetches, with that header
+added. A route sees only the first URL of a redirect chain, so the confidential
+client's authorization, which starts on the client's origin and redirects into
+the issuer, is pinned with context-wide extra headers instead. Every issuer response in a stage must carry the pinned node's
+`x-entryway-instance`, and every pinned receipt the ingress kept for the stage
+(`/__profile/receipts`, which records the node, instance, method, path, status
+and whether the request was pinned) must name that node.
+
+| Stage                                                            | First project      | Second project     |
+| ---------------------------------------------------------------- | ------------------ | ------------------ |
+| Browser email proof and `/incoming/prepare`                      | `entryway`         | `entryway-replica` |
+| Handoff (`submitPlcOperation`, with both refusals)               | `entryway-replica` | `entryway`         |
+| `createAccount`, its replay and the paused `getSession`          | `entryway`         | `entryway-replica` |
+| Tracked `refreshSession`                                         | `entryway-replica` | `entryway`         |
+| Activation, forwarded by the stock destination                   | observed           | observed           |
+| Password `createSession`                                         | `entryway`         | `entryway-replica` |
+| Tracked family `refreshSession` after deactivating the source    | `entryway-replica` | `entryway`         |
+| Email-code session, then SDK authorization and its code exchange | `entryway`         | `entryway-replica` |
+| SDK refresh of that grant, then a write                          | `entryway-replica` | `entryway`         |
+| SDK revocation and the account page                              | `entryway`         | `entryway-replica` |
+| The confidential client's browser requests                       | `entryway-replica` | `entryway`         |
+
+Consecutive pinned migration stages must be served by different instances for
+the same DID. After the move, the authorization-code exchange and the refresh
+both answer at the issuer's `/oauth/token`; the refresh presents the refresh
+token that the code exchange issued, returns the same subject, and the next
+write uses a different access token. The transferred records and blobs are then
+still served unchanged beside the two client writes. Alternating instance IDs
+alone is not the claim: each stage continues state the previous stage left on
+the other node.
+
+Not pinned, only observed: import and blob upload go to the destination PDS, not
+Entryway. Activation goes to the stock destination, which forwards it to
+Entryway itself through the issuer URL, so the ingress chooses the node. The spec
+requires at least one unpinned `activateAccount` receipt with status 200 and
+records its node; it does not claim which node will serve it. Requests that the
+confidential client's server or a PDS makes are recorded per stage as unpinned
+receipts. Each project prints its stage table as `node-stage` lines to the phase
+log, `incoming-two-node.log` in the report directory: the stage, whether it was
+pinned, the node and instance ID, and for pinned stages the method, path and
+node of each unpinned receipt. It prints no DID, credential or body.
+
+Context-wide extra headers, as the resilience profile uses for its confidential
+client, stopped the browser SDK's cross-origin login before consent, so the
+two-node run routes only issuer requests. While a route is active, Playwright
+answers CORS preflights itself: the two-node run does not exercise Entryway's
+preflight responses. The single-node journey does. List the selection without a
+sandbox:
+
+```sh
+INCOMING_TWO_NODE=1 npx playwright test --config tests/playwright.config.mjs --list
+```
 
 ### Public incoming failure cases
 

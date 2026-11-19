@@ -23,6 +23,17 @@ Contributors: run `./tests/local.sh fresh-group incoming-public-journey` for a d
 
 The client chooses what to transfer and when to activate. This flow checks the exported fixture state. Source writes after export are not covered by the accepted client-managed contract. The [synthetic migration](external-migration.md) exercises restart boundaries separately.
 
+## Two-node run
+
+Run `./tests/local.sh fresh-group incoming-two-node` (see the [testing guide](../../docs/testing.md#public-incoming-journey-on-two-nodes)). It is one-off evidence for multi-node operation, not a CI gate. The same journey runs on the two-node PostgreSQL profile, once with `entryway` as the first node and once with `entryway-replica`, each with fresh accounts.
+
+1. Steps 2 to 6 alternate nodes. Preparation runs on the first node, the handoff on the second, creation on the first, the tracked refresh on the second, password sign-in on the first and the tracked family refresh on the second. Each stage is pinned with `x-profile-node` and must be answered by the pinned node's instance. Consecutive stages are served by different instances for the same DID.
+2. Activation is observed, not pinned: the stock destination forwards `activateAccount` to Entryway through the issuer URL. The ingress receipts must show at least one such request with status 200; the run records which node served it.
+3. In step 7, the email-code session and the browser SDK's authorization, including its authorization-code exchange, run on the first node. The SDK then refreshes that grant on the second node at the same issuer. The refresh presents the refresh token the code exchange issued and returns the same subject. A write with the refreshed session succeeds, and the destination still serves every transferred record and blob unchanged beside the two writes. Revocation runs on the first node again and the confidential client on the second.
+4. Import and blob upload go only to the destination PDS, so no Entryway node serves them.
+
+Browser requests are pinned by routing only the issuer origin, except the confidential client's authorization: it redirects from the client's origin into the issuer, which a route does not follow, so it is pinned with context-wide extra headers. While that route is active, Playwright answers CORS preflights itself, so this run does not test Entryway's preflight responses; the single-node journey does.
+
 ## Failure and restart cases
 
 Run `./tests/local.sh fresh-group incoming-public-failures`, or `./tests/local.sh incoming-public-failures` after `prepare` and `up` (see the [testing guide](../../docs/testing.md#public-incoming-failure-cases)). Each move uses its own fresh source account, source email and destination email. A refusal asserts its status and error name, that the source DID's PLC head is unchanged (nothing published) and that the saved arrival's state and version on the owner's `/incoming` status page are unchanged (nothing claimed). Where a retry with the same arrival code exists, it follows the refusal and succeeds, so a mistyped request cannot pass as a refusal.
