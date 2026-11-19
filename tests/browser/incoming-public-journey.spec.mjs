@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import assert from "node:assert/strict";
+import { isDeepStrictEqual } from "node:util";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
@@ -9,6 +10,11 @@ import {
   ok,
   registerArrivalSetup,
 } from "../support/helpers/incoming-journey.mjs";
+import {
+  expectSdkAction,
+  expectSdkWrite,
+  expectSourceSessionsRefused,
+} from "../support/helpers/incoming-post-move.mjs";
 import { Secp256k1Keypair } from "@atproto/crypto";
 import { waitForStockPlcMessage } from "../support/helpers/stock-plc-mailpit.mjs";
 
@@ -22,6 +28,8 @@ import { waitForStockPlcMessage } from "../support/helpers/stock-plc-mailpit.mjs
 // Read in beforeAll so test discovery works without a sandbox.
 let access;
 let config;
+let sdk;
+let confidential;
 const unique = randomUUID().replaceAll("-", "").slice(0, 16);
 const destinationEmail = `public-arrival-${unique}@example.com`;
 const sourceEmail = `public-source-${unique}@example.com`;
@@ -42,7 +50,9 @@ const serviceAuth = async (lxm) =>
   ).token;
 
 test.describe.configure({ mode: "serial" });
-test.beforeAll(() => {
+test.beforeAll(async () => {
+  sdk = await import("../support/helpers/browser-oauth.mjs");
+  confidential = await import("./support/oauth-client.mjs");
   access = JSON.parse(readFileSync(process.env.INCOMING_ACCESS_PATH, "utf8"));
   assert.equal(access.project, process.env.INCOMING_PROJECT);
   config = JSON.parse(readFileSync(process.env.SERVICE_CONFIG_PATH, "utf8"));
@@ -135,6 +145,15 @@ test("the source signs the authority handoff and Entryway publishes only that", 
   );
   expect(submitted.status).toBe(200);
   expect(submitted.headers.get("cache-control")).toBe("no-store");
+  // createAccount publishes a second operation. Read the head before creation.
+  const head = await fetch(
+    new URL(`/${run.source.did}/log/last`, access.plcUrl),
+  );
+  expect(head.status).toBe(200);
+  expect(
+    isDeepStrictEqual(await head.json(), operation),
+    "exact signed PLC handoff",
+  ).toBe(true);
 });
 
 test("creation returns tracked credentials for a paused destination", async () => {
@@ -305,4 +324,81 @@ test("the activated account serves the transferred state and the client deactiva
     }),
     "source deactivation",
   );
+});
+
+test("the old source refuses accessJwt writes and refresh", async () => {
+  await expectSourceSessionsRefused(access.sourceUrl, run.source);
+});
+
+test("the tracked destination family refreshes as an active account session", async () => {
+  const response = await fetch(
+    new URL("/xrpc/com.atproto.server.refreshSession", config.issuer),
+    {
+      method: "POST",
+      headers: { authorization: `Bearer ${run.destination.refreshJwt}` },
+    },
+  );
+  expect(response.status).toBe(200);
+  expect((await response.json()).did).toBe(run.source.did);
+});
+
+test("destination OTP and independent browser OAuth retain access after the move", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  const identity = {
+    did: run.source.did,
+    email: destinationEmail,
+    handle: run.destinationHandle,
+  };
+  const endpoint = run.prepared.destinationEndpoint;
+  await test.step("destination email OTP returns the source DID", () =>
+    sdk.signInAccount(page, identity));
+  await test.step("destination handle prompts for consent and #issuer names Entryway", () =>
+    sdk.authorizeBrowserApp(page, identity));
+  await test.step("DPoP write is read back at the SDK audience on the prepared destination", () =>
+    expectSdkWrite(page, sdk.createPost, {
+      ...identity,
+      endpoint,
+      text: `Migrated ${unique}`,
+    }));
+  await page.reload();
+  await expect(page.locator("#verified-did")).toHaveText(identity.did);
+  await test.step("successful token refresh followed by a refreshed-session write", async () => {
+    await expectSdkAction(page, {
+      issuer: config.issuer,
+      path: "/oauth/token",
+      button: "Refresh authorization",
+      grantType: "refresh_token",
+    });
+    await expect(page.getByRole("status")).toHaveText(
+      "Authorization refreshed",
+    );
+    await expectSdkWrite(page, sdk.createPost, {
+      ...identity,
+      endpoint,
+      text: `Refreshed ${unique}`,
+    });
+  });
+  await expectSdkAction(page, {
+    issuer: config.issuer,
+    path: "/oauth/revoke",
+    button: "Revoke this client session",
+  });
+  await expect(page.getByLabel("Handle", { exact: true })).toBeVisible();
+
+  await test.step("the separate confidential client authorizes and writes as the migrated DID", async () => {
+    await confidential.beginAuthorization(page, {
+      identifier: identity.handle,
+      prompt: "consent",
+    });
+    await confidential.finishConsent(page, identity.did);
+    const pds = config.pds.find(({ url }) => url === endpoint);
+    expect(Boolean(pds), "prepared host in service config").toBe(true);
+    await confidential.assertOAuthSubjectAndWrite(
+      page,
+      { ...identity, pdsId: pds.id },
+      { text: `Confidential ${unique}` },
+    );
+  });
 });

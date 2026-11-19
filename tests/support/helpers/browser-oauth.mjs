@@ -51,7 +51,9 @@ export async function signInAccount(page, identity) {
     recipient: identity.email,
     since,
   });
-  await page.getByLabel("Sign-in code").fill(code);
+  await page.getByLabel("Sign-in code").evaluate((input, value) => {
+    input.value = value;
+  }, code);
   await page.getByRole("button", { name: "Verify code" }).click();
   await expect(
     page.getByRole("heading", { name: "Account settings" }),
@@ -70,14 +72,8 @@ export async function authorizeBrowserApp(page, identity) {
     await expect(
       page.getByRole("heading", { name: "Sign in to authorize" }),
     ).toBeVisible({ timeout: 10_000 });
-  } catch (error) {
-    const current = new URL(page.url());
-    const clientError = (
-      await page.locator("#login-form-error").textContent()
-    )?.slice(0, 300);
-    throw Error(
-      `Browser authorization did not open at ${current.origin}${current.pathname}: ${clientError || error.message}`,
-    );
+  } catch {
+    throw Error("Browser authorization did not reach consent");
   }
   const form = page.locator('form[action="/auth/consent"]').filter({
     has: page.locator(`input[name="did"][value="${identity.did}"]`),
