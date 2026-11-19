@@ -326,10 +326,6 @@ test("the activated account serves the transferred state and the client deactiva
   );
 });
 
-test("the old source refuses accessJwt writes and refresh", async () => {
-  await expectSourceSessionsRefused(access.sourceUrl, run.source);
-});
-
 test("the tracked destination family refreshes as an active account session", async () => {
   const response = await fetch(
     new URL("/xrpc/com.atproto.server.refreshSession", config.issuer),
@@ -401,4 +397,10 @@ test("destination OTP and independent browser OAuth retain access after the move
       { text: `Confidential ${unique}` },
     );
   });
+});
+
+// Source and destination sessions are independent cutover observations. Keep
+// the source refusal last so it cannot mask the destination access results.
+test("the old source refuses accessJwt writes and refresh", async () => {
+  await expectSourceSessionsRefused(access.sourceUrl, run.source);
 });
