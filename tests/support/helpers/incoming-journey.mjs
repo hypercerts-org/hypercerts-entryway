@@ -1,4 +1,5 @@
 import { expect } from "@playwright/test";
+import { readCarWithRoot } from "@atproto/repo";
 import { waitForMailpitCode } from "./mailpit.mjs";
 
 // Shared by the public and goat incoming journeys, which differ only in the
@@ -41,6 +42,74 @@ export const json = ({ content }) =>
 // Status only: bodies of failed calls can echo credentials.
 export const ok = (response, what) =>
   expect(response.status, `${what} status`).toBeLessThan(300);
+
+// The error name only: a refusal body can echo request details.
+export const errorName = ({ content }) => {
+  try {
+    const { error } = JSON.parse(content.toString("utf8"));
+    return typeof error === "string" ? error : null;
+  } catch {
+    return null;
+  }
+};
+
+// Header frame first, then one frame per block: varint length, 36-byte CID, data.
+function carFrames(car) {
+  const frames = [];
+  let offset = 0;
+  while (offset < car.length) {
+    const start = offset;
+    let size = 0;
+    let scale = 1;
+    let byte;
+    do {
+      byte = car[offset++];
+      size += (byte & 0x7f) * scale;
+      scale *= 128;
+    } while (byte & 0x80);
+    frames.push({ start, data: offset, end: offset + size });
+    offset += size;
+  }
+  expect(offset, "whole CAR frames").toBe(car.length);
+  return frames;
+}
+
+/**
+ * Malformed variants of a verified export, for import refusal checks:
+ * - `tampered`: one byte of the named record's text changed in place, so the
+ *   framing and the DAG-CBOR stay valid but the block no longer hashes to its CID;
+ * - `cutMidBlock`: cut half-way through the data of the block at the midpoint;
+ * - `cutAtBlock`: every whole frame except the final block.
+ */
+export async function malformedCars(car, record) {
+  const frames = carFrames(car);
+  const { blocks } = await readCarWithRoot(car);
+  const block = blocks.entries().find((entry) => `${entry.cid}` === record.cid);
+  const frame = frames
+    .slice(1)
+    .find(({ data }) => car.subarray(data, data + 36).equals(block.cid.bytes));
+  const text = car
+    .subarray(frame.data + 36, frame.end)
+    .indexOf(Buffer.from(record.value.text));
+  expect(text, "record text in its block").toBeGreaterThan(0);
+  const tampered = Buffer.from(car);
+  tampered[frame.data + 36 + text] ^= 0x01;
+  const middle = frames
+    .slice(1)
+    .find(({ end }) => end > Math.floor(car.length / 2));
+  const cut = Math.floor((middle.data + 36 + middle.end) / 2);
+  expect(
+    middle.data + 36 < cut && cut < middle.end,
+    "cut ends inside block data",
+  ).toBe(true);
+  const last = frames.at(-1);
+  return {
+    tampered,
+    cutMidBlock: car.subarray(0, cut),
+    cutAtBlock: car.subarray(0, last.start),
+    droppedBlock: `${blocks.entries().find((entry) => car.subarray(last.data, last.data + 36).equals(entry.cid.bytes)).cid}`,
+  };
+}
 
 // Verifies the destination email in the browser, asks for a fresh code and
 // prepares the arrival. Returns the values the page shows once.

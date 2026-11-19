@@ -5,8 +5,10 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   call,
+  errorName,
   expectDestinationServes,
   json,
+  malformedCars,
   ok,
   registerArrivalSetup,
 } from "../support/helpers/incoming-journey.mjs";
@@ -255,6 +257,72 @@ test("creation returns tracked credentials for a paused destination", async () =
   expect(plain.status).toBeGreaterThanOrEqual(400);
 });
 
+// Observed on the pinned stock destination (@atproto/pds 0.5.36). Each refusal
+// must leave the paused destination's status and its own export byte-identical.
+async function expectMalformedImportsRefused() {
+  const endpoint = run.prepared.destinationEndpoint;
+  const token = run.destination.accessJwt;
+  const did = run.source.did;
+  const state = async () => {
+    const status = await call(
+      endpoint,
+      "com.atproto.server.checkAccountStatus",
+      { token },
+    );
+    ok(status, "destination status");
+    const exported = await call(endpoint, "com.atproto.sync.getRepo", {
+      token,
+      params: { did },
+    });
+    ok(exported, "destination export");
+    return { status: json(status), car: exported.content };
+  };
+  const post = run.inventory.records.find(({ value }) => value.text);
+  const cars = await malformedCars(run.car, post);
+  // The final block of this export is a seeded record, not a tree node.
+  expect(
+    run.inventory.records.some(({ cid }) => cid === cars.droppedBlock),
+    "dropped final block is a record",
+  ).toBe(true);
+  const before = await state();
+  expect(before.status.activated).toBe(false);
+  expect(before.status.indexedRecords).toBe(0);
+  expect((await verifyRepoCar(before.car, did)).creates).toEqual([]);
+  for (const [name, bytes, refusal] of [
+    [
+      "a record block altered under its CID is refused",
+      cars.tampered,
+      { status: 500, error: "InternalServerError" },
+    ],
+    [
+      "a CAR cut inside a block is refused",
+      cars.cutMidBlock,
+      { status: 500, error: "InternalServerError" },
+    ],
+    [
+      "a CAR missing its final block is refused",
+      cars.cutAtBlock,
+      { status: 400, error: "InvalidRequest" },
+    ],
+  ])
+    await test.step(name, async () => {
+      const response = await call(endpoint, "com.atproto.repo.importRepo", {
+        token,
+        bytes,
+        type: "application/vnd.ipld.car",
+      });
+      expect({
+        status: response.status,
+        error: errorName(response),
+      }).toEqual(refusal);
+      const after = await state();
+      expect(after.status).toEqual(before.status);
+      expect(after.car.equals(before.car), "destination export unchanged").toBe(
+        true,
+      );
+    });
+}
+
 test("the client transfers its chosen state directly between the pinned endpoints", async () => {
   const destinationRead = async (method) => {
     const response = await call(run.prepared.destinationEndpoint, method, {
@@ -263,6 +331,10 @@ test("the client transfers its chosen state directly between the pinned endpoint
     ok(response, method);
     return json(response);
   };
+  // One shape of the wider selection probes the stock import with malformed
+  // copies of the verified export first; the valid import below is the control.
+  if (test.info().project.metadata.shape === "multi-collection")
+    await expectMalformedImportsRefused();
   const imported = await call(
     run.prepared.destinationEndpoint,
     "com.atproto.repo.importRepo",
