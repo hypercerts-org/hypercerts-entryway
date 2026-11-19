@@ -103,18 +103,31 @@ test("the mid-block cut ends inside one block's data", async () => {
   assert.equal(inside.length, 1);
 });
 
-test("the boundary cut is every frame except the last, whose CID is reported", async () => {
+test("the missing record block CAR is every frame except that record's, and still parses", async () => {
   const { car, record } = await fixture();
-  const { cutAtBlock, droppedBlock } = await malformedCars(car, record);
+  const { missingRecordBlock, droppedBlock } = await malformedCars(car, record);
+  assert.equal(droppedBlock, record.cid);
   const frames = carFrames(car);
-  const last = frames.at(-1);
-  assert.ok(car.subarray(0, last.start).equals(cutAtBlock));
-  assert.deepEqual(carFrames(cutAtBlock), frames.slice(0, -1));
-  assert.equal(droppedBlock, `${await blockCid(car, last)}`);
+  const kept = [];
+  for (const frame of frames)
+    if (frame.start === 0 || `${await blockCid(car, frame)}` !== record.cid)
+      kept.push(frame);
+  assert.equal(kept.length, frames.length - 1);
+  assert.ok(
+    Buffer.concat(
+      kept.map(({ start, end }) => car.subarray(start, end)),
+    ).equals(missingRecordBlock),
+  );
+  assert.equal(carFrames(missingRecordBlock).length, kept.length);
+  const parsed = await readCar(missingRecordBlock);
+  assert.deepEqual(
+    parsed.roots.map((root) => `${root}`),
+    (await readCar(car)).roots.map((root) => `${root}`),
+  );
   const cids = async (bytes) =>
     (await readCar(bytes)).blocks.entries().map(({ cid }) => `${cid}`);
   assert.deepEqual(
-    await cids(cutAtBlock),
+    await cids(missingRecordBlock),
     (await cids(car)).filter((cid) => cid !== droppedBlock),
   );
 });

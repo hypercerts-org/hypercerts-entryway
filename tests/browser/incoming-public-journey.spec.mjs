@@ -285,12 +285,11 @@ async function expectMalformedImportsRefused() {
   };
   // Records are sorted by URI: a feed post where the shape has one, otherwise
   // the profile.
-  const cars = await malformedCars(run.car, run.inventory.records.at(-1));
-  // The final block of this export is a seeded record, not a tree node.
-  expect(
-    run.inventory.records.some(({ cid }) => cid === cars.droppedBlock),
-    "dropped final block is a record",
-  ).toBe(true);
+  const record = run.inventory.records.at(-1);
+  const cars = await malformedCars(run.car, record);
+  expect(cars.droppedBlock, "dropped block is the chosen record").toBe(
+    record.cid,
+  );
   const before = await state();
   expect(before.status.activated).toBe(false);
   expect(before.status.indexedRecords).toBe(0);
@@ -307,8 +306,8 @@ async function expectMalformedImportsRefused() {
       { status: 500, error: "InternalServerError" },
     ],
     [
-      "a CAR missing its final block is refused",
-      cars.cutAtBlock,
+      "a CAR missing one record block is refused",
+      cars.missingRecordBlock,
       { status: 400, error: "InvalidRequest" },
     ],
   ])
