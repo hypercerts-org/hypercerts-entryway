@@ -151,8 +151,9 @@ arrival code, a source-signed handoff, creation returning tracked credentials, a
 direct client transfer between the pinned endpoints, refresh, and activation
 through the stock destination's `activateAccount`, which forwards to Entryway. It
 seeds no authority rows and calls no private fixture. The client chooses what to
-transfer and when to activate: the spec checks one record and one blob, not a
-complete inventory, and later source writes are outside what it proves. List the
+transfer and when to activate. Before cutover, the client checks the seeded inventory, verifies the exported CAR for the DID and checks the commit signature against the source's PLC signing key. After activation, it compares all record URIs, values and CIDs and all blob CIDs and bytes before OAuth writes. Source writes after export are outside this client-managed contract.
+
+The per-PR job uses a blob-bearing profile. For all four shapes, run `./tests/local.sh fresh-group incoming-public-shapes` (or `./tests/local.sh incoming-public-shapes` after `up`). The same full journey runs serially for empty, blob-free, blob-bearing and multi-collection repositories. For a referenced blob, it checks that the destination reports the missing CID before upload and complete counts afterwards. List the
 spec without a sandbox to verify discovery:
 
 ```sh
@@ -497,10 +498,9 @@ child fixture is SQLite-specific; it does not establish PostgreSQL restart cover
 Run `./tests/local.sh incoming-public-mechanisms` separately
 for stock runtime evidence. Do not invent a host database URL or report these
 commands as executed from native CI alone. The [public journey](../tests/flows/incoming-public-migration.md)
-checks one profile and blob, activation and post-move access. Additional qualification
+checks the chosen repository shape, activation and post-move access. Additional qualification
 under the [accepted C4 contract](incoming-migration.md#c4-client-managed-migration-contract-accepted)
-remains outstanding: valid empty and blob-free repositories, broader transfer integrity,
-authorization and refusal across every pending-arrival activation entrypoint, and
+remains outstanding: malformed-import behavior, authorization and refusal across every pending-arrival activation entrypoint, and
 interrupted/lost-response recovery. Preserve canonical
 identity/custody, placement, saved-user binding, backend-state and durable-owner
 checks; do not require the abandoned final-source certification or global write
