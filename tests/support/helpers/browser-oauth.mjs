@@ -11,6 +11,13 @@ export const config = JSON.parse(
 );
 export const browserUrl = "https://browser.atmosbox.internal";
 
+// Unlike fill(value), evaluate does not include the OTP in the report step title.
+export async function enterSignInCode(page, code) {
+  await page.getByLabel("Sign-in code").evaluate((input, value) => {
+    input.value = value;
+  }, code);
+}
+
 export async function createAccount(page, label = "browser") {
   const suffix = randomUUID().slice(0, 12);
   const email = `${label}-${suffix}@example.test`;
@@ -23,7 +30,7 @@ export async function createAccount(page, label = "browser") {
     page.getByRole("heading", { name: "Check your email" }),
   ).toBeVisible();
   const { code } = await waitForMailpitCode({ recipient: email, since });
-  await page.getByLabel("Sign-in code").fill(code);
+  await enterSignInCode(page, code);
   await page.getByRole("button", { name: "Verify code" }).click();
   await expect(
     page.getByRole("heading", { name: "Create your account" }),
@@ -51,9 +58,7 @@ export async function signInAccount(page, identity) {
     recipient: identity.email,
     since,
   });
-  await page.getByLabel("Sign-in code").evaluate((input, value) => {
-    input.value = value;
-  }, code);
+  await enterSignInCode(page, code);
   await page.getByRole("button", { name: "Verify code" }).click();
   await expect(
     page.getByRole("heading", { name: "Account settings" }),
@@ -73,7 +78,22 @@ export async function authorizeBrowserApp(page, identity) {
       page.getByRole("heading", { name: "Sign in to authorize" }),
     ).toBeVisible({ timeout: 10_000 });
   } catch {
-    throw Error("Browser authorization did not reach consent");
+    const origin = new URL(page.url()).origin;
+    const location =
+      origin === browserUrl
+        ? "browser client"
+        : origin === config.issuer
+          ? "issuer"
+          : "unexpected origin";
+    const message = await page.locator("#login-form-error").allTextContents();
+    const category = /fetch|network/i.test(message.join(""))
+      ? "network error"
+      : message.some(Boolean)
+        ? "client login error"
+        : "no client error";
+    throw Error(
+      `Browser authorization did not reach consent: ${location}, ${category}`,
+    );
   }
   const form = page.locator('form[action="/auth/consent"]').filter({
     has: page.locator(`input[name="did"][value="${identity.did}"]`),
@@ -127,7 +147,7 @@ export async function completeAuthorizationWithHintedCode(
     recipient: identity.email,
     since,
   });
-  await page.getByLabel("Sign-in code").fill(code);
+  await enterSignInCode(page, code);
   await page.getByRole("button", { name: "Verify code" }).click();
   const form = page.locator('form[action="/auth/consent"]').filter({
     has: page.locator(`input[name="did"][value="${identity.did}"]`),

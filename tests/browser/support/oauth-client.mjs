@@ -1,6 +1,9 @@
 import { expect } from "@playwright/test";
 import { waitForMailpitCode } from "../../support/helpers/mailpit.mjs";
-import { config } from "../../support/helpers/browser-oauth.mjs";
+import {
+  config,
+  enterSignInCode,
+} from "../../support/helpers/browser-oauth.mjs";
 
 export { config };
 export const databasePath =
@@ -47,7 +50,7 @@ export async function requestVisibleCode(page, email) {
 }
 
 export async function verifyVisibleCode(page, code) {
-  await page.getByLabel("Sign-in code").fill(code);
+  await enterSignInCode(page, code);
   await page.getByRole("button", { name: "Verify code" }).click();
 }
 

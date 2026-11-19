@@ -4,9 +4,6 @@ const publicRun = process.env.PUBLIC_BROWSER_TESTS === "true";
 // The incoming public journey needs an owned sandbox's access projection, so
 // only `./tests/local.sh incoming-public-journey` selects it.
 const incomingJourney = process.env.INCOMING_PUBLIC_JOURNEY === "1";
-// The preparation page displays a one-time credential. Never snapshot its DOM
-// into the Playwright failure report, even when a later assertion fails.
-if (incomingJourney) process.env.PLAYWRIGHT_NO_COPY_PROMPT = "1";
 // The goat journey is selected only by `./tests/local.sh incoming-goat-journey`.
 const goatJourney = process.env.INCOMING_GOAT_JOURNEY === "1";
 const defaultMatch = [
@@ -29,6 +26,10 @@ const defaultMatch = [
 ];
 // The PDS MOOver journey is selected only by `./tests/local.sh incoming-moover-journey`.
 const mooverJourney = process.env.INCOMING_MOOVER_JOURNEY === "1";
+// All three preparation flows display the one-time arrival code. Do not copy
+// their DOM into failure reports.
+if (incomingJourney || goatJourney || mooverJourney)
+  process.env.PLAYWRIGHT_NO_COPY_PROMPT = "1";
 const selected = [
   [
     mooverJourney,

@@ -13,7 +13,7 @@ import {
 import {
   expectSdkAction,
   expectSdkWrite,
-  expectSourceSessionsRefused,
+  expectSourceCutover,
 } from "../support/helpers/incoming-post-move.mjs";
 import { Secp256k1Keypair } from "@atproto/crypto";
 import { waitForStockPlcMessage } from "../support/helpers/stock-plc-mailpit.mjs";
@@ -352,12 +352,13 @@ test("destination OTP and independent browser OAuth retain access after the move
     sdk.signInAccount(page, identity));
   await test.step("destination handle prompts for consent and #issuer names Entryway", () =>
     sdk.authorizeBrowserApp(page, identity));
-  await test.step("DPoP write is read back at the SDK audience on the prepared destination", () =>
-    expectSdkWrite(page, sdk.createPost, {
-      ...identity,
-      endpoint,
-      text: `Migrated ${unique}`,
-    }));
+  const originalAuthorization =
+    await test.step("DPoP write is read back at the SDK audience on the prepared destination", () =>
+      expectSdkWrite(page, sdk, {
+        ...identity,
+        endpoint,
+        text: `Migrated ${unique}`,
+      }));
   await page.reload();
   await expect(page.locator("#verified-did")).toHaveText(identity.did);
   await test.step("successful token refresh followed by a refreshed-session write", async () => {
@@ -370,18 +371,33 @@ test("destination OTP and independent browser OAuth retain access after the move
     await expect(page.getByRole("status")).toHaveText(
       "Authorization refreshed",
     );
-    await expectSdkWrite(page, sdk.createPost, {
+    const refreshedAuthorization = await expectSdkWrite(page, sdk, {
       ...identity,
       endpoint,
       text: `Refreshed ${unique}`,
     });
+    expect(
+      refreshedAuthorization !== originalAuthorization,
+      "write used a different access token",
+    ).toBe(true);
   });
+  const account = await page.context().newPage();
+  await account.goto(`${config.issuer}/account`);
+  const sessions = account.locator("#sessions");
+  await expect(
+    sessions.getByRole("button", { name: "Revoke OAuth session", exact: true }),
+  ).toHaveCount(1);
   await expectSdkAction(page, {
     issuer: config.issuer,
     path: "/oauth/revoke",
     button: "Revoke this client session",
   });
   await expect(page.getByLabel("Handle", { exact: true })).toBeVisible();
+
+  await account.reload();
+  await expect(account.getByTestId("account-did")).toHaveText(identity.did);
+  await expect(sessions).toContainText("No active OAuth refresh sessions.");
+  await account.close();
 
   await test.step("the separate confidential client authorizes and writes as the migrated DID", async () => {
     await confidential.beginAuthorization(page, {
@@ -401,6 +417,6 @@ test("destination OTP and independent browser OAuth retain access after the move
 
 // Source and destination sessions are independent cutover observations. Keep
 // the source refusal last so it cannot mask the destination access results.
-test("the old source refuses accessJwt writes and refresh", async () => {
-  await expectSourceSessionsRefused(access.sourceUrl, run.source);
+test("the old source refreshes as deactivated and refuses both access tokens for writes", async () => {
+  await expectSourceCutover(access.sourceUrl, run.source);
 });

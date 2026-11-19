@@ -1,11 +1,11 @@
 import { expect } from "@playwright/test";
 import { call, json } from "./incoming-journey.mjs";
 
-export async function expectSourceSessionsRefused(origin, source) {
+async function expectDeactivatedWrite(origin, did, token) {
   const write = await call(origin, "com.atproto.repo.createRecord", {
-    token: source.accessJwt,
+    token,
     body: {
-      repo: source.did,
+      repo: did,
       collection: "app.bsky.feed.post",
       record: {
         $type: "app.bsky.feed.post",
@@ -19,6 +19,10 @@ export async function expectSourceSessionsRefused(origin, source) {
     json(write).error === "AccountDeactivated",
     "stock deactivation error",
   ).toBe(true);
+}
+
+export async function expectSourceCutover(origin, source) {
+  await expectDeactivatedWrite(origin, source.did, source.accessJwt);
   const refresh = await fetch(
     new URL("/xrpc/com.atproto.server.refreshSession", origin),
     {
@@ -26,14 +30,22 @@ export async function expectSourceSessionsRefused(origin, source) {
       headers: { authorization: `Bearer ${source.refreshJwt}` },
     },
   );
-  expect(refresh.status, "deactivated source refresh").toBe(400);
+  expect(refresh.status === 200, "deactivated source refresh").toBe(true);
+  const rotated = await refresh.json();
+  expect(rotated.did === source.did, "source DID retained").toBe(true);
+  expect(rotated.active === false, "source remains inactive").toBe(true);
+  expect(rotated.status === "deactivated", "source status").toBe(true);
+  expect(
+    typeof rotated.accessJwt === "string" && rotated.accessJwt.length > 0,
+    "rotated access token issued",
+  ).toBe(true);
+  await expectDeactivatedWrite(origin, source.did, rotated.accessJwt);
 }
 
-export async function expectSdkWrite(
-  page,
-  createPost,
-  { did, endpoint, text },
-) {
+export async function expectSdkWrite(page, sdk, { did, endpoint, text }) {
+  expect(endpoint, "prepared endpoint must match the browser fixture PDS").toBe(
+    sdk.config.pds[0].url,
+  );
   const [response, readback] = await Promise.all([
     page.waitForResponse(
       (candidate) =>
@@ -42,7 +54,7 @@ export async function expectSdkWrite(
         candidate.request().method() === "POST" &&
         candidate.ok(),
     ),
-    createPost(page, text, did),
+    sdk.createPost(page, text, did),
   ]);
   const headers = await response.request().allHeaders();
   expect(
@@ -52,6 +64,7 @@ export async function expectSdkWrite(
   expect(readback.origin, "SDK audience-derived readback endpoint").toBe(
     endpoint,
   );
+  return headers.authorization;
 }
 
 export async function expectSdkAction(
