@@ -54,7 +54,7 @@ export const errorName = ({ content }) => {
 };
 
 // Header frame first, then one frame per block: varint length, 36-byte CID, data.
-function carFrames(car) {
+export function carFrames(car) {
   const frames = [];
   let offset = 0;
   while (offset < car.length) {
@@ -76,8 +76,9 @@ function carFrames(car) {
 
 /**
  * Malformed variants of a verified export, for import refusal checks:
- * - `tampered`: one byte of the named record's text changed in place, so the
- *   framing and the DAG-CBOR stay valid but the block no longer hashes to its CID;
+ * - `tampered`: one byte of the named record's first string field (a post's
+ *   text, a profile's display name) changed in place, so the length, the framing
+ *   and the DAG-CBOR stay valid but the block no longer hashes to its CID;
  * - `cutMidBlock`: cut half-way through the data of the block at the midpoint;
  * - `cutAtBlock`: every whole frame except the final block.
  */
@@ -88,11 +89,19 @@ export async function malformedCars(car, record) {
   const frame = frames
     .slice(1)
     .find(({ data }) => car.subarray(data, data + 36).equals(block.cid.bytes));
+  const field = Object.entries(record.value).find(
+    ([name, value]) =>
+      name !== "$type" &&
+      typeof value === "string" &&
+      /^[\x20-\x7e]+$/.test(value),
+  );
+  expect(Boolean(field), "record has a printable string field").toBe(true);
   const text = car
     .subarray(frame.data + 36, frame.end)
-    .indexOf(Buffer.from(record.value.text));
-  expect(text, "record text in its block").toBeGreaterThan(0);
+    .indexOf(Buffer.from(field[1]));
+  expect(text, "record string in its block").toBeGreaterThan(0);
   const tampered = Buffer.from(car);
+  // Bit 0 of a printable ASCII byte: still one valid UTF-8 byte.
   tampered[frame.data + 36 + text] ^= 0x01;
   const middle = frames
     .slice(1)

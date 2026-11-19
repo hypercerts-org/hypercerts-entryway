@@ -189,6 +189,7 @@ esac
         package = json.loads((source / "package.json").read_text())
         helpers = ["tests/support/helpers/stock-plc-mailpit.test.mjs",
                    "tests/support/helpers/incoming-public-io.test.mjs",
+                   "tests/support/helpers/incoming-journey.test.mjs",
                    "tests/atmosphere/project-incoming-access.test.mjs"]
         self.assertEqual(package["scripts"]["test:incoming-helpers"].split(),
                          ["node", "--test", *helpers])
