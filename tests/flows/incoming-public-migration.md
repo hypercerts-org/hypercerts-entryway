@@ -32,7 +32,9 @@ Run `./tests/local.sh fresh-group incoming-two-node` (see the [testing guide](..
 3. In step 7, the email-code session and the browser SDK's authorization, including its authorization-code exchange, run on the first node. The SDK then refreshes that grant on the second node at the same issuer. The refresh presents the refresh token the code exchange issued and returns the same subject. A write with the refreshed session succeeds, and the destination still serves every transferred record and blob unchanged beside the two writes. Revocation runs on the first node again and the confidential client on the second.
 4. Import and blob upload go only to the destination PDS, so no Entryway node serves them.
 
-Browser requests are pinned by routing only the issuer origin, except the confidential client's authorization: it redirects from the client's origin into the issuer, which a route does not follow, so it is pinned with context-wide extra headers. While that route is active, Playwright answers CORS preflights itself, so this run does not test Entryway's preflight responses; the single-node journey does.
+Browser requests are pinned by routing only the issuer origin, except the confidential client's authorization: it redirects from the client's origin into the issuer, which a route does not follow, so it is pinned with context-wide extra headers and must make no scripted issuer request. Each pinned request carries a stage tag that the ingress records, so a stage is judged by its own requests, not by when their responses arrived. Consecutive stages must have observed different instance IDs.
+
+While any route is active, Playwright answers every intercepted CORS preflight itself, so no route stage exercises a real preflight. In the single-node journey no route is installed: Entryway answers `/oauth/*` preflights, and the Caddy ingress (`atproto_cors` in `tests/support/entryway-ingress.Caddyfile`) answers `/xrpc/*` and `/.well-known/atproto-did` preflights.
 
 ## Failure and restart cases
 

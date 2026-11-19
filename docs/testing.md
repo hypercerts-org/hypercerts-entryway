@@ -157,6 +157,8 @@ through the stock destination's `activateAccount`, which forwards to Entryway. I
 seeds no authority rows and calls no private fixture. The client chooses what to
 transfer and when to activate. Before cutover, the client checks the seeded inventory, verifies the exported CAR for the DID and checks the commit signature against the source's PLC signing key. After activation, it compares all record URIs, values and CIDs and all blob CIDs and bytes before OAuth writes. Source writes after export are outside this client-managed contract.
 
+After the move, the browser SDK's authorization-code exchange must issue a refresh token and name the migrated DID as `sub`. The later refresh must present that refresh token and return the same `sub`, the client page's `#issuer` must name Entryway, and the transferred records and blobs must still be served unchanged beside the client's two writes (`expectInventoryRetained`). These checks run in the per-PR single-node journey as well as on two nodes.
+
 The per-PR job uses a blob-bearing profile. For all four shapes, run `./tests/local.sh fresh-group incoming-public-shapes` (or `./tests/local.sh incoming-public-shapes` after `up`). The same full journey runs serially for empty, blob-free, blob-bearing and multi-collection repositories. For a referenced blob, it checks that the destination reports the missing CID before upload and complete counts afterwards. Every shape records the destination's `checkAccountStatus` revision before the valid import and requires a different one afterwards, so an import of an empty repository is told apart from a no-op. Before the valid import, the blob-bearing journey (so every per-PR run) and the multi-collection journey also send the paused destination three malformed copies of their own verified export and require each refusal to leave the destination's status and export unchanged. As observed on the pinned stock PDS (0.5.36): a record block altered under its CID and a CAR cut inside a block both get 500 `InternalServerError`; a well-formed CAR with one record's block removed gets 400 `InvalidRequest`. The removed block is a chosen record's, wherever it sits, because the stock export orders blocks by revision and CID and its final block is not reliably a record. The 500s are the generic answer to an error thrown while the PDS reads the CAR (`verifyIncomingCarBlocks`), not an integrity-specific status. The refusals are stock PDS behaviour, pinned in the per-PR `incoming` job so that a PDS upgrade changing them fails CI. The byte surgery itself has a native test, `tests/support/helpers/incoming-journey.test.mjs`. List the
 spec without a sandbox to verify discovery of either selection:
 
@@ -198,10 +200,17 @@ Entryway-facing stage is pinned to one node: XRPC calls send the ingress's
 origin, including redirects and the OAuth SDK's own fetches, with that header
 added. A route sees only the first URL of a redirect chain, so the confidential
 client's authorization, which starts on the client's origin and redirects into
-the issuer, is pinned with context-wide extra headers instead. Every issuer response in a stage must carry the pinned node's
-`x-entryway-instance`, and every pinned receipt the ingress kept for the stage
-(`/__profile/receipts`, which records the node, instance, method, path, status
-and whether the request was pinned) must name that node.
+the issuer, is pinned with context-wide extra headers instead; that stage fails
+if it makes any scripted (fetch or XHR) request to the issuer. Every pinned
+request also carries an `x-profile-stage` tag unique to its stage, which the
+ingress records on the receipt and strips before forwarding. A stage is judged
+by its tagged receipts (`/__profile/receipts`, which records the node,
+instance, method, path, status, whether the request was pinned and the tag) and
+by the issuer responses to browser requests started inside it, not by when a
+response arrived: each must name the pinned node and its `x-entryway-instance`.
+A response that arrives after the next stage began is still attributed to the
+stage that sent it. Untagged requests are forwarded and recorded as before, and
+the resilience profiles, which read only `/__profile/nodes`, are unaffected.
 
 | Stage                                                            | First project      | Second project     |
 | ---------------------------------------------------------------- | ------------------ | ------------------ |
@@ -218,7 +227,9 @@ and whether the request was pinned) must name that node.
 | The confidential client's browser requests                       | `entryway-replica` | `entryway`         |
 
 Consecutive pinned migration stages must be served by different instances for
-the same DID. After the move, the authorization-code exchange and the refresh
+the same DID, judged on the instance IDs each stage observed in its receipts
+and response headers, not on the configured order; each stage must observe
+exactly one. After the move, the authorization-code exchange and the refresh
 both answer at the issuer's `/oauth/token`; the refresh presents the refresh
 token that the code exchange issued, returns the same subject, and the next
 write uses a different access token. The transferred records and blobs are then
@@ -232,17 +243,25 @@ Entryway itself through the issuer URL, so the ingress chooses the node. The spe
 requires at least one unpinned `activateAccount` receipt with status 200 and
 records its node; it does not claim which node will serve it. Requests that the
 confidential client's server or a PDS makes are recorded per stage as unpinned
-receipts. Each project prints its stage table as `node-stage` lines to the phase
-log, `incoming-two-node.log` in the report directory: the stage, whether it was
-pinned, the node and instance ID, and for pinned stages the method, path and
-node of each unpinned receipt. It prints no DID, credential or body.
+receipts. After its tests, passing or not, each project prints its stage table
+as `node-stage` lines to the phase log, `incoming-two-node.log` in the report
+directory: the stage, whether it was pinned, the node and instance ID, and for
+pinned stages the observed instance IDs and the method, path and node of each
+unpinned receipt and of each pinned receipt from another stage that landed in
+its window. It prints no DID, credential or body.
 
 Context-wide extra headers, as the resilience profile uses for its confidential
 client, stopped the browser SDK's cross-origin login before consent, so the
-two-node run routes only issuer requests. While a route is active, Playwright
-answers CORS preflights itself: the two-node run does not exercise Entryway's
-preflight responses. The single-node journey does. List the selection without a
-sandbox:
+two-node run routes only issuer requests. While any route is active, Playwright
+(1.58.2, `crNetworkManager.js`) fulfils every intercepted CORS preflight itself
+with allow-all headers, whatever its origin, including those to the destination
+PDS. No route stage therefore exercises a real preflight, and the
+headers-pinned stage makes no scripted issuer request. In the single-node
+journey no route is installed, so preflights reach the real services: Entryway
+(the OAuth provider routes it mounts) answers `/oauth/*` preflights, and the
+Caddy ingress (`tests/support/entryway-ingress.Caddyfile`, `atproto_cors`)
+answers `/xrpc/*` and `/.well-known/atproto-did` preflights before they reach
+Entryway. List the selection without a sandbox:
 
 ```sh
 INCOMING_TWO_NODE=1 npx playwright test --config tests/playwright.config.mjs --list
