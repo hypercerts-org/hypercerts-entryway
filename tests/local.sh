@@ -269,13 +269,25 @@ case "$command" in
       printf 'failure-phase=%s status=started\n' "$1"
       compose run --rm --no-deps --volume "$sandbox/incoming-access.json:/run/incoming-access.json:ro" --volume "$failure_state:/run/incoming-failures" -e INCOMING_ACCESS_PATH=/run/incoming-access.json -e "INCOMING_PROJECT=$project" -e INCOMING_PUBLIC_FAILURES=1 -e "INCOMING_FAILURES_PHASE=$1" -e INCOMING_FAILURES_STATE=/run/incoming-failures/restart.json browser npx --no-install playwright test --config tests/playwright.config.mjs 2>&1 | tee "$artifacts/incoming-public-failures-$1.log" | python3 "$root/scripts/ci-summary.py"
     }
+    # The one Entryway container's start time, to prove the restart happened.
+    entryway_started() {
+      local id
+      id=$(compose ps --quiet entryway) || return 1
+      [[ -n "$id" && "$id" != *$'\n'* ]] || { echo 'Expected exactly one Entryway container' >&2; return 1; }
+      docker --context "$DOCKER_CONTEXT" inspect --format '{{.State.StartedAt}}' "$id"
+    }
     # The restart halves run apart from the other cases and run even when a
-    # case fails; the command fails if any phase does.
+    # case fails; after-restart needs a passing before-restart. The command
+    # fails if any phase does.
     cases=0
     failures cases || cases=$?
     failures before-restart
+    started=$(entryway_started)
     compose restart entryway
     compose up -d --wait entryway
+    restarted=$(entryway_started)
+    [[ -n "$started" && -n "$restarted" && "$restarted" != "$started" ]] || { echo 'code=RESTART_NOT_OBSERVED' >&2; exit 1; }
+    echo 'entryway-restart=observed'
     failures after-restart
     (( cases == 0 )) || exit "$cases"
     ;;

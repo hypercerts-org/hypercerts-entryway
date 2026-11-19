@@ -36,8 +36,9 @@ import {
 // run only by `./tests/local.sh incoming-public-failures`. Specs run inside the
 // browser container and cannot restart services, so the controller runs this
 // file twice: phase `before-restart` stops after the handoff is admitted and
-// published, the controller restarts the Entryway service and waits for it,
-// then phase `after-restart` continues. This is a restart between admitted
+// published, the controller restarts the Entryway service, waits for it and
+// checks that its container start time changed, then phase `after-restart`
+// continues. This is a restart between admitted
 // steps, not an interruption during provisioning.
 //
 // Cross-phase state (source session, arrival code, signed operation) lives in
@@ -212,16 +213,47 @@ if (phase === "after-restart") {
 
   test("after the restart: the first createAccount is a new admission with a fresh method-bound JWT", async () => {
     run.recoveryKey = (await Secp256k1Keypair.create()).did();
-    const created = await incomingCall(config, creationMethod, {
-      jwt: await serviceAuth(access, config, run.source, creationMethod),
-      code: renewedCode,
-      body: {
-        handle: run.destinationHandle,
-        password: `Arrive-${randomUUID()}-${randomUUID()}`,
-        recoveryKey: run.recoveryKey,
-        ...(await inviteFields(config)),
-      },
+    const body = {
+      handle: run.destinationHandle,
+      password: `Arrive-${randomUUID()}-${randomUUID()}`,
+      recoveryKey: run.recoveryKey,
+      ...(await inviteFields(config)),
+    };
+    const create = async (jwt) =>
+      incomingCall(config, creationMethod, { jwt, code: renewedCode, body });
+    await test.step("the same body with a JWT bound to another method is refused with 403 AccountMismatch, so no creation was admitted", async () => {
+      // An exact replay of a recorded admission needs no source credential
+      // (it would answer 200), so verification refusing this body shows that
+      // phase one saved no creation admission.
+      const saved = await arrivalSummary(
+        owner,
+        config,
+        run.prepared.operationId,
+      );
+      expect(saved.state).toBe(arrivalStates.handoffPublished);
+      const wrongMethod = await serviceAuth(
+        access,
+        config,
+        run.source,
+        handoffMethod,
+      );
+      expect(jwtClaims(wrongMethod).lxm).toBe(handoffMethod);
+      expect(refusal(await create(wrongMethod))).toEqual({
+        status: 403,
+        error: "AccountMismatch",
+      });
+      expect(
+        isDeepStrictEqual(await plcHead(access, run.source.did), run.operation),
+        "PLC head is still the handoff",
+      ).toBe(true);
+      expect(
+        await arrivalSummary(owner, config, run.prepared.operationId),
+        "arrival not advanced",
+      ).toEqual(saved);
     });
+    const created = await create(
+      await serviceAuth(access, config, run.source, creationMethod),
+    );
     expect({
       status: created.status,
       cacheControl: created.cacheControl,

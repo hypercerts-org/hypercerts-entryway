@@ -105,6 +105,21 @@ esac
                 self.assertIn("context=container exit=124", output.getvalue())
             self.assertIn("context=build exit=", output.getvalue())
 
+    def test_incoming_failure_phases_and_restart_proof(self):
+        source = Path(__file__).resolve().parents[2]
+        local = (source / "tests/local.sh").read_text()
+        self.assertIn("start_group incoming incoming-public-journey incoming-public-failures\n", local)
+        block = local.split("\n  incoming-public-failures)\n", 1)[1].split("\n    ;;\n", 1)[0]
+        steps = ['rm -rf -- "$failure_state"', "cases=0", "failures cases || cases=$?",
+                 "failures before-restart", "started=$(entryway_started)",
+                 "compose restart entryway", "compose up -d --wait entryway",
+                 "restarted=$(entryway_started)", '"$restarted" != "$started"',
+                 "failures after-restart", '(( cases == 0 )) || exit "$cases"']
+        positions = [block.index(step) for step in steps]
+        self.assertEqual(positions, sorted(positions))
+        self.assertTrue(block.rstrip().endswith('(( cases == 0 )) || exit "$cases"'))
+        self.assertEqual(block.count("failures cases"), 1)
+
     def test_repeated_scoped_cleanup(self):
         for _ in range(2):
             self.assertEqual(self.ownership("cleanup", COMPOSE_PROFILES="unrelated").returncode, 0)
