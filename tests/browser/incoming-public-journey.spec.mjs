@@ -259,6 +259,11 @@ test("creation returns tracked credentials for a paused destination", async () =
 
 // Observed on the pinned stock destination (@atproto/pds 0.5.36). Each refusal
 // must leave the paused destination's status and its own export byte-identical.
+// The two 500s are not an integrity-specific status: while importRepo reads the
+// body, @atproto/repo's verifyIncomingCarBlocks throws a plain Error ("Not a
+// valid CID for bytes"), which xrpc-server surfaces as a generic 500
+// InternalServerError with the message hidden. They are pinned as a tripwire for
+// a stock PDS upgrade, with the unchanged destination as the actual evidence.
 async function expectMalformedImportsRefused() {
   const endpoint = run.prepared.destinationEndpoint;
   const token = run.destination.accessJwt;
@@ -277,8 +282,9 @@ async function expectMalformedImportsRefused() {
     ok(exported, "destination export");
     return { status: json(status), car: exported.content };
   };
-  const post = run.inventory.records.find(({ value }) => value.text);
-  const cars = await malformedCars(run.car, post);
+  // Records are sorted by URI: a feed post where the shape has one, otherwise
+  // the profile.
+  const cars = await malformedCars(run.car, run.inventory.records.at(-1));
   // The final block of this export is a seeded record, not a tree node.
   expect(
     run.inventory.records.some(({ cid }) => cid === cars.droppedBlock),
@@ -331,9 +337,14 @@ test("the client transfers its chosen state directly between the pinned endpoint
     ok(response, method);
     return json(response);
   };
-  // One shape of the wider selection probes the stock import with malformed
-  // copies of the verified export first; the valid import below is the control.
-  if (test.info().project.metadata.shape === "multi-collection")
+  // The per-PR default (blob-bearing) and the multi-collection shape probe the
+  // stock import with malformed copies of the verified export first; the valid
+  // import below is the control.
+  if (
+    ["blob-bearing", "multi-collection"].includes(
+      test.info().project.metadata.shape ?? "blob-bearing",
+    )
+  )
     await expectMalformedImportsRefused();
   const imported = await call(
     run.prepared.destinationEndpoint,
