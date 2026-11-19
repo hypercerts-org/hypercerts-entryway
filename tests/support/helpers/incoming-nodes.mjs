@@ -1,27 +1,33 @@
 import { expect } from "@playwright/test";
+import { randomUUID } from "node:crypto";
 
 // Two-node routing for the incoming journey, used only by `./tests/local.sh
 // fresh-group incoming-two-node`. The profile ingress in front of both Entryway
 // nodes forwards a request to the node named in `x-profile-node` and balances
 // the rest; every forwarded response carries the serving process's
 // `x-entryway-instance` and leaves a receipt (`/__profile/receipts`) with the
-// node, instance, path, status and whether the caller pinned it. Without an
-// order (the single-node journey) every method is a pass-through.
+// node, instance, path, status, whether the caller pinned it and the caller's
+// `x-profile-stage` tag, which the ingress strips before forwarding. Without
+// an order (the single-node journey) every method is a pass-through.
 //
 // Pinned: XRPC calls made by the test, which add `headers(role)`, and browser
 // pages, whose context routes every request to the issuer origin (navigations,
-// their redirects and the OAuth SDK's own fetches) with the header added.
+// their redirects and the OAuth SDK's own fetches) with the headers added.
+// Every pinned request carries its stage's tag, and a stage is checked against
+// the receipts with its tag and the browser requests started inside it, so a
+// response that arrives after the next stage began is never attributed to it.
 // Context-wide extra headers (as the resilience profile uses) stopped the
 // SDK's cross-origin login before consent: the OAuth endpoints' preflight
-// allows only Content-Type and DPoP. While a route is active Playwright
-// answers CORS preflights itself, so real preflight handling is covered by the
-// single-node journey, not by this run. A route sees only the first URL of a
-// redirect chain, so a redirect from another origin into the issuer (the
-// confidential client's authorization) is not routed; such a stage uses
-// context-wide extra headers instead (`via: "headers"`), as the resilience
-// profile does, and must contain no SDK fetches. Observed only: requests a PDS makes to
-// Entryway on the client's behalf (the stock `activateAccount` forward), which
-// the test cannot address; their receipts are unpinned and recorded as seen.
+// allows only Content-Type and DPoP. While any route is active Playwright
+// answers every intercepted CORS preflight itself, so no route stage exercises
+// a real preflight. A route sees only the first URL of a redirect chain, so a
+// redirect from another origin into the issuer (the confidential client's
+// authorization) is not routed; such a stage uses context-wide extra headers
+// instead (`via: "headers"`), as the resilience profile does, and fails if it
+// makes any scripted (fetch or XHR) issuer request. Observed only: requests a
+// PDS makes to Entryway on the client's behalf (the stock `activateAccount`
+// forward), which the test cannot address; their receipts are unpinned and
+// recorded as seen.
 
 const noise = (path) =>
   path === "/_health" || path === "/_readyz" || path.startsWith("/__profile/");
@@ -35,6 +41,10 @@ export function nodeRouting(issuer, order) {
   const enabled = Array.isArray(order);
   const origin = new URL(issuer).origin;
   const ids = new Map();
+  // Tags are unique per routing instance, so the second node order (another
+  // project on the same ingress) cannot match the first order's receipts.
+  const run = randomUUID().slice(0, 8);
+  let tags = 0;
   // One entry per stage: pinned stages name the node the test chose, observed
   // ones the node the ingress chose for the PDS's own request.
   const stages = [];
@@ -62,6 +72,13 @@ export function nodeRouting(issuer, order) {
     ).toBe(true);
     return all.filter(({ id, path }) => id > start && !noise(path));
   }
+  const describe = ({ method, path, node, instanceId, status }) => ({
+    method,
+    path,
+    node,
+    instanceId,
+    status,
+  });
 
   return {
     enabled,
@@ -81,9 +98,13 @@ export function nodeRouting(issuer, order) {
         ids.set(node, instanceId);
       expect(new Set(ids.values()).size, "distinct instance IDs").toBe(2);
     },
-    /** Request headers pinning a call to the role's node. */
+    /** Request headers pinning a call to the role's node and current stage. */
     headers(role) {
-      return enabled ? { "x-profile-node": order[role] } : {};
+      if (!enabled) return {};
+      return {
+        "x-profile-node": order[role],
+        ...(current ? { "x-profile-stage": current.tag } : {}),
+      };
     },
     /** The response came from the current stage's node. */
     expectServed(response, what) {
@@ -96,20 +117,28 @@ export function nodeRouting(issuer, order) {
     /**
      * Runs one Entryway-facing stage on the role's node. With `page`, the
      * browser context pins every issuer request (by route, or with `via:
-     * "headers"` by context-wide extra headers) and every issuer response it
-     * sees must come from that node. Afterwards every pinned receipt in the window must
-     * name that node, and unpinned ones (requests the test did not address)
-     * are kept as observations.
+     * "headers"` by context-wide extra headers) and every issuer response to a
+     * request started inside the stage must come from that node. Afterwards
+     * every receipt carrying the stage's tag must be pinned to that node, and
+     * unpinned ones in the stage's window (requests the test did not address)
+     * are kept as observations. The stage is recorded before it is checked,
+     * so a failing run still reports it.
      */
     async stage(name, role, did, action, { page, via = "route" } = {}) {
       if (!enabled) return action();
       const node = order[role];
-      current = { node, instanceId: ids.get(node) };
+      const expected = { node, instanceId: ids.get(node) };
+      const tag = `${run}-${++tags}`;
+      current = { ...expected, tag };
       const start = await mark();
+      const started = new Set();
       const responses = [];
+      const track = (request) => {
+        if (new URL(request.url()).origin === origin) started.add(request);
+      };
       const collect = (response) => {
         if (
-          new URL(response.url()).origin === origin &&
+          started.has(response.request()) &&
           response.request().method() !== "OPTIONS"
         )
           responses.push(response);
@@ -117,56 +146,84 @@ export function nodeRouting(issuer, order) {
       const pattern = `${origin}/**`;
       const pin = (route) =>
         route.continue({
-          headers: { ...route.request().headers(), "x-profile-node": node },
+          headers: {
+            ...route.request().headers(),
+            "x-profile-node": node,
+            "x-profile-stage": tag,
+          },
         });
       if (page) {
+        page.context().on("request", track);
+        page.context().on("response", collect);
         if (via === "headers")
           await page.context().setExtraHTTPHeaders(this.headers(role));
         else await page.context().route(pattern, pin);
-        page.context().on("response", collect);
       }
       let result;
       try {
         result = await action();
       } finally {
+        current = undefined;
         if (page) {
-          page.context().off("response", collect);
           if (via === "headers") await page.context().setExtraHTTPHeaders({});
           else await page.context().unroute(pattern, pin);
+          page.context().off("request", track);
+          page.context().off("response", collect);
         }
       }
+      const seen = await since(start);
+      const tagged = seen.filter((receipt) => receipt.stage === tag);
+      const record = {
+        stage: name,
+        pinned: true,
+        node,
+        instanceId: expected.instanceId,
+        // Instance IDs that actually answered this stage: its tagged receipts
+        // and the issuer responses its browser requests received.
+        observed: [
+          ...new Set([
+            ...tagged.map(({ instanceId }) => instanceId),
+            ...responses.map(instanceOf),
+          ]),
+        ],
+        did,
+        requests: tagged.length,
+        browserResponses: responses.length,
+        unpinned: seen.filter((receipt) => !receipt.pinned).map(describe),
+        // Pinned receipts that landed in this window for another stage (a
+        // response that arrived late) or without a tag: reported, not judged.
+        other: seen
+          .filter((receipt) => receipt.pinned && receipt.stage !== tag)
+          .map(describe),
+      };
+      stages.push(record);
+      if (via === "headers")
+        expect(
+          [...started]
+            .filter((request) =>
+              ["fetch", "xhr"].includes(request.resourceType()),
+            )
+            .map(
+              (request) =>
+                `${request.method()} ${new URL(request.url()).pathname}`,
+            ),
+          `${name}: no scripted issuer requests under context-wide headers`,
+        ).toEqual([]);
       for (const response of responses)
         expect(
           instanceOf(response),
           `${name}: ${new URL(response.url()).pathname} served by ${node}`,
-        ).toBe(current.instanceId);
-      const seen = await since(start);
-      const pinned = seen.filter((receipt) => receipt.pinned);
-      expect(pinned.length, `${name}: pinned receipts`).toBeGreaterThan(0);
-      for (const receipt of pinned)
+        ).toBe(expected.instanceId);
+      expect(tagged.length, `${name}: tagged receipts`).toBeGreaterThan(0);
+      for (const receipt of tagged)
         expect(
-          { node: receipt.node, instanceId: receipt.instanceId },
+          {
+            pinned: receipt.pinned,
+            node: receipt.node,
+            instanceId: receipt.instanceId,
+          },
           `${name}: ${receipt.method} ${receipt.path}`,
-        ).toEqual(current);
-      stages.push({
-        stage: name,
-        pinned: true,
-        node,
-        instanceId: current.instanceId,
-        did,
-        requests: pinned.length,
-        browserResponses: responses.length,
-        unpinned: seen
-          .filter((receipt) => !receipt.pinned)
-          .map(({ method, path, node, instanceId, status }) => ({
-            method,
-            path,
-            node,
-            instanceId,
-            status,
-          })),
-      });
-      current = undefined;
+        ).toEqual({ pinned: true, ...expected });
       return result;
     },
     /**
@@ -186,34 +243,33 @@ export function nodeRouting(issuer, order) {
       );
       for (const receipt of seen) {
         expect([...ids.values()]).toContain(receipt.instanceId);
-        stages.push({
-          stage: name,
-          pinned: false,
-          node: receipt.node,
-          instanceId: receipt.instanceId,
-          did,
-          method: receipt.method,
-          path: receipt.path,
-          status: receipt.status,
-        });
+        stages.push({ stage: name, pinned: false, did, ...describe(receipt) });
       }
       return result;
     },
     /**
-     * Consecutive pinned stages in `names` ran on different instances for one
-     * DID. Observed stages are reported, not part of the alternation.
+     * Consecutive pinned stages in `names` were answered by different
+     * instances for one DID, judged on the instance IDs each stage observed
+     * (receipts and response headers), not on the configured order. Each
+     * stage must have observed exactly one instance. Observed-only stages are
+     * reported, not part of the alternation.
      */
     expectAlternation(names, did) {
       const pinned = stages.filter(
         (stage) => stage.pinned && names.includes(stage.stage),
       );
       expect(pinned.map(({ stage }) => stage)).toEqual(names);
-      for (const stage of pinned) expect(stage.did, stage.stage).toBe(did);
+      for (const stage of pinned) {
+        expect(stage.did, stage.stage).toBe(did);
+        expect(stage.observed, `${stage.stage}: one observed instance`).toEqual(
+          [expect.any(String)],
+        );
+      }
       for (let index = 1; index < pinned.length; index++)
         expect(
-          pinned[index].instanceId,
+          pinned[index].observed[0],
           `${pinned[index - 1].stage} then ${pinned[index].stage}`,
-        ).not.toBe(pinned[index - 1].instanceId);
+        ).not.toBe(pinned[index - 1].observed[0]);
     },
     /** The stage table, with node names, instance IDs and paths only. */
     report() {

@@ -252,6 +252,7 @@ async function createDestination() {
         body: JSON.stringify({ useCount: 1 }),
       },
     );
+    nodes.expectServed(invite, "createInviteCode");
     expect(invite.status).toBe(200);
     body.inviteCode = (await invite.json()).code;
   }
@@ -553,24 +554,23 @@ if (twoNode)
     );
     expect(activation.length).toBeGreaterThan(0);
     expect(activation.every(({ status }) => status === 200)).toBe(true);
-    reportNodes();
   });
 
 // The stage table goes to the private phase log, which the controller keeps:
-// node names, instance IDs and paths only, no DID, credential or body. Each
-// call prints the stages recorded since the previous one.
-let reported = 0;
-function reportNodes() {
-  for (const stage of nodes.report().stages.slice(reported)) {
-    const unpinned = (stage.unpinned ?? []).map(
-      ({ method, path, node }) => `${method}:${path}@${node}`,
-    );
+// node names, instance IDs and paths only, no DID, credential or body. Printed
+// after all tests, so a failing run keeps the stages recorded up to the
+// failure, including the failing stage's observations.
+test.afterAll(() => {
+  if (!nodes?.enabled) return;
+  const list = (receipts) =>
+    receipts
+      .map(({ method, path, node }) => `${method}:${path}@${node}`)
+      .join(",") || "none";
+  for (const stage of nodes.report().stages)
     console.log(
-      `node-stage stage=${stage.stage.replaceAll(" ", "-")} pinned=${stage.pinned} node=${stage.node} instance=${stage.instanceId}${stage.pinned ? ` requests=${stage.requests} unpinned=${unpinned.join(",") || "none"}` : ` observed=${stage.method}:${stage.path} status=${stage.status}`}`,
+      `node-stage stage=${stage.stage.replaceAll(" ", "-")} pinned=${stage.pinned} node=${stage.node} instance=${stage.instanceId}${stage.pinned ? ` observed=${stage.observed.join("+") || "none"} requests=${stage.requests} unpinned=${list(stage.unpinned)} other=${list(stage.other)}` : ` observed=${stage.method}:${stage.path} status=${stage.status}`}`,
     );
-  }
-  reported = nodes.report().stages.length;
-}
+});
 
 test("destination OTP and independent browser OAuth retain access after the move", async ({
   page,
@@ -704,15 +704,18 @@ test("destination OTP and independent browser OAuth retain access after the move
       "email-code session",
       "authorization",
     ].map((name) => nodes.stages.find(({ stage }) => stage === name));
+    // Judged on the instances each stage observed, not the configured order.
+    expect(session.observed, "email-code session on one instance").toEqual([
+      expect.any(String),
+    ]);
     expect(
-      authorization.instanceId,
+      authorization.observed,
       "session and code exchange on one node",
-    ).toBe(session.instanceId);
+    ).toEqual(session.observed);
     nodes.expectAlternation(
       ["authorization", "grant refresh", "revocation", "confidential client"],
       did,
     );
-    reportNodes();
   }
 });
 
