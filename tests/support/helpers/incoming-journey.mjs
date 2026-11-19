@@ -80,7 +80,10 @@ export function carFrames(car) {
  *   text, a profile's display name) changed in place, so the length, the framing
  *   and the DAG-CBOR stay valid but the block no longer hashes to its CID;
  * - `cutMidBlock`: cut half-way through the data of the block at the midpoint;
- * - `cutAtBlock`: every whole frame except the final block.
+ * - `missingRecordBlock`: every frame except the named record's block, wherever
+ *   it sits, so the CAR stays well formed and ends on a whole frame. The stock
+ *   export orders blocks by revision and CID, not by kind, so the final block
+ *   is not reliably a record; `droppedBlock` is the record's CID.
  */
 export async function malformedCars(car, record) {
   const frames = carFrames(car);
@@ -111,12 +114,14 @@ export async function malformedCars(car, record) {
     middle.data + 36 < cut && cut < middle.end,
     "cut ends inside block data",
   ).toBe(true);
-  const last = frames.at(-1);
   return {
     tampered,
     cutMidBlock: car.subarray(0, cut),
-    cutAtBlock: car.subarray(0, last.start),
-    droppedBlock: `${blocks.entries().find((entry) => car.subarray(last.data, last.data + 36).equals(entry.cid.bytes)).cid}`,
+    missingRecordBlock: Buffer.concat([
+      car.subarray(0, frame.start),
+      car.subarray(frame.end),
+    ]),
+    droppedBlock: `${block.cid}`,
   };
 }
 
