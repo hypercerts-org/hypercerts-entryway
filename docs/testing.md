@@ -16,12 +16,12 @@ pattern. The reference manifest is `tests/sandbox.json`. The runtime is generate
 it is not vendored upstream source and must remain untracked. Consumer stack
 installation and application runtime are separate phases.
 
-`fresh` runs three groups in parallel, each in its own disposable sandbox:
+`fresh` runs four groups in parallel, each in its own disposable sandbox:
 `journeys` (browser, contracts, resilience), `migration` (external migration and
-interop profile) and `faults` (PLC recovery, process crash, managed recovery,
+interop profile), `incoming` (public incoming journey) and `faults` (PLC recovery, process crash, managed recovery,
 authority drills). Steps within a group stay sequential: contracts and resilience
 read accounts and sessions created by the browser suite, and fault steps stop
-shared containers. Expect roughly three sandboxes' worth of CPU and memory.
+shared containers. Expect roughly four sandboxes' worth of CPU and memory.
 
 Each group creates a unique `hypercerts-entryway-<timestamp>-<pid>-<group>` project in a
 temporary checkout, uses `--subnet auto` and validates `sandbox access --json`
@@ -38,7 +38,7 @@ and requires no host dependency install:
 
 | Command                                       | Purpose and precondition                                                                                                                                                                                   |
 | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `./tests/local.sh fresh`                      | Repeatable full run as three parallel disposable groups; cleanup follows success/failure                                                                                                                   |
+| `./tests/local.sh fresh`                      | Repeatable full run as four parallel disposable groups; cleanup follows success/failure                                                                                                                   |
 | `./tests/local.sh fresh-group <steps>`        | Run the named steps in order in one disposable project, for example `fresh-group browser contracts`                                                                                                        |
 | `./tests/local.sh prepare`                    | Install sandbox CLI dependencies and create/check project configuration                                                                                                                                    |
 | `./tests/local.sh up`                         | Build/start the sandbox and build test/browser images after prepare                                                                                                                                        |
@@ -499,7 +499,7 @@ for stock runtime evidence. Do not invent a host database URL or report these
 commands as executed from native CI alone. Full public journey and guarded
 activation qualification remain pending, independently of these checks. Follow the
 [accepted C4 contract](incoming-migration.md#c4-client-managed-migration-contract-accepted)
-and [public journey coverage](../tests/flows/external-migration.md#public-incoming-migration-shared-email-test-on-hold):
+and [public journey coverage](../tests/flows/incoming-public-migration.md):
 exercise records/blobs, valid empty and blob-free repositories, integrity of the
 chosen transferred state, authorization and refusal across every pending-arrival
 activation entrypoint, and interrupted/lost-response recovery. Preserve canonical

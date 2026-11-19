@@ -159,7 +159,10 @@ sequenceDiagram
 
 The migration tool follows an Entryway-specific journey through public APIs and
 unchanged PDS contracts. Compatibility depends on support for this sequence, not
-on a particular tool name or version.
+on a particular tool name or version. Incoming journey acceptance uses the
+repository's public-endpoint client against an independent stock source PDS.
+The PDS MOOver fork is optional corroboration; patched goat is a harness outside
+acceptance. No unmodified existing tool has been shown to run this incoming flow.
 
 ## Admission proofs and credentials
 
@@ -189,9 +192,11 @@ It lasts 24 hours. Only its hash is stored; the code is excluded from
 logs and URLs. The user hands it to the tool explicitly, without exporting browser
 cookies.
 
-A dedicated preparation interface and an `Entryway-Arrival-Code` header are the
-proposed wire surface. They are Entryway-specific extensions, not existing AT
-Protocol methods or implemented endpoints. Standard XRPC bodies remain unchanged.
+The preparation page and `Entryway-Arrival-Code` request header are accepted,
+implemented Entryway extensions. The header carries arrival authorization on both
+handoff and creation without changing the standard XRPC bodies. Reusing
+`inviteCode` would conflate an operator's invitation with the migrant's proof
+of a prepared arrival; a deployment can require both.
 
 Preparation proves only destination email ownership, so it is non-exclusive. A
 prepared arrival holds nothing: not the DID, the handle, the email or a repository
@@ -1049,7 +1054,7 @@ resolved by completion or the operator recovery in
 [shared operations](shared-operations.md#supported-operator-recovery), not by
 cancellation.
 
-Standard XRPC bodies keep their shapes and carry the arrival code in the proposed
+Standard XRPC bodies keep their shapes. The client sends the arrival code in the
 `Entryway-Arrival-Code` header at `com.atproto.identity.submitPlcOperation` and
 `com.atproto.server.createAccount`. The arrival code never substitutes for
 `inviteCode`, and invitation policy is unchanged.

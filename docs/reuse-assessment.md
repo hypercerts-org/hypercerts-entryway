@@ -102,6 +102,13 @@ They are not complete readiness: public journey qualification is separate; see t
 contract gates in
 [incoming migration](incoming-migration.md#contract-qualification-gates-for-implementers).
 
+### Incoming client compatibility
+
+Acceptance uses the repository's public-endpoint client and an independent stock
+source PDS. The PDS MOOver fork is optional corroboration. Patched goat is a
+harness outside acceptance. No unmodified existing tool has been shown to run
+the incoming flow.
+
 ### goat test client provenance
 
 The `incoming-goat-journey` live test builds the public goat CLI as a test-only
@@ -128,7 +135,7 @@ against our contract.
   public endpoints), skips the stock
   recommended-credentials cutover, activates through the destination, confirms
   activation and then deactivates the source. Blob failures are fatal there. The
-  Docker build also checks that stock goat, without `--arrival-code`, refuses the
+  Docker build checks that the patched binary, without `--arrival-code`, refuses the
   Entryway-only flags.
 - Status: reusable as a harness only; stock unmodified goat does not support the
   Entryway surface.
