@@ -182,17 +182,30 @@ Phase `cases` (`tests/browser/incoming-public-failures.spec.mjs`) needs no resta
 an expired and a foreign source service JWT before admission, a destination email
 an account took after preparation, a discarded `createAccount` response recovered
 with `/incoming/recover`, the pending account before activation, and a move
-without a recovery key. Email-code sign-in of a pending account is documented to
-succeed and show the pending page; it answers 404 today, so that one test asserts
-the documented behaviour under `test.fail` (Playwright counts it as expected, an
-unexpected pass fails the run, and the summary filter prints its title with
-`status=failed` because the list reporter marks it with a cross). Phases `before-restart` and `after-restart`
+without a recovery key. Email-code sign-in of a pending account, at `/login` and
+in OAuth authorization, is documented to succeed and show the pending page; today
+it answers 404 "Unable to continue" with no session. Ordinary tests pin that
+observed page, so any change fails them, and two separate tests assert the
+documented behaviour under `test.fail`. Playwright counts those two as expected
+failures and the run as passed; an unexpected pass fails it. The phase result is
+the Playwright totals line and exit status. The summary filter
+(`scripts/ci-summary.py`) strips colour, so it prints these two titles with
+`status=failed`: Playwright marks an expected failure with a green cross. Read
+those two lines as expected failures, not as a failed run.
+
+Phases `before-restart` and `after-restart`
 (`tests/browser/incoming-public-restart.spec.mjs`) run apart from those cases: the
 first stops after the handoff is admitted and published, the controller restarts
 the Entryway service and waits for it, and the second renews the arrival code,
-replays the handoff and makes the first `createAccount`. This is a restart between
-admitted steps, not an interruption during provisioning. The restart phases always
-run, and the command fails if any phase fails.
+replays the handoff and makes the first `createAccount`. Before that first
+creation it sends the same body with a JWT bound to `submitPlcOperation` and
+expects 403 `AccountMismatch`, which shows that no creation admission was saved
+(an exact replay of one would succeed without a credential). The controller reads
+the Entryway container's `.State.StartedAt` before and after the restart and fails
+with `code=RESTART_NOT_OBSERVED` unless it changed. This is a restart between
+admitted steps, not an interruption during provisioning. Both restart phases run
+even when phase `cases` fails, but `after-restart` runs only after a passing
+`before-restart`. The command fails if any phase fails.
 
 Specs run in the browser container and cannot restart services, so the restart
 case carries its state (the source session, arrival code and signed operation) in
@@ -201,9 +214,26 @@ mounted only into those two runs. It is outside `ACCEPTANCE_REPORT_DIR`, never
 printed, and the controller removes it on every exit. Each phase writes its own
 Playwright reports (`incoming-public-failures`,
 `incoming-public-failures-before-restart`, `incoming-public-failures-after-restart`)
-and log. Sign-in, fresh and arrival codes are entered through `evaluate`, so no
-step title carries them, and only statuses and error names of refused calls are
-asserted. List the three selections without a sandbox:
+and log. Sign-in and fresh email codes are entered through `evaluate`, and arrival
+codes travel only in the `Entryway-Arrival-Code` request header, so no step title
+carries them. Only statuses and error names of refused calls are asserted.
+
+Rate-limit headroom, from the source defaults (fixed 10-minute windows kept in the
+database, so the restart does not reset them): the target makes four
+`/incoming/prepare` requests (three in `cases`, one before the restart) against
+the per-IP signup budget of 30, and four `createAccount` requests with an arrival
+code (two in each half) against the per-IP `createAccount` budget of 30. Both
+budgets are shared with ordinary signup and with the journey that runs before in
+the same sandbox (one preparation, two creations). Handoff submission has no
+budget. Browser email sign-in has no per-IP budget. Its budget is five codes per
+address per window, and two automatic OAuth codes per DID. The busiest address,
+the `cases` destination email, gets up to five sign-in codes: preparation, the
+two pending `/login` sign-ins, and the two OAuth sign-ins if they fall back to
+the email form. That is the limit, so add no further sign-in to that address.
+Fresh incoming codes are limited to five per user per window; each user here
+asks for two.
+
+List the three selections without a sandbox:
 
 ```sh
 INCOMING_PUBLIC_FAILURES=1 npx playwright test --config tests/playwright.config.mjs --list

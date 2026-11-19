@@ -1036,6 +1036,7 @@ Errors. Each code is stable and mapped explicitly, and no message carries a secr
 | Handoff admission: handle taken since preparation                                            | `HandleNotAvailable`        | 409         |
 | Handoff admission: email taken since preparation                                             | `EmailNotAvailable`         | 409         |
 | Handoff admission: DID became hosted or bound                                                | `IdentityConflict`          | 409         |
+| Handoff or creation admission: the source service JWT fails verification, including expiry   | `AccountMismatch`           | 403         |
 
 Handoff admission takes the DID claim only after the source JWT verifies, so
 `OperationPending` at that site requires DID authority.
