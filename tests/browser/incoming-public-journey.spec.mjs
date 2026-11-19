@@ -7,6 +7,7 @@ import {
   call,
   errorName,
   expectDestinationServes,
+  expectInventoryRetained,
   json,
   malformedCars,
   ok,
@@ -27,6 +28,7 @@ import {
 } from "@atproto/repo";
 import { Secp256k1Keypair } from "@atproto/crypto";
 import { waitForStockPlcMessage } from "../support/helpers/stock-plc-mailpit.mjs";
+import { nodeRouting } from "../support/helpers/incoming-nodes.mjs";
 
 // Public incoming-migration journey, run only by `./tests/local.sh
 // incoming-public-journey` (one shape) or `incoming-public-shapes` (four) inside
@@ -36,11 +38,19 @@ import { waitForStockPlcMessage } from "../support/helpers/stock-plc-mailpit.mjs
 // Mailpit, and nothing seeds authority rows or calls a private fixture. The
 // client chooses what to transfer and when to activate; this does not certify
 // completeness of every record or blob.
+//
+// `./tests/local.sh fresh-group incoming-two-node` runs the same journey on the
+// two-node PostgreSQL profile (`INCOMING_TWO_NODE=1`), once per node order. Each
+// Entryway-facing stage is then pinned to one node with `x-profile-node` and
+// must be served by that node's instance; see `incoming-nodes.mjs`. Otherwise
+// the routing helper does nothing.
+const twoNode = process.env.INCOMING_TWO_NODE === "1";
 // Read in beforeAll so test discovery works without a sandbox.
 let access;
 let config;
 let sdk;
 let confidential;
+let nodes;
 const unique = randomUUID().replaceAll("-", "").slice(0, 16);
 const destinationEmail = `public-arrival-${unique}@example.com`;
 const sourceEmail = `public-source-${unique}@example.com`;
@@ -67,6 +77,10 @@ test.beforeAll(async () => {
   access = JSON.parse(readFileSync(process.env.INCOMING_ACCESS_PATH, "utf8"));
   assert.equal(access.project, process.env.INCOMING_PROJECT);
   config = JSON.parse(readFileSync(process.env.SERVICE_CONFIG_PATH, "utf8"));
+  const order = test.info().project.metadata.nodes;
+  assert.equal(Array.isArray(order), twoNode, "node order only on two nodes");
+  nodes = nodeRouting(config.issuer, order);
+  await nodes.load();
 });
 
 registerArrivalSetup(test, {
@@ -77,6 +91,8 @@ registerArrivalSetup(test, {
   sourcePassword: `Public-${randomUUID()}!`,
   destinationEmail,
   displayName: "Public arrival journey",
+  aroundPrepare: (page, prepare) =>
+    nodes.stage("prepare", 0, run.source.did, prepare, { page }),
 });
 
 test("the client verifies the source export before identity cutover", async () => {
@@ -144,49 +160,57 @@ test("the source signs the authority handoff and Entryway publishes only that", 
   );
   ok(signed, "signed handoff");
   const operation = json(signed).operation;
-  // Wrong code, then wrong method, are refused before anything is published.
-  const wrongCode = await fetch(
-    new URL(`/xrpc/${handoffMethod}`, config.issuer),
-    {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${await serviceAuth(handoffMethod)}`,
-        "entryway-arrival-code": "A".repeat(32),
-        "content-type": "application/json",
+  await nodes.stage("handoff", 1, run.source.did, async () => {
+    // Wrong code, then wrong method, are refused before anything is published.
+    const wrongCode = await fetch(
+      new URL(`/xrpc/${handoffMethod}`, config.issuer),
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${await serviceAuth(handoffMethod)}`,
+          "entryway-arrival-code": "A".repeat(32),
+          "content-type": "application/json",
+          ...nodes.headers(1),
+        },
+        body: JSON.stringify({ operation }),
       },
-      body: JSON.stringify({ operation }),
-    },
-  );
-  expect(wrongCode.status).toBe(409);
-  expect((await wrongCode.json()).error).toBe("ArrivalExpired");
-  const wrongMethodJwt = await serviceAuth(creationMethod);
-  const wrongMethod = await fetch(
-    new URL(`/xrpc/${handoffMethod}`, config.issuer),
-    {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${wrongMethodJwt}`,
-        "entryway-arrival-code": run.prepared.arrivalCode,
-        "content-type": "application/json",
+    );
+    nodes.expectServed(wrongCode, "wrong-code handoff");
+    expect(wrongCode.status).toBe(409);
+    expect((await wrongCode.json()).error).toBe("ArrivalExpired");
+    const wrongMethodJwt = await serviceAuth(creationMethod);
+    const wrongMethod = await fetch(
+      new URL(`/xrpc/${handoffMethod}`, config.issuer),
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${wrongMethodJwt}`,
+          "entryway-arrival-code": run.prepared.arrivalCode,
+          "content-type": "application/json",
+          ...nodes.headers(1),
+        },
+        body: JSON.stringify({ operation }),
       },
-      body: JSON.stringify({ operation }),
-    },
-  );
-  expect(wrongMethod.status).toBe(403);
-  const submitted = await fetch(
-    new URL(`/xrpc/${handoffMethod}`, config.issuer),
-    {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${await serviceAuth(handoffMethod)}`,
-        "entryway-arrival-code": run.prepared.arrivalCode,
-        "content-type": "application/json",
+    );
+    nodes.expectServed(wrongMethod, "wrong-method handoff");
+    expect(wrongMethod.status).toBe(403);
+    const submitted = await fetch(
+      new URL(`/xrpc/${handoffMethod}`, config.issuer),
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${await serviceAuth(handoffMethod)}`,
+          "entryway-arrival-code": run.prepared.arrivalCode,
+          "content-type": "application/json",
+          ...nodes.headers(1),
+        },
+        body: JSON.stringify({ operation }),
       },
-      body: JSON.stringify({ operation }),
-    },
-  );
-  expect(submitted.status).toBe(200);
-  expect(submitted.headers.get("cache-control")).toBe("no-store");
+    );
+    nodes.expectServed(submitted, "handoff");
+    expect(submitted.status).toBe(200);
+    expect(submitted.headers.get("cache-control")).toBe("no-store");
+  });
   // createAccount publishes a second operation. Read the head before creation.
   const head = await fetch(
     new URL(`/${run.source.did}/log/last`, access.plcUrl),
@@ -199,10 +223,15 @@ test("the source signs the authority handoff and Entryway publishes only that", 
 });
 
 test("creation returns tracked credentials for a paused destination", async () => {
+  await nodes.stage("createAccount", 0, run.source.did, createDestination);
+});
+
+async function createDestination() {
   const headers = {
     authorization: `Bearer ${await serviceAuth(creationMethod)}`,
     "entryway-arrival-code": run.prepared.arrivalCode,
     "content-type": "application/json",
+    ...nodes.headers(0),
   };
   run.recoveryKey = (await Secp256k1Keypair.create()).did();
   const body = {
@@ -218,6 +247,7 @@ test("creation returns tracked credentials for a paused destination", async () =
         headers: {
           authorization: `Basic ${Buffer.from(`admin:${config.adminPassword}`).toString("base64")}`,
           "content-type": "application/json",
+          ...nodes.headers(0),
         },
         body: JSON.stringify({ useCount: 1 }),
       },
@@ -233,6 +263,7 @@ test("creation returns tracked credentials for a paused destination", async () =
       body: JSON.stringify(body),
     },
   );
+  nodes.expectServed(created, "createAccount");
   expect(created.status).toBe(200);
   expect(created.headers.get("cache-control")).toBe("no-store");
   run.destination = await created.json();
@@ -248,15 +279,22 @@ test("creation returns tracked credentials for a paused destination", async () =
       body: JSON.stringify(body),
     },
   );
+  nodes.expectServed(repeated, "createAccount replay");
   expect(repeated.status).toBe(409);
   expect((await repeated.json()).error).toBe("OperationConflict");
   // The paused destination refuses ordinary activation paths at Entryway.
   const plain = await fetch(
     new URL("/xrpc/com.atproto.server.getSession", config.issuer),
-    { headers: { authorization: `Bearer ${run.destination.accessJwt}` } },
+    {
+      headers: {
+        authorization: `Bearer ${run.destination.accessJwt}`,
+        ...nodes.headers(0),
+      },
+    },
   );
+  nodes.expectServed(plain, "paused getSession");
   expect(plain.status).toBeGreaterThanOrEqual(400);
-});
+}
 
 // Observed on the pinned stock destination (@atproto/pds 0.5.36). Each refusal
 // must leave the paused destination's status and its own export byte-identical.
@@ -396,21 +434,38 @@ test("the client transfers its chosen state directly between the pinned endpoint
 });
 
 test("the tracked credential refreshes, then activates through the stock destination callback", async () => {
-  const refreshed = await fetch(
-    new URL("/xrpc/com.atproto.server.refreshSession", config.issuer),
-    {
-      method: "POST",
-      headers: { authorization: `Bearer ${run.destination.refreshJwt}` },
-    },
+  await nodes.stage("refresh", 1, run.source.did, async () => {
+    const refreshed = await fetch(
+      new URL("/xrpc/com.atproto.server.refreshSession", config.issuer),
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${run.destination.refreshJwt}`,
+          ...nodes.headers(1),
+        },
+      },
+    );
+    nodes.expectServed(refreshed, "refreshSession");
+    expect(refreshed.status).toBe(200);
+    run.destination = await refreshed.json();
+    expect(run.destination.did).toBe(run.source.did);
+  });
+  // The stock destination forwards activation to Entryway itself, so the
+  // ingress, not the test, picks the node: observed, not pinned.
+  await nodes.observe(
+    "activation",
+    run.source.did,
+    "/xrpc/com.atproto.server.activateAccount",
+    async () =>
+      ok(
+        await call(
+          run.prepared.destinationEndpoint,
+          "com.atproto.server.activateAccount",
+          { token: run.destination.accessJwt },
+        ),
+        "stock activateAccount",
+      ),
   );
-  expect(refreshed.status).toBe(200);
-  run.destination = await refreshed.json();
-  const activated = await call(
-    run.prepared.destinationEndpoint,
-    "com.atproto.server.activateAccount",
-    { token: run.destination.accessJwt },
-  );
-  ok(activated, "stock activateAccount");
   const status = json(
     await call(
       run.prepared.destinationEndpoint,
@@ -435,17 +490,21 @@ test("the activated account serves the transferred state and the client deactiva
   expect(data.rotationKeys[0]).toBe(run.recoveryKey);
   expect(data.rotationKeys.slice(1)).toEqual(run.prepared.handoff.rotationKeys);
   // Ordinary password sign-in at Entryway works once the account is active.
-  for (const identifier of [run.destinationHandle, run.source.did]) {
-    const session = await call(
-      config.issuer,
-      "com.atproto.server.createSession",
-      {
-        body: { identifier, password: destinationPassword },
-      },
-    );
-    expect(session.status, "password createSession status").toBe(200);
-    expect(json(session).did).toBe(run.source.did);
-  }
+  await nodes.stage("createSession", 0, run.source.did, async () => {
+    for (const identifier of [run.destinationHandle, run.source.did]) {
+      const session = await call(
+        config.issuer,
+        "com.atproto.server.createSession",
+        {
+          body: { identifier, password: destinationPassword },
+          headers: nodes.headers(0),
+        },
+      );
+      nodes.expectServed(session, "password createSession");
+      expect(session.status, "password createSession status").toBe(200);
+      expect(json(session).did).toBe(run.source.did);
+    }
+  });
   ok(
     await call(access.sourceUrl, "com.atproto.server.deactivateAccount", {
       token: run.source.accessJwt,
@@ -456,16 +515,62 @@ test("the activated account serves the transferred state and the client deactiva
 });
 
 test("the tracked destination family refreshes as an active account session", async () => {
-  const response = await fetch(
-    new URL("/xrpc/com.atproto.server.refreshSession", config.issuer),
-    {
-      method: "POST",
-      headers: { authorization: `Bearer ${run.destination.refreshJwt}` },
-    },
-  );
-  expect(response.status).toBe(200);
-  expect((await response.json()).did).toBe(run.source.did);
+  await nodes.stage("family refresh", 1, run.source.did, async () => {
+    const response = await fetch(
+      new URL("/xrpc/com.atproto.server.refreshSession", config.issuer),
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${run.destination.refreshJwt}`,
+          ...nodes.headers(1),
+        },
+      },
+    );
+    nodes.expectServed(response, "family refreshSession");
+    expect(response.status).toBe(200);
+    expect((await response.json()).did).toBe(run.source.did);
+  });
 });
+
+// Alternating instance IDs alone would not show one migration crossing nodes:
+// each stage also names the one DID and continues the state the previous
+// stage left on the other node.
+if (twoNode)
+  test("consecutive migration stages alternate Entryway nodes for one DID", async () => {
+    nodes.expectAlternation(
+      [
+        "prepare",
+        "handoff",
+        "createAccount",
+        "refresh",
+        "createSession",
+        "family refresh",
+      ],
+      run.source.did,
+    );
+    const activation = nodes.stages.filter(
+      ({ stage }) => stage === "activation",
+    );
+    expect(activation.length).toBeGreaterThan(0);
+    expect(activation.every(({ status }) => status === 200)).toBe(true);
+    reportNodes();
+  });
+
+// The stage table goes to the private phase log, which the controller keeps:
+// node names, instance IDs and paths only, no DID, credential or body. Each
+// call prints the stages recorded since the previous one.
+let reported = 0;
+function reportNodes() {
+  for (const stage of nodes.report().stages.slice(reported)) {
+    const unpinned = (stage.unpinned ?? []).map(
+      ({ method, path, node }) => `${method}:${path}@${node}`,
+    );
+    console.log(
+      `node-stage stage=${stage.stage.replaceAll(" ", "-")} pinned=${stage.pinned} node=${stage.node} instance=${stage.instanceId}${stage.pinned ? ` requests=${stage.requests} unpinned=${unpinned.join(",") || "none"}` : ` observed=${stage.method}:${stage.path} status=${stage.status}`}`,
+    );
+  }
+  reported = nodes.report().stages.length;
+}
 
 test("destination OTP and independent browser OAuth retain access after the move", async ({
   page,
@@ -477,39 +582,141 @@ test("destination OTP and independent browser OAuth retain access after the move
     handle: run.destinationHandle,
   };
   const endpoint = run.prepared.destinationEndpoint;
-  await test.step("destination email OTP returns the source DID", () =>
-    sdk.signInAccount(page, identity));
-  await test.step("destination handle prompts for consent and #issuer names Entryway", () =>
-    sdk.authorizeBrowserApp(page, identity));
-  const originalAuthorization =
-    await test.step("DPoP write is read back at the SDK audience on the prepared destination", () =>
-      expectSdkWrite(page, sdk, {
-        ...identity,
-        endpoint,
-        text: `Migrated ${unique}`,
-      }));
-  await page.reload();
-  await expect(page.locator("#verified-did")).toHaveText(identity.did);
-  await test.step("successful token refresh followed by a refreshed-session write", async () => {
-    await expectSdkAction(page, {
-      issuer: config.issuer,
-      path: "/oauth/token",
-      button: "Refresh authorization",
-      grantType: "refresh_token",
+  const did = identity.did;
+  const writes = [];
+  const tokenGrant = (grantType) => (candidate) =>
+    candidate.url() === new URL("/oauth/token", config.issuer).href &&
+    candidate.request().method() === "POST" &&
+    new URLSearchParams(candidate.request().postData() ?? "").get(
+      "grant_type",
+    ) === grantType &&
+    candidate.ok();
+  // On two nodes: the email-code session and the authorization-code exchange
+  // on the first node, the refresh of that same grant on the second.
+  await nodes.stage(
+    "email-code session",
+    0,
+    did,
+    () =>
+      test.step("destination email OTP returns the source DID", () =>
+        sdk.signInAccount(page, identity)),
+    { page },
+  );
+  const { grant, originalAuthorization } = await nodes.stage(
+    "authorization",
+    0,
+    did,
+    async () => {
+      const [exchange] = await Promise.all([
+        page.waitForResponse(tokenGrant("authorization_code"), {
+          timeout: 60_000,
+        }),
+        test.step("destination handle prompts for consent and #issuer names Entryway", () =>
+          sdk.authorizeBrowserApp(page, identity)),
+      ]);
+      nodes.expectServed(exchange, "authorization-code exchange");
+      const grant = await exchange.json();
+      expect(grant.sub).toBe(did);
+      expect(
+        typeof grant.refresh_token === "string" &&
+          grant.refresh_token.length > 0,
+        "the code exchange issued a refresh token",
+      ).toBe(true);
+      const original =
+        await test.step("DPoP write is read back at the SDK audience on the prepared destination", () =>
+          expectSdkWrite(page, sdk, {
+            ...identity,
+            endpoint,
+            text: `Migrated ${unique}`,
+          }));
+      await page.reload();
+      await expect(page.locator("#verified-did")).toHaveText(identity.did);
+      writes.push(original.uri);
+      return { grant, originalAuthorization: original.authorization };
+    },
+    { page },
+  );
+  await nodes.stage(
+    "grant refresh",
+    1,
+    did,
+    () =>
+      test.step("successful token refresh followed by a refreshed-session write", async () => {
+        const refreshed = await expectSdkAction(page, {
+          issuer: config.issuer,
+          path: "/oauth/token",
+          button: "Refresh authorization",
+          grantType: "refresh_token",
+        });
+        nodes.expectServed(refreshed, "refresh-token grant");
+        // The same grant: the refresh presents the code exchange's refresh
+        // token, at the same issuer, for the same subject.
+        expect(
+          new URLSearchParams(refreshed.request().postData()).get(
+            "refresh_token",
+          ) === grant.refresh_token,
+          "refresh presents the code exchange's refresh token",
+        ).toBe(true);
+        expect((await refreshed.json()).sub).toBe(did);
+        await expect(page.getByRole("status")).toHaveText(
+          "Authorization refreshed",
+        );
+        await expect(page.locator("#issuer")).toHaveText(config.issuer);
+        const refreshedWrite = await expectSdkWrite(page, sdk, {
+          ...identity,
+          endpoint,
+          text: `Refreshed ${unique}`,
+        });
+        expect(
+          refreshedWrite.authorization !== originalAuthorization,
+          "write used a different access token",
+        ).toBe(true);
+        writes.push(refreshedWrite.uri);
+      }),
+    { page },
+  );
+  await test.step("the transferred inventory is still served beside the client's writes", async () => {
+    expect(writes.length).toBe(2);
+    await expectInventoryRetained(endpoint, {
+      did,
+      inventory: run.inventory,
+      writes,
     });
-    await expect(page.getByRole("status")).toHaveText(
-      "Authorization refreshed",
-    );
-    const refreshedAuthorization = await expectSdkWrite(page, sdk, {
-      ...identity,
-      endpoint,
-      text: `Refreshed ${unique}`,
-    });
-    expect(
-      refreshedAuthorization !== originalAuthorization,
-      "write used a different access token",
-    ).toBe(true);
   });
+  await nodes.stage(
+    "revocation",
+    0,
+    did,
+    () => revokeBrowserSession(page, identity),
+    { page },
+  );
+  // Its authorization starts on the client's origin and redirects into the
+  // issuer, which a route does not follow: pinned by extra headers instead.
+  await nodes.stage(
+    "confidential client",
+    1,
+    did,
+    () => authorizeConfidentialClient(page, identity, endpoint),
+    { page, via: "headers" },
+  );
+  if (nodes.enabled) {
+    const [session, authorization] = [
+      "email-code session",
+      "authorization",
+    ].map((name) => nodes.stages.find(({ stage }) => stage === name));
+    expect(
+      authorization.instanceId,
+      "session and code exchange on one node",
+    ).toBe(session.instanceId);
+    nodes.expectAlternation(
+      ["authorization", "grant refresh", "revocation", "confidential client"],
+      did,
+    );
+    reportNodes();
+  }
+});
+
+async function revokeBrowserSession(page, identity) {
   await test.step("revocation removes the browser SDK client's server session", async () => {
     const account = await page.context().newPage();
     await account.goto(`${config.issuer}/account`);
@@ -541,7 +748,9 @@ test("destination OTP and independent browser OAuth retain access after the move
     await expect(sdkSession).toHaveCount(0);
     await account.close();
   });
+}
 
+async function authorizeConfidentialClient(page, identity, endpoint) {
   await test.step("the separate confidential client authorizes and writes as the migrated DID", async () => {
     await confidential.beginAuthorization(page, {
       identifier: identity.handle,
@@ -556,7 +765,7 @@ test("destination OTP and independent browser OAuth retain access after the move
       { text: `Confidential ${unique}` },
     );
   });
-});
+}
 
 // Source and destination sessions are independent cutover observations. Keep
 // the source refusal last so it cannot mask the destination access results.

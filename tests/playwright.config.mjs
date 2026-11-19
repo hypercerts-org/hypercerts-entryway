@@ -7,6 +7,10 @@ const publicRun = process.env.PUBLIC_BROWSER_TESTS === "true";
 const allShapes = process.env.INCOMING_PUBLIC_SHAPES === "1";
 const incomingJourney =
   allShapes || process.env.INCOMING_PUBLIC_JOURNEY === "1";
+// The same journey on the two-node PostgreSQL profile, once per node order, is
+// selected only by `./tests/local.sh incoming-two-node`. One-off evidence, not
+// a CI gate.
+const twoNode = process.env.INCOMING_TWO_NODE === "1";
 // The goat journey is selected only by `./tests/local.sh incoming-goat-journey`.
 const goatJourney = process.env.INCOMING_GOAT_JOURNEY === "1";
 const defaultMatch = [
@@ -42,7 +46,7 @@ if (
   throw new Error("Unknown incoming failure phase");
 // Every preparation flow displays the one-time arrival code. Do not copy
 // their DOM into failure reports.
-if (incomingJourney || goatJourney || mooverJourney || failures)
+if (incomingJourney || twoNode || goatJourney || mooverJourney || failures)
   process.env.PLAYWRIGHT_NO_COPY_PROMPT = "1";
 const selected = [
   [
@@ -60,6 +64,7 @@ const selected = [
     "incoming-moover-journey.spec.mjs",
   ],
   [goatJourney, "incoming-goat-journey", "incoming-goat-journey.spec.mjs"],
+  [twoNode, "incoming-two-node", "incoming-public-journey.spec.mjs"],
   [
     incomingJourney,
     allShapes ? "incoming-public-shapes" : "incoming-public-journey",
@@ -71,11 +76,19 @@ const artifactPrefix = selected?.[1] ?? "browser";
 export default defineConfig({
   testDir: "./browser",
   testMatch: selected?.[2] ?? defaultMatch,
-  projects: allShapes
-    ? ["empty", "blob-free", "blob-bearing", "multi-collection"].map(
-        (shape) => ({ name: shape, metadata: { shape } }),
-      )
-    : undefined,
+  projects: twoNode
+    ? [
+        ["entryway", "entryway-replica"],
+        ["entryway-replica", "entryway"],
+      ].map((nodes) => ({
+        name: `${nodes[0]}-first`,
+        metadata: { nodes },
+      }))
+    : allShapes
+      ? ["empty", "blob-free", "blob-bearing", "multi-collection"].map(
+          (shape) => ({ name: shape, metadata: { shape } }),
+        )
+      : undefined,
   fullyParallel: false,
   workers: 1,
   retries: 0,

@@ -42,6 +42,8 @@ export async function expectSourceCutover(origin, source) {
   await expectDeactivatedWrite(origin, source.did, rotated.accessJwt);
 }
 
+// Returns the write's authorization header value, to tell access tokens apart
+// without printing them, and the written record's URI.
 export async function expectSdkWrite(page, sdk, { did, endpoint, text }) {
   expect(endpoint, "prepared endpoint must match the browser fixture PDS").toBe(
     sdk.config.pds[0].url,
@@ -64,7 +66,11 @@ export async function expectSdkWrite(page, sdk, { did, endpoint, text }) {
   expect(readback.origin, "SDK audience-derived readback endpoint").toBe(
     endpoint,
   );
-  return headers.authorization;
+  const { searchParams } = readback;
+  return {
+    authorization: headers.authorization,
+    uri: `at://${searchParams.get("repo")}/${searchParams.get("collection")}/${searchParams.get("rkey")}`,
+  };
 }
 
 export async function expectSdkAction(
@@ -86,4 +92,5 @@ export async function expectSdkAction(
     page.getByRole("button", { name: button }).click(),
   ]);
   expect(response.ok(), `${path} succeeded`).toBe(true);
+  return response;
 }
