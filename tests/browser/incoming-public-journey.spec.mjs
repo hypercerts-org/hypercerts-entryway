@@ -346,6 +346,14 @@ test("the client transfers its chosen state directly between the pinned endpoint
     )
   )
     await expectMalformedImportsRefused();
+  // The revision, not the commit CID: an import always writes a new revision.
+  const { repoRev: revBefore } = await destinationRead(
+    "com.atproto.server.checkAccountStatus",
+  );
+  expect(
+    typeof revBefore === "string" && revBefore.length > 0,
+    "destination revision before import",
+  ).toBe(true);
   const imported = await call(
     run.prepared.destinationEndpoint,
     "com.atproto.repo.importRepo",
@@ -384,6 +392,7 @@ test("the client transfers its chosen state directly between the pinned endpoint
   ).toEqual([]);
   expect(status.activated).toBe(false);
   expect(status.repoCommit).toBeTruthy();
+  expect(status.repoRev, "import wrote a new revision").not.toBe(revBefore);
 });
 
 test("the tracked credential refreshes, then activates through the stock destination callback", async () => {
