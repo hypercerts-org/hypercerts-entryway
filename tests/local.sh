@@ -98,7 +98,7 @@ case "$command" in
     }
     trap 'stop_groups; exit 130' INT
     trap 'stop_groups; exit 143' TERM
-    start_group incoming incoming-public-journey
+    start_group incoming incoming-public-journey incoming-public-failures
     start_group journeys browser contracts resilience
     start_group migration migration interop-acceptance
     start_group faults plc-recovery process-crash managed-recovery authority-drills

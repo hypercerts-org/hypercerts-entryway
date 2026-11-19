@@ -66,7 +66,8 @@ esac
         incoming = workflow.split("\n  incoming:\n", 1)[1].split("\n  databases:\n", 1)[0]
         steps = ["run: *package-network-diagnostics", "ci-ownership.py register",
                  "run: bash tests/local.sh prepare", "run: bash tests/local.sh up",
-                 "run: bash tests/local.sh incoming-public-journey", "if: always()",
+                 "run: bash tests/local.sh incoming-public-journey",
+                 "run: bash tests/local.sh incoming-public-failures", "if: always()",
                  "ci-ownership.py cleanup"]
         positions = [incoming.index(step) for step in steps]
         self.assertEqual(positions, sorted(positions))
