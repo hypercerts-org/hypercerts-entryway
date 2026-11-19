@@ -3,7 +3,9 @@ import { defineConfig } from "@playwright/test";
 const publicRun = process.env.PUBLIC_BROWSER_TESTS === "true";
 // The incoming public journey needs an owned sandbox's access projection, so
 // only `./tests/local.sh incoming-public-journey` selects it.
-const incomingJourney = process.env.INCOMING_PUBLIC_JOURNEY === "1";
+const allShapes = process.env.INCOMING_PUBLIC_SHAPES === "1";
+const incomingJourney =
+  allShapes || process.env.INCOMING_PUBLIC_JOURNEY === "1";
 // The goat journey is selected only by `./tests/local.sh incoming-goat-journey`.
 const goatJourney = process.env.INCOMING_GOAT_JOURNEY === "1";
 const defaultMatch = [
@@ -39,7 +41,7 @@ const selected = [
   [goatJourney, "incoming-goat-journey", "incoming-goat-journey.spec.mjs"],
   [
     incomingJourney,
-    "incoming-public-journey",
+    allShapes ? "incoming-public-shapes" : "incoming-public-journey",
     "incoming-public-journey.spec.mjs",
   ],
   [publicRun, "public-browser", "public-browser.spec.mjs"],
@@ -48,6 +50,11 @@ const artifactPrefix = selected?.[1] ?? "browser";
 export default defineConfig({
   testDir: "./browser",
   testMatch: selected?.[2] ?? defaultMatch,
+  projects: allShapes
+    ? ["empty", "blob-free", "blob-bearing", "multi-collection"].map(
+        (shape) => ({ name: shape, metadata: { shape } }),
+      )
+    : undefined,
   fullyParallel: false,
   workers: 1,
   retries: 0,
