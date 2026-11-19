@@ -205,6 +205,29 @@ export async function browserPost(page, config, path, body, { form } = {}) {
 export const incomingPost = (page, config, path, body) =>
   browserPost(page, config, path, body);
 
+/** Whether this browser holds a verified session, without following a
+ * redirect: /incoming answers 200 with one and 303 to /login without. */
+export async function sessionProbe(page, config) {
+  const response = await page.request.get(
+    new URL("/incoming", config.issuer).href,
+    { maxRedirects: 0, failOnStatusCode: false },
+  );
+  return {
+    status: response.status(),
+    location: response.headers().location ?? null,
+  };
+}
+
+/** A handle's /.well-known/atproto-did answer: the status and, on 200, the DID. */
+export async function wellKnownDid(handle) {
+  const response = await fetch(`https://${handle}/.well-known/atproto-did`, {
+    redirect: "error",
+    signal: AbortSignal.timeout(15_000),
+  });
+  const text = await response.text();
+  return { status: response.status, did: response.ok ? text.trim() : null };
+}
+
 /** The saved user's own arrival as the /incoming status page shows it. */
 export async function arrivalSummary(page, config, operationId) {
   const url = new URL("/incoming", config.issuer);

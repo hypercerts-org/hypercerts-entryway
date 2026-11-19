@@ -28,9 +28,11 @@ import {
   refreshAtEntryway,
   refusal,
   serviceAuth,
+  sessionProbe,
   signHandoff,
   signInByEmail,
   transferAndActivate,
+  wellKnownDid,
 } from "../support/helpers/incoming-failures.mjs";
 import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
 
@@ -140,6 +142,7 @@ test("expired and foreign source proofs are refused before admission, then a fre
       exp,
     });
     const claims = jwtClaims(jwt);
+    expect(claims.aud, "audience is this Entryway").toBe(config.serviceDid);
     expect(
       claims.exp === exp &&
         claims.iss === did &&
@@ -247,20 +250,41 @@ test("the pending account's console shows only the pending page and refuses its 
 
 // Documented (docs/incoming-migration.md, "Pending guard"): browser email
 // sign-in still succeeds for a pending arrival, creates a session and shows the
-// pending page. Observed on this tree: /auth/verify answers 404 "Account not
-// found" and commits no session, because the login resolution syncs email
-// verification through an account lookup that refuses `provisioning` accounts
-// (src/features/account-settings/security.mjs, assertLoginEmail, and
-// src/database/drizzle/account-authority.mjs, `account`). The documented
-// behaviour stays asserted and is marked as a known failure until it is fixed;
-// an unexpected pass fails the run.
+// pending page. Observed on this tree: /auth/verify answers 404 "Unable to
+// continue" ("Account not found") and commits no session, for `/login` and for
+// the OAuth sign-in alike. Cause: assertLoginEmail
+// (src/features/account-settings/security.mjs) calls
+// syncBoundAccountEmailVerification, whose account() lookup
+// (src/database/drizzle/account-authority.mjs) refuses `provisioning` accounts.
+// Ordinary tests pin what is observed, so any change fails them; the documented
+// behaviour is asserted separately under test.fail, so an unexpected pass fails
+// the run once the defect is fixed.
+const knownDefect =
+  "known defect: pending-account email sign-in answers 404 AccountNotFound (security.mjs assertLoginEmail, syncBoundAccountEmailVerification, account-authority.mjs account() refuses provisioning)";
+const noSession = { status: 303, location: "/login" };
+
+test("observed today: email-code sign-in of a pending account answers 404 Unable to continue and creates no session", async ({
+  page,
+}) => {
+  // Positive control for the session probe: the owner's verified session.
+  expect(await sessionProbe(owner, config)).toEqual({
+    status: 200,
+    location: null,
+  });
+  const shown = await signInByEmail(page, config, destinationEmail);
+  expect(shown.status).toBe(404);
+  await expect(shown.heading).toHaveText("Unable to continue");
+  await expect(
+    page.getByText("Account not found", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText(pendingText)).toHaveCount(0);
+  expect(await sessionProbe(page, config)).toEqual(noSession);
+});
+
 test("email-code sign-in of a pending account succeeds and shows the pending notice", async ({
   page,
 }) => {
-  test.fail(
-    true,
-    "known defect: pending-account email sign-in answers 404 AccountNotFound",
-  );
+  test.fail(true, knownDefect);
   const shown = await signInByEmail(page, config, destinationEmail);
   expect(shown.status).toBe(200);
   await expect(page.getByText(pendingText)).toBeVisible();
@@ -273,17 +297,61 @@ test("email-code sign-in of a pending account succeeds and shows the pending not
   ).toBe(arrivalStates.pausedPending);
 });
 
-test("OAuth authorization of the pending account never reaches consent", async ({
+/** The browser SDK client authorizes by DID through Entryway's email-code
+ * step. Returns the status of Entryway's answer to the code. */
+async function authorizeByDid(client) {
+  await client.goto(sdk.browserUrl);
+  await expect(
+    client.getByRole("heading", { name: "Entryway browser client" }),
+  ).toBeVisible();
+  await client.getByLabel("Handle", { exact: true }).fill(run.source.did);
+  const since = Date.now();
+  await client.getByRole("button", { name: "Continue" }).click();
+  const signIn = client.getByRole("heading", {
+    name: "Sign in to authorize",
+  });
+  const codeStep = client.getByRole("heading", { name: "Check your email" });
+  await expect(signIn.or(codeStep)).toBeVisible();
+  if (await signIn.isVisible()) {
+    await client.getByLabel("Email address").fill(destinationEmail);
+    await client.getByRole("button", { name: "Send sign-in code" }).click();
+    await expect(codeStep).toBeVisible();
+  }
+  const { code } = await waitForMailpitCode({
+    recipient: destinationEmail,
+    since,
+  });
+  await sdk.enterSignInCode(client, code);
+  const [verified] = await Promise.all([
+    client.waitForResponse(
+      (response) =>
+        response.url().endsWith("/auth/verify") &&
+        response.request().method() === "POST",
+    ),
+    client.getByRole("button", { name: "Verify code" }).click(),
+  ]);
+  expect(new URL(client.url()).origin).toBe(new URL(config.issuer).origin);
+  return verified.status();
+}
+
+const noConsent = async (client) => {
+  await expect(client.locator('form[action="/auth/consent"]')).toHaveCount(0);
+  await expect(
+    client.getByRole("button", { name: "Allow access" }),
+  ).toHaveCount(0);
+};
+
+test("observed today: OAuth authorization of the pending account cannot start by handle and by DID answers 404 Unable to continue after the code", async ({
   page: client,
 }) => {
   await test.step("the destination handle does not resolve while the account is pending", async () => {
     // Entryway's handle endpoint answers 404 for a provisioning account
-    // (src/app.mjs, /.well-known/atproto-did), so a client cannot start.
-    const wellKnown = await fetch(
-      `https://${run.destinationHandle}/.well-known/atproto-did`,
-      { redirect: "error", signal: AbortSignal.timeout(15_000) },
-    );
-    expect(wellKnown.status).toBe(404);
+    // (src/app.mjs, /.well-known/atproto-did), so a client cannot start. The
+    // activation test below is its positive control.
+    expect(await wellKnownDid(run.destinationHandle)).toEqual({
+      status: 404,
+      did: null,
+    });
     await client.goto(sdk.browserUrl);
     await client
       .getByLabel("Handle", { exact: true })
@@ -292,37 +360,31 @@ test("OAuth authorization of the pending account never reaches consent", async (
     await expect(client.locator("#login-form-error")).not.toBeEmpty();
     expect(new URL(client.url()).origin).toBe(sdk.browserUrl);
   });
-  await test.step("by DID, Entryway's email-code step is followed by no consent", async () => {
-    await client.goto(sdk.browserUrl);
+  await test.step("by DID, the code gets 404 Unable to continue, no consent and no session", async () => {
+    // The consent guard (src/features/oauth-authorization/consent.mjs) is not
+    // reached: sign-in fails first.
+    expect(await authorizeByDid(client)).toBe(404);
+    await expect(client.locator("h1")).toHaveText("Unable to continue");
     await expect(
-      client.getByRole("heading", { name: "Entryway browser client" }),
+      client.getByText("Account not found", { exact: true }),
     ).toBeVisible();
-    await client.getByLabel("Handle", { exact: true }).fill(run.source.did);
-    const since = Date.now();
-    await client.getByRole("button", { name: "Continue" }).click();
-    const signIn = client.getByRole("heading", {
-      name: "Sign in to authorize",
-    });
-    const codeStep = client.getByRole("heading", { name: "Check your email" });
-    await expect(signIn.or(codeStep)).toBeVisible();
-    if (await signIn.isVisible()) {
-      await client.getByLabel("Email address").fill(destinationEmail);
-      await client.getByRole("button", { name: "Send sign-in code" }).click();
-      await expect(codeStep).toBeVisible();
-    }
-    const { code } = await waitForMailpitCode({
-      recipient: destinationEmail,
-      since,
-    });
-    await sdk.enterSignInCode(client, code);
-    await client.getByRole("button", { name: "Verify code" }).click();
-    await expect(client.locator("h1")).not.toHaveText("Check your email");
-    expect(new URL(client.url()).origin).toBe(new URL(config.issuer).origin);
-    await expect(client.locator('form[action="/auth/consent"]')).toHaveCount(0);
-    await expect(
-      client.getByRole("button", { name: "Allow access" }),
-    ).toHaveCount(0);
+    await noConsent(client);
+    expect(await sessionProbe(client, config)).toEqual(noSession);
   });
+});
+
+test("OAuth sign-in of the pending account succeeds and is refused consent with the pending notice", async ({
+  page: client,
+}) => {
+  test.fail(true, knownDefect);
+  // Accepted sign-in: the signup page's pending notice (200) or the consent
+  // guard's page (409). Today this first assertion fails, with 404.
+  expect([200, 409], "sign-in accepted").toContain(
+    await authorizeByDid(client),
+  );
+  await expect(client.getByText(pendingText)).toBeVisible();
+  await noConsent(client);
+  expect((await sessionProbe(client, config)).status).toBe(200);
 });
 
 test("recovery with a fresh code replaces the lost credentials and revokes the earlier family", async () => {
@@ -395,6 +457,11 @@ test("the replacement credentials complete the move, and without a recovery key 
     did: run.source.did,
     inventory: run.inventory,
     handle: run.destinationHandle,
+  });
+  // Positive control for the pending account's 404 at the handle endpoint.
+  expect(await wellKnownDid(run.destinationHandle)).toEqual({
+    status: 200,
+    did: run.source.did,
   });
   // The no-recovery-key control for the public journey's key-ordering check.
   expect((await plcData(access, run.source.did)).rotationKeys).toEqual(
@@ -485,6 +552,10 @@ test("an arrival whose destination email an account took after preparation is re
         status: 409,
         error: "EmailNotAvailable",
       });
+      expect(
+        await arrivalSummary(page, config, prepared.operationId),
+        "earlier arrival unchanged",
+      ).toEqual(saved);
     });
     await test.step("the existing account keeps its DID, handle, email and identity", async () => {
       const shown = await signup.goto(`${config.issuer}/account`);
