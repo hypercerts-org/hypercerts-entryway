@@ -29,7 +29,8 @@ import { Secp256k1Keypair } from "@atproto/crypto";
 import { waitForStockPlcMessage } from "../support/helpers/stock-plc-mailpit.mjs";
 
 // Public incoming-migration journey, run only by `./tests/local.sh
-// incoming-public-journey` inside an owned sandbox. Entryway is reached only
+// incoming-public-journey` (one shape) or `incoming-public-shapes` (four) inside
+// an owned sandbox. Entryway is reached only
 // through its public browser pages and XRPC routes. The source is the standalone
 // stock PDS, the destination is a stock PDS behind Entryway, mail is read from
 // Mailpit, and nothing seeds authority rows or calls a private fixture. The

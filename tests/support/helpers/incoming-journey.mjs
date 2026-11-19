@@ -346,9 +346,10 @@ export async function expectDestinationServes(
 
 /**
  * Registers the two opening steps every incoming journey shares: a standalone
- * source account with a record and a blob, then the browser email proof and
- * arrival preparation. `context` returns the sandbox access and service config
- * loaded by the spec's own `beforeAll`; `onPrepared` runs after preparation.
+ * source account seeded for the selected repository shape (by default a profile
+ * and its avatar blob), then the browser email proof and arrival preparation.
+ * `context` returns the sandbox access and service config loaded by the spec's
+ * own `beforeAll`; `onPrepared` runs after preparation.
  */
 export function registerArrivalSetup(
   test,

@@ -143,8 +143,10 @@ suite does not establish.
 
 After `up`, this runs the one Playwright spec
 `tests/browser/incoming-public-journey.spec.mjs` in the owned project's browser
-container, selected by `INCOMING_PUBLIC_JOURNEY=1`; the default browser run does not
-include it. It uses the standalone stock source PDS, a stock destination behind
+container, selected by `INCOMING_PUBLIC_JOURNEY=1` for the one default shape or by
+`INCOMING_PUBLIC_SHAPES=1` for all four shapes as separate Playwright projects (the
+`incoming-public-shapes` command sets it); the default browser run does not include
+it. It uses the standalone stock source PDS, a stock destination behind
 Entryway, Mailpit and managed TLS, and reaches Entryway only through its public
 browser pages and XRPC routes: a browser-verified destination email, an
 arrival code, a source-signed handoff, creation returning tracked credentials, a
@@ -153,11 +155,12 @@ through the stock destination's `activateAccount`, which forwards to Entryway. I
 seeds no authority rows and calls no private fixture. The client chooses what to
 transfer and when to activate. Before cutover, the client checks the seeded inventory, verifies the exported CAR for the DID and checks the commit signature against the source's PLC signing key. After activation, it compares all record URIs, values and CIDs and all blob CIDs and bytes before OAuth writes. Source writes after export are outside this client-managed contract.
 
-The per-PR job uses a blob-bearing profile. For all four shapes, run `./tests/local.sh fresh-group incoming-public-shapes` (or `./tests/local.sh incoming-public-shapes` after `up`). The same full journey runs serially for empty, blob-free, blob-bearing and multi-collection repositories. For a referenced blob, it checks that the destination reports the missing CID before upload and complete counts afterwards. Before the valid import, the multi-collection journey also sends the paused destination three malformed copies of its own verified export and requires each refusal to leave the destination's status and export unchanged. As observed on the pinned stock PDS (0.5.36): a record block altered under its CID and a CAR cut inside a block both get 500 `InternalServerError`; a CAR ending before its final record block gets 400 `InvalidRequest`. The refusals are stock PDS behaviour, pinned so that a PDS upgrade changing them is noticed. List the
-spec without a sandbox to verify discovery:
+The per-PR job uses a blob-bearing profile. For all four shapes, run `./tests/local.sh fresh-group incoming-public-shapes` (or `./tests/local.sh incoming-public-shapes` after `up`). The same full journey runs serially for empty, blob-free, blob-bearing and multi-collection repositories. For a referenced blob, it checks that the destination reports the missing CID before upload and complete counts afterwards. Every shape records the destination's `checkAccountStatus` revision before the valid import and requires a different one afterwards, so an import of an empty repository is told apart from a no-op. Before the valid import, the blob-bearing journey (so every per-PR run) and the multi-collection journey also send the paused destination three malformed copies of their own verified export and require each refusal to leave the destination's status and export unchanged. As observed on the pinned stock PDS (0.5.36): a record block altered under its CID and a CAR cut inside a block both get 500 `InternalServerError`; a CAR ending before its final record block gets 400 `InvalidRequest`. The 500s are the generic answer to an error thrown while the PDS reads the CAR (`verifyIncomingCarBlocks`), not an integrity-specific status. The refusals are stock PDS behaviour, pinned in the per-PR `incoming` job so that a PDS upgrade changing them fails CI. The byte surgery itself has a native test, `tests/support/helpers/incoming-journey.test.mjs`. List the
+spec without a sandbox to verify discovery of either selection:
 
 ```sh
 INCOMING_PUBLIC_JOURNEY=1 npx playwright test --config tests/playwright.config.mjs --list
+INCOMING_PUBLIC_SHAPES=1 npx playwright test --config tests/playwright.config.mjs --list
 ```
 
 `fresh-group incoming-public-mechanisms incoming-public-journey contracts` runs the
@@ -478,7 +481,8 @@ npm run test:ci-lifecycle
 ```
 
 The explicit helper script covers `stock-plc-mailpit.test.mjs`,
-`incoming-public-io.test.mjs` and `tests/atmosphere/project-incoming-access.test.mjs`.
+`incoming-public-io.test.mjs`, `incoming-journey.test.mjs` and
+`tests/atmosphere/project-incoming-access.test.mjs`.
 The native CI checks job runs it separately: helper files are not contract-discovered.
 The unit allowlist includes incoming storage, admission, handoff and composition.
 The separate native CI script `test:incoming-reconciliation` runs fresh-process
@@ -500,7 +504,7 @@ for stock runtime evidence. Do not invent a host database URL or report these
 commands as executed from native CI alone. The [public journey](../tests/flows/incoming-public-migration.md)
 checks the chosen repository shape, activation and post-move access. Additional qualification
 under the [accepted C4 contract](incoming-migration.md#c4-client-managed-migration-contract-accepted)
-remains outstanding: malformed-import behavior, authorization and refusal across every pending-arrival activation entrypoint, and
+remains outstanding: authorization and refusal across every pending-arrival activation entrypoint, and
 interrupted/lost-response recovery. Preserve canonical
 identity/custody, placement, saved-user binding, backend-state and durable-owner
 checks; do not require the abandoned final-source certification or global write

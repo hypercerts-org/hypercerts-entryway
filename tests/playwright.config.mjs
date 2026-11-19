@@ -2,7 +2,8 @@ import { defineConfig } from "@playwright/test";
 
 const publicRun = process.env.PUBLIC_BROWSER_TESTS === "true";
 // The incoming public journey needs an owned sandbox's access projection, so
-// only `./tests/local.sh incoming-public-journey` selects it.
+// only `./tests/local.sh incoming-public-journey` (the blob-bearing shape) and
+// `./tests/local.sh incoming-public-shapes` (all four shapes) select it.
 const allShapes = process.env.INCOMING_PUBLIC_SHAPES === "1";
 const incomingJourney =
   allShapes || process.env.INCOMING_PUBLIC_JOURNEY === "1";
