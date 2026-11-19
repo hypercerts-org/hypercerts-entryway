@@ -29,11 +29,31 @@ const defaultMatch = [
 ];
 // The PDS MOOver journey is selected only by `./tests/local.sh incoming-moover-journey`.
 const mooverJourney = process.env.INCOMING_MOOVER_JOURNEY === "1";
-// All three preparation flows display the one-time arrival code. Do not copy
+// The incoming failure cases and the two halves of the restart case are
+// selected only by `./tests/local.sh incoming-public-failures`, which runs each
+// phase separately and restarts Entryway between the restart halves. Each
+// phase writes its own reports.
+const failures = process.env.INCOMING_PUBLIC_FAILURES === "1";
+const failurePhase = process.env.INCOMING_FAILURES_PHASE ?? "cases";
+if (
+  failures &&
+  !["cases", "before-restart", "after-restart"].includes(failurePhase)
+)
+  throw new Error("Unknown incoming failure phase");
+// Every preparation flow displays the one-time arrival code. Do not copy
 // their DOM into failure reports.
-if (incomingJourney || goatJourney || mooverJourney)
+if (incomingJourney || goatJourney || mooverJourney || failures)
   process.env.PLAYWRIGHT_NO_COPY_PROMPT = "1";
 const selected = [
+  [
+    failures,
+    failurePhase === "cases"
+      ? "incoming-public-failures"
+      : `incoming-public-failures-${failurePhase}`,
+    failurePhase === "cases"
+      ? "incoming-public-failures.spec.mjs"
+      : "incoming-public-restart.spec.mjs",
+  ],
   [
     mooverJourney,
     "incoming-moover-journey",
