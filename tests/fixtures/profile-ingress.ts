@@ -7,7 +7,11 @@ const count = Number(process.env.PROFILE_NODE_COUNT);
 if (count !== 1 && count !== 2) throw new Error("InvalidProfileNodeCount");
 const nodes = ["entryway", ...(count === 2 ? ["entryway-replica"] : [])];
 const states = new Map<string, { ready: boolean; instanceId: string | null }>();
+// `id` orders receipts across the bounded window; `pinned` says whether the
+// caller selected the node with `x-profile-node` or the ingress balanced it.
 const receipts: {
+  id: number;
+  pinned: boolean;
   method: string;
   path: string;
   node: string;
@@ -15,6 +19,7 @@ const receipts: {
   status: number;
 }[] = [];
 let sequence = 0;
+let received = 0;
 let probing: Promise<void> | undefined;
 function probe() {
   if (probing) return probing;
@@ -111,6 +116,8 @@ createServer(async (incoming, outgoing) => {
           ? response.headers["x-entryway-instance"]
           : null;
       receipts.push({
+        id: ++received,
+        pinned: typeof selected === "string",
         method: incoming.method ?? "GET",
         path,
         node,
