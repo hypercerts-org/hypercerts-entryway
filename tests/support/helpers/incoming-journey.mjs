@@ -235,7 +235,7 @@ export async function createSourceAccount(
       ...(avatar ? { avatar } : {}),
     });
   if (shape === "multi-collection")
-    for (const rkey of ["first", "second"])
+    for (const rkey of ["3mznesxxhic2e", "3mznesxxhic2f"])
       await put(rkey, {
         $type: "app.bsky.feed.post",
         text: rkey,
