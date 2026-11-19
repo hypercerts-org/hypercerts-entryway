@@ -324,12 +324,15 @@ export async function createSourceAccount(
   return { source, inventory, handle };
 }
 
-// The destination serves the record and the blob byte for byte, and the PLC
-// directory names the destination endpoint and handle.
+// The destination, which is not the source, serves every seeded record and blob
+// byte for byte, and the PLC directory names the destination endpoint and handle.
 export async function expectDestinationServes(
   access,
   { endpoint, did, inventory, handle },
 ) {
+  expect(new URL(endpoint).origin, "destination is not the source").not.toBe(
+    new URL(access.sourceUrl).origin,
+  );
   expect(await snapshot(endpoint, did)).toEqual(inventory);
   const document = await (
     await fetch(new URL(`/${did}`, access.plcUrl))
