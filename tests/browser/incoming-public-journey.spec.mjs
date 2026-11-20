@@ -15,6 +15,8 @@ import {
 import {
   expectSdkAction,
   expectSdkWrite,
+  matchesGrant,
+  tokenGrant,
   expectSourceCutover,
 } from "../support/helpers/incoming-post-move.mjs";
 import {
@@ -392,6 +394,9 @@ test("the client transfers its chosen state directly between the pinned endpoint
   ).toEqual([]);
   expect(status.activated).toBe(false);
   expect(status.repoCommit).toBeTruthy();
+  expect(status.repoRev, "destination revision after import").toEqual(
+    expect.stringMatching(/.+/),
+  );
   expect(status.repoRev, "import wrote a new revision").not.toBe(revBefore);
 });
 
@@ -479,8 +484,11 @@ test("destination OTP and independent browser OAuth retain access after the move
   const endpoint = run.prepared.destinationEndpoint;
   await test.step("destination email OTP returns the source DID", () =>
     sdk.signInAccount(page, identity));
-  await test.step("destination handle prompts for consent and #issuer names Entryway", () =>
-    sdk.authorizeBrowserApp(page, identity));
+  const [exchange] = await Promise.all([
+    page.waitForResponse(tokenGrant(config.issuer, "authorization_code")),
+    test.step("destination handle prompts for consent and #issuer names Entryway", () =>
+      sdk.authorizeBrowserApp(page, identity)),
+  ]);
   const originalAuthorization =
     await test.step("DPoP write is read back at the SDK audience on the prepared destination", () =>
       expectSdkWrite(page, sdk, {
@@ -488,10 +496,14 @@ test("destination OTP and independent browser OAuth retain access after the move
         endpoint,
         text: `Migrated ${unique}`,
       }));
+  expect(
+    matchesGrant(originalAuthorization, await exchange.json()),
+    "write uses the authorization-code access token",
+  ).toBe(true);
   await page.reload();
   await expect(page.locator("#verified-did")).toHaveText(identity.did);
   await test.step("successful token refresh followed by a refreshed-session write", async () => {
-    await expectSdkAction(page, {
+    const refreshed = await expectSdkAction(page, {
       issuer: config.issuer,
       path: "/oauth/token",
       button: "Refresh authorization",
@@ -505,6 +517,10 @@ test("destination OTP and independent browser OAuth retain access after the move
       endpoint,
       text: `Refreshed ${unique}`,
     });
+    expect(
+      matchesGrant(refreshedAuthorization, await refreshed.json()),
+      "write uses the refreshed access token",
+    ).toBe(true);
     expect(
       refreshedAuthorization !== originalAuthorization,
       "write used a different access token",
