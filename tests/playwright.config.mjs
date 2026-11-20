@@ -55,7 +55,10 @@ const selected = [
       ? "incoming-public-failures"
       : `incoming-public-failures-${failurePhase}`,
     failurePhase === "cases"
-      ? "incoming-public-failures.spec.mjs"
+      ? [
+          "incoming-public-failures.spec.mjs",
+          "incoming-public-identity.spec.mjs",
+        ]
       : "incoming-public-restart.spec.mjs",
   ],
   [
