@@ -20,6 +20,7 @@ import {
   handoffMethod,
   incomingCall,
   browserPost,
+  destinationRepoStatus,
   incomingPost,
   inviteFields,
   jwtClaims,
@@ -31,6 +32,8 @@ import {
   sessionProbe,
   signHandoff,
   signInByEmail,
+  signUpOrdinary,
+  expectOrdinaryAccountUnchanged,
   transferAndActivate,
   wellKnownDid,
 } from "../support/helpers/incoming-failures.mjs";
@@ -494,26 +497,21 @@ test("an arrival whose destination email an account took after preparation is re
       handle: `d${tag}${domain}`,
       email,
     });
-    const existing = { handle: `e${tag}${domain}` };
     // A second browser of the same verified owner, which then holds the account.
     settings = await context.browser().newContext();
     const signup = await settings.newPage();
+    let existing;
     await test.step("the same verified owner signs up an ordinary account with that email", async () => {
       await signup.waitForTimeout(6_000);
-      const shown = await signInByEmail(signup, config, email);
-      await expect(shown.heading).toHaveText("Create your account");
-      await signup.getByLabel("Handle", { exact: true }).fill(existing.handle);
-      await signup
-        .getByLabel("Personal data server")
-        .selectOption(config.pds[0].id);
-      await signup.getByRole("button", { name: "Create account" }).click();
-      await expect(
-        signup.getByRole("heading", { name: "Account settings" }),
-      ).toBeVisible();
-      existing.did = await signup.getByTestId("account-did").textContent();
-      expect(existing.did).toMatch(/^did:plc:/);
-      existing.head = await plcHead(access, existing.did);
+      existing = await signUpOrdinary(signup, {
+        config,
+        access,
+        email,
+        handle: `e${tag}${domain}`,
+      });
     });
+    // The target-conflict case below reuses this hosted account.
+    run.hosted = { ...existing, email };
     const operation = await signHandoff(access, {
       source,
       sourceEmail: sourceAddress,
@@ -558,29 +556,149 @@ test("an arrival whose destination email an account took after preparation is re
       ).toEqual(saved);
     });
     await test.step("the existing account keeps its DID, handle, email and identity", async () => {
-      const shown = await signup.goto(`${config.issuer}/account`);
-      expect(shown.status()).toBe(200);
-      await expect(signup.getByTestId("account-did")).toHaveText(existing.did);
-      await expect(signup.getByTestId("account-handle")).toHaveText(
-        existing.handle,
-      );
-      await expect(signup.getByTestId("primary-email")).toHaveText(
-        `${email} (verified)`,
-      );
-      expect(
-        isDeepStrictEqual(await plcHead(access, existing.did), existing.head),
-        "existing account PLC head unchanged",
-      ).toBe(true);
-      const resolved = await call(
-        config.issuer,
-        "com.atproto.identity.resolveHandle",
-        { params: { handle: existing.handle } },
-      );
-      expect(resolved.status).toBe(200);
-      expect(json(resolved).did).toBe(existing.did);
+      await expectOrdinaryAccountUnchanged(signup, {
+        config,
+        access,
+        account: existing,
+        email,
+      });
     });
   } finally {
     await settings?.close();
+    await context.close();
+  }
+});
+
+test("a destination handle or DID already hosted at the target is refused and the hosted accounts are unchanged", async ({
+  browser,
+}) => {
+  test.setTimeout(240_000);
+  const tag = id();
+  const email = `failure-target-${tag}@example.com`;
+  const sourceAddress = `failure-target-source-${tag}@example.com`;
+  const domain = config.handleDomains[0];
+  // Two accounts the target already hosts: the ordinary account from the case
+  // above, and the DID this file migrated in and activated.
+  const hosted = run.hosted;
+  const migrated = { did: run.source.did, handle: run.destinationHandle };
+  const identity = async (account) => ({
+    head: await plcHead(access, account.did),
+    resolved: await wellKnownDid(account.handle),
+  });
+  const hostedBefore = await identity(hosted);
+  const migratedBefore = await identity(migrated);
+  expect(hostedBefore.resolved).toEqual({ status: 200, did: hosted.did });
+  expect(migratedBefore.resolved).toEqual({ status: 200, did: migrated.did });
+  const context = await browser.newContext();
+  let taker;
+  try {
+    const page = await context.newPage();
+    const { source } = await createSourceAccount(access, {
+      unique: tag,
+      email: sourceAddress,
+      password: `Target-${randomUUID()}!`,
+      shape: "empty",
+    });
+    const handle = `d${tag}${domain}`;
+    const prepared = await prepareArrival(page, {
+      issuer: config.issuer,
+      mailpitUrl: access.mailpitUrl,
+      did: source.did,
+      handle,
+      email,
+    });
+    const before = await plcHead(access, source.did);
+    const saved = await arrivalSummary(page, config, prepared.operationId);
+    expect(saved.state).toBe(arrivalStates.prepared);
+    // A refused preparation keeps the user's earlier unclaimed one.
+    const refusedPreparation = async (fields, expected) => {
+      const otp = await freshIncomingCode(page, config, email);
+      const answer = await incomingPost(page, config, "/incoming/prepare", {
+        ...fields,
+        otp,
+      });
+      expect(refusal(answer)).toEqual(expected);
+      expect(
+        await arrivalSummary(page, config, prepared.operationId),
+        "earlier arrival unchanged",
+      ).toEqual(saved);
+    };
+    await test.step("a preparation with a handle the target hosts is refused with 409 HandleNotAvailable", async () => {
+      await refusedPreparation(
+        { did: source.did, handle: hosted.handle },
+        { status: 409, error: "HandleNotAvailable" },
+      );
+    });
+    await test.step("a preparation for the DID of an ordinary hosted account is refused with 409 IdentityConflict", async () => {
+      await refusedPreparation(
+        { did: hosted.did, handle: `g${tag}${domain}` },
+        { status: 409, error: "IdentityConflict" },
+      );
+    });
+    await test.step("a preparation for a DID already migrated in is refused with 409 IdentityConflict", async () => {
+      await refusedPreparation(
+        { did: migrated.did, handle: `h${tag}${domain}` },
+        { status: 409, error: "IdentityConflict" },
+      );
+    });
+    const operation = await signHandoff(access, {
+      source,
+      sourceEmail: sourceAddress,
+      handoff: prepared.handoff,
+    });
+    await test.step("an ordinary account takes the prepared handle", async () => {
+      taker = await browser.newContext();
+      const signup = await taker.newPage();
+      run.taker = await signUpOrdinary(signup, {
+        config,
+        access,
+        email: `failure-taker-${tag}@example.com`,
+        handle,
+      });
+    });
+    await test.step("the signed handoff is then refused with 409 HandleNotAvailable and nothing is published or claimed", async () => {
+      const refused = await incomingCall(config, handoffMethod, {
+        jwt: await serviceAuth(access, config, source, handoffMethod),
+        code: prepared.arrivalCode,
+        body: { operation },
+      });
+      expect(refusal(refused)).toEqual({
+        status: 409,
+        error: "HandleNotAvailable",
+      });
+      expect(
+        isDeepStrictEqual(await plcHead(access, source.did), before),
+        "source PLC head unchanged",
+      ).toBe(true);
+      expect(
+        await arrivalSummary(page, config, prepared.operationId),
+        "arrival not claimed",
+      ).toEqual(saved);
+    });
+    await test.step("the hosted accounts keep their identity", async () => {
+      for (const [account, earlier] of [
+        [hosted, hostedBefore],
+        [migrated, migratedBefore],
+      ])
+        expect(
+          isDeepStrictEqual(await identity(account), earlier),
+          `${account === hosted ? "ordinary" : "migrated"} account unchanged`,
+        ).toBe(true);
+      expect(
+        await destinationRepoStatus(
+          run.prepared.destinationEndpoint,
+          migrated.did,
+        ),
+      ).toEqual({ status: 200, error: null });
+      await expectOrdinaryAccountUnchanged(taker.pages()[0], {
+        config,
+        access,
+        account: run.taker,
+        email: `failure-taker-${tag}@example.com`,
+      });
+    });
+  } finally {
+    await taker?.close();
     await context.close();
   }
 });

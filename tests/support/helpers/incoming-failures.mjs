@@ -1,4 +1,5 @@
 import { expect } from "@playwright/test";
+import { isDeepStrictEqual } from "node:util";
 import { call, errorName, json, ok } from "./incoming-journey.mjs";
 import { waitForMailpitCode } from "./mailpit.mjs";
 import { waitForStockPlcMessage } from "./stock-plc-mailpit.mjs";
@@ -29,8 +30,9 @@ export async function serviceAuth(access, config, source, lxm, { exp } = {}) {
 export const jwtClaims = (jwt) =>
   JSON.parse(Buffer.from(jwt.split(".")[1], "base64url").toString("utf8"));
 
-/** Stock PLC confirmation by Mailpit, then the source signs the prepared facts. */
-export async function signHandoff(access, { source, sourceEmail, handoff }) {
+/** Stock PLC confirmation by Mailpit, then the source signs an operation on
+ * the DID's current head with the given fields (the others keep their values). */
+export async function signAtSource(access, { source, sourceEmail, fields }) {
   const since = Date.now();
   ok(
     await call(
@@ -51,17 +53,63 @@ export async function signHandoff(access, { source, sourceEmail, handoff }) {
     "com.atproto.identity.signPlcOperation",
     {
       token: source.accessJwt,
-      body: {
-        token: confirmation.token,
-        rotationKeys: handoff.rotationKeys,
-        alsoKnownAs: handoff.alsoKnownAs,
-        verificationMethods: handoff.verificationMethods,
-        services: handoff.services,
-      },
+      body: { token: confirmation.token, ...fields },
     },
   );
-  ok(signed, "signed handoff");
+  ok(signed, "source-signed PLC operation");
   return json(signed).operation;
+}
+
+/** The source signs the prepared handoff facts. */
+export const signHandoff = (access, { source, sourceEmail, handoff }) =>
+  signAtSource(access, {
+    source,
+    sourceEmail,
+    fields: {
+      rotationKeys: handoff.rotationKeys,
+      alsoKnownAs: handoff.alsoKnownAs,
+      verificationMethods: handoff.verificationMethods,
+      services: handoff.services,
+    },
+  });
+
+/** A user-requested handle change on the stock source. The stock PDS signs and
+ * publishes the PLC update itself with its rotation key, on top of the DID's
+ * current head, keeping every other field (including rotation keys). */
+export async function changeSourceHandle(access, source, label) {
+  const description = json(
+    await call(access.sourceUrl, "com.atproto.server.describeServer"),
+  );
+  const handle = `${label}${description.availableUserDomains[0]}`;
+  ok(
+    await call(access.sourceUrl, "com.atproto.identity.updateHandle", {
+      token: source.accessJwt,
+      body: { handle },
+    }),
+    "source updateHandle",
+  );
+  return handle;
+}
+
+/** The documented way out of an abandoned handoff: the source signs and
+ * submits an operation that restores the given rotation list. */
+export async function restoreSourceRotationKeys(
+  access,
+  { source, sourceEmail, rotationKeys },
+) {
+  const operation = await signAtSource(access, {
+    source,
+    sourceEmail,
+    fields: { rotationKeys },
+  });
+  ok(
+    await call(access.sourceUrl, "com.atproto.identity.submitPlcOperation", {
+      token: source.accessJwt,
+      body: { operation },
+    }),
+    "source submitPlcOperation",
+  );
+  return operation;
 }
 
 /** One tool request at Entryway with the arrival header. Returns the status,
@@ -93,6 +141,13 @@ export const refusal = ({ status, error }) => ({ status, error });
 export async function plcHead(access, did) {
   const response = await fetch(new URL(`/${did}/log/last`, access.plcUrl));
   expect(response.status, "PLC head status").toBe(200);
+  return response.json();
+}
+
+/** The DID's whole PLC audit log, so a test can show that nothing was added. */
+export async function plcAudit(access, did) {
+  const response = await fetch(new URL(`/${did}/log/audit`, access.plcUrl));
+  expect(response.status, "PLC audit status").toBe(200);
   return response.json();
 }
 
@@ -248,6 +303,8 @@ export async function arrivalSummary(page, config, operationId) {
     version: Number(fields.Version),
     did: fields.DID,
     state: await page.getByRole("status").first().textContent(),
+    // The page's "saved server request is unresolved" notice.
+    unresolved: (await page.getByRole("alert").count()) > 0,
   };
 }
 
@@ -260,6 +317,57 @@ export const arrivalStates = {
   pausedPending:
     "The destination account exists and is paused. It is not active: it cannot sign in to applications or be changed here until your migration tool finishes and activation is requested.",
 };
+
+/** An ordinary Entryway signup by email code with the given handle, in its
+ * own browser. Returns the new account's DID and its PLC head. */
+export async function signUpOrdinary(page, { config, access, email, handle }) {
+  const shown = await signInByEmail(page, config, email);
+  await expect(shown.heading).toHaveText("Create your account");
+  await page.getByLabel("Handle", { exact: true }).fill(handle);
+  await page.getByLabel("Personal data server").selectOption(config.pds[0].id);
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Account settings" }),
+  ).toBeVisible();
+  const did = await page.getByTestId("account-did").textContent();
+  expect(did).toMatch(/^did:plc:/);
+  return { did, handle, head: await plcHead(access, did) };
+}
+
+/** The account console still shows the same DID, handle and verified email,
+ * its PLC head is unchanged and Entryway resolves its handle to its DID. */
+export async function expectOrdinaryAccountUnchanged(
+  page,
+  { config, access, account, email },
+) {
+  const shown = await page.goto(`${config.issuer}/account`);
+  expect(shown.status()).toBe(200);
+  await expect(page.getByTestId("account-did")).toHaveText(account.did);
+  await expect(page.getByTestId("account-handle")).toHaveText(account.handle);
+  await expect(page.getByTestId("primary-email")).toHaveText(
+    `${email} (verified)`,
+  );
+  expect(
+    isDeepStrictEqual(await plcHead(access, account.did), account.head),
+    "existing account PLC head unchanged",
+  ).toBe(true);
+  const resolved = await call(
+    config.issuer,
+    "com.atproto.identity.resolveHandle",
+    { params: { handle: account.handle } },
+  );
+  expect(resolved.status).toBe(200);
+  expect(json(resolved).did).toBe(account.did);
+}
+
+/** The stock destination's repository status for a DID: status and error name
+ * only (`RepoNotFound` when it hosts no repository for it). */
+export async function destinationRepoStatus(endpoint, did) {
+  const response = await call(endpoint, "com.atproto.sync.getRepoStatus", {
+    params: { did },
+  });
+  return { status: response.status, error: errorName(response) };
+}
 
 /** Import, upload referenced blobs and activate through the stock destination
  * with the given tracked access token. */
