@@ -15,7 +15,7 @@ command=${1:-help}
 mkdir -p "$artifacts"
 # Phase identity comes from the controller, never from a command or request body.
 case "$command" in
-  fresh|fresh-group|prepare|up|contracts|database-contracts|database-dialects|resilience-profiles|database-profile|browser|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-goat-journey|incoming-moover-journey|incoming-arrival-live|migration|migration-resume|resilience|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|all|down|status|help) ;;
+  fresh|fresh-group|prepare|up|contracts|database-contracts|database-dialects|resilience-profiles|database-profile|browser|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-public-failures|incoming-goat-journey|incoming-moover-journey|incoming-arrival-live|migration|migration-resume|resilience|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|all|down|status|help) ;;
   *) echo 'code=UNKNOWN_PHASE'; exit 2 ;;
 esac
 printf 'phase=%s status=started\n' "$command"
@@ -98,7 +98,7 @@ case "$command" in
     }
     trap 'stop_groups; exit 130' INT
     trap 'stop_groups; exit 143' TERM
-    start_group incoming incoming-public-journey
+    start_group incoming incoming-public-journey incoming-public-failures
     start_group journeys browser contracts resilience
     start_group migration migration interop-acceptance
     start_group faults plc-recovery process-crash managed-recovery authority-drills
@@ -118,7 +118,7 @@ case "$command" in
     (( $# > 0 )) || { echo 'fresh-group needs at least one step' >&2; exit 2; }
     for step in "$@"; do
       case "$step" in
-        browser|contracts|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-goat-journey|incoming-moover-journey|database-contracts|migration|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience) ;;
+        browser|contracts|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-public-failures|incoming-goat-journey|incoming-moover-journey|database-contracts|migration|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience) ;;
         *) echo "Unknown fresh-group step: $step" >&2; exit 2 ;;
       esac
     done
@@ -253,6 +253,44 @@ case "$command" in
     # because it needs this project's access projection and mail capture.
     compose run --rm --no-deps --volume "$sandbox/incoming-access.json:/run/incoming-access.json:ro" -e INCOMING_ACCESS_PATH=/run/incoming-access.json -e "INCOMING_PROJECT=$project" -e "$selection=1" browser npx --no-install playwright test --config tests/playwright.config.mjs 2>&1 | tee "$artifacts/$command.log" | python3 "$root/scripts/ci-summary.py"
     ;;
+  incoming-public-failures)
+    require_state
+    prepare_incoming_access
+    # Specs run inside the browser container and cannot restart services, so
+    # the restart case runs as two browser phases with an Entryway restart in
+    # between. Its cross-phase state (source session, arrival code) is one file
+    # in a private directory outside the artifact directory, removed whatever
+    # the outcome.
+    failure_state=$(mktemp -d "$sandbox/.incoming-failures.XXXXXX")
+    trap 'result=$?; rm -rf -- "$failure_state" || (( result )) || result=1; printf "phase=%s status=finished exit=%s\n" "$command" "$result"; exit "$result"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    failures() {
+      printf 'failure-phase=%s status=started\n' "$1"
+      compose run --rm --no-deps --volume "$sandbox/incoming-access.json:/run/incoming-access.json:ro" --volume "$failure_state:/run/incoming-failures" -e INCOMING_ACCESS_PATH=/run/incoming-access.json -e "INCOMING_PROJECT=$project" -e INCOMING_PUBLIC_FAILURES=1 -e "INCOMING_FAILURES_PHASE=$1" -e INCOMING_FAILURES_STATE=/run/incoming-failures/restart.json browser npx --no-install playwright test --config tests/playwright.config.mjs 2>&1 | tee "$artifacts/incoming-public-failures-$1.log" | python3 "$root/scripts/ci-summary.py"
+    }
+    # The one Entryway container's start time, to prove the restart happened.
+    entryway_started() {
+      local id
+      id=$(compose ps --quiet entryway) || return 1
+      [[ -n "$id" && "$id" != *$'\n'* ]] || { echo 'Expected exactly one Entryway container' >&2; return 1; }
+      docker --context "$DOCKER_CONTEXT" inspect --format '{{.State.StartedAt}}' "$id"
+    }
+    # The restart halves run apart from the other cases and run even when a
+    # case fails; after-restart needs a passing before-restart. The command
+    # fails if any phase does.
+    cases=0
+    failures cases || cases=$?
+    failures before-restart
+    started=$(entryway_started)
+    compose restart entryway
+    compose up -d --wait entryway
+    restarted=$(entryway_started)
+    [[ -n "$started" && -n "$restarted" && "$restarted" != "$started" ]] || { echo 'code=RESTART_NOT_OBSERVED' >&2; exit 1; }
+    echo 'entryway-restart=observed'
+    failures after-restart
+    (( cases == 0 )) || exit "$cases"
+    ;;
   incoming-goat-journey)
     require_state
     prepare_incoming_access
@@ -366,7 +404,7 @@ JS
     deno task sandbox status
     ;;
   *)
-    echo 'Usage: ./tests/local.sh fresh|fresh-group <steps...>|prepare|up|browser|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-goat-journey|incoming-moover-journey|contracts|database-contracts|database-profile|resilience-profiles|migration|migration-resume|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience|all|status|down'
+    echo 'Usage: ./tests/local.sh fresh|fresh-group <steps...>|prepare|up|browser|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-public-failures|incoming-goat-journey|incoming-moover-journey|contracts|database-contracts|database-profile|resilience-profiles|migration|migration-resume|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience|all|status|down'
     echo 'all requires a fresh project fixture; down retains state and volumes. No implicit reset.'
     ;;
 esac

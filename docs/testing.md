@@ -18,7 +18,7 @@ installation and application runtime are separate phases.
 
 `fresh` runs four groups in parallel, each in its own disposable sandbox:
 `journeys` (browser, contracts, resilience), `migration` (external migration and
-interop profile), `incoming` (public incoming journey) and `faults` (PLC recovery, process crash, managed recovery,
+interop profile), `incoming` (public incoming journey, then its failure and restart cases) and `faults` (PLC recovery, process crash, managed recovery,
 authority drills). Steps within a group stay sequential: contracts and resilience
 read accounts and sessions created by the browser suite, and fault steps stop
 shared containers. Expect roughly four sandboxes' worth of CPU and memory.
@@ -49,6 +49,7 @@ and requires no host dependency install:
 | `./tests/local.sh contracts`                  | Run imported contract scenarios in the test container after up                                                                                                                                             |
 | `./tests/local.sh browser`                    | Run browser scenarios after up                                                                                                                                                                             |
 | `./tests/local.sh incoming-public-mechanisms` | Bounded stock public-mechanism contract test after up: standalone signup, Mailpit, PLC signing, inactive destination and reservation; offline checks plus live-gated cases, not a migration qualification  |
+| `./tests/local.sh incoming-public-failures`   | Public incoming failure cases after up, then a restart of Entryway between two admitted steps of a separate move; see below                                                                                |
 | `./tests/local.sh incoming-goat-journey`      | Second incoming client after up: the public goat CLI, patched to the Entryway incoming contract, migrates a fresh stock source account; see below                                                          |
 | `./tests/local.sh incoming-moover-journey`    | Third incoming client after up: a fork of the PDS MOOver web UI carrying the unmerged Entryway mode, driven in Chromium through the sandbox CORS ingress, migrates a fresh stock source account; see below |
 | `./tests/local.sh migration`                  | Fresh synthetic external-source migration, including two Entryway restarts                                                                                                                                 |
@@ -166,6 +167,83 @@ INCOMING_PUBLIC_SHAPES=1 npx playwright test --config tests/playwright.config.mj
 `fresh-group incoming-public-mechanisms incoming-public-journey contracts` runs the
 same steps in one disposable project. A skipped, synthetic or negative-control
 result is not a public qualification; report only an executed managed run.
+
+### Public incoming failure cases
+
+```sh
+./tests/local.sh incoming-public-failures
+```
+
+After `up`, this runs the public failure cases of the
+[incoming flow](../tests/flows/incoming-public-migration.md#failure-and-restart-cases)
+through the same public pages and XRPC routes as the journey, in three browser
+phases selected by `INCOMING_PUBLIC_FAILURES=1` and `INCOMING_FAILURES_PHASE`.
+Phase `cases` (`tests/browser/incoming-public-failures.spec.mjs`) needs no restart:
+an expired and a foreign source service JWT before admission, a destination email
+an account took after preparation, a discarded `createAccount` response recovered
+with `/incoming/recover`, the pending account before activation, and a move
+without a recovery key. Email-code sign-in of a pending account, at `/login` and
+in OAuth authorization, is documented to succeed and show the pending page; today
+it answers 404 "Unable to continue" with no session. Ordinary tests pin that
+observed page, so any change fails them, and two separate tests assert the
+documented behaviour under `test.fail`. Playwright counts those two as expected
+failures and the run as passed; an unexpected pass fails it. The phase result is
+the Playwright totals line and exit status. The summary filter
+(`scripts/ci-summary.py`) strips colour, so it prints these two titles with
+`status=failed`: Playwright marks an expected failure with a green cross. Read
+those two lines as expected failures, not as a failed run.
+
+Phases `before-restart` and `after-restart`
+(`tests/browser/incoming-public-restart.spec.mjs`) run apart from those cases: the
+first stops after the handoff is admitted and published, the controller restarts
+the Entryway service and waits for it, and the second renews the arrival code,
+replays the handoff and makes the first `createAccount`. Before that first
+creation it sends the same body with a JWT bound to `submitPlcOperation` and
+expects 403 `AccountMismatch`, which shows that no creation admission was saved
+(an exact replay of one would succeed without a credential). The controller reads
+the Entryway container's `.State.StartedAt` before and after the restart and fails
+with `code=RESTART_NOT_OBSERVED` unless it changed. This is a restart between
+admitted steps, not an interruption during provisioning. Both restart phases run
+even when phase `cases` fails, but `after-restart` runs only after a passing
+`before-restart`. The command fails if any phase fails.
+
+Specs run in the browser container and cannot restart services, so the restart
+case carries its state (the source session, arrival code and signed operation) in
+one 0600 file in a private `mktemp -d` directory inside the sandbox checkout,
+mounted only into those two runs. It is outside `ACCEPTANCE_REPORT_DIR`, never
+printed, and the controller removes it on every exit. Each phase writes its own
+Playwright reports (`incoming-public-failures`,
+`incoming-public-failures-before-restart`, `incoming-public-failures-after-restart`)
+and log. Sign-in and fresh email codes are entered through `evaluate`, and arrival
+codes travel only in the `Entryway-Arrival-Code` request header, so no step title
+carries them. Only statuses and error names of refused calls are asserted.
+
+Rate-limit headroom, from the source defaults (fixed 10-minute windows kept in the
+database, so the restart does not reset them): the target makes four
+`/incoming/prepare` requests (three in `cases`, one before the restart) against
+the per-IP signup budget of 30, and four `createAccount` requests with an arrival
+code (two in each half) against the per-IP `createAccount` budget of 30. Both
+budgets are shared with ordinary signup and with the journey that runs before in
+the same sandbox (one preparation, two creations). Handoff submission has no
+budget. Browser email sign-in has no per-IP budget. Its budget is five codes per
+address per window, and two automatic OAuth codes per DID. The busiest address,
+the `cases` destination email, gets up to five sign-in codes: preparation, the
+two pending `/login` sign-ins, and the two OAuth sign-ins if they fall back to
+the email form. That is the limit, so add no further sign-in to that address.
+Fresh incoming codes are limited to five per user per window; each user here
+asks for two.
+
+List the three selections without a sandbox:
+
+```sh
+INCOMING_PUBLIC_FAILURES=1 npx playwright test --config tests/playwright.config.mjs --list
+INCOMING_PUBLIC_FAILURES=1 INCOMING_FAILURES_PHASE=before-restart npx playwright test --config tests/playwright.config.mjs --list
+INCOMING_PUBLIC_FAILURES=1 INCOMING_FAILURES_PHASE=after-restart npx playwright test --config tests/playwright.config.mjs --list
+```
+
+The per-PR `incoming` job runs this command after the journey in the same sandbox.
+Each phase creates its own stock source accounts and destination emails, so it
+does not depend on accounts the journey made.
 
 ### Public incoming journey with goat
 
@@ -377,7 +455,7 @@ Contributors maintain the actual job commands in `.github/workflows/ci.yml`.
 Formatting, lint, syntax, types, architecture, schema, build, unit and lifecycle
 checks each have a visible step. Integration runs browser before contracts,
 then migration, the declared moderation-gap assertion, recovery/crash/authority
-checks and resilience last. The separate `incoming` job runs the public incoming journey in its own sandbox on every PR. Database dialects and the PostgreSQL application
+checks and resilience last. The separate `incoming` job runs the public incoming journey, then its failure and restart cases, in its own sandbox on every PR. Database dialects and the PostgreSQL application
 profile are separate steps: the databases job starts its sandbox on PostgreSQL,
 runs the SQLite and PostgreSQL suites concurrently, and runs the application
 profile in that sandbox (`POSTGRESQL_PROFILE_REUSE_SANDBOX=1`, which leaves
@@ -504,8 +582,10 @@ for stock runtime evidence. Do not invent a host database URL or report these
 commands as executed from native CI alone. The [public journey](../tests/flows/incoming-public-migration.md)
 checks the chosen repository shape, activation and post-move access. Additional qualification
 under the [accepted C4 contract](incoming-migration.md#c4-client-managed-migration-contract-accepted)
-remains outstanding: authorization and refusal across every pending-arrival activation entrypoint, and
-interrupted/lost-response recovery. Preserve canonical
+remains outstanding: authorization and refusal across every pending-arrival activation entrypoint,
+an interruption during provisioning, and cleanup of an abandoned published handoff. The
+[failure cases](#public-incoming-failure-cases) cover a lost `createAccount` response and a
+restart between admitted steps only. Preserve canonical
 identity/custody, placement, saved-user binding, backend-state and durable-owner
 checks; do not require the abandoned final-source certification or global write
 barrier as a prerequisite.

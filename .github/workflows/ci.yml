@@ -231,6 +231,8 @@ jobs:
         run: bash tests/local.sh up
       - name: Public incoming journey
         run: bash tests/local.sh incoming-public-journey
+      - name: Public incoming failure and restart cases
+        run: bash tests/local.sh incoming-public-failures
       - name: Clean only recorded projects and children
         if: always()
         run: |
