@@ -26,6 +26,10 @@ const defaultMatch = [
 ];
 // The PDS MOOver journey is selected only by `./tests/local.sh incoming-moover-journey`.
 const mooverJourney = process.env.INCOMING_MOOVER_JOURNEY === "1";
+// All three preparation flows display the one-time arrival code. Do not copy
+// their DOM into failure reports.
+if (incomingJourney || goatJourney || mooverJourney)
+  process.env.PLAYWRIGHT_NO_COPY_PROMPT = "1";
 const selected = [
   [
     mooverJourney,

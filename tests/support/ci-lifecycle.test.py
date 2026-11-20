@@ -62,7 +62,14 @@ esac
         self.assertEqual(syntax.returncode, 0, syntax.stderr)
         script = shell.split("python3 - <<'PYTHON'\n", 1)[1].rsplit("PYTHON", 1)[0]
         compiled = compile(script, "hosted-network-diagnostics", "exec")
-        self.assertEqual(workflow.count("run: *package-network-diagnostics"), 2)
+        self.assertEqual(workflow.count("run: *package-network-diagnostics"), 3)
+        incoming = workflow.split("\n  incoming:\n", 1)[1].split("\n  databases:\n", 1)[0]
+        steps = ["run: *package-network-diagnostics", "ci-ownership.py register",
+                 "run: bash tests/local.sh prepare", "run: bash tests/local.sh up",
+                 "run: bash tests/local.sh incoming-public-journey", "if: always()",
+                 "ci-ownership.py cleanup"]
+        positions = [incoming.index(step) for step in steps]
+        self.assertEqual(positions, sorted(positions))
         for failed_context in [None, "runner", "container", "build", "timeout"]:
             calls = []
 

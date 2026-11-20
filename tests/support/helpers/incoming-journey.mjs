@@ -57,7 +57,9 @@ export async function prepareArrival(
     since,
     baseUrl: mailpitUrl,
   });
-  await page.getByLabel("Sign-in code").fill(login.code);
+  await page.getByLabel("Sign-in code").evaluate((input, code) => {
+    input.value = code;
+  }, login.code);
   await page.getByRole("button", { name: "Verify code" }).click();
   // A verified session exists even though no account does yet.
   await page.goto(`${issuer}/incoming`);
@@ -79,7 +81,9 @@ export async function prepareArrival(
   await page.goto(`${issuer}/incoming`);
   await page.getByLabel("Your DID").fill(did);
   await page.getByLabel("Destination handle").fill(handle);
-  await page.getByLabel("Fresh email code").fill(fresh.code);
+  await page.getByLabel("Fresh email code").evaluate((input, code) => {
+    input.value = code;
+  }, fresh.code);
   const response = page.waitForResponse(
     (candidate) =>
       candidate.url().endsWith("/incoming/prepare") &&

@@ -1,36 +1,14 @@
 # External migration testing for contributors
 
-## Public incoming migration: shared-email test on hold
+## Public incoming migration
 
-The Playwright scenario for migrating an independent account into Entryway with
-an email already used by another Entryway DID is on hold. The current public
-migration path cannot admit that outside account; the synthetic fixture below
-does not prove this behavior.
+For individual arrivals, follow the [public incoming migration flow](incoming-public-migration.md).
+It uses a distinct verified destination email; established whole-server shared-email
+associations are a separate contract. The source freeze and private fixture calls
+below are not prerequisites for an individual move.
 
-Blocked by [TECH-681 — Implement the public incoming-migration API](https://linear.app/hypercerts/issue/TECH-681/implement-the-public-incoming-migration-api).
-Once that support is available, add the scenario under
-[TECH-682 — Prove independent incoming migration and post-move OAuth](https://linear.app/hypercerts/issue/TECH-682/prove-independent-incoming-migration-and-post-move-oauth),
-following the existing AiaB test conventions. The original shared-email positive
-scenario is not the accepted individual-arrival policy: that path now requires a
-unique destination email. Cover rejection of an already-claimed destination email
-without changing the existing account, then use a distinct verified destination
-email for the eventual public journey. Established whole-server shared-primary-email
-associations remain a separate supported contract. Verify the incoming DID, records
-and blobs through public endpoints with normal ownership proofs. Do not substitute
-private fixture calls or negative controls for the full public migration journey.
-C4 is the accepted client-managed design as of 2026-11-11, not completed runtime
-qualification. Public exposure, tracked credential lifecycle and guarded activation
-remain unimplemented. For release, exercise a full stock-PDS client journey with
-records/blobs, valid empty and blob-free repositories, integrity checks of the
-chosen transferred state and interrupted/lost-response recovery. Test authorized
-activation and refusals on every pending-arrival entrypoint, retaining canonical
-identity/custody, placement, saved-user binding, backend and durable-owner gates.
-Concurrent/later source writes and unavailable blobs may be absent; sample integrity
-assertions are not Entryway certification of a final head or exhaustive inventory.
-Counts, zero missing blobs and client intent never replace source ownership proof.
-The client deactivates the source only after confirmed destination activation;
-there is no automatic deletion or new blanket loss acknowledgement. The synthetic
-freeze below remains fixture behavior, not a public migration prerequisite.
+Outstanding negative case: reject an arrival for an already-claimed destination
+email and verify that the existing account is unchanged.
 
 ## Existing synthetic flow
 
