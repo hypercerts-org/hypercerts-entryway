@@ -9,12 +9,13 @@ Use it for requirements and approvals; do not maintain a second matrix here.
 Source, harness and [published designs](../../docs/README.md#core-design-references)
 are usable without a sibling Entryway checkout.
 
-| Domain               | Flow                                                                 | Existing assertions                                                                  | Repeat strategy                                                        |
-| -------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
-| Accounts / Access    | [OTP and client OAuth](../flows/otp-client-oauth.md)                 | Signup, returning login, consent, browser OAuth, expected DID, write and refresh     | Fresh isolated project; most ordinary cases generate unique accounts   |
-| Accounts / Access    | [Account and device lifecycle](../flows/account-device-lifecycle.md) | Account settings, email proof, devices, session/grant controls                       | Serial cases with dedicated accounts; no shared operator accounts      |
-| Identity / PDS fleet | [External migration](../flows/external-migration.md)                 | Fixture source, custody transition, data integrity, restart/resume, subsequent login | One source identity per project; use reverify only for completed state |
-| Runtime / Access     | [Resilience](../flows/resilience.md)                                 | Entryway outage and persistent core-stack restart                                    | Last, alone, after live browser sessions exist                         |
+| Domain               | Flow                                                                 | Existing assertions                                                                                                                             | Repeat strategy                                                                   |
+| -------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Accounts / Access    | [OTP and client OAuth](../flows/otp-client-oauth.md)                 | Signup, returning login, consent, browser OAuth, expected DID, write and refresh                                                                | Fresh isolated project; most ordinary cases generate unique accounts              |
+| Accounts / Access    | [Account and device lifecycle](../flows/account-device-lifecycle.md) | Account settings, email proof, devices, session/grant controls                                                                                  | Serial cases with dedicated accounts; no shared operator accounts                 |
+| Identity / PDS fleet | [External migration](../flows/external-migration.md)                 | Fixture source, custody transition, data integrity, restart/resume, subsequent login                                                            | One source identity per project; use reverify only for completed state            |
+| Identity / PDS fleet | [Incoming public migration](../flows/incoming-public-migration.md)   | Independent stock source to Entryway by public endpoints: handoff, integrity, inventory, post-move sign-in and OAuth, failure and restart cases | Fresh accounts per move; journey and failures per PR, shapes and two-node by hand |
+| Runtime / Access     | [Resilience](../flows/resilience.md)                                 | Entryway outage and persistent core-stack restart                                                                                               | Last, alone, after live browser sessions exist                                    |
 
 Unit and contract cases remain in `../contracts/` and beside feature operations;
 real browser interactions remain in `../browser/`. Their existence is not evidence
@@ -22,3 +23,8 @@ of passing runs; report actual commands, results and source revision in the PR
 or final handoff, with raw artifacts kept under ignored `tests/artifacts/`.
 Independent existing-tool migration, fleet drain/retire, and production custody
 operations are not established by these imported scenarios.
+
+The incoming migration targets (`incoming-public-journey`, `incoming-public-shapes`,
+`incoming-public-failures` and `incoming-two-node`) use the repository's own
+public-endpoint client. The [testing guide](../../docs/testing.md#incoming-migration-targets)
+says what each proves, which run on every pull request and what remains outstanding.

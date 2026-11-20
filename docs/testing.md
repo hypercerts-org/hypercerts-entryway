@@ -49,6 +49,8 @@ and requires no host dependency install:
 | `./tests/local.sh contracts`                  | Run imported contract scenarios in the test container after up                                                                                                                                             |
 | `./tests/local.sh browser`                    | Run browser scenarios after up                                                                                                                                                                             |
 | `./tests/local.sh incoming-public-mechanisms` | Bounded stock public-mechanism contract test after up: standalone signup, Mailpit, PLC signing, inactive destination and reservation; offline checks plus live-gated cases, not a migration qualification  |
+| `./tests/local.sh incoming-public-journey`    | The public incoming journey in one blob-bearing shape after up, with post-move sign-in and OAuth; runs on every PR; see below                                                                              |
+| `./tests/local.sh incoming-public-shapes`     | The same journey for empty, blob-free, blob-bearing and multi-collection repositories after up; run by hand, not in CI; see below                                                                          |
 | `./tests/local.sh incoming-public-failures`   | Public incoming failure cases after up, then a restart of Entryway between two admitted steps of a separate move; see below                                                                                |
 | `./tests/local.sh incoming-two-node`          | The public incoming journey on the two-node PostgreSQL profile, once per node order; run it as `fresh-group incoming-two-node`. One-off evidence, not a CI gate; see below                                 |
 | `./tests/local.sh incoming-goat-journey`      | Second incoming client after up: the public goat CLI, patched to the Entryway incoming contract, migrates a fresh stock source account; see below                                                          |
@@ -136,6 +138,52 @@ write barrier. Counts, zero missing blobs and client intent do not replace sourc
 ownership proof. The incoming routes, tracked credentials and guarded activation are
 mounted; full public runtime qualification is a separate gate that a passing unit
 suite does not establish.
+
+### Incoming migration targets
+
+Four `tests/local.sh` targets run incoming migration through Entryway's public
+pages and XRPC routes with the repository's own public-endpoint client, against
+an independent stock source PDS in Atmosphere in a Box. Each is described below,
+with the [flow](../tests/flows/incoming-public-migration.md) giving every step.
+
+- `incoming-public-journey` moves one fresh blob-bearing account. It checks the
+  exact signed handoff on PLC before creation, the stock destination's refusal of
+  three malformed CARs, the transferred records, values, CIDs and blob bytes,
+  PLC and hosting agreement, recovery-key ordering, destination email-code
+  sign-in, an independent browser OAuth client's DPoP write, refresh and
+  revocation, a confidential client, and the deactivated source's sessions.
+  The per-PR `incoming` CI job runs it.
+- `incoming-public-failures` runs the failure and identity cases and a restart of
+  Entryway between two admitted steps, each as its own move. The `incoming` job
+  runs it after the journey in the same sandbox.
+- `incoming-public-shapes` runs the journey for empty, blob-free, blob-bearing and
+  multi-collection repositories. It runs by hand, not in CI.
+- `incoming-two-node` runs the journey on the two-node PostgreSQL profile, once in
+  each node order, pinning stages to nodes. It is one-off evidence, not a CI gate,
+  and runs by hand.
+
+Their results are reported with the change they support, not here. Outstanding:
+
+- No unmodified existing migration tool has been shown to run the incoming flow.
+  The patched goat client and the PDS MOOver fork below are a harness and
+  optional corroboration, outside acceptance.
+- Two known defects are pinned as observed, with the intended behaviour as
+  expected failures: email-code sign-in of a pending account answers 404, so the
+  OAuth consent guard for a pending account is not exercised; and a handoff
+  signed before the source head moved claims the arrival and holds the DID with
+  no supported release, and the status page shows no notice for it.
+- A published handoff whose destination account is never created leaves
+  Entryway's rotation key on the DID; no supported cleanup exists.
+- A single guard over every pending-arrival activation entrypoint, an
+  interruption during provisioning (only a restart between admitted steps is
+  run), and source writes after export (outside the client-managed contract)
+  are not covered.
+- A continuation from a claim that lost its lease, and a DID that becomes hosted
+  after preparation, are covered only by contract tests; neither shows the
+  current owner completing the move.
+- Multi-node operation is not qualified: the two-node run does not run the
+  failure cases, does not pin activation, and exercises no real CORS preflight.
+- The sandbox does not require invitations, so no run presents one.
 
 ### Public incoming journey
 
@@ -709,7 +757,8 @@ for stock runtime evidence. Do not invent a host database URL or report these
 commands as executed from native CI alone. The [public journey](../tests/flows/incoming-public-migration.md)
 checks the chosen repository shape, activation and post-move access. Additional qualification
 under the [accepted C4 contract](incoming-migration.md#c4-client-managed-migration-contract-accepted)
-remains outstanding: authorization and refusal across every pending-arrival activation entrypoint,
+remains outstanding (see [incoming migration targets](#incoming-migration-targets)):
+authorization and refusal across every pending-arrival activation entrypoint,
 an interruption during provisioning, and cleanup of an abandoned published handoff. The
 [failure cases](#public-incoming-failure-cases) cover a lost `createAccount` response, a
 restart between admitted steps, a destination already hosting the handle or DID, and a
