@@ -9,7 +9,7 @@ It does not certify that an account's data transferred completely, and it adds
 one nullable schema column (the recovery key) and no configuration key. The routes are mounted on every
 deployment (single-node SQLite, multi-node, and deployments with no migration
 intent) with no configuration key or opt-out. Multi-node PostgreSQL deployments
-are not yet qualified for incoming migration.
+are not qualified for incoming migration.
 
 What operators and users now see:
 
@@ -62,8 +62,9 @@ What operators and users now see:
 - **Pending accounts.** Until activation a migrated account is paused. OAuth
   authorization, account settings, signup, status, handle, deletion and PLC
   operations refuse it (`MigrationPending` or an honest page), and ordinary status
-  changes cannot activate it. Browser email sign-in still succeeds by design and
-  then shows the pending page. An unclaimed preparation never blocks anyone.
+  changes cannot activate it. Browser email sign-in is designed to succeed and
+  then show the pending page; a known defect makes it answer 404 "Account not
+  found" today, with no session. An unclaimed preparation never blocks anyone.
   Activation is one operation for the saved user (fresh email code,
   `/incoming/activate`) and for an authorized client (its tracked access
   credential on `activateAccount`, including the stock PDS callback). The client
@@ -74,7 +75,11 @@ What operators and users now see:
   import and activate; the source keeps its copy. If a user stops after the
   authority handoff and no destination account is created, the Entryway rotation
   key stays on their DID: Entryway does not remove it, and the user removes it
-  through their source PDS. Rotating or replacing credentials does not revoke
+  through their source PDS. A known defect: a handoff signed before the source's
+  PLC head moved (for example after a handle change there) is refused with
+  `OperationRecoveryRequired` but still claims the arrival, so its DID, handle and
+  email stay held at Entryway; neither cancel nor the operator recovery releases
+  it. Rotating or replacing credentials does not revoke
   an access token already issued: the stock PDS accepts it until it expires
   (five minutes). Request budgets reuse existing producers: browser preparation spends the
   ordinary signup per-IP budget and incoming `createAccount` the ordinary
@@ -86,5 +91,6 @@ What operators and users now see:
   `OperationLeaseLost`, `OperationNoLongerPending`, `OperationRecoveryRequired`.
 
 See the [incoming migration guide](https://github.com/hypercerts-org/hypercerts-entryway/blob/main/docs/incoming-migration.md)
-for the accepted contract. Independent public
-qualification of the whole journey has not been completed.
+for the accepted contract and its known defects. Release qualification is not
+complete: no unmodified existing migration tool has been shown to complete the
+journey.
