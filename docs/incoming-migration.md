@@ -209,7 +209,8 @@ admitted (see [source-authorized handoff](#2-source-authorized-authority-handoff
 
 The user verifies the destination email, supplies the incoming DID and requested
 handle, and confirms the migration. Entryway checks that the DID is not hosted or
-bound and is not claimed by another arrival, and that the email is available. It
+bound and is not claimed by another arrival, that the requested handle is not hosted
+by an account or reserved (`HandleNotAvailable`), and that the email is available. It
 then records an unclaimed preparation holding the verified user ID, selected PDS,
 source PLC head and key facts, approved custody configuration, arrival ID and the
 hash of a 24-hour arrival code.
@@ -1032,6 +1033,7 @@ Errors. Each code is stable and mapped explicitly, and no message carries a secr
 | Per-IP or per-subject budget exhausted                                                       | `RateLimitExceeded`         | 429         |
 | Arrival is claimed (`cancel`) or its reservation is uncertain (`renew`)                      | `OperationRecoveryRequired` | 409         |
 | `prepare`: DID is hosted or bound                                                            | `IdentityConflict`          | 409         |
+| `prepare`: handle is hosted by an account or reserved                                        | `HandleNotAvailable`        | 409         |
 | `prepare`: email is not available                                                            | `EmailNotAvailable`         | 409         |
 | Handoff admission: handle taken since preparation                                            | `HandleNotAvailable`        | 409         |
 | Handoff admission: email taken since preparation                                             | `EmailNotAvailable`         | 409         |
