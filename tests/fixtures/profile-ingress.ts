@@ -7,7 +7,14 @@ const count = Number(process.env.PROFILE_NODE_COUNT);
 if (count !== 1 && count !== 2) throw new Error("InvalidProfileNodeCount");
 const nodes = ["entryway", ...(count === 2 ? ["entryway-replica"] : [])];
 const states = new Map<string, { ready: boolean; instanceId: string | null }>();
+// `id` orders receipts across the bounded window; `pinned` says whether the
+// caller selected the node with `x-profile-node` or the ingress balanced it;
+// `stage` is the caller's optional `x-profile-stage` tag, present only on
+// tagged requests, so a test can attribute receipts without relying on timing.
 const receipts: {
+  id: number;
+  pinned: boolean;
+  stage?: string;
   method: string;
   path: string;
   node: string;
@@ -15,6 +22,7 @@ const receipts: {
   status: number;
 }[] = [];
 let sequence = 0;
+let received = 0;
 let probing: Promise<void> | undefined;
 function probe() {
   if (probing) return probing;
@@ -70,6 +78,14 @@ createServer(async (incoming, outgoing) => {
     outgoing.writeHead(400).end();
     return;
   }
+  const stage = incoming.headers["x-profile-stage"];
+  if (
+    stage !== undefined &&
+    (typeof stage !== "string" || !/^[A-Za-z0-9._-]{1,64}$/.test(stage))
+  ) {
+    outgoing.writeHead(400).end();
+    return;
+  }
   // Explicit selection is diagnostic traffic: forward even to an unready node
   // to test its admission refusal. Ordinary traffic uses only ready backends.
   const available = nodes.filter((node) => states.get(node)?.ready);
@@ -97,6 +113,7 @@ createServer(async (incoming, outgoing) => {
   }
   const headers = { ...incoming.headers };
   delete headers["x-profile-node"];
+  delete headers["x-profile-stage"];
   const forwarded = request(
     {
       host: node,
@@ -111,6 +128,9 @@ createServer(async (incoming, outgoing) => {
           ? response.headers["x-entryway-instance"]
           : null;
       receipts.push({
+        id: ++received,
+        pinned: typeof selected === "string",
+        ...(stage === undefined ? {} : { stage }),
         method: incoming.method ?? "GET",
         path,
         node,

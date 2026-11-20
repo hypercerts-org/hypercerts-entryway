@@ -50,6 +50,7 @@ and requires no host dependency install:
 | `./tests/local.sh browser`                    | Run browser scenarios after up                                                                                                                                                                             |
 | `./tests/local.sh incoming-public-mechanisms` | Bounded stock public-mechanism contract test after up: standalone signup, Mailpit, PLC signing, inactive destination and reservation; offline checks plus live-gated cases, not a migration qualification  |
 | `./tests/local.sh incoming-public-failures`   | Public incoming failure cases after up, then a restart of Entryway between two admitted steps of a separate move; see below                                                                                |
+| `./tests/local.sh incoming-two-node`          | The public incoming journey on the two-node PostgreSQL profile, once per node order; run it as `fresh-group incoming-two-node`. One-off evidence, not a CI gate; see below                                 |
 | `./tests/local.sh incoming-goat-journey`      | Second incoming client after up: the public goat CLI, patched to the Entryway incoming contract, migrates a fresh stock source account; see below                                                          |
 | `./tests/local.sh incoming-moover-journey`    | Third incoming client after up: a fork of the PDS MOOver web UI carrying the unmerged Entryway mode, driven in Chromium through the sandbox CORS ingress, migrates a fresh stock source account; see below |
 | `./tests/local.sh migration`                  | Fresh synthetic external-source migration, including two Entryway restarts                                                                                                                                 |
@@ -156,6 +157,8 @@ through the stock destination's `activateAccount`, which forwards to Entryway. I
 seeds no authority rows and calls no private fixture. The client chooses what to
 transfer and when to activate. Before cutover, the client checks the seeded inventory, verifies the exported CAR for the DID and checks the commit signature against the source's PLC signing key. After activation, it compares all record URIs, values and CIDs and all blob CIDs and bytes before OAuth writes. Source writes after export are outside this client-managed contract.
 
+After the move, the browser SDK's authorization-code exchange must issue a refresh token and name the migrated DID as `sub`. The later refresh must present that refresh token and return the same `sub`, the client page's `#issuer` must name Entryway, and the transferred records and blobs must still be served unchanged beside the client's two writes (`expectInventoryRetained`). These checks run in the per-PR single-node journey as well as on two nodes.
+
 The per-PR job uses a blob-bearing profile. For all four shapes, run `./tests/local.sh fresh-group incoming-public-shapes` (or `./tests/local.sh incoming-public-shapes` after `up`). The same full journey runs serially for empty, blob-free, blob-bearing and multi-collection repositories. For a referenced blob, it checks that the destination reports the missing CID before upload and complete counts afterwards. Every shape records the destination's `checkAccountStatus` revision before the valid import and requires a different one afterwards, so an import of an empty repository is told apart from a no-op. Before the valid import, the blob-bearing journey (so every per-PR run) and the multi-collection journey also send the paused destination three malformed copies of their own verified export and require each refusal to leave the destination's status and export unchanged. As observed on the pinned stock PDS (0.5.36): a record block altered under its CID and a CAR cut inside a block both get 500 `InternalServerError`; a well-formed CAR with one record's block removed gets 400 `InvalidRequest`. The removed block is a chosen record's, wherever it sits, because the stock export orders blocks by revision and CID and its final block is not reliably a record. The 500s are the generic answer to an error thrown while the PDS reads the CAR (`verifyIncomingCarBlocks`), not an integrity-specific status. The refusals are stock PDS behaviour, pinned in the per-PR `incoming` job so that a PDS upgrade changing them fails CI. The byte surgery itself has a native test, `tests/support/helpers/incoming-journey.test.mjs`. List the
 spec without a sandbox to verify discovery of either selection:
 
@@ -167,6 +170,102 @@ INCOMING_PUBLIC_SHAPES=1 npx playwright test --config tests/playwright.config.mj
 `fresh-group incoming-public-mechanisms incoming-public-journey contracts` runs the
 same steps in one disposable project. A skipped, synthetic or negative-control
 result is not a public qualification; report only an executed managed run.
+
+### Public incoming journey on two nodes
+
+```sh
+./tests/local.sh fresh-group incoming-two-node
+```
+
+This is one-off evidence, not a CI gate: no workflow runs it, and its result is
+reported with the change it supports, not recorded here. `fresh-group` exports
+`DATABASE_BACKEND=postgresql`, `DEPLOYMENT_MODE=multi-node`,
+`ENTRYWAY_PROFILE_NODE_COUNT=2` and `DATABASE_URL` (the profile scripts' value)
+before `prepare` and `up`. Installation then adds the second node
+(`entryway-replica`) and the profile ingress in front of both nodes, and both
+nodes start against the one PostgreSQL database. The step runs alone in its
+group, because the other steps assume one Entryway container.
+`./tests/local.sh incoming-two-node` runs the same step in an owned project that
+was prepared and started with those four settings exported, and refuses without
+them. It is kept out of `run-resilience-profile.sh`, whose exercise has a
+480-second deadline.
+
+The step runs `tests/browser/incoming-public-journey.spec.mjs` with
+`INCOMING_TWO_NODE=1` as two Playwright projects, `entryway-first` and
+`entryway-replica-first`; the second swaps the node roles. Reports and the log
+use the `incoming-two-node` prefix. The spec reads both nodes' instance IDs from
+the ingress (`/__profile/nodes`) and requires two ready, distinct processes. Each
+Entryway-facing stage is pinned to one node: XRPC calls send the ingress's
+`x-profile-node` header, and browser pages route every request to the issuer
+origin, including redirects and the OAuth SDK's own fetches, with that header
+added. A route sees only the first URL of a redirect chain, so the confidential
+client's authorization, which starts on the client's origin and redirects into
+the issuer, is pinned with context-wide extra headers instead; that stage fails
+if it makes any scripted (fetch or XHR) request to the issuer. Every pinned
+request also carries an `x-profile-stage` tag unique to its stage, which the
+ingress records on the receipt and strips before forwarding. A stage is judged
+by its tagged receipts (`/__profile/receipts`, which records the node,
+instance, method, path, status, whether the request was pinned and the tag) and
+by the issuer responses to browser requests started inside it, not by when a
+response arrived: each must name the pinned node and its `x-entryway-instance`.
+A response that arrives after the next stage began is still attributed to the
+stage that sent it. Untagged requests are forwarded and recorded as before, and
+the resilience profiles, which read only `/__profile/nodes`, are unaffected.
+
+| Stage                                                            | First project      | Second project     |
+| ---------------------------------------------------------------- | ------------------ | ------------------ |
+| Browser email proof and `/incoming/prepare`                      | `entryway`         | `entryway-replica` |
+| Handoff (`submitPlcOperation`, with both refusals)               | `entryway-replica` | `entryway`         |
+| `createAccount`, its replay and the paused `getSession`          | `entryway`         | `entryway-replica` |
+| Tracked `refreshSession`                                         | `entryway-replica` | `entryway`         |
+| Activation, forwarded by the stock destination                   | observed           | observed           |
+| Password `createSession`                                         | `entryway`         | `entryway-replica` |
+| Tracked family `refreshSession` after deactivating the source    | `entryway-replica` | `entryway`         |
+| Email-code session, then SDK authorization and its code exchange | `entryway`         | `entryway-replica` |
+| SDK refresh of that grant, then a write                          | `entryway-replica` | `entryway`         |
+| SDK revocation and the account page                              | `entryway`         | `entryway-replica` |
+| The confidential client's browser requests                       | `entryway-replica` | `entryway`         |
+
+Consecutive pinned migration stages must be served by different instances for
+the same DID, judged on the instance IDs each stage observed in its receipts
+and response headers, not on the configured order; each stage must observe
+exactly one. After the move, the authorization-code exchange and the refresh
+both answer at the issuer's `/oauth/token`; the refresh presents the refresh
+token that the code exchange issued, returns the same subject, and the next
+write uses a different access token. The transferred records and blobs are then
+still served unchanged beside the two client writes. Alternating instance IDs
+alone is not the claim: each stage continues state the previous stage left on
+the other node.
+
+Not pinned, only observed: import and blob upload go to the destination PDS, not
+Entryway. Activation goes to the stock destination, which forwards it to
+Entryway itself through the issuer URL, so the ingress chooses the node. The spec
+requires at least one unpinned `activateAccount` receipt with status 200 and
+records its node; it does not claim which node will serve it. Requests that the
+confidential client's server or a PDS makes are recorded per stage as unpinned
+receipts. After its tests, passing or not, each project prints its stage table
+as `node-stage` lines to the phase log, `incoming-two-node.log` in the report
+directory: the stage, whether it was pinned, the node and instance ID, and for
+pinned stages the observed instance IDs and the method, path and node of each
+unpinned receipt and of each pinned receipt from another stage that landed in
+its window. It prints no DID, credential or body.
+
+Context-wide extra headers, as the resilience profile uses for its confidential
+client, stopped the browser SDK's cross-origin login before consent, so the
+two-node run routes only issuer requests. While any route is active, Playwright
+(1.58.2, `crNetworkManager.js`) fulfils every intercepted CORS preflight itself
+with allow-all headers, whatever its origin, including those to the destination
+PDS. No route stage therefore exercises a real preflight, and the
+headers-pinned stage makes no scripted issuer request. In the single-node
+journey no route is installed, so preflights reach the real services: Entryway
+(the OAuth provider routes it mounts) answers `/oauth/*` preflights, and the
+Caddy ingress (`tests/support/entryway-ingress.Caddyfile`, `atproto_cors`)
+answers `/xrpc/*` and `/.well-known/atproto-did` preflights before they reach
+Entryway. List the selection without a sandbox:
+
+```sh
+INCOMING_TWO_NODE=1 npx playwright test --config tests/playwright.config.mjs --list
+```
 
 ### Public incoming failure cases
 

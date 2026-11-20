@@ -6,10 +6,12 @@ import { waitForMailpitCode } from "./mailpit.mjs";
 // migration client. The browser step and the XRPC call helper live here so the
 // two journeys cannot drift apart.
 
+// `headers` adds request headers, such as the two-node profile's
+// `x-profile-node` pin; the credential and content type are never overridden.
 export async function call(
   origin,
   method,
-  { token, body, params, bytes, type } = {},
+  { token, body, params, bytes, type, headers } = {},
 ) {
   const url = new URL(`/xrpc/${method}`, origin);
   for (const [key, value] of Object.entries(params ?? {}))
@@ -23,6 +25,7 @@ export async function call(
   const response = await fetch(url, {
     method: post ? "POST" : "GET",
     headers: {
+      ...headers,
       ...(token ? { authorization: `Bearer ${token}` } : {}),
       ...(body === undefined ? {} : { "content-type": "application/json" }),
       ...(bytes === undefined ? {} : { "content-type": type }),
@@ -352,12 +355,33 @@ export async function expectDestinationServes(
   expect(document.alsoKnownAs).toContain(`at://${handle}`);
 }
 
+// After OAuth writes the destination holds more than the transfer, so the
+// whole transferred inventory must still be served unchanged beside them: every
+// record by URI with its CID and value, and every blob byte for byte.
+export async function expectInventoryRetained(
+  endpoint,
+  { did, inventory, writes = [] },
+) {
+  const served = await snapshot(endpoint, did);
+  const byUri = new Map(served.records.map((record) => [record.uri, record]));
+  for (const record of inventory.records)
+    expect(byUri.get(record.uri), record.uri).toEqual(record);
+  for (const uri of writes)
+    expect(byUri.has(uri), "client write served beside the inventory").toBe(
+      true,
+    );
+  expect(served.records.length).toBe(inventory.records.length + writes.length);
+  expect(served.blobs).toEqual(inventory.blobs);
+}
+
 /**
  * Registers the two opening steps every incoming journey shares: a standalone
  * source account seeded for the selected repository shape (by default a profile
  * and its avatar blob), then the browser email proof and arrival preparation.
  * `context` returns the sandbox access and service config loaded by the spec's
- * own `beforeAll`; `onPrepared` runs after preparation.
+ * own `beforeAll`; `onPrepared` runs after preparation. `aroundPrepare(page,
+ * prepare)`, when given, wraps the browser preparation (the two-node run pins
+ * it to one node).
  */
 export function registerArrivalSetup(
   test,
@@ -370,6 +394,7 @@ export function registerArrivalSetup(
     destinationEmail,
     displayName,
     onPrepared,
+    aroundPrepare = (_page, prepare) => prepare(),
   },
 ) {
   test("the standalone source serves the seeded inventory", async () => {
@@ -392,13 +417,15 @@ export function registerArrivalSetup(
     page,
   }) => {
     const { access, config } = context();
-    run.prepared = await prepareArrival(page, {
-      issuer: config.issuer,
-      mailpitUrl: access.mailpitUrl,
-      did: run.source.did,
-      handle: run.destinationHandle,
-      email: destinationEmail,
-    });
+    run.prepared = await aroundPrepare(page, () =>
+      prepareArrival(page, {
+        issuer: config.issuer,
+        mailpitUrl: access.mailpitUrl,
+        did: run.source.did,
+        handle: run.destinationHandle,
+        email: destinationEmail,
+      }),
+    );
     await onPrepared?.(page);
   });
 }
