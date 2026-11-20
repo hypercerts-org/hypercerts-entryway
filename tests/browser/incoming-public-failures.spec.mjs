@@ -284,17 +284,25 @@ test("observed today: email-code sign-in of a pending account answers 404 Unable
 test("email-code sign-in of a pending account succeeds and shows the pending notice", async ({
   page,
 }) => {
-  test.fail(true, knownDefect);
   const shown = await signInByEmail(page, config, destinationEmail);
-  expect(shown.status).toBe(200);
-  await expect(page.getByText(pendingText)).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Create account" }),
-  ).toHaveCount(0);
-  // A session exists: the owner's status page opens.
-  expect(
-    (await arrivalSummary(page, config, run.prepared.operationId)).state,
-  ).toBe(arrivalStates.pausedPending);
+  if (shown.status === 404) {
+    await expect(
+      page.getByText("Account not found", { exact: true }),
+    ).toBeVisible();
+    expect(await sessionProbe(page, config)).toEqual(noSession);
+  } else {
+    expect(shown.status).toBe(200);
+    await expect(page.getByText(pendingText)).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Create account" }),
+    ).toHaveCount(0);
+    // A session exists: the owner's status page opens.
+    expect(
+      (await arrivalSummary(page, config, run.prepared.operationId)).state,
+    ).toBe(arrivalStates.pausedPending);
+  }
+  test.fail(true, knownDefect);
+  expect(shown.status === 200, "pending account sign-in accepted").toBe(true);
 });
 
 /** The browser SDK client authorizes by DID through Entryway's email-code
@@ -376,15 +384,23 @@ test("observed today: OAuth authorization of the pending account cannot start by
 test("OAuth sign-in of the pending account succeeds and is refused consent with the pending notice", async ({
   page: client,
 }) => {
-  test.fail(true, knownDefect);
   // Accepted sign-in: the signup page's pending notice (200) or the consent
   // guard's page (409). Today this first assertion fails, with 404.
-  expect([200, 409], "sign-in accepted").toContain(
-    await authorizeByDid(client),
-  );
-  await expect(client.getByText(pendingText)).toBeVisible();
-  await noConsent(client);
-  expect((await sessionProbe(client, config)).status).toBe(200);
+  const status = await authorizeByDid(client);
+  if (status === 404) {
+    await expect(
+      client.getByText("Account not found", { exact: true }),
+    ).toBeVisible();
+    await noConsent(client);
+    expect(await sessionProbe(client, config)).toEqual(noSession);
+  } else {
+    expect([200, 409], "sign-in accepted").toContain(status);
+    await expect(client.getByText(pendingText)).toBeVisible();
+    await noConsent(client);
+    expect((await sessionProbe(client, config)).status).toBe(200);
+  }
+  test.fail(true, knownDefect);
+  expect(status !== 404, "pending account sign-in accepted").toBe(true);
 });
 
 test("recovery with a fresh code replaces the lost credentials and revokes the earlier family", async () => {

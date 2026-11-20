@@ -67,6 +67,23 @@ export async function expectSdkWrite(page, sdk, { did, endpoint, text }) {
   return headers.authorization;
 }
 
+export function matchesGrant(authorization, grant) {
+  return (
+    typeof grant.access_token === "string" &&
+    grant.access_token.length > 0 &&
+    authorization === `DPoP ${grant.access_token}`
+  );
+}
+
+export function tokenGrant(issuer, grantType) {
+  return (candidate) =>
+    candidate.url() === new URL("/oauth/token", issuer).href &&
+    candidate.request().method() === "POST" &&
+    candidate.ok() &&
+    new URLSearchParams(candidate.request().postData()).get("grant_type") ===
+      grantType;
+}
+
 export async function expectSdkAction(
   page,
   { issuer, path, button, grantType },
@@ -86,4 +103,5 @@ export async function expectSdkAction(
     page.getByRole("button", { name: button }).click(),
   ]);
   expect(response.ok(), `${path} succeeded`).toBe(true);
+  return response;
 }
