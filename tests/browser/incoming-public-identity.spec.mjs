@@ -192,13 +192,34 @@ test("a foreign PLC head between handoff and creation holds creation for recover
   });
 });
 
-test("a handoff signed before the head moved cannot complete, and a handoff signed on the new head does not match the preparation", async ({
-  page,
-}) => {
-  test.setTimeout(240_000);
-  const move = await preparedMove(page, "stale");
+// Known defect: a superseded handoff claims the arrival. Its predecessor is the
+// one saved at preparation, so it passes validation although the source head
+// has moved since. `admit` (src/features/external-migration/submit-handoff.ts)
+// then commits the claim, the replay binding and the signed handoff, and the
+// head-divergence check runs only inside the handoff dispatch's `send`, after
+// the claim has committed and the dispatch marker is written. The open receipt
+// cannot be released by operator recovery either: an approved retry observes
+// the head as diverged and refuses again. Ordinary tests pin what happens
+// today, so any change fails them; the intended outcome is asserted separately
+// under test.fail, so an unexpected pass fails the run once it is fixed.
+const supersededDefect =
+  "known defect: a superseded handoff is claimed before its head check (submit-handoff.ts checks head divergence inside the dispatch's send, after the claim commits and the dispatch marker is written)";
+const unresolvedDefect =
+  "known defect: the /incoming status page shows no unresolved-request notice for the superseded handoff's open dispatch receipt, although migration pages are documented to explain the operator dependency (docs/shared-operations.md)";
+
+// The arrival the observed-today test leaves claimed, and the owner's page,
+// whose context is kept open for the status-page test that follows it.
+let locked;
+
+test.afterAll(async () => {
+  await locked?.page.context().close();
+});
+
+/** A prepared move whose handoff was signed on the prepared head and then
+ * superseded by a handle change at the source. */
+async function supersededMove(page, label) {
+  const move = await preparedMove(page, label);
   const { source, prepared } = move;
-  // Signed on the prepared head, then superseded by a source change.
   const stale = await signHandoff(access, {
     source,
     sourceEmail: move.sourceEmail,
@@ -214,12 +235,24 @@ test("a handoff signed before the head moved cannot complete, and a handoff sign
     saved: await arrivalSummary(page, config, prepared.operationId),
   };
   expect(held.saved.state).toBe(arrivalStates.prepared);
+  expect(held.saved.unresolved).toBe(false);
   const submit = async (operation) =>
     incomingCall(config, handoffMethod, {
       jwt: await serviceAuth(access, config, source, handoffMethod),
       code: prepared.arrivalCode,
       body: { operation },
     });
+  return { move, stale, held, submit };
+}
+
+test("observed today: a superseded signed handoff is refused but claims the arrival, which then holds the DID", async ({
+  browser,
+}) => {
+  test.setTimeout(240_000);
+  const page = await (await browser.newContext()).newPage();
+  locked = { page };
+  const { move, stale, held, submit } = await supersededMove(page, "stale");
+  const { source, prepared } = move;
   await test.step("a handoff signed on the new head gets 400 InvalidPlcOperation and nothing is claimed", async () => {
     const rebased = await signHandoff(access, {
       source,
@@ -232,24 +265,23 @@ test("a handoff signed before the head moved cannot complete, and a handoff sign
     });
     await expectHeld(page, move, held, "rebased handoff");
   });
-  await test.step("the superseded handoff gets 409 OperationRecoveryRequired; it is not published but the arrival is claimed", async () => {
+  await test.step("observed today: the superseded handoff gets 409 OperationRecoveryRequired; it is not published but the arrival is claimed", async () => {
     expect(refusal(await submit(stale))).toEqual({
       status: 409,
       error: "OperationRecoveryRequired",
     });
-    // The claim, replay binding and signed handoff commit before dispatch
-    // (docs/incoming-migration.md, handoff admission), so the saved version
-    // advances while the state stays prepared: nothing was observed published.
+    // The claim, replay binding and signed handoff committed before the head
+    // check, so the saved version advances while the state stays prepared.
     const saved = await arrivalSummary(page, config, prepared.operationId);
     expect(saved.state).toBe(arrivalStates.prepared);
     expect(saved.version).toBeGreaterThan(held.saved.version);
-    // The dispatch receipt left open is the ownership store's, not an arrival
-    // attempt, so the status page shows no unresolved-request notice.
+    // Observed today: no unresolved-request notice for the open dispatch
+    // receipt. The documented notice is asserted under test.fail below.
     expect(saved.unresolved).toBe(false);
     held.saved = saved;
     await expectHeld(page, move, held, "superseded handoff");
   });
-  await test.step("its exact replay and a creation stay held with 409 OperationRecoveryRequired", async () => {
+  await test.step("observed today: its exact replay and a creation get 409 OperationRecoveryRequired", async () => {
     expect(refusal(await submit(stale))).toEqual({
       status: 409,
       error: "OperationRecoveryRequired",
@@ -271,7 +303,7 @@ test("a handoff signed before the head moved cannot complete, and a handoff sign
     held.saved = saved;
     await expectHeld(page, move, held, "creation after a superseded handoff");
   });
-  await test.step("the claim now holds the DID: cancel and a new preparation are refused", async () => {
+  await test.step("observed today: the claim holds the DID; cancel and a new preparation are refused", async () => {
     const cancelled = await incomingPost(page, config, "/incoming/cancel", {
       operationId: prepared.operationId,
       expectedVersion: held.saved.version,
@@ -289,4 +321,39 @@ test("a handoff signed before the head moved cannot complete, and a handoff sign
     expect(refusal(again)).toEqual({ status: 409, error: "OperationPending" });
     await expectHeld(page, move, held, "cancel and new preparation");
   });
+  locked.move = move;
+});
+
+test("the status page explains the operator dependency of the superseded handoff's open request", async () => {
+  test.fail(true, unresolvedDefect);
+  const saved = await arrivalSummary(
+    locked.page,
+    config,
+    locked.move.prepared.operationId,
+  );
+  expect(saved.unresolved).toBe(true);
+});
+
+test("a superseded signed handoff is refused without a claim, so the user can prepare again", async ({
+  page,
+}) => {
+  test.fail(true, supersededDefect);
+  test.setTimeout(240_000);
+  const { move, stale, held, submit } = await supersededMove(
+    page,
+    "superseded",
+  );
+  // Which error names the refusal is not decided; the intended outcome is
+  // that nothing is published or claimed.
+  expect((await submit(stale)).status, "superseded handoff refused").not.toBe(
+    200,
+  );
+  // Today this fails: the version has advanced.
+  await expectHeld(page, move, held, "superseded handoff");
+  const again = await incomingPost(page, config, "/incoming/prepare", {
+    did: move.source.did,
+    handle: `e${move.tag}${config.handleDomains[0]}`,
+    otp: await freshIncomingCode(page, config, move.email),
+  });
+  expect(again.status, "new preparation").toBe(200);
 });
