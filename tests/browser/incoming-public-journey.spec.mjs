@@ -5,8 +5,10 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   call,
+  errorName,
   expectDestinationServes,
   json,
+  malformedCars,
   ok,
   registerArrivalSetup,
 } from "../support/helpers/incoming-journey.mjs";
@@ -17,11 +19,20 @@ import {
   tokenGrant,
   expectSourceCutover,
 } from "../support/helpers/incoming-post-move.mjs";
+import {
+  verifyRepoCar,
+  verifyCommitSig,
+  readCarWithRoot,
+  MemoryBlockstore,
+  def,
+  ensureV3Commit,
+} from "@atproto/repo";
 import { Secp256k1Keypair } from "@atproto/crypto";
 import { waitForStockPlcMessage } from "../support/helpers/stock-plc-mailpit.mjs";
 
 // Public incoming-migration journey, run only by `./tests/local.sh
-// incoming-public-journey` inside an owned sandbox. Entryway is reached only
+// incoming-public-journey` (one shape) or `incoming-public-shapes` (four) inside
+// an owned sandbox. Entryway is reached only
 // through its public browser pages and XRPC routes. The source is the standalone
 // stock PDS, the destination is a stock PDS behind Entryway, mail is read from
 // Mailpit, and nothing seeds authority rows or calls a private fixture. The
@@ -68,6 +79,37 @@ registerArrivalSetup(test, {
   sourcePassword: `Public-${randomUUID()}!`,
   destinationEmail,
   displayName: "Public arrival journey",
+});
+
+test("the client verifies the source export before identity cutover", async () => {
+  const did = run.source.did;
+  const head = await fetch(new URL(`/${did}/data`, access.plcUrl));
+  expect(head.status).toBe(200);
+  const key = (await head.json()).verificationMethods.atproto;
+  const exported = await call(access.sourceUrl, "com.atproto.sync.getRepo", {
+    params: { did },
+  });
+  ok(exported, "source export");
+  run.car = exported.content;
+  const verified = await verifyRepoCar(run.car, did);
+  expect(
+    verified.creates
+      .map(
+        ({ collection, rkey, cid }) =>
+          `at://${did}/${collection}/${rkey} ${cid}`,
+      )
+      .sort(),
+  ).toEqual(
+    run.inventory.records.map(({ uri, cid }) => `${uri} ${cid}`).sort(),
+  );
+  const car = await readCarWithRoot(run.car);
+  const commit = ensureV3Commit(
+    await new MemoryBlockstore(car.blocks).readObj(
+      car.root,
+      def.versionedCommit,
+    ),
+  );
+  expect(await verifyCommitSig(commit, key)).toBe(true);
 });
 
 test("the source signs the authority handoff and Entryway publishes only that", async () => {
@@ -218,53 +260,144 @@ test("creation returns tracked credentials for a paused destination", async () =
   expect(plain.status).toBeGreaterThanOrEqual(400);
 });
 
+// Observed on the pinned stock destination (@atproto/pds 0.5.36). Each refusal
+// must leave the paused destination's status and its own export byte-identical.
+// The two 500s are not an integrity-specific status: while importRepo reads the
+// body, @atproto/repo's verifyIncomingCarBlocks throws a plain Error ("Not a
+// valid CID for bytes"), which xrpc-server surfaces as a generic 500
+// InternalServerError with the message hidden. They are pinned as a tripwire for
+// a stock PDS upgrade, with the unchanged destination as the actual evidence.
+async function expectMalformedImportsRefused() {
+  const endpoint = run.prepared.destinationEndpoint;
+  const token = run.destination.accessJwt;
+  const did = run.source.did;
+  const state = async () => {
+    const status = await call(
+      endpoint,
+      "com.atproto.server.checkAccountStatus",
+      { token },
+    );
+    ok(status, "destination status");
+    const exported = await call(endpoint, "com.atproto.sync.getRepo", {
+      token,
+      params: { did },
+    });
+    ok(exported, "destination export");
+    return { status: json(status), car: exported.content };
+  };
+  // Records are sorted by URI: a feed post where the shape has one, otherwise
+  // the profile.
+  const record = run.inventory.records.at(-1);
+  const cars = await malformedCars(run.car, record);
+  expect(cars.droppedBlock, "dropped block is the chosen record").toBe(
+    record.cid,
+  );
+  const before = await state();
+  expect(before.status.activated).toBe(false);
+  expect(before.status.indexedRecords).toBe(0);
+  expect((await verifyRepoCar(before.car, did)).creates).toEqual([]);
+  for (const [name, bytes, refusal] of [
+    [
+      "a record block altered under its CID is refused",
+      cars.tampered,
+      { status: 500, error: "InternalServerError" },
+    ],
+    [
+      "a CAR cut inside a block is refused",
+      cars.cutMidBlock,
+      { status: 500, error: "InternalServerError" },
+    ],
+    [
+      "a CAR missing one record block is refused",
+      cars.missingRecordBlock,
+      { status: 400, error: "InvalidRequest" },
+    ],
+  ])
+    await test.step(name, async () => {
+      const response = await call(endpoint, "com.atproto.repo.importRepo", {
+        token,
+        bytes,
+        type: "application/vnd.ipld.car",
+      });
+      expect({
+        status: response.status,
+        error: errorName(response),
+      }).toEqual(refusal);
+      const after = await state();
+      expect(after.status).toEqual(before.status);
+      expect(after.car.equals(before.car), "destination export unchanged").toBe(
+        true,
+      );
+    });
+}
+
 test("the client transfers its chosen state directly between the pinned endpoints", async () => {
-  const exported = await call(access.sourceUrl, "com.atproto.sync.getRepo", {
-    params: { did: run.source.did },
-  });
-  ok(exported, "source export");
+  const destinationRead = async (method) => {
+    const response = await call(run.prepared.destinationEndpoint, method, {
+      token: run.destination.accessJwt,
+    });
+    ok(response, method);
+    return json(response);
+  };
+  // The per-PR default (blob-bearing) and the multi-collection shape probe the
+  // stock import with malformed copies of the verified export first; the valid
+  // import below is the control.
+  if (
+    ["blob-bearing", "multi-collection"].includes(
+      test.info().project.metadata.shape ?? "blob-bearing",
+    )
+  )
+    await expectMalformedImportsRefused();
+  // The revision, not the commit CID: an import always writes a new revision.
+  const { repoRev: revBefore } = await destinationRead(
+    "com.atproto.server.checkAccountStatus",
+  );
+  expect(
+    typeof revBefore === "string" && revBefore.length > 0,
+    "destination revision before import",
+  ).toBe(true);
   const imported = await call(
     run.prepared.destinationEndpoint,
     "com.atproto.repo.importRepo",
     {
       token: run.destination.accessJwt,
-      bytes: exported.content,
+      bytes: run.car,
       type: "application/vnd.ipld.car",
     },
   );
   ok(imported, "destination import");
-  const blobs = json(
-    await call(access.sourceUrl, "com.atproto.sync.listBlobs", {
-      params: { did: run.source.did },
-    }),
-  ).cids;
-  for (const cid of blobs) {
-    const blob = await call(access.sourceUrl, "com.atproto.sync.getBlob", {
-      params: { did: run.source.did, cid },
-    });
-    ok(blob, "source blob download");
+  for (const { cid, bytes } of run.inventory.blobs) {
+    const pending = await destinationRead(
+      "com.atproto.server.checkAccountStatus",
+    );
+    expect(pending.importedBlobs).toBeLessThan(pending.expectedBlobs);
+    const missing = await destinationRead("com.atproto.repo.listMissingBlobs");
+    expect(missing.blobs.map((blob) => blob.cid)).toContain(cid);
     ok(
       await call(
         run.prepared.destinationEndpoint,
         "com.atproto.repo.uploadBlob",
         {
           token: run.destination.accessJwt,
-          bytes: blob.content,
-          type: blob.headers.get("content-type") ?? "application/octet-stream",
+          bytes,
+          type: "image/png",
         },
       ),
       "destination blob upload",
     );
   }
-  const status = json(
-    await call(
-      run.prepared.destinationEndpoint,
-      "com.atproto.server.checkAccountStatus",
-      { token: run.destination.accessJwt },
-    ),
-  );
+  const status = await destinationRead("com.atproto.server.checkAccountStatus");
+  expect(status.expectedBlobs).toBe(run.inventory.blobs.length);
+  expect(status.importedBlobs).toBe(status.expectedBlobs);
+  expect(
+    (await destinationRead("com.atproto.repo.listMissingBlobs")).blobs,
+  ).toEqual([]);
   expect(status.activated).toBe(false);
   expect(status.repoCommit).toBeTruthy();
+  expect(status.repoRev, "destination revision after import").toEqual(
+    expect.stringMatching(/.+/),
+  );
+  expect(status.repoRev, "import wrote a new revision").not.toBe(revBefore);
 });
 
 test("the tracked credential refreshes, then activates through the stock destination callback", async () => {
@@ -297,8 +430,7 @@ test("the activated account serves the transferred state and the client deactiva
   await expectDestinationServes(access, {
     endpoint: run.prepared.destinationEndpoint,
     did: run.source.did,
-    blob: run.blob,
-    displayName: "Public arrival journey",
+    inventory: run.inventory,
     handle: run.destinationHandle,
   });
   // The recovery key leads the destination move, followed by the approved list.
@@ -394,23 +526,37 @@ test("destination OTP and independent browser OAuth retain access after the move
       "write used a different access token",
     ).toBe(true);
   });
-  const account = await page.context().newPage();
-  await account.goto(`${config.issuer}/account`);
-  const sessions = account.locator("#sessions");
-  await expect(
-    sessions.getByRole("button", { name: "Revoke OAuth session", exact: true }),
-  ).toHaveCount(1);
-  await expectSdkAction(page, {
-    issuer: config.issuer,
-    path: "/oauth/revoke",
-    button: "Revoke this client session",
-  });
-  await expect(page.getByLabel("Handle", { exact: true })).toBeVisible();
+  await test.step("revocation removes the browser SDK client's server session", async () => {
+    const account = await page.context().newPage();
+    await account.goto(`${config.issuer}/account`);
+    const sessions = account.locator("#sessions");
+    const sdkSession = sessions
+      .locator("li")
+      .filter({
+        has: account.getByText(`${sdk.browserUrl}/oauth-client-metadata.json`, {
+          exact: true,
+        }),
+      })
+      .filter({
+        has: account.getByRole("button", {
+          name: "Revoke OAuth session",
+          exact: true,
+        }),
+      });
+    await expect(sdkSession).toHaveCount(1);
+    await expectSdkAction(page, {
+      issuer: config.issuer,
+      path: "/oauth/revoke",
+      button: "Revoke this client session",
+    });
+    await expect(page.getByLabel("Handle", { exact: true })).toBeVisible();
 
-  await account.reload();
-  await expect(account.getByTestId("account-did")).toHaveText(identity.did);
-  await expect(sessions).toContainText("No active OAuth refresh sessions.");
-  await account.close();
+    await account.reload();
+    await expect(account.getByTestId("account-did")).toHaveText(identity.did);
+    await expect(sessions).toContainText("No active OAuth refresh sessions.");
+    await expect(sdkSession).toHaveCount(0);
+    await account.close();
+  });
 
   await test.step("the separate confidential client authorizes and writes as the migrated DID", async () => {
     await confidential.beginAuthorization(page, {
