@@ -326,12 +326,12 @@ test("observed today: a superseded signed handoff is refused but claims the arri
 
 test("the status page explains the operator dependency of the superseded handoff's open request", async () => {
   expect(locked?.move, "locked arrival from the observed test").toBeDefined();
-  test.fail(true, unresolvedDefect);
   const saved = await arrivalSummary(
     locked.page,
     config,
     locked.move.prepared.operationId,
   );
+  test.fail(true, unresolvedDefect);
   expect(saved.unresolved).toBe(true);
 });
 
@@ -343,19 +343,33 @@ test("a superseded signed handoff is refused without a claim, so the user can pr
     page,
     "superseded",
   );
-  // Only the outcome is expected to fail; setup above must pass.
+  const result = refusal(await submit(stale));
+  expect(result.status, "handoff refused").toBeGreaterThanOrEqual(400);
+  expect(result.status, "client refusal").toBeLessThan(500);
+  const saved = await arrivalSummary(page, config, move.prepared.operationId);
+  if (saved.version !== held.saved.version) {
+    expect(result).toEqual({ status: 409, error: "OperationRecoveryRequired" });
+    expect(saved.version).toBeGreaterThan(held.saved.version);
+    await expectHeld(
+      page,
+      move,
+      {
+        ...held,
+        saved: { ...held.saved, version: saved.version },
+      },
+      "superseded handoff",
+    );
+  } else {
+    await expectHeld(page, move, held, "superseded handoff");
+    const again = await incomingPost(page, config, "/incoming/prepare", {
+      did: move.source.did,
+      handle: `e${move.tag}${config.handleDomains[0]}`,
+      otp: await freshIncomingCode(page, config, move.email),
+    });
+    expect(again.status, "new preparation").toBe(200);
+  }
   test.fail(true, supersededDefect);
-  // Which error names the refusal is not decided; the intended outcome is
-  // that nothing is published or claimed.
-  expect((await submit(stale)).status, "superseded handoff refused").not.toBe(
-    200,
+  expect(saved.version, "refusal leaves the arrival unclaimed").toBe(
+    held.saved.version,
   );
-  // Today this fails: the version has advanced.
-  await expectHeld(page, move, held, "superseded handoff");
-  const again = await incomingPost(page, config, "/incoming/prepare", {
-    did: move.source.did,
-    handle: `e${move.tag}${config.handleDomains[0]}`,
-    otp: await freshIncomingCode(page, config, move.email),
-  });
-  expect(again.status, "new preparation").toBe(200);
 });

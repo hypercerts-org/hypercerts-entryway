@@ -304,7 +304,14 @@ export async function arrivalSummary(page, config, operationId) {
     did: fields.DID,
     state: await page.getByRole("status").first().textContent(),
     // The page's "saved server request is unresolved" notice.
-    unresolved: (await page.getByRole("alert").count()) > 0,
+    unresolved:
+      (await page
+        .getByRole("alert")
+        .filter({
+          hasText:
+            "A saved server request is unresolved. Contact the service operator",
+        })
+        .count()) > 0,
   };
 }
 

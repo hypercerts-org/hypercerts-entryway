@@ -202,8 +202,10 @@ if (phase === "after-restart") {
     expect({
       status: resumed.status,
       cacheControl: resumed.cacheControl,
-      body: resumed.body,
-    }).toEqual({ status: 200, cacheControl: "no-store", body: {} });
+    }).toEqual({ status: 200, cacheControl: "no-store" });
+    expect(isDeepStrictEqual(resumed.body, {}), "empty replay response").toBe(
+      true,
+    );
     // Still the one handoff: the replay published nothing new.
     expect(
       isDeepStrictEqual(await plcHead(access, run.source.did), run.operation),

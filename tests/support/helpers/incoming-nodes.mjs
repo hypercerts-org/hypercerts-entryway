@@ -45,6 +45,7 @@ export function nodeRouting(issuer, order) {
   // project on the same ingress) cannot match the first order's receipts.
   const run = randomUUID().slice(0, 8);
   let tags = 0;
+  const targets = new Map();
   // One entry per stage: pinned stages name the node the test chose, observed
   // ones the node the ingress chose for the PDS's own request.
   const stages = [];
@@ -130,20 +131,32 @@ export function nodeRouting(issuer, order) {
       const node = order[role];
       const expected = { node, instanceId: ids.get(node) };
       const tag = `${run}-${++tags}`;
-      current = { ...expected, tag };
+      targets.set(tag, expected);
+      const record = {
+        stage: name,
+        pinned: true,
+        ...expected,
+        observed: [],
+        did,
+        requests: 0,
+        browserResponses: 0,
+        unpinned: [],
+        other: [],
+      };
+      stages.push(record);
       const start = await mark();
       const started = new Set();
+      const pending = new Set();
       const responses = [];
       const track = (request) => {
-        if (new URL(request.url()).origin === origin) started.add(request);
+        if (new URL(request.url()).origin !== origin) return;
+        started.add(request);
+        if (request.method() !== "OPTIONS") pending.add(request);
       };
       const collect = (response) => {
-        if (
-          started.has(response.request()) &&
-          response.request().method() !== "OPTIONS"
-        )
-          responses.push(response);
+        if (pending.delete(response.request())) responses.push(response);
       };
+      const failed = (request) => pending.delete(request);
       const pattern = `${origin}/**`;
       const pin = (route) =>
         route.continue({
@@ -153,51 +166,76 @@ export function nodeRouting(issuer, order) {
             "x-profile-stage": tag,
           },
         });
-      if (page) {
-        page.context().on("request", track);
-        page.context().on("response", collect);
-        if (via === "headers")
-          await page.context().setExtraHTTPHeaders(this.headers(role));
-        else await page.context().route(pattern, pin);
-      }
+      current = { ...expected, tag };
       let result;
+      const errors = [];
       try {
+        if (page) {
+          page.context().on("request", track);
+          page.context().on("response", collect);
+          page.context().on("requestfailed", failed);
+          if (via === "headers")
+            await page.context().setExtraHTTPHeaders(this.headers(role));
+          else await page.context().route(pattern, pin);
+        }
         result = await action();
+      } catch (error) {
+        errors.push(error);
+      }
+      if (page) page.context().off("request", track);
+      try {
+        if (page)
+          await expect
+            .poll(() => pending.size, {
+              message: `${name}: issuer responses settled`,
+              timeout: 10000,
+            })
+            .toBe(0);
+      } catch (error) {
+        errors.push(error);
+      }
+      try {
+        const seen = await since(start);
+        const tagged = seen.filter((receipt) => receipt.stage === tag);
+        record.requests = tagged.length;
+        record.unpinned = seen
+          .filter((receipt) => !receipt.pinned)
+          .map(describe);
+        record.other = seen
+          .filter((receipt) => receipt.pinned && receipt.stage !== tag)
+          .map(describe);
+        record.observed = [
+          ...new Set(tagged.map(({ instanceId }) => instanceId)),
+        ];
+        for (const receipt of seen.filter(({ stage }) => targets.has(stage)))
+          expect(
+            {
+              pinned: receipt.pinned,
+              node: receipt.node,
+              instanceId: receipt.instanceId,
+            },
+            `${name}: ${receipt.method} ${receipt.path}`,
+          ).toEqual({ pinned: true, ...targets.get(receipt.stage) });
+      } catch (error) {
+        errors.push(error);
       } finally {
         current = undefined;
         if (page) {
-          if (via === "headers") await page.context().setExtraHTTPHeaders({});
-          else await page.context().unroute(pattern, pin);
-          page.context().off("request", track);
           page.context().off("response", collect);
+          page.context().off("requestfailed", failed);
+          try {
+            if (via === "headers") await page.context().setExtraHTTPHeaders({});
+            else await page.context().unroute(pattern, pin);
+          } catch (error) {
+            errors.push(error);
+          }
         }
+        record.browserResponses = responses.length;
+        record.observed = [
+          ...new Set([...record.observed, ...responses.map(instanceOf)]),
+        ];
       }
-      const seen = await since(start);
-      const tagged = seen.filter((receipt) => receipt.stage === tag);
-      const record = {
-        stage: name,
-        pinned: true,
-        node,
-        instanceId: expected.instanceId,
-        // Instance IDs that actually answered this stage: its tagged receipts
-        // and the issuer responses its browser requests received.
-        observed: [
-          ...new Set([
-            ...tagged.map(({ instanceId }) => instanceId),
-            ...responses.map(instanceOf),
-          ]),
-        ],
-        did,
-        requests: tagged.length,
-        browserResponses: responses.length,
-        unpinned: seen.filter((receipt) => !receipt.pinned).map(describe),
-        // Pinned receipts that landed in this window for another stage (a
-        // response that arrived late) or without a tag: reported, not judged.
-        other: seen
-          .filter((receipt) => receipt.pinned && receipt.stage !== tag)
-          .map(describe),
-      };
-      stages.push(record);
+      if (errors.length) throw errors[0];
       if (via === "headers")
         expect(
           [...started]
@@ -215,16 +253,7 @@ export function nodeRouting(issuer, order) {
           instanceOf(response),
           `${name}: ${new URL(response.url()).pathname} served by ${node}`,
         ).toBe(expected.instanceId);
-      expect(tagged.length, `${name}: tagged receipts`).toBeGreaterThan(0);
-      for (const receipt of tagged)
-        expect(
-          {
-            pinned: receipt.pinned,
-            node: receipt.node,
-            instanceId: receipt.instanceId,
-          },
-          `${name}: ${receipt.method} ${receipt.path}`,
-        ).toEqual({ pinned: true, ...expected });
+      expect(record.requests, `${name}: tagged receipts`).toBeGreaterThan(0);
       return result;
     },
     /**
@@ -235,17 +264,46 @@ export function nodeRouting(issuer, order) {
     async observe(name, did, path, action) {
       if (!enabled) return action();
       const start = await mark();
-      const result = await action();
-      const seen = (await since(start)).filter(
-        (receipt) => !receipt.pinned && receipt.path === path,
-      );
-      expect(seen.length, `${name}: unpinned ${path} receipt`).toBeGreaterThan(
-        0,
-      );
-      for (const receipt of seen) {
-        expect([...ids.values()]).toContain(receipt.instanceId);
-        stages.push({ stage: name, pinned: false, did, ...describe(receipt) });
+      let result;
+      const errors = [];
+      try {
+        result = await action();
+      } catch (error) {
+        errors.push(error);
       }
+      const previous = stages.length;
+      try {
+        const seen = (await since(start)).filter(
+          (receipt) => !receipt.pinned && receipt.path === path,
+        );
+        for (const receipt of seen) {
+          stages.push({
+            stage: name,
+            pinned: false,
+            did,
+            ...describe(receipt),
+          });
+          expect([...ids.values()]).toContain(receipt.instanceId);
+        }
+        expect(
+          seen.length,
+          `${name}: unpinned ${path} receipt`,
+        ).toBeGreaterThan(0);
+      } catch (error) {
+        errors.push(error);
+      }
+      if (stages.length === previous)
+        stages.push({
+          stage: name,
+          pinned: false,
+          did,
+          path,
+          node: "unobserved",
+          instanceId: null,
+          method: null,
+          status: null,
+        });
+      if (errors.length) throw errors[0];
       return result;
     },
     /**
