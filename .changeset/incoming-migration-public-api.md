@@ -9,10 +9,7 @@ It does not certify that an account's data transferred completely, and it adds
 one nullable schema column (the recovery key) and no configuration key. The routes are mounted on every
 deployment (single-node SQLite, multi-node, and deployments with no migration
 intent) with no configuration key or opt-out. Multi-node PostgreSQL deployments
-are not qualified for incoming migration: a two-node run of the public journey,
-with stages alternating between nodes and one OAuth grant refreshed on the other
-node, is one-off evidence and not a CI gate, and the failure cases do not run
-there.
+are not qualified for incoming migration.
 
 What operators and users now see:
 
@@ -94,8 +91,6 @@ What operators and users now see:
   `OperationLeaseLost`, `OperationNoLongerPending`, `OperationRecoveryRequired`.
 
 See the [incoming migration guide](https://github.com/hypercerts-org/hypercerts-entryway/blob/main/docs/incoming-migration.md)
-for the accepted contract. The repository's own public client runs the whole
-journey, its failure cases and post-move OAuth against an independent stock
-source PDS in the test sandbox on every pull request. That is not release
-qualification: no unmodified existing migration tool has been shown to complete
-the journey.
+for the accepted contract and its known defects. Release qualification is not
+complete: no unmodified existing migration tool has been shown to complete the
+journey.

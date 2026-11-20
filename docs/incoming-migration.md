@@ -808,8 +808,8 @@ approved safe retry, and `readArrivalFamilies` and `readArrivalFamily` are read-
 
 ### Development: mounted surfaces and pending guard
 
-**Status: implemented.** On the two-node PostgreSQL profile the public journey has
-been run as one-off evidence, not a CI gate
+**Status: implemented.** On the two-node PostgreSQL profile the public journey can
+be run by hand as one-off evidence, not a CI gate
 ([testing](testing.md#public-incoming-journey-on-two-nodes)). It pins consecutive
 migration stages to different nodes for the same DID and refreshes one OAuth grant
 on the node that did not issue it, under one issuer; activation is observed, not
@@ -953,9 +953,9 @@ later. The predicate and the reviewed action names live in
 `src/accounts/pending-arrival.ts` and read saved arrival facts. Existing checks
 refuse status, handle, deletion and PLC changes (`MigrationPending` 409), and ordinary
 XRPC authentication, ordinary refresh and ordinary login refuse a `provisioning`
-account (a refused refresh does not revoke the family). Browser email sign-in still
-succeeds by design: it creates a session and then shows the pending page rather than
-settings or a reactivation prompt. The console, OAuth consent and signup pages show an
+account (a refused refresh does not revoke the family). Browser email sign-in is
+designed to succeed: it should create a session and then show the pending page rather
+than settings or a reactivation prompt. The console, OAuth consent and signup pages show an
 honest pending page. A single enforced guard is follow-up work; this is decided.
 
 **Known defect:** today browser email sign-in of a pending account does not succeed.
@@ -1440,7 +1440,7 @@ the chosen transferred state, activation authorization across every entrypoint a
 bounded interrupted/lost-response recovery. Sample assertions demonstrate those
 scenarios; they do not certify all source data or all concurrent writes. The
 repository's own public client covers records and blobs, the four repository
-shapes, the integrity assertions, a lost `createAccount` response and a restart
+shapes (by hand; the per-PR job runs the blob-bearing shape), the integrity assertions, a lost `createAccount` response and a restart
 between admitted steps ([testing](testing.md#incoming-migration-targets)).
 Activation authorization across every entrypoint and an interruption during
 provisioning remain outstanding, and no unmodified existing tool has been shown to

@@ -165,8 +165,8 @@ with the [flow](../tests/flows/incoming-public-migration.md) giving every step.
 Their results are reported with the change they support, not here. Outstanding:
 
 - No unmodified existing migration tool has been shown to run the incoming flow.
-  The patched goat client and the PDS MOOver fork below are a harness and
-  optional corroboration, outside acceptance.
+  The patched goat client is a harness and the PDS MOOver fork optional
+  corroboration; neither is part of acceptance.
 - Two known defects are pinned as observed, with the intended behaviour as
   expected failures: email-code sign-in of a pending account answers 404, so the
   OAuth consent guard for a pending account is not exercised; and a handoff
@@ -178,12 +178,15 @@ Their results are reported with the change they support, not here. Outstanding:
   interruption during provisioning (only a restart between admitted steps is
   run), and source writes after export (outside the client-managed contract)
   are not covered.
-- A continuation from a claim that lost its lease, and a DID that becomes hosted
-  after preparation, are covered only by contract tests; neither shows the
-  current owner completing the move.
+- A continuation from a claim that lost its lease is covered only by contract
+  tests, which do not show the current owner completing the move; a DID that
+  becomes hosted after preparation is covered only by a unit test.
 - Multi-node operation is not qualified: the two-node run does not run the
   failure cases, does not pin activation, and exercises no real CORS preflight.
 - The sandbox does not require invitations, so no run presents one.
+- Playwright HTML and JSON reports are not kept: they are written under
+  `/app/tests/artifacts` inside the browser container, which is not mounted.
+  Only the phase logs under `ACCEPTANCE_REPORT_DIR` survive.
 
 ### Public incoming journey
 
@@ -240,8 +243,8 @@ them. It is kept out of `run-resilience-profile.sh`, whose exercise has a
 
 The step runs `tests/browser/incoming-public-journey.spec.mjs` with
 `INCOMING_TWO_NODE=1` as two Playwright projects, `entryway-first` and
-`entryway-replica-first`; the second swaps the node roles. Reports and the log
-use the `incoming-two-node` prefix. The spec reads both nodes' instance IDs from
+`entryway-replica-first`; the second swaps the node roles. The phase log uses
+the `incoming-two-node` prefix. The spec reads both nodes' instance IDs from
 the ingress (`/__profile/nodes`) and requires two ready, distinct processes. Each
 Entryway-facing stage is pinned to one node: XRPC calls send the ingress's
 `x-profile-node` header, and browser pages route every request to the issuer

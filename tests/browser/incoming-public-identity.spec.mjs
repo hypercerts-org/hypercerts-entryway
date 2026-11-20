@@ -325,6 +325,7 @@ test("observed today: a superseded signed handoff is refused but claims the arri
 });
 
 test("the status page explains the operator dependency of the superseded handoff's open request", async () => {
+  expect(locked?.move, "locked arrival from the observed test").toBeDefined();
   test.fail(true, unresolvedDefect);
   const saved = await arrivalSummary(
     locked.page,
@@ -337,12 +338,13 @@ test("the status page explains the operator dependency of the superseded handoff
 test("a superseded signed handoff is refused without a claim, so the user can prepare again", async ({
   page,
 }) => {
-  test.fail(true, supersededDefect);
   test.setTimeout(240_000);
   const { move, stale, held, submit } = await supersededMove(
     page,
     "superseded",
   );
+  // Only the outcome is expected to fail; setup above must pass.
+  test.fail(true, supersededDefect);
   // Which error names the refusal is not decided; the intended outcome is
   // that nothing is published or claimed.
   expect((await submit(stale)).status, "superseded handoff refused").not.toBe(
