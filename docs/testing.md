@@ -286,16 +286,24 @@ with `/incoming/recover`, the pending account before activation, a move
 without a recovery key, and two PLC head changes at the source: one between the
 published handoff and creation, and one that supersedes a signed handoff before it
 is submitted. The source changes are ordinary `updateHandle` requests, which the
-stock source signs and publishes itself. These cases add about 55 seconds. Email-code sign-in of a pending account, at `/login` and
-in OAuth authorization, is documented to succeed and show the pending page; today
-it answers 404 "Unable to continue" with no session. Ordinary tests pin that
-observed page, so any change fails them, and two separate tests assert the
-documented behaviour under `test.fail`. Playwright counts those two as expected
-failures and the run as passed; an unexpected pass fails it. The phase result is
-the Playwright totals line and exit status. The summary filter
-(`scripts/ci-summary.py`) strips colour, so it prints these two titles with
+stock source signs and publishes itself. Each case is its own move with fresh
+accounts.
+
+Two known defects are pinned as observed. Email-code sign-in of a pending
+account, at `/login` and in OAuth authorization, is documented to succeed and
+show the pending page; today it answers 404 "Unable to continue" with no
+session. A handoff signed before the source head moved is refused with 409
+`OperationRecoveryRequired` but claims the arrival, which then holds the DID
+(see the flow's case 9). Ordinary tests whose titles start "observed today:"
+pin what happens now, so any change fails them, and four separate tests assert
+the documented or intended behaviour under `test.fail`: the two sign-ins, a
+superseded handoff refused without a claim, and the status page's
+unresolved-request notice for the claimed arrival. Playwright counts those four
+as expected failures and the run as passed; an unexpected pass fails it. The
+phase result is the Playwright totals line and exit status. The summary filter
+(`scripts/ci-summary.py`) strips colour, so it prints these four titles with
 `status=failed`: Playwright marks an expected failure with a green cross. Read
-those two lines as expected failures, not as a failed run.
+those four lines as expected failures, not as a failed run.
 
 Phases `before-restart` and `after-restart`
 (`tests/browser/incoming-public-restart.spec.mjs`) run apart from those cases: the
@@ -323,9 +331,10 @@ codes travel only in the `Entryway-Arrival-Code` request header, so no step titl
 carries them. Only statuses and error names of refused calls are asserted.
 
 Rate-limit headroom, from the source defaults (fixed 10-minute windows kept in the
-database, so the restart does not reset them): the target makes eleven
-`/incoming/prepare` requests (ten in `cases`, five of them refused, and one before
-the restart) and two ordinary signups against the per-IP signup budget of 30, and
+database, so the restart does not reset them): the target makes twelve
+`/incoming/prepare` requests (eleven in `cases`, five of them refused, and one
+before the restart; one more in `cases` once the superseded-handoff defect is
+fixed) and two ordinary signups against the per-IP signup budget of 30, and
 eight `createAccount` requests with an arrival code (six in `cases`, two after the
 restart) against the per-IP `createAccount` budget of 30. Both
 budgets are shared with ordinary signup and with the journey that runs before in
@@ -336,15 +345,20 @@ the `cases` destination email, gets up to five sign-in codes: preparation, the
 two pending `/login` sign-ins, and the two OAuth sign-ins if they fall back to
 the email form. That is the limit, so add no further sign-in to that address.
 Fresh incoming codes are limited to five per user per window; the target-conflict
-owner asks for four and the superseded-handoff owner for three, the others for two
-or fewer.
+owner asks for four and the observed superseded-handoff owner for three, the others
+for two or fewer.
 
 Not every identity case can be provoked through public endpoints. A continuation
 from a claim that lost its lease, and a DID that becomes hosted after preparation,
 are left to the contract tests; the
 [flow](../tests/flows/incoming-public-migration.md#failure-and-restart-cases) gives
-the reasons and the tests. The two-node run adds no such case: two nodes contend
-for a live lease (`OperationPending`) rather than lose it.
+the reasons and the tests. For a lost lease those tests show that a stale owner
+is refused with `OperationLeaseLost`, that its successor resumes the claim and
+then needs recovery for an open receipt (`OperationRecoveryRequired`) or ends
+pending, and that the listed arrival storage writes refuse a stale owner
+(`claimArrival` is not among them). They do not show the current owner going on
+to complete the move, and no live run shows it. The two-node run adds no such
+case: two nodes contend for a live lease (`OperationPending`) rather than lose it.
 
 List the three selections without a sandbox:
 
@@ -700,7 +714,8 @@ an interruption during provisioning, and cleanup of an abandoned published hando
 [failure cases](#public-incoming-failure-cases) cover a lost `createAccount` response, a
 restart between admitted steps, a destination already hosting the handle or DID, and a
 source PLC head change before handoff submission or before creation. A lost lease is
-covered by contract tests only. Preserve canonical
+covered only in part, by contract tests: a stale owner is refused, but the current
+owner completing the move is not shown. Preserve canonical
 identity/custody, placement, saved-user binding, backend-state and durable-owner
 checks; do not require the abandoned final-source certification or global write
 barrier as a prerequisite.
