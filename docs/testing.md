@@ -277,11 +277,16 @@ After `up`, this runs the public failure cases of the
 [incoming flow](../tests/flows/incoming-public-migration.md#failure-and-restart-cases)
 through the same public pages and XRPC routes as the journey, in three browser
 phases selected by `INCOMING_PUBLIC_FAILURES=1` and `INCOMING_FAILURES_PHASE`.
-Phase `cases` (`tests/browser/incoming-public-failures.spec.mjs`) needs no restart:
+Phase `cases` (`tests/browser/incoming-public-failures.spec.mjs`, then
+`tests/browser/incoming-public-identity.spec.mjs`) needs no restart:
 an expired and a foreign source service JWT before admission, a destination email
-an account took after preparation, a discarded `createAccount` response recovered
-with `/incoming/recover`, the pending account before activation, and a move
-without a recovery key. Email-code sign-in of a pending account, at `/login` and
+an account took after preparation, a destination handle or DID the target already
+hosts, a discarded `createAccount` response recovered
+with `/incoming/recover`, the pending account before activation, a move
+without a recovery key, and two PLC head changes at the source: one between the
+published handoff and creation, and one that supersedes a signed handoff before it
+is submitted. The source changes are ordinary `updateHandle` requests, which the
+stock source signs and publishes itself. These cases add about 55 seconds. Email-code sign-in of a pending account, at `/login` and
 in OAuth authorization, is documented to succeed and show the pending page; today
 it answers 404 "Unable to continue" with no session. Ordinary tests pin that
 observed page, so any change fails them, and two separate tests assert the
@@ -318,10 +323,11 @@ codes travel only in the `Entryway-Arrival-Code` request header, so no step titl
 carries them. Only statuses and error names of refused calls are asserted.
 
 Rate-limit headroom, from the source defaults (fixed 10-minute windows kept in the
-database, so the restart does not reset them): the target makes four
-`/incoming/prepare` requests (three in `cases`, one before the restart) against
-the per-IP signup budget of 30, and four `createAccount` requests with an arrival
-code (two in each half) against the per-IP `createAccount` budget of 30. Both
+database, so the restart does not reset them): the target makes eleven
+`/incoming/prepare` requests (ten in `cases`, five of them refused, and one before
+the restart) and two ordinary signups against the per-IP signup budget of 30, and
+eight `createAccount` requests with an arrival code (six in `cases`, two after the
+restart) against the per-IP `createAccount` budget of 30. Both
 budgets are shared with ordinary signup and with the journey that runs before in
 the same sandbox (one preparation, two creations). Handoff submission has no
 budget. Browser email sign-in has no per-IP budget. Its budget is five codes per
@@ -329,8 +335,16 @@ address per window, and two automatic OAuth codes per DID. The busiest address,
 the `cases` destination email, gets up to five sign-in codes: preparation, the
 two pending `/login` sign-ins, and the two OAuth sign-ins if they fall back to
 the email form. That is the limit, so add no further sign-in to that address.
-Fresh incoming codes are limited to five per user per window; each user here
-asks for two.
+Fresh incoming codes are limited to five per user per window; the target-conflict
+owner asks for four and the superseded-handoff owner for three, the others for two
+or fewer.
+
+Not every identity case can be provoked through public endpoints. A continuation
+from a claim that lost its lease, and a DID that becomes hosted after preparation,
+are left to the contract tests; the
+[flow](../tests/flows/incoming-public-migration.md#failure-and-restart-cases) gives
+the reasons and the tests. The two-node run adds no such case: two nodes contend
+for a live lease (`OperationPending`) rather than lose it.
 
 List the three selections without a sandbox:
 
@@ -683,8 +697,10 @@ checks the chosen repository shape, activation and post-move access. Additional 
 under the [accepted C4 contract](incoming-migration.md#c4-client-managed-migration-contract-accepted)
 remains outstanding: authorization and refusal across every pending-arrival activation entrypoint,
 an interruption during provisioning, and cleanup of an abandoned published handoff. The
-[failure cases](#public-incoming-failure-cases) cover a lost `createAccount` response and a
-restart between admitted steps only. Preserve canonical
+[failure cases](#public-incoming-failure-cases) cover a lost `createAccount` response, a
+restart between admitted steps, a destination already hosting the handle or DID, and a
+source PLC head change before handoff submission or before creation. A lost lease is
+covered by contract tests only. Preserve canonical
 identity/custody, placement, saved-user binding, backend-state and durable-owner
 checks; do not require the abandoned final-source certification or global write
 barrier as a prerequisite.
