@@ -90,8 +90,9 @@ export function nodeRouting(issuer, order) {
       const topology = await (
         await fetch(new URL("/__profile/nodes", issuer))
       ).json();
-      expect(topology.nodes.map(({ node }) => node).sort()).toEqual(
-        order.toSorted(),
+      const byName = (a, b) => a.localeCompare(b);
+      expect(topology.nodes.map(({ node }) => node).toSorted(byName)).toEqual(
+        order.toSorted(byName),
       );
       expect(topology.nodes.every(({ ready }) => ready)).toBe(true);
       for (const { node, instanceId } of topology.nodes)
