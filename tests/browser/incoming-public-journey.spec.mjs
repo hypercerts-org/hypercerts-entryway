@@ -16,6 +16,8 @@ import {
 import {
   expectSdkAction,
   expectSdkWrite,
+  matchesGrant,
+  tokenGrant,
   expectSourceCutover,
 } from "../support/helpers/incoming-post-move.mjs";
 import {
@@ -431,6 +433,9 @@ test("the client transfers its chosen state directly between the pinned endpoint
   ).toEqual([]);
   expect(status.activated).toBe(false);
   expect(status.repoCommit).toBeTruthy();
+  expect(status.repoRev, "destination revision after import").toEqual(
+    expect.stringMatching(/.+/),
+  );
   expect(status.repoRev, "import wrote a new revision").not.toBe(revBefore);
 });
 
@@ -584,13 +589,6 @@ test("destination OTP and independent browser OAuth retain access after the move
   const endpoint = run.prepared.destinationEndpoint;
   const did = identity.did;
   const writes = [];
-  const tokenGrant = (grantType) => (candidate) =>
-    candidate.url() === new URL("/oauth/token", config.issuer).href &&
-    candidate.request().method() === "POST" &&
-    new URLSearchParams(candidate.request().postData() ?? "").get(
-      "grant_type",
-    ) === grantType &&
-    candidate.ok();
   // On two nodes: the email-code session and the authorization-code exchange
   // on the first node, the refresh of that same grant on the second.
   await nodes.stage(
@@ -608,7 +606,7 @@ test("destination OTP and independent browser OAuth retain access after the move
     did,
     async () => {
       const [exchange] = await Promise.all([
-        page.waitForResponse(tokenGrant("authorization_code"), {
+        page.waitForResponse(tokenGrant(config.issuer, "authorization_code"), {
           timeout: 60_000,
         }),
         test.step("destination handle prompts for consent and #issuer names Entryway", () =>
@@ -629,6 +627,10 @@ test("destination OTP and independent browser OAuth retain access after the move
             endpoint,
             text: `Migrated ${unique}`,
           }));
+      expect(
+        matchesGrant(original.authorization, grant),
+        "write uses the authorization-code access token",
+      ).toBe(true);
       await page.reload();
       await expect(page.locator("#verified-did")).toHaveText(identity.did);
       writes.push(original.uri);
@@ -657,7 +659,8 @@ test("destination OTP and independent browser OAuth retain access after the move
           ) === grant.refresh_token,
           "refresh presents the code exchange's refresh token",
         ).toBe(true);
-        expect((await refreshed.json()).sub).toBe(did);
+        const refreshedGrant = await refreshed.json();
+        expect(refreshedGrant.sub).toBe(did);
         await expect(page.getByRole("status")).toHaveText(
           "Authorization refreshed",
         );
@@ -667,6 +670,10 @@ test("destination OTP and independent browser OAuth retain access after the move
           endpoint,
           text: `Refreshed ${unique}`,
         });
+        expect(
+          matchesGrant(refreshedWrite.authorization, refreshedGrant),
+          "write uses the refreshed access token",
+        ).toBe(true);
         expect(
           refreshedWrite.authorization !== originalAuthorization,
           "write used a different access token",
