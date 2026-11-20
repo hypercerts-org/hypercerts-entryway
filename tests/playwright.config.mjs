@@ -76,24 +76,24 @@ const selected = [
   [publicRun, "public-browser", "public-browser.spec.mjs"],
 ].find(([active]) => active);
 const artifactPrefix = selected?.[1] ?? "browser";
+// Projects belong to the selection that won, never to another one.
+const selectedProjects = {
+  "incoming-two-node": [
+    ["entryway", "entryway-replica"],
+    ["entryway-replica", "entryway"],
+  ].map((nodes) => ({ name: `${nodes[0]}-first`, metadata: { nodes } })),
+  "incoming-public-shapes": [
+    "empty",
+    "blob-free",
+    "blob-bearing",
+    "multi-collection",
+  ].map((shape) => ({ name: shape, metadata: { shape } })),
+};
 export default defineConfig({
   testDir: "./browser",
   testMatch: selected?.[2] ?? defaultMatch,
   // Projects follow the winning selection, not every flag that happens to be set.
-  projects:
-    artifactPrefix === "incoming-two-node"
-      ? [
-          ["entryway", "entryway-replica"],
-          ["entryway-replica", "entryway"],
-        ].map((nodes) => ({
-          name: `${nodes[0]}-first`,
-          metadata: { nodes },
-        }))
-      : artifactPrefix === "incoming-public-shapes"
-        ? ["empty", "blob-free", "blob-bearing", "multi-collection"].map(
-            (shape) => ({ name: shape, metadata: { shape } }),
-          )
-        : undefined,
+  projects: selectedProjects[artifactPrefix],
   fullyParallel: false,
   workers: 1,
   retries: 0,
