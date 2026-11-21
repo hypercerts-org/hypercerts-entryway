@@ -51,6 +51,28 @@ It is not a reset command. A completed fixture is revisited with
 `./tests/local.sh migration-resume`. Errors stop the flow; manual recovery is
 never invoked automatically. `./tests/local.sh down` retains state and volumes.
 
+## Incoming migration
+
+`fresh` runs the `incoming` group in its own disposable project:
+`incoming-public-journey`, then `incoming-public-failures`, the same two targets
+the per-PR `incoming` CI job runs. `./tests/local.sh fresh-group
+incoming-public-journey incoming-public-failures` runs that group alone.
+
+1. `incoming-public-journey`: one fresh account moves from an independent stock
+   source PDS into Entryway through public endpoints, with integrity, inventory,
+   PLC and hosting checks, then post-move email-code sign-in and OAuth.
+2. `incoming-public-failures`: refused proofs, taken emails, handles and DIDs,
+   source PLC head changes, a lost `createAccount` response, the pending account,
+   and a restart of Entryway between two admitted steps.
+
+Two further targets run by hand and are not in CI:
+`./tests/local.sh fresh-group incoming-public-shapes` runs the journey for empty,
+blob-free, blob-bearing and multi-collection repositories, and
+`./tests/local.sh fresh-group incoming-two-node` runs it once on the two-node
+PostgreSQL profile in each node order, as one-off evidence. See
+[incoming migration targets](../../docs/testing.md#incoming-migration-targets) for
+what each proves, the known defects and what remains outstanding.
+
 ## Evidence and boundaries
 
 Reports/screenshots are under `tests/artifacts/`. Keep generated configuration,

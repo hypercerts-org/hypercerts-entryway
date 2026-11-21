@@ -2,8 +2,22 @@
 
 **Status:** accepted design, updated November 11, 2026 for the client-managed
 migration contract and amended November 16, 2026 for claim at handoff. The routes
-below are mounted; independent public runtime qualification of the whole journey
-has not been completed.
+below are mounted. The repository's own public-endpoint client runs the whole
+journey, its failure cases and post-move access against an independent stock
+source PDS in Atmosphere in a Box; the public journey and failure cases run on
+every pull request, and a two-node PostgreSQL run is one-off evidence, not a CI
+gate. [Testing](testing.md#incoming-migration-targets) lists what each run checks
+and what remains outstanding. This is not release qualification: no unmodified
+existing migration tool has been shown to run this flow.
+
+**Known defects.** Browser email sign-in of a pending account answers 404
+"Account not found" instead of showing the pending page (see the
+[pending guard](#development-mounted-surfaces-and-pending-guard)). A handoff
+signed before the source PLC head moved is refused but claims the arrival first,
+so the DID, handle and email stay held at this Entryway with no supported release
+(see the [handoff](#2-source-authorized-authority-handoff)). **Known limitation:**
+a published handoff whose destination account is never created leaves the
+Entryway rotation key on the DID (see [cancellation](#cancellation)).
 
 Incoming migration moves an existing account from an external PDS to a PDS behind
 Entryway. The account keeps its DID; the migration client transfers its records
@@ -159,7 +173,10 @@ sequenceDiagram
 
 The migration tool follows an Entryway-specific journey through public APIs and
 unchanged PDS contracts. Compatibility depends on support for this sequence, not
-on a particular tool name or version.
+on a particular tool name or version. Incoming journey acceptance uses the
+repository's public-endpoint client against an independent stock source PDS.
+The PDS MOOver fork is optional corroboration; patched goat is a harness outside
+acceptance. No unmodified existing tool has been shown to run this incoming flow.
 
 ## Admission proofs and credentials
 
@@ -189,9 +206,11 @@ It lasts 24 hours. Only its hash is stored; the code is excluded from
 logs and URLs. The user hands it to the tool explicitly, without exporting browser
 cookies.
 
-A dedicated preparation interface and an `Entryway-Arrival-Code` header are the
-proposed wire surface. They are Entryway-specific extensions, not existing AT
-Protocol methods or implemented endpoints. Standard XRPC bodies remain unchanged.
+The preparation page and `Entryway-Arrival-Code` request header are accepted,
+implemented Entryway extensions. The header carries arrival authorization on both
+handoff and creation without changing the standard XRPC bodies. Reusing
+`inviteCode` would conflate an operator's invitation with the migrant's proof
+of a prepared arrival; a deployment can require both.
 
 Preparation proves only destination email ownership, so it is non-exclusive. A
 prepared arrival holds nothing: not the DID, the handle, the email or a repository
@@ -204,7 +223,8 @@ admitted (see [source-authorized handoff](#2-source-authorized-authority-handoff
 
 The user verifies the destination email, supplies the incoming DID and requested
 handle, and confirms the migration. Entryway checks that the DID is not hosted or
-bound and is not claimed by another arrival, and that the email is available. It
+bound and is not claimed by another arrival, that the requested handle is not hosted
+by an account or reserved (`HandleNotAvailable`), and that the email is available. It
 then records an unclaimed preparation holding the verified user ID, selected PDS,
 source PLC head and key facts, approved custody configuration, arrival ID and the
 hash of a 24-hour arrival code.
@@ -273,6 +293,22 @@ only live claimed arrival for the DID. Handoff admission refuses:
   preparation, with `HandleNotAvailable` or `EmailNotAvailable`;
 - a DID that became hosted, with `IdentityConflict`;
 - a superseded, cancelled or expired code, with `ArrivalExpired`.
+
+**Known defect: a superseded handoff claims the arrival.** A handoff signed on
+the saved predecessor passes validation even when the source head has moved on
+since, for example after a handle change at the source. Admission then commits
+the claim, replay binding and signed operation, and the head-divergence check runs
+only inside the handoff dispatch, after the dispatch marker is written
+(`src/features/external-migration/submit-handoff.ts`). The handoff is refused with
+`OperationRecoveryRequired` and never published, but the arrival stays claimed:
+`cancel` returns `OperationRecoveryRequired`, a new `prepare` for the DID returns
+`OperationPending`, and the status page shows no unresolved-request notice. The
+[operator recovery](shared-operations.md#supported-operator-recovery) cannot
+release it, because an approved retry observes the head as diverged and refuses
+again, so the DID, handle and email stay held at this Entryway. The source keeps
+full authority over the DID. The intended behaviour is a refusal before the claim.
+The public failure cases pin the observed behaviour and assert the intended one as
+an expected failure.
 
 Destination creation becomes eligible only after Entryway observes the canonical
 handoff. The destination PDS's submission handler is constrained to destination
@@ -392,8 +428,16 @@ Lost responses retain uncertain attempts until supported reconciliation is safe;
 identity cutover or backend status alone cannot complete the operation.
 
 The client deactivates the source only after confirmed destination activation.
-Source deletion is separate and is not scheduled automatically. Post-move login,
-OAuth, refresh and direct PDS access remain independent interoperability work.
+Source deletion is separate and is not scheduled automatically.
+
+The public journey exercises post-move access: destination email-code sign-in
+returns the original DID; an independent browser OAuth client authorizes at
+Entryway, writes to the destination PDS with DPoP, refreshes and writes again
+with a different access token, and its revocation removes the grant at Entryway;
+and a confidential client authorizes and writes. On the standalone stock source,
+the deactivated account's access token is refused with 401 `AccountDeactivated`
+and its refresh token still returns 200 with `active: false`. Other OAuth clients
+are not covered.
 
 ## Recovery and operation ownership
 
@@ -764,8 +808,14 @@ approved safe retry, and `readArrivalFamilies` and `readArrivalFamily` are read-
 
 ### Development: mounted surfaces and pending guard
 
-**Status: implemented. Multi-node PostgreSQL deployments are not yet qualified for
-incoming migration.** `src/app.mjs` mounts the feature on every
+**Status: implemented.** On the two-node PostgreSQL profile the public journey can
+be run by hand as one-off evidence, not a CI gate
+([testing](testing.md#public-incoming-journey-on-two-nodes)). It pins consecutive
+migration stages to different nodes for the same DID and refreshes one OAuth grant
+on the node that did not issue it, under one issuer; activation is observed, not
+pinned. It does not qualify multi-node deployments for incoming migration: the
+failure cases do not run there, and no real CORS preflight is exercised while
+requests are routed. `src/app.mjs` mounts the feature on every
 deployment (single-node SQLite, multi-node, and deployments with no migration
 intent) with no configuration key or opt-out; this is decided. It is mounted through `createIncomingArrival` in
 `src/compose-incoming-arrival.mjs` (production arrival storage over the account
@@ -862,7 +912,10 @@ refusal. A transient directory outage or a head change during observation is
 handoff observation runs before any dispatch marker is written, so the exact same
 request is retried and succeeds once the directory answers; only an external attempt
 that stays unresolved needs the
-[operator recovery](shared-operations.md#supported-operator-recovery). For
+[operator recovery](shared-operations.md#supported-operator-recovery). A head that
+moved past the saved predecessor before the handoff was submitted is the exception:
+its refusal is raised after the marker and nothing releases it (a known defect, see
+the [handoff](#2-source-authorized-authority-handoff)). For
 `createAccount` before the destination move, a head race returns 409 and the exact
 replay then succeeds, while a raw directory 503 there is 503 `RequestFailed`.
 
@@ -900,10 +953,19 @@ later. The predicate and the reviewed action names live in
 `src/accounts/pending-arrival.ts` and read saved arrival facts. Existing checks
 refuse status, handle, deletion and PLC changes (`MigrationPending` 409), and ordinary
 XRPC authentication, ordinary refresh and ordinary login refuse a `provisioning`
-account (a refused refresh does not revoke the family). Browser email sign-in still
-succeeds by design: it creates a session and then shows the pending page rather than
-settings or a reactivation prompt. The console, OAuth consent and signup pages show an
+account (a refused refresh does not revoke the family). Browser email sign-in is
+designed to succeed: it should create a session and then show the pending page rather
+than settings or a reactivation prompt. The console, OAuth consent and signup pages show an
 honest pending page. A single enforced guard is follow-up work; this is decided.
+
+**Known defect:** today browser email sign-in of a pending account does not succeed.
+`/auth/verify` answers 404 "Account not found" and commits no session, at `/login`
+and in OAuth authorization, because `assertLoginEmail`
+(`src/features/account-settings/security.mjs`) calls
+`syncBoundAccountEmailVerification`, whose account lookup refuses `provisioning`
+accounts. The OAuth consent guard for a pending account is therefore not reached
+live. The public failure cases pin the observed page and assert the designed
+behaviour as an expected failure.
 
 Credential limits, stated plainly. Recovery revokes local families, but the stock PDS
 accepts an access token already issued until it expires (five minutes). The browser
@@ -972,7 +1034,7 @@ Owner: `src/features/external-migration` prepares and manages the arrival lifecy
 and owns its routes. Consumers: the browser pages and the migration tool through the
 standard XRPC bodies.
 
-Proposed Entryway-only POST surfaces. These are Entryway extensions, not AT Protocol
+Implemented Entryway-only POST surfaces. These are Entryway extensions, not AT Protocol
 methods. They never accept or export browser cookies on behalf of a tool.
 
 | Path                | Request body                     | Response                                                                                                                     |
@@ -1027,10 +1089,12 @@ Errors. Each code is stable and mapped explicitly, and no message carries a secr
 | Per-IP or per-subject budget exhausted                                                       | `RateLimitExceeded`         | 429         |
 | Arrival is claimed (`cancel`) or its reservation is uncertain (`renew`)                      | `OperationRecoveryRequired` | 409         |
 | `prepare`: DID is hosted or bound                                                            | `IdentityConflict`          | 409         |
+| `prepare`: handle is hosted by an account or reserved                                        | `HandleNotAvailable`        | 409         |
 | `prepare`: email is not available                                                            | `EmailNotAvailable`         | 409         |
 | Handoff admission: handle taken since preparation                                            | `HandleNotAvailable`        | 409         |
 | Handoff admission: email taken since preparation                                             | `EmailNotAvailable`         | 409         |
 | Handoff admission: DID became hosted or bound                                                | `IdentityConflict`          | 409         |
+| Handoff or creation admission: the source service JWT fails verification, including expiry   | `AccountMismatch`           | 403         |
 
 Handoff admission takes the DID claim only after the source JWT verifies, so
 `OperationPending` at that site requires DID authority.
@@ -1049,7 +1113,7 @@ resolved by completion or the operator recovery in
 [shared operations](shared-operations.md#supported-operator-recovery), not by
 cancellation.
 
-Standard XRPC bodies keep their shapes and carry the arrival code in the proposed
+Standard XRPC bodies keep their shapes. The client sends the arrival code in the
 `Entryway-Arrival-Code` header at `com.atproto.identity.submitPlcOperation` and
 `com.atproto.server.createAccount`. The arrival code never substitutes for
 `inviteCode`, and invitation policy is unchanged.
@@ -1374,7 +1438,13 @@ Release qualification still needs a full supported public client journey on stoc
 PDS: records and blobs, valid empty/blob-free repositories, integrity assertions for
 the chosen transferred state, activation authorization across every entrypoint and
 bounded interrupted/lost-response recovery. Sample assertions demonstrate those
-scenarios; they do not certify all source data or all concurrent writes.
+scenarios; they do not certify all source data or all concurrent writes. The
+repository's own public client covers records and blobs, the four repository
+shapes (by hand; the per-PR job runs the blob-bearing shape), the integrity assertions, a lost `createAccount` response and a restart
+between admitted steps ([testing](testing.md#incoming-migration-targets)).
+Activation authorization across every entrypoint and an interruption during
+provisioning remain outstanding, and no unmodified existing tool has been shown to
+complete the journey.
 
 Only the responsibility contract is adopted from Rust. Entryway's accepted early
 PLC cutover, create-active then pause, pending-backend guards and recovery ordering

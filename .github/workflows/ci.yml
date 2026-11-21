@@ -192,6 +192,53 @@ jobs:
           if test -f "$CI_OWNERSHIP_MANIFEST"; then
             python3 scripts/ci-ownership.py cleanup "$CI_OWNERSHIP_MANIFEST"
           fi
+  incoming:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      SOURCE_CHECKOUT: ${{ github.workspace }}
+      SANDBOX_PROJECT: hypercerts-entryway-ci-incoming-${{ github.run_id }}-${{ github.run_attempt }}
+      SANDBOX_CHECKOUT: ${{ github.workspace }}/tests/.runtime/ci-incoming-${{ github.run_id }}-${{ github.run_attempt }}
+      ACCEPTANCE_REPORT_DIR: ${{ github.workspace }}/tests/artifacts/ci-incoming-${{ github.run_id }}-${{ github.run_attempt }}/reports
+      CI_OWNERSHIP_MANIFEST: ${{ github.workspace }}/tests/artifacts/ci-incoming-${{ github.run_id }}-${{ github.run_attempt }}/ownership.json
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24.22.0
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: 2.8.3
+      - name: Verify standard hosted Docker
+        run: |
+          source tests/support/rootless-docker.sh
+          test "$DOCKER_CONTEXT" = default
+          docker --context default compose version
+      - name: Diagnose hosted package network
+        continue-on-error: true
+        timeout-minutes: 3
+        run: *package-network-diagnostics
+      - name: Register owned project before provisioning
+        run: |
+          python3 scripts/ci-ownership.py init "$CI_OWNERSHIP_MANIFEST"
+          python3 scripts/ci-ownership.py register "$CI_OWNERSHIP_MANIFEST" "$SANDBOX_CHECKOUT" "$SANDBOX_PROJECT"
+          mkdir -p "$SANDBOX_CHECKOUT" "$ACCEPTANCE_REPORT_DIR"
+      - name: Install pinned AiaB dependencies and configure sandbox
+        run: bash tests/local.sh prepare
+      - name: Build and start managed application and test images
+        run: bash tests/local.sh up
+      - name: Public incoming journey
+        run: bash tests/local.sh incoming-public-journey
+      - name: Public incoming failure and restart cases
+        run: bash tests/local.sh incoming-public-failures
+      - name: Clean only recorded projects and children
+        if: always()
+        run: |
+          if test -f "$CI_OWNERSHIP_MANIFEST"; then
+            python3 scripts/ci-ownership.py cleanup "$CI_OWNERSHIP_MANIFEST"
+          fi
   databases:
     runs-on: ubuntu-24.04
     timeout-minutes: 120

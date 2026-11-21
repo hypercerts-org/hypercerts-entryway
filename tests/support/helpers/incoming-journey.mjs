@@ -1,14 +1,17 @@
 import { expect } from "@playwright/test";
+import { readCarWithRoot } from "@atproto/repo";
 import { waitForMailpitCode } from "./mailpit.mjs";
 
 // Shared by the public and goat incoming journeys, which differ only in the
 // migration client. The browser step and the XRPC call helper live here so the
 // two journeys cannot drift apart.
 
+// `headers` adds request headers, such as the two-node profile's
+// `x-profile-node` pin; the credential and content type are never overridden.
 export async function call(
   origin,
   method,
-  { token, body, params, bytes, type } = {},
+  { token, body, params, bytes, type, headers } = {},
 ) {
   const url = new URL(`/xrpc/${method}`, origin);
   for (const [key, value] of Object.entries(params ?? {}))
@@ -22,6 +25,7 @@ export async function call(
   const response = await fetch(url, {
     method: post ? "POST" : "GET",
     headers: {
+      ...headers,
       ...(token ? { authorization: `Bearer ${token}` } : {}),
       ...(body === undefined ? {} : { "content-type": "application/json" }),
       ...(bytes === undefined ? {} : { "content-type": type }),
@@ -42,6 +46,88 @@ export const json = ({ content }) =>
 export const ok = (response, what) =>
   expect(response.status, `${what} status`).toBeLessThan(300);
 
+// The error name only: a refusal body can echo request details.
+export const errorName = ({ content }) => {
+  try {
+    const { error } = JSON.parse(content.toString("utf8"));
+    return typeof error === "string" ? error : null;
+  } catch {
+    return null;
+  }
+};
+
+// Header frame first, then one frame per block: varint length, 36-byte CID, data.
+export function carFrames(car) {
+  const frames = [];
+  let offset = 0;
+  while (offset < car.length) {
+    const start = offset;
+    let size = 0;
+    let scale = 1;
+    let byte;
+    do {
+      byte = car[offset++];
+      size += (byte & 0x7f) * scale;
+      scale *= 128;
+    } while (byte & 0x80);
+    frames.push({ start, data: offset, end: offset + size });
+    offset += size;
+  }
+  expect(offset, "whole CAR frames").toBe(car.length);
+  return frames;
+}
+
+/**
+ * Malformed variants of a verified export, for import refusal checks:
+ * - `tampered`: one byte of the named record's first string field (a post's
+ *   text, a profile's display name) changed in place, so the length, the framing
+ *   and the DAG-CBOR stay valid but the block no longer hashes to its CID;
+ * - `cutMidBlock`: cut half-way through the data of the block at the midpoint;
+ * - `missingRecordBlock`: every frame except the named record's block, wherever
+ *   it sits, so the CAR stays well formed and ends on a whole frame. The stock
+ *   export orders blocks by revision and CID, not by kind, so the final block
+ *   is not reliably a record; `droppedBlock` is the record's CID.
+ */
+export async function malformedCars(car, record) {
+  const frames = carFrames(car);
+  const { blocks } = await readCarWithRoot(car);
+  const block = blocks.entries().find((entry) => `${entry.cid}` === record.cid);
+  const frame = frames
+    .slice(1)
+    .find(({ data }) => car.subarray(data, data + 36).equals(block.cid.bytes));
+  const field = Object.entries(record.value).find(
+    ([name, value]) =>
+      name !== "$type" &&
+      typeof value === "string" &&
+      /^[\x20-\x7e]+$/.test(value),
+  );
+  expect(Boolean(field), "record has a printable string field").toBe(true);
+  const text = car
+    .subarray(frame.data + 36, frame.end)
+    .indexOf(Buffer.from(field[1]));
+  expect(text, "record string in its block").toBeGreaterThan(0);
+  const tampered = Buffer.from(car);
+  // Bit 0 of a printable ASCII byte: still one valid UTF-8 byte.
+  tampered[frame.data + 36 + text] ^= 0x01;
+  const middle = frames
+    .slice(1)
+    .find(({ end }) => end > Math.floor(car.length / 2));
+  const cut = Math.floor((middle.data + 36 + middle.end) / 2);
+  expect(
+    middle.data + 36 < cut && cut < middle.end,
+    "cut ends inside block data",
+  ).toBe(true);
+  return {
+    tampered,
+    cutMidBlock: car.subarray(0, cut),
+    missingRecordBlock: Buffer.concat([
+      car.subarray(0, frame.start),
+      car.subarray(frame.end),
+    ]),
+    droppedBlock: `${block.cid}`,
+  };
+}
+
 // Verifies the destination email in the browser, asks for a fresh code and
 // prepares the arrival. Returns the values the page shows once.
 export async function prepareArrival(
@@ -57,7 +143,9 @@ export async function prepareArrival(
     since,
     baseUrl: mailpitUrl,
   });
-  await page.getByLabel("Sign-in code").fill(login.code);
+  await page.getByLabel("Sign-in code").evaluate((input, code) => {
+    input.value = code;
+  }, login.code);
   await page.getByRole("button", { name: "Verify code" }).click();
   // A verified session exists even though no account does yet.
   await page.goto(`${issuer}/incoming`);
@@ -79,7 +167,9 @@ export async function prepareArrival(
   await page.goto(`${issuer}/incoming`);
   await page.getByLabel("Your DID").fill(did);
   await page.getByLabel("Destination handle").fill(handle);
-  await page.getByLabel("Fresh email code").fill(fresh.code);
+  await page.getByLabel("Fresh email code").evaluate((input, code) => {
+    input.value = code;
+  }, fresh.code);
   const response = page.waitForResponse(
     (candidate) =>
       candidate.url().endsWith("/incoming/prepare") &&
@@ -120,18 +210,66 @@ export const pixel = Buffer.from(
   "base64",
 );
 
-const profile = {
-  repo: undefined,
-  collection: "app.bsky.actor.profile",
-  rkey: "self",
-};
+async function readPages(endpoint, method, params, field) {
+  const items = [];
+  const seen = new Set();
+  let cursor;
+  do {
+    const response = await call(endpoint, method, {
+      params: { ...params, limit: 1, ...(cursor ? { cursor } : {}) },
+    });
+    ok(response, method);
+    const page = json(response);
+    expect(Array.isArray(page[field])).toBe(true);
+    items.push(...page[field]);
+    cursor = page.cursor;
+    if (cursor !== undefined) {
+      expect(
+        typeof cursor === "string" && cursor.length > 0 && !seen.has(cursor),
+        "new page cursor",
+      ).toBe(true);
+      seen.add(cursor);
+    }
+  } while (cursor);
+  return items;
+}
 
-// Creates the standalone source account with a profile record that references
-// an uploaded avatar blob. Returns the session, the blob reference and the
-// source handle. Credentials are passed through and never logged.
+async function snapshot(endpoint, did) {
+  const description = await call(endpoint, "com.atproto.repo.describeRepo", {
+    params: { repo: did },
+  });
+  ok(description, "describe repository");
+  const records = [];
+  for (const collection of json(description).collections.sort()) {
+    records.push(
+      ...(await readPages(
+        endpoint,
+        "com.atproto.repo.listRecords",
+        { repo: did, collection },
+        "records",
+      )),
+    );
+  }
+  const blobs = [];
+  for (const cid of (
+    await readPages(endpoint, "com.atproto.sync.listBlobs", { did }, "cids")
+  ).toSorted((a, b) => a.localeCompare(b))) {
+    const response = await call(endpoint, "com.atproto.sync.getBlob", {
+      params: { did, cid },
+    });
+    ok(response, "fetch blob");
+    blobs.push({ cid, bytes: response.content });
+  }
+  return {
+    records: records.toSorted((a, b) => a.uri.localeCompare(b.uri)),
+    blobs,
+  };
+}
+
+// Compare the source's public inventory to the writes, independently of import.
 export async function createSourceAccount(
   access,
-  { unique, email, password, displayName },
+  { unique, email, password, displayName, shape },
 ) {
   const description = json(
     await call(access.sourceUrl, "com.atproto.server.describeServer"),
@@ -146,48 +284,67 @@ export async function createSourceAccount(
   );
   ok(created, "source account");
   const source = json(created);
-  const uploaded = await call(access.sourceUrl, "com.atproto.repo.uploadBlob", {
-    token: source.accessJwt,
-    bytes: pixel,
-    type: "image/png",
-  });
-  ok(uploaded, "source blob");
-  const blob = json(uploaded).blob;
-  ok(
-    await call(access.sourceUrl, "com.atproto.repo.putRecord", {
-      token: source.accessJwt,
-      body: {
-        ...profile,
-        repo: source.did,
-        record: {
-          $type: "app.bsky.actor.profile",
-          displayName,
-          avatar: blob,
-        },
+  const blobs = [];
+  let avatar;
+  if (shape === "blob-bearing" || shape === "multi-collection") {
+    const uploaded = await call(
+      access.sourceUrl,
+      "com.atproto.repo.uploadBlob",
+      {
+        token: source.accessJwt,
+        bytes: pixel,
+        type: "image/png",
       },
-    }),
-    "source record",
-  );
-  return { source, blob, handle };
+    );
+    ok(uploaded, "source blob");
+    avatar = json(uploaded).blob;
+    blobs.push({ cid: avatar.ref.$link, bytes: pixel });
+  }
+  const records = [];
+  async function put(rkey, value) {
+    const collection = value.$type;
+    const response = await call(
+      access.sourceUrl,
+      "com.atproto.repo.putRecord",
+      {
+        token: source.accessJwt,
+        body: { repo: source.did, collection, rkey, record: value },
+      },
+    );
+    ok(response, "source record");
+    const { cid, uri } = json(response);
+    expect(uri).toBe(`at://${source.did}/${collection}/${rkey}`);
+    expect(typeof cid).toBe("string");
+    records.push({ uri, cid, value });
+  }
+  if (shape !== "empty")
+    await put("self", {
+      $type: "app.bsky.actor.profile",
+      displayName,
+      ...(avatar ? { avatar } : {}),
+    });
+  if (shape === "multi-collection")
+    for (const rkey of ["3mznesxxhic2e", "3mznesxxhic2f"])
+      await put(rkey, {
+        $type: "app.bsky.feed.post",
+        text: rkey,
+        createdAt: new Date().toISOString(),
+      });
+  const inventory = await snapshot(access.sourceUrl, source.did);
+  expect(inventory).toEqual({ records, blobs });
+  return { source, inventory, handle };
 }
 
-// The destination serves the record and the blob byte for byte, and the PLC
-// directory names the destination endpoint and handle.
+// The destination, which is not the source, serves every seeded record and blob
+// byte for byte, and the PLC directory names the destination endpoint and handle.
 export async function expectDestinationServes(
   access,
-  { endpoint, did, blob, displayName, handle },
+  { endpoint, did, inventory, handle },
 ) {
-  const record = json(
-    await call(endpoint, "com.atproto.repo.getRecord", {
-      params: { ...profile, repo: did },
-    }),
+  expect(new URL(endpoint).origin, "destination is not the source").not.toBe(
+    new URL(access.sourceUrl).origin,
   );
-  expect(record.value.displayName).toBe(displayName);
-  const served = await call(endpoint, "com.atproto.sync.getBlob", {
-    params: { did, cid: blob.ref.$link },
-  });
-  ok(served, "destination blob");
-  expect(served.content.equals(pixel)).toBe(true);
+  expect(await snapshot(endpoint, did)).toEqual(inventory);
   const document = await (
     await fetch(new URL(`/${did}`, access.plcUrl))
   ).json();
@@ -198,11 +355,33 @@ export async function expectDestinationServes(
   expect(document.alsoKnownAs).toContain(`at://${handle}`);
 }
 
+// After OAuth writes the destination holds more than the transfer, so the
+// whole transferred inventory must still be served unchanged beside them: every
+// record by URI with its CID and value, and every blob byte for byte.
+export async function expectInventoryRetained(
+  endpoint,
+  { did, inventory, writes = [] },
+) {
+  const served = await snapshot(endpoint, did);
+  const byUri = new Map(served.records.map((record) => [record.uri, record]));
+  for (const record of inventory.records)
+    expect(byUri.get(record.uri), record.uri).toEqual(record);
+  for (const uri of writes)
+    expect(byUri.has(uri), "client write served beside the inventory").toBe(
+      true,
+    );
+  expect(served.records.length).toBe(inventory.records.length + writes.length);
+  expect(served.blobs).toEqual(inventory.blobs);
+}
+
 /**
  * Registers the two opening steps every incoming journey shares: a standalone
- * source account with a record and a blob, then the browser email proof and
- * arrival preparation. `context` returns the sandbox access and service config
- * loaded by the spec's own `beforeAll`; `onPrepared` runs after preparation.
+ * source account seeded for the selected repository shape (by default a profile
+ * and its avatar blob), then the browser email proof and arrival preparation.
+ * `context` returns the sandbox access and service config loaded by the spec's
+ * own `beforeAll`; `onPrepared` runs after preparation. `aroundPrepare(page,
+ * prepare)`, when given, wraps the browser preparation (the two-node run pins
+ * it to one node).
  */
 export function registerArrivalSetup(
   test,
@@ -215,18 +394,20 @@ export function registerArrivalSetup(
     destinationEmail,
     displayName,
     onPrepared,
+    aroundPrepare = (_page, prepare) => prepare(),
   },
 ) {
-  test("a standalone source account has a record and a blob", async () => {
+  test("the standalone source serves the seeded inventory", async () => {
     const { access, config } = context();
     const created = await createSourceAccount(access, {
       unique,
       email: sourceEmail,
       password: sourcePassword,
+      shape: test.info().project.metadata.shape ?? "blob-bearing",
       displayName,
     });
     run.source = created.source;
-    run.blob = created.blob;
+    run.inventory = created.inventory;
     run.sourceHandle = created.handle;
     run.destinationHandle = `d${unique}${config.handleDomains[0]}`;
     expect(run.sourceHandle).not.toBe(run.destinationHandle);
@@ -236,13 +417,15 @@ export function registerArrivalSetup(
     page,
   }) => {
     const { access, config } = context();
-    run.prepared = await prepareArrival(page, {
-      issuer: config.issuer,
-      mailpitUrl: access.mailpitUrl,
-      did: run.source.did,
-      handle: run.destinationHandle,
-      email: destinationEmail,
-    });
+    run.prepared = await aroundPrepare(page, () =>
+      prepareArrival(page, {
+        issuer: config.issuer,
+        mailpitUrl: access.mailpitUrl,
+        did: run.source.did,
+        handle: run.destinationHandle,
+        email: destinationEmail,
+      }),
+    );
     await onPrepared?.(page);
   });
 }

@@ -62,7 +62,15 @@ esac
         self.assertEqual(syntax.returncode, 0, syntax.stderr)
         script = shell.split("python3 - <<'PYTHON'\n", 1)[1].rsplit("PYTHON", 1)[0]
         compiled = compile(script, "hosted-network-diagnostics", "exec")
-        self.assertEqual(workflow.count("run: *package-network-diagnostics"), 2)
+        self.assertEqual(workflow.count("run: *package-network-diagnostics"), 3)
+        incoming = workflow.split("\n  incoming:\n", 1)[1].split("\n  databases:\n", 1)[0]
+        steps = ["run: *package-network-diagnostics", "ci-ownership.py register",
+                 "run: bash tests/local.sh prepare", "run: bash tests/local.sh up",
+                 "run: bash tests/local.sh incoming-public-journey",
+                 "run: bash tests/local.sh incoming-public-failures", "if: always()",
+                 "ci-ownership.py cleanup"]
+        positions = [incoming.index(step) for step in steps]
+        self.assertEqual(positions, sorted(positions))
         for failed_context in [None, "runner", "container", "build", "timeout"]:
             calls = []
 
@@ -96,6 +104,21 @@ esac
             if failed_context == "timeout":
                 self.assertIn("context=container exit=124", output.getvalue())
             self.assertIn("context=build exit=", output.getvalue())
+
+    def test_incoming_failure_phases_and_restart_proof(self):
+        source = Path(__file__).resolve().parents[2]
+        local = (source / "tests/local.sh").read_text()
+        self.assertIn("start_group incoming incoming-public-journey incoming-public-failures\n", local)
+        block = local.split("\n  incoming-public-failures)\n", 1)[1].split("\n    ;;\n", 1)[0]
+        steps = ['rm -rf -- "$failure_state"', "cases=0", "failures cases || cases=$?",
+                 "failures before-restart", "started=$(entryway_started)",
+                 "compose restart entryway", "compose up -d --wait entryway",
+                 "restarted=$(entryway_started)", '"$restarted" != "$started"',
+                 "failures after-restart", '(( cases == 0 )) || exit "$cases"']
+        positions = [block.index(step) for step in steps]
+        self.assertEqual(positions, sorted(positions))
+        self.assertTrue(block.rstrip().endswith('(( cases == 0 )) || exit "$cases"'))
+        self.assertEqual(block.count("failures cases"), 1)
 
     def test_repeated_scoped_cleanup(self):
         for _ in range(2):
@@ -182,6 +205,7 @@ esac
         package = json.loads((source / "package.json").read_text())
         helpers = ["tests/support/helpers/stock-plc-mailpit.test.mjs",
                    "tests/support/helpers/incoming-public-io.test.mjs",
+                   "tests/support/helpers/incoming-journey.test.mjs",
                    "tests/atmosphere/project-incoming-access.test.mjs"]
         self.assertEqual(package["scripts"]["test:incoming-helpers"].split(),
                          ["node", "--test", *helpers])

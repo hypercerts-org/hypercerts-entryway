@@ -1,6 +1,9 @@
 import { expect } from "@playwright/test";
 import { waitForMailpitCode } from "../../support/helpers/mailpit.mjs";
-import { config } from "../../support/helpers/browser-oauth.mjs";
+import {
+  config,
+  enterSignInCode,
+} from "../../support/helpers/browser-oauth.mjs";
 
 export { config };
 export const databasePath =
@@ -47,7 +50,7 @@ export async function requestVisibleCode(page, email) {
 }
 
 export async function verifyVisibleCode(page, code) {
-  await page.getByLabel("Sign-in code").fill(code);
+  await enterSignInCode(page, code);
   await page.getByRole("button", { name: "Verify code" }).click();
 }
 
@@ -73,7 +76,10 @@ export async function assertOAuthSubjectAndWrite(
     `${config.clientUrl}/client/session?client=primary`,
     { headers },
   );
-  expect(session.ok(), await session.text()).toBeTruthy();
+  expect(
+    session.ok(),
+    `client session status ${session.status()}`,
+  ).toBeTruthy();
   const current = await session.json();
   // The OAuth client session DID is the subject returned by the token exchange.
   expect(current.did).toBe(account.did);
@@ -88,7 +94,7 @@ export async function assertOAuthSubjectAndWrite(
     },
     data: { client: "primary", text },
   });
-  expect(write.ok(), await write.text()).toBeTruthy();
+  expect(write.ok(), `client write status ${write.status()}`).toBeTruthy();
   expect((await write.json()).uri).toContain(`at://${account.did}/`);
   return { session, write };
 }

@@ -16,12 +16,12 @@ pattern. The reference manifest is `tests/sandbox.json`. The runtime is generate
 it is not vendored upstream source and must remain untracked. Consumer stack
 installation and application runtime are separate phases.
 
-`fresh` runs three groups in parallel, each in its own disposable sandbox:
+`fresh` runs four groups in parallel, each in its own disposable sandbox:
 `journeys` (browser, contracts, resilience), `migration` (external migration and
-interop profile) and `faults` (PLC recovery, process crash, managed recovery,
+interop profile), `incoming` (public incoming journey, then its failure and restart cases) and `faults` (PLC recovery, process crash, managed recovery,
 authority drills). Steps within a group stay sequential: contracts and resilience
 read accounts and sessions created by the browser suite, and fault steps stop
-shared containers. Expect roughly three sandboxes' worth of CPU and memory.
+shared containers. Expect roughly four sandboxes' worth of CPU and memory.
 
 Each group creates a unique `hypercerts-entryway-<timestamp>-<pid>-<group>` project in a
 temporary checkout, uses `--subnet auto` and validates `sandbox access --json`
@@ -38,7 +38,7 @@ and requires no host dependency install:
 
 | Command                                       | Purpose and precondition                                                                                                                                                                                   |
 | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `./tests/local.sh fresh`                      | Repeatable full run as three parallel disposable groups; cleanup follows success/failure                                                                                                                   |
+| `./tests/local.sh fresh`                      | Repeatable full run as four parallel disposable groups; cleanup follows success/failure                                                                                                                    |
 | `./tests/local.sh fresh-group <steps>`        | Run the named steps in order in one disposable project, for example `fresh-group browser contracts`                                                                                                        |
 | `./tests/local.sh prepare`                    | Install sandbox CLI dependencies and create/check project configuration                                                                                                                                    |
 | `./tests/local.sh up`                         | Build/start the sandbox and build test/browser images after prepare                                                                                                                                        |
@@ -49,6 +49,10 @@ and requires no host dependency install:
 | `./tests/local.sh contracts`                  | Run imported contract scenarios in the test container after up                                                                                                                                             |
 | `./tests/local.sh browser`                    | Run browser scenarios after up                                                                                                                                                                             |
 | `./tests/local.sh incoming-public-mechanisms` | Bounded stock public-mechanism contract test after up: standalone signup, Mailpit, PLC signing, inactive destination and reservation; offline checks plus live-gated cases, not a migration qualification  |
+| `./tests/local.sh incoming-public-journey`    | The public incoming journey in one blob-bearing shape after up, with post-move sign-in and OAuth; runs on every PR; see below                                                                              |
+| `./tests/local.sh incoming-public-shapes`     | The same journey for empty, blob-free, blob-bearing and multi-collection repositories after up; run by hand, not in CI; see below                                                                          |
+| `./tests/local.sh incoming-public-failures`   | Public incoming failure cases after up, then a restart of Entryway between two admitted steps of a separate move; see below                                                                                |
+| `./tests/local.sh incoming-two-node`          | The public incoming journey on the two-node PostgreSQL profile, once per node order; run it as `fresh-group incoming-two-node`. One-off evidence, not a CI gate; see below                                 |
 | `./tests/local.sh incoming-goat-journey`      | Second incoming client after up: the public goat CLI, patched to the Entryway incoming contract, migrates a fresh stock source account; see below                                                          |
 | `./tests/local.sh incoming-moover-journey`    | Third incoming client after up: a fork of the PDS MOOver web UI carrying the unmerged Entryway mode, driven in Chromium through the sandbox CORS ingress, migrates a fresh stock source account; see below |
 | `./tests/local.sh migration`                  | Fresh synthetic external-source migration, including two Entryway restarts                                                                                                                                 |
@@ -135,6 +139,55 @@ ownership proof. The incoming routes, tracked credentials and guarded activation
 mounted; full public runtime qualification is a separate gate that a passing unit
 suite does not establish.
 
+### Incoming migration targets
+
+Four `tests/local.sh` targets run incoming migration through Entryway's public
+pages and XRPC routes with the repository's own public-endpoint client, against
+an independent stock source PDS in Atmosphere in a Box. Each is described below,
+with the [flow](../tests/flows/incoming-public-migration.md) giving every step.
+
+- `incoming-public-journey` moves one fresh blob-bearing account. It checks the
+  exact signed handoff on PLC before creation, the stock destination's refusal of
+  three malformed CARs, the transferred records, values, CIDs and blob bytes,
+  PLC and hosting agreement, recovery-key ordering, destination email-code
+  sign-in, an independent browser OAuth client's DPoP write, refresh and
+  revocation, a confidential client, and the deactivated source's sessions.
+  The per-PR `incoming` CI job runs it.
+- `incoming-public-failures` runs the failure and identity cases and a restart of
+  Entryway between two admitted steps, each as its own move. The `incoming` job
+  runs it after the journey in the same sandbox.
+- `incoming-public-shapes` runs the journey for empty, blob-free, blob-bearing and
+  multi-collection repositories. It runs by hand, not in CI.
+- `incoming-two-node` runs the journey on the two-node PostgreSQL profile, once in
+  each node order, pinning stages to nodes. It is one-off evidence, not a CI gate,
+  and runs by hand.
+
+Their results are reported with the change they support, not here. Outstanding:
+
+- No unmodified existing migration tool has been shown to run the incoming flow.
+  The patched goat client is a harness and the PDS MOOver fork optional
+  corroboration; neither is part of acceptance.
+- Two known defects are pinned as observed, with the intended behaviour as
+  expected failures: email-code sign-in of a pending account answers 404, so the
+  OAuth consent guard for a pending account is not exercised; and a handoff
+  signed before the source head moved claims the arrival and holds the DID with
+  no supported release, and the status page shows no notice for it.
+- A published handoff whose destination account is never created leaves
+  Entryway's rotation key on the DID; no supported cleanup exists.
+- A single guard over every pending-arrival activation entrypoint, an
+  interruption during provisioning (only a restart between admitted steps is
+  run), and source writes after export (outside the client-managed contract)
+  are not covered.
+- A continuation from a claim that lost its lease is covered only by contract
+  tests, which do not show the current owner completing the move; a DID that
+  becomes hosted after preparation is covered only by a unit test.
+- Multi-node operation is not qualified: the two-node run does not run the
+  failure cases, does not pin activation, and exercises no real CORS preflight.
+- The sandbox does not require invitations, so no run presents one.
+- Playwright HTML and JSON reports are not kept: they are written under
+  `/app/tests/artifacts` inside the browser container, which is not mounted.
+  Only the phase logs under `ACCEPTANCE_REPORT_DIR` survive.
+
 ### Public incoming journey
 
 ```sh
@@ -143,25 +196,232 @@ suite does not establish.
 
 After `up`, this runs the one Playwright spec
 `tests/browser/incoming-public-journey.spec.mjs` in the owned project's browser
-container, selected by `INCOMING_PUBLIC_JOURNEY=1`; the default browser run does not
-include it. It uses the standalone stock source PDS, a stock destination behind
+container, selected by `INCOMING_PUBLIC_JOURNEY=1` for the one default shape or by
+`INCOMING_PUBLIC_SHAPES=1` for all four shapes as separate Playwright projects (the
+`incoming-public-shapes` command sets it); the default browser run does not include
+it. It uses the standalone stock source PDS, a stock destination behind
 Entryway, Mailpit and managed TLS, and reaches Entryway only through its public
 browser pages and XRPC routes: a browser-verified destination email, an
 arrival code, a source-signed handoff, creation returning tracked credentials, a
 direct client transfer between the pinned endpoints, refresh, and activation
 through the stock destination's `activateAccount`, which forwards to Entryway. It
 seeds no authority rows and calls no private fixture. The client chooses what to
-transfer and when to activate: the spec checks one record and one blob, not a
-complete inventory, and later source writes are outside what it proves. List the
-spec without a sandbox to verify discovery:
+transfer and when to activate. Before cutover, the client checks the seeded inventory, verifies the exported CAR for the DID and checks the commit signature against the source's PLC signing key. After activation, it compares all record URIs, values and CIDs and all blob CIDs and bytes before OAuth writes. Source writes after export are outside this client-managed contract.
+
+After the move, the browser SDK's authorization-code exchange must issue a refresh token and name the migrated DID as `sub`. The later refresh must present that refresh token and return the same `sub`, the client page's `#issuer` must name Entryway, and the transferred records and blobs must still be served unchanged beside the client's two writes (`expectInventoryRetained`). These checks run in the per-PR single-node journey as well as on two nodes.
+
+The per-PR job uses a blob-bearing profile. For all four shapes, run `./tests/local.sh fresh-group incoming-public-shapes` (or `./tests/local.sh incoming-public-shapes` after `up`). The same full journey runs serially for empty, blob-free, blob-bearing and multi-collection repositories. For a referenced blob, it checks that the destination reports the missing CID before upload and complete counts afterwards. Every shape records the destination's `checkAccountStatus` revision before the valid import and requires a different one afterwards, so an import of an empty repository is told apart from a no-op. Before the valid import, the blob-bearing journey (so every per-PR run) and the multi-collection journey also send the paused destination three malformed copies of their own verified export and require each refusal to leave the destination's status and export unchanged. As observed on the pinned stock PDS (0.5.36): a record block altered under its CID and a CAR cut inside a block both get 500 `InternalServerError`; a well-formed CAR with one record's block removed gets 400 `InvalidRequest`. The removed block is a chosen record's, wherever it sits, because the stock export orders blocks by revision and CID and its final block is not reliably a record. The 500s are the generic answer to an error thrown while the PDS reads the CAR (`verifyIncomingCarBlocks`), not an integrity-specific status. The refusals are stock PDS behaviour, pinned in the per-PR `incoming` job so that a PDS upgrade changing them fails CI. The byte surgery itself has a native test, `tests/support/helpers/incoming-journey.test.mjs`. List the
+spec without a sandbox to verify discovery of either selection:
 
 ```sh
 INCOMING_PUBLIC_JOURNEY=1 npx playwright test --config tests/playwright.config.mjs --list
+INCOMING_PUBLIC_SHAPES=1 npx playwright test --config tests/playwright.config.mjs --list
 ```
 
 `fresh-group incoming-public-mechanisms incoming-public-journey contracts` runs the
 same steps in one disposable project. A skipped, synthetic or negative-control
 result is not a public qualification; report only an executed managed run.
+
+### Public incoming journey on two nodes
+
+```sh
+./tests/local.sh fresh-group incoming-two-node
+```
+
+This is one-off evidence, not a CI gate: no workflow runs it, and its result is
+reported with the change it supports, not recorded here. `fresh-group` exports
+`DATABASE_BACKEND=postgresql`, `DEPLOYMENT_MODE=multi-node`,
+`ENTRYWAY_PROFILE_NODE_COUNT=2` and `DATABASE_URL` (the profile scripts' value)
+before `prepare` and `up`. Installation then adds the second node
+(`entryway-replica`) and the profile ingress in front of both nodes, and both
+nodes start against the one PostgreSQL database. The step runs alone in its
+group, because the other steps assume one Entryway container.
+`./tests/local.sh incoming-two-node` runs the same step in an owned project that
+was prepared and started with those four settings exported, and refuses without
+them. It is kept out of `run-resilience-profile.sh`, whose exercise has a
+480-second deadline.
+
+The step runs `tests/browser/incoming-public-journey.spec.mjs` with
+`INCOMING_TWO_NODE=1` as two Playwright projects, `entryway-first` and
+`entryway-replica-first`; the second swaps the node roles. The phase log uses
+the `incoming-two-node` prefix. The spec reads both nodes' instance IDs from
+the ingress (`/__profile/nodes`) and requires two ready, distinct processes. Each
+Entryway-facing stage is pinned to one node: XRPC calls send the ingress's
+`x-profile-node` header, and browser pages route every request to the issuer
+origin, including redirects and the OAuth SDK's own fetches, with that header
+added. A route sees only the first URL of a redirect chain, so the confidential
+client's authorization, which starts on the client's origin and redirects into
+the issuer, is pinned with context-wide extra headers instead; that stage fails
+if it makes any scripted (fetch or XHR) request to the issuer. Every pinned
+request also carries an `x-profile-stage` tag unique to its stage, which the
+ingress records on the receipt and strips before forwarding. A stage is judged
+by its tagged receipts (`/__profile/receipts`, which records the node,
+instance, method, path, status, whether the request was pinned and the tag) and
+by the issuer responses to browser requests started inside it, not by when a
+response arrived: each must name the pinned node and its `x-entryway-instance`.
+A response that arrives after the next stage began is still attributed to the
+stage that sent it. Untagged requests are forwarded and recorded as before, and
+the resilience profiles, which read only `/__profile/nodes`, are unaffected.
+
+| Stage                                                            | First project      | Second project     |
+| ---------------------------------------------------------------- | ------------------ | ------------------ |
+| Browser email proof and `/incoming/prepare`                      | `entryway`         | `entryway-replica` |
+| Handoff (`submitPlcOperation`, with both refusals)               | `entryway-replica` | `entryway`         |
+| `createAccount`, its replay and the paused `getSession`          | `entryway`         | `entryway-replica` |
+| Tracked `refreshSession`                                         | `entryway-replica` | `entryway`         |
+| Activation, forwarded by the stock destination                   | observed           | observed           |
+| Password `createSession`                                         | `entryway`         | `entryway-replica` |
+| Tracked family `refreshSession` after deactivating the source    | `entryway-replica` | `entryway`         |
+| Email-code session, then SDK authorization and its code exchange | `entryway`         | `entryway-replica` |
+| SDK refresh of that grant, then a write                          | `entryway-replica` | `entryway`         |
+| SDK revocation and the account page                              | `entryway`         | `entryway-replica` |
+| The confidential client's browser requests                       | `entryway-replica` | `entryway`         |
+
+Consecutive pinned migration stages must be served by different instances for
+the same DID, judged on the instance IDs each stage observed in its receipts
+and response headers, not on the configured order; each stage must observe
+exactly one. After the move, the authorization-code exchange and the refresh
+both answer at the issuer's `/oauth/token`; the refresh presents the refresh
+token that the code exchange issued, returns the same subject, and the next
+write uses a different access token. The transferred records and blobs are then
+still served unchanged beside the two client writes. Alternating instance IDs
+alone is not the claim: each stage continues state the previous stage left on
+the other node.
+
+Not pinned, only observed: import and blob upload go to the destination PDS, not
+Entryway. Activation goes to the stock destination, which forwards it to
+Entryway itself through the issuer URL, so the ingress chooses the node. The spec
+requires at least one unpinned `activateAccount` receipt with status 200 and
+records its node; it does not claim which node will serve it. Requests that the
+confidential client's server or a PDS makes are recorded per stage as unpinned
+receipts. After its tests, passing or not, each project prints its stage table
+as `node-stage` lines to the phase log, `incoming-two-node.log` in the report
+directory: the stage, whether it was pinned, the node and instance ID, and for
+pinned stages the observed instance IDs and the method, path and node of each
+unpinned receipt and of each pinned receipt from another stage that landed in
+its window. It prints no DID, credential or body.
+
+Context-wide extra headers, as the resilience profile uses for its confidential
+client, stopped the browser SDK's cross-origin login before consent, so the
+two-node run routes only issuer requests. While any route is active, Playwright
+(1.58.2, `crNetworkManager.js`) fulfils every intercepted CORS preflight itself
+with allow-all headers, whatever its origin, including those to the destination
+PDS. No route stage therefore exercises a real preflight, and the
+headers-pinned stage makes no scripted issuer request. In the single-node
+journey no route is installed, so preflights reach the real services: Entryway
+(the OAuth provider routes it mounts) answers `/oauth/*` preflights, and the
+Caddy ingress (`tests/support/entryway-ingress.Caddyfile`, `atproto_cors`)
+answers `/xrpc/*` and `/.well-known/atproto-did` preflights before they reach
+Entryway. List the selection without a sandbox:
+
+```sh
+INCOMING_TWO_NODE=1 npx playwright test --config tests/playwright.config.mjs --list
+```
+
+### Public incoming failure cases
+
+```sh
+./tests/local.sh incoming-public-failures
+```
+
+After `up`, this runs the public failure cases of the
+[incoming flow](../tests/flows/incoming-public-migration.md#failure-and-restart-cases)
+through the same public pages and XRPC routes as the journey, in three browser
+phases selected by `INCOMING_PUBLIC_FAILURES=1` and `INCOMING_FAILURES_PHASE`.
+Phase `cases` (`tests/browser/incoming-public-failures.spec.mjs`, then
+`tests/browser/incoming-public-identity.spec.mjs`) needs no restart:
+an expired and a foreign source service JWT before admission, a destination email
+an account took after preparation, a destination handle or DID the target already
+hosts, a discarded `createAccount` response recovered
+with `/incoming/recover`, the pending account before activation, a move
+without a recovery key, and two PLC head changes at the source: one between the
+published handoff and creation, and one that supersedes a signed handoff before it
+is submitted. The source changes are ordinary `updateHandle` requests, which the
+stock source signs and publishes itself. Each case is its own move with fresh
+accounts.
+
+Two known defects are pinned as observed. Email-code sign-in of a pending
+account, at `/login` and in OAuth authorization, is documented to succeed and
+show the pending page; today it answers 404 "Unable to continue" with no
+session. A handoff signed before the source head moved is refused with 409
+`OperationRecoveryRequired` but claims the arrival, which then holds the DID
+(see the flow's case 9). Ordinary tests whose titles start "observed today:"
+pin what happens now, so any change fails them, and four separate tests assert
+the documented or intended behaviour under `test.fail`: the two sign-ins, a
+superseded handoff refused without a claim, and the status page's
+unresolved-request notice for the claimed arrival. Playwright counts those four
+as expected failures and the run as passed; an unexpected pass fails it. The
+phase result is the Playwright totals line and exit status. The summary filter
+(`scripts/ci-summary.py`) strips colour, so it prints these four titles with
+`status=failed`: Playwright marks an expected failure with a green cross. Read
+those four lines as expected failures, not as a failed run.
+
+Phases `before-restart` and `after-restart`
+(`tests/browser/incoming-public-restart.spec.mjs`) run apart from those cases: the
+first stops after the handoff is admitted and published, the controller restarts
+the Entryway service and waits for it, and the second renews the arrival code,
+replays the handoff and makes the first `createAccount`. Before that first
+creation it sends the same body with a JWT bound to `submitPlcOperation` and
+expects 403 `AccountMismatch`, which shows that no creation admission was saved
+(an exact replay of one would succeed without a credential). The controller reads
+the Entryway container's `.State.StartedAt` before and after the restart and fails
+with `code=RESTART_NOT_OBSERVED` unless it changed. This is a restart between
+admitted steps, not an interruption during provisioning. Both restart phases run
+even when phase `cases` fails, but `after-restart` runs only after a passing
+`before-restart`. The command fails if any phase fails.
+
+Specs run in the browser container and cannot restart services, so the restart
+case carries its state (the source session, arrival code and signed operation) in
+one 0600 file in a private `mktemp -d` directory inside the sandbox checkout,
+mounted only into those two runs. It is outside `ACCEPTANCE_REPORT_DIR`, never
+printed, and the controller removes it on every exit. Each phase writes its own
+Playwright reports (`incoming-public-failures`,
+`incoming-public-failures-before-restart`, `incoming-public-failures-after-restart`)
+and log. Sign-in and fresh email codes are entered through `evaluate`, and arrival
+codes travel only in the `Entryway-Arrival-Code` request header, so no step title
+carries them. Only statuses and error names of refused calls are asserted.
+
+Rate-limit headroom, from the source defaults (fixed 10-minute windows kept in the
+database, so the restart does not reset them): the target makes twelve
+`/incoming/prepare` requests (eleven in `cases`, five of them refused, and one
+before the restart; one more in `cases` once the superseded-handoff defect is
+fixed) and two ordinary signups against the per-IP signup budget of 30, and
+eight `createAccount` requests with an arrival code (six in `cases`, two after the
+restart) against the per-IP `createAccount` budget of 30. Both
+budgets are shared with ordinary signup and with the journey that runs before in
+the same sandbox (one preparation, two creations). Handoff submission has no
+budget. Browser email sign-in has no per-IP budget. Its budget is five codes per
+address per window, and two automatic OAuth codes per DID. The busiest address,
+the `cases` destination email, gets up to five sign-in codes: preparation, the
+two pending `/login` sign-ins, and the two OAuth sign-ins if they fall back to
+the email form. That is the limit, so add no further sign-in to that address.
+Fresh incoming codes are limited to five per user per window; the target-conflict
+owner asks for four and the observed superseded-handoff owner for three, the others
+for two or fewer.
+
+Not every identity case can be provoked through public endpoints. A continuation
+from a claim that lost its lease, and a DID that becomes hosted after preparation,
+are left to the contract tests; the
+[flow](../tests/flows/incoming-public-migration.md#failure-and-restart-cases) gives
+the reasons and the tests. For a lost lease those tests show that a stale owner
+is refused with `OperationLeaseLost`, that its successor resumes the claim and
+then needs recovery for an open receipt (`OperationRecoveryRequired`) or ends
+pending, and that the listed arrival storage writes refuse a stale owner
+(`claimArrival` is not among them). They do not show the current owner going on
+to complete the move, and no live run shows it. The two-node run adds no such
+case: two nodes contend for a live lease (`OperationPending`) rather than lose it.
+
+List the three selections without a sandbox:
+
+```sh
+INCOMING_PUBLIC_FAILURES=1 npx playwright test --config tests/playwright.config.mjs --list
+INCOMING_PUBLIC_FAILURES=1 INCOMING_FAILURES_PHASE=before-restart npx playwright test --config tests/playwright.config.mjs --list
+INCOMING_PUBLIC_FAILURES=1 INCOMING_FAILURES_PHASE=after-restart npx playwright test --config tests/playwright.config.mjs --list
+```
+
+The per-PR `incoming` job runs this command after the journey in the same sandbox.
+Each phase creates its own stock source accounts and destination emails, so it
+does not depend on accounts the journey made.
 
 ### Public incoming journey with goat
 
@@ -373,7 +633,7 @@ Contributors maintain the actual job commands in `.github/workflows/ci.yml`.
 Formatting, lint, syntax, types, architecture, schema, build, unit and lifecycle
 checks each have a visible step. Integration runs browser before contracts,
 then migration, the declared moderation-gap assertion, recovery/crash/authority
-checks and resilience last. Database dialects and the PostgreSQL application
+checks and resilience last. The separate `incoming` job runs the public incoming journey, then its failure and restart cases, in its own sandbox on every PR. Database dialects and the PostgreSQL application
 profile are separate steps: the databases job starts its sandbox on PostgreSQL,
 runs the SQLite and PostgreSQL suites concurrently, and runs the application
 profile in that sandbox (`POSTGRESQL_PROFILE_REUSE_SANDBOX=1`, which leaves
@@ -477,7 +737,8 @@ npm run test:ci-lifecycle
 ```
 
 The explicit helper script covers `stock-plc-mailpit.test.mjs`,
-`incoming-public-io.test.mjs` and `tests/atmosphere/project-incoming-access.test.mjs`.
+`incoming-public-io.test.mjs`, `incoming-journey.test.mjs` and
+`tests/atmosphere/project-incoming-access.test.mjs`.
 The native CI checks job runs it separately: helper files are not contract-discovered.
 The unit allowlist includes incoming storage, admission, handoff and composition.
 The separate native CI script `test:incoming-reconciliation` runs fresh-process
@@ -496,13 +757,17 @@ test container with `CONTRACT_DATABASE_BACKEND=postgresql` and that sandbox's
 child fixture is SQLite-specific; it does not establish PostgreSQL restart coverage.
 Run `./tests/local.sh incoming-public-mechanisms` separately
 for stock runtime evidence. Do not invent a host database URL or report these
-commands as executed from native CI alone. Full public journey and guarded
-activation qualification remain pending, independently of these checks. Follow the
-[accepted C4 contract](incoming-migration.md#c4-client-managed-migration-contract-accepted)
-and [public journey coverage](../tests/flows/external-migration.md#public-incoming-migration-shared-email-test-on-hold):
-exercise records/blobs, valid empty and blob-free repositories, integrity of the
-chosen transferred state, authorization and refusal across every pending-arrival
-activation entrypoint, and interrupted/lost-response recovery. Preserve canonical
+commands as executed from native CI alone. The [public journey](../tests/flows/incoming-public-migration.md)
+checks the chosen repository shape, activation and post-move access. Additional qualification
+under the [accepted C4 contract](incoming-migration.md#c4-client-managed-migration-contract-accepted)
+remains outstanding (see [incoming migration targets](#incoming-migration-targets)):
+authorization and refusal across every pending-arrival activation entrypoint,
+an interruption during provisioning, and cleanup of an abandoned published handoff. The
+[failure cases](#public-incoming-failure-cases) cover a lost `createAccount` response, a
+restart between admitted steps, a destination already hosting the handle or DID, and a
+source PLC head change before handoff submission or before creation. A lost lease is
+covered only in part, by contract tests: a stale owner is refused, but the current
+owner completing the move is not shown. Preserve canonical
 identity/custody, placement, saved-user binding, backend-state and durable-owner
 checks; do not require the abandoned final-source certification or global write
 barrier as a prerequisite.

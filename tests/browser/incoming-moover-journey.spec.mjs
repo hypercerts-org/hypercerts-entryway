@@ -308,8 +308,7 @@ test("the destination is active and serves the state; the source is deactivated"
   await expectDestinationServes(access, {
     endpoint,
     did: run.source.did,
-    blob: run.blob,
-    displayName: "PDS MOOver arrival journey",
+    inventory: run.inventory,
     handle: run.destinationHandle,
   });
   const destinationStatus = await call(
