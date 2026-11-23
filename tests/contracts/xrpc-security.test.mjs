@@ -1,3 +1,4 @@
+import { createApprovedOAuthToken } from "../support/approved-oauth-token.mjs";
 import { createOperationOwnership } from "../../dist/src/accounts/operation-ownership.js";
 import { createOperationOwnershipStore } from "../../dist/src/database/drizzle/operation-ownership.js";
 import assert from "node:assert/strict";
@@ -471,7 +472,7 @@ async function oauthFixture(t) {
   const f = await fixture(t, { oauth });
   oauth.stores = createOAuthStores(f.db, f.accounts, f.config);
   const token = async (jti, did = f.alice.did) => {
-    await oauth.stores.createToken(jti, { did }, null);
+    await createApprovedOAuthToken(oauth.stores, jti, { did }, null);
     payload = {
       sub: f.alice.did,
       jti,

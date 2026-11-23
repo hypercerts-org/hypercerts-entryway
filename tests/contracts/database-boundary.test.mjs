@@ -27,16 +27,32 @@ async function fixture(t, independent = false) {
   const directory = mkdtempSync(join(tmpdir(), "entryway-database-boundary-"));
   const path = join(directory, "authority.sqlite");
   const first = await openTestDatabase(path);
-  const second =
-    independent && first.backend === "postgresql"
-      ? await openTestDatabase(path)
-      : first;
+  let second = first;
+  let contenderName;
+  if (independent && first.backend === "postgresql") {
+    const configuration = await testDatabaseConfiguration(path);
+    contenderName = `entryway-race-${randomUUID()}`;
+    const url = new URL(configuration.url);
+    url.searchParams.set("application_name", contenderName);
+    second = await openDatabase({ ...configuration, url: String(url) });
+  }
   t.after(async () => {
     if (second !== first) await second.close();
     await first.close();
     rmSync(directory, { recursive: true, force: true });
   });
-  return { first, second };
+  return { first, second, contenderName };
+}
+
+async function createApprovedToken(store, id, data, refreshToken) {
+  const code = `code-${id}`;
+  const clientId = data.clientId ?? "client-fixture";
+  await store.createRequest(`request-${id}`, { clientId });
+  await store.updateRequest(`request-${id}`, { did: data.did, code });
+  await store.runExchange(async () => {
+    await store.consumeRequestCode(code);
+    await store.createToken(id, { ...data, clientId, code }, refreshToken);
+  });
 }
 
 test("database profiles accept both single-node backends and only PostgreSQL multi-node", () => {
@@ -157,7 +173,7 @@ test("close rejects new work while admitted transactions drain with nested provi
 });
 
 test("code, refresh, replay and grant races preserve exactly one consumer and all grants across independent PostgreSQL connections", async (t) => {
-  const { first, second } = await fixture(t, true);
+  const { first, second, contenderName } = await fixture(t, true);
   assert.equal(first === second, first.backend === "sqlite");
   const did = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
   const accounts = {
@@ -173,60 +189,53 @@ test("code, refresh, replay and grant races preserve exactly one consumer and al
   const stores = [first, second].map((db) =>
     createOAuthStores(db, accounts, config),
   );
-  const backendIds =
-    first.backend === "postgresql"
-      ? await Promise.all(
-          [first, second].map(
-            async (db) =>
-              (await query(db, "SELECT pg_backend_pid() AS pid", [], "get"))
-                .pid,
-          ),
-        )
-      : [];
-  if (backendIds.length) assert.notEqual(backendIds[0], backendIds[1]);
+  const observedBackends = [];
   const runTogether = async (operation) => {
     if (first.backend === "postgresql") {
       const entered = deferred(),
         release = deferred();
+      let holderPid;
       const left = first.transact(async () => {
-        assert.equal(
-          (await query(first, "SELECT pg_backend_pid() AS pid", [], "get")).pid,
-          backendIds[0],
-        );
+        holderPid = (
+          await query(first, "SELECT pg_backend_pid() AS pid", [], "get")
+        ).pid;
         entered.resolve();
         await release.promise;
         return operation(stores[0], 0);
       });
       await entered.promise;
-      const right = operation(stores[1], 1);
-      const results = Promise.allSettled([left, right]);
+      let contenderPid, results;
       try {
+        // Call the store directly so its own transaction must acquire the lock.
+        const right = operation(stores[1], 1);
+        results = Promise.allSettled([left, right]);
         const deadline = Date.now() + 5000;
-        let waiting = false;
         while (Date.now() < deadline) {
-          // Observation uses a third connection. The second race connection
-          // must actually wait on the first transaction's advisory lock.
+          // The unique application name identifies this fixture's second pool;
+          // pg_blocking_pids ties its wait to this phase's actual holder.
           const activity = await query(
             first,
-            "SELECT wait_event FROM pg_stat_activity WHERE pid=?",
-            [backendIds[1]],
+            "SELECT pid FROM pg_stat_activity WHERE application_name=? AND wait_event='advisory' AND ? = ANY(pg_blocking_pids(pid))",
+            [contenderName, holderPid],
             "get",
           );
-          if (activity?.wait_event === "advisory") {
-            waiting = true;
+          if (activity) {
+            contenderPid = activity.pid;
             break;
           }
           await new Promise((resolve) => setTimeout(resolve, 10));
         }
-        assert.equal(
-          waiting,
-          true,
+        assert.ok(
+          contenderPid,
           "second physical transaction must contend before the first commits",
         );
+        assert.notEqual(holderPid, contenderPid);
       } finally {
         release.resolve();
       }
-      return results;
+      const settled = await results;
+      observedBackends.push(`${holderPid},${contenderPid}`);
+      return settled;
     }
     const start = deferred();
     const attempts = stores.map((store, index) =>
@@ -252,7 +261,7 @@ test("code, refresh, replay and grant races preserve exactly one consumer and al
     codes.filter((result) => result.status === "rejected").length,
     0,
   );
-  await stores[0].createToken("original", { did }, "original-refresh");
+  await createApprovedToken(stores[0], "original", { did }, "original-refresh");
   const refreshes = await runTogether((store, index) =>
     store.rotateToken(
       "original",
@@ -296,7 +305,7 @@ test("code, refresh, replay and grant races preserve exactly one consumer and al
     ["client-0", "client-1"],
   );
   t.diagnostic(
-    `backend=${first.backend}; independent_connections=${first === second ? 1 : 2}; cases=code,refresh,replay,grants; backend_ids=${backendIds.join(",")}`,
+    `backend=${first.backend}; independent_connections=${first === second ? 1 : 2}; cases=code,refresh,replay,grants; backend_ids=${observedBackends.join(";")}`,
   );
 });
 
@@ -434,12 +443,14 @@ async function orderedAuthorityRace(
 for (const firstAction of ["revoke", "rotate"]) {
   test(`token family ${firstAction}-first race cannot leave a successor after revocation`, async (t) => {
     const f = await oauthRaceFixture(t);
-    await f.stores[0].createToken(
+    await createApprovedToken(
+      f.stores[0],
       "original",
       { did: f.did },
       "refresh-original",
     );
-    await f.stores[0].createToken(
+    await createApprovedToken(
+      f.stores[0],
       "unrelated",
       { did: f.did },
       "refresh-unrelated",
@@ -486,8 +497,14 @@ test("upstream old-refresh replay revokes a successor rotated after its lookup",
       import.meta.resolve("@atproto/oauth-provider/provider"),
     )
   );
-  await f.stores[0].createToken("original", { did: f.did }, "refresh-original");
-  await f.stores[0].createToken(
+  await createApprovedToken(
+    f.stores[0],
+    "original",
+    { did: f.did },
+    "refresh-original",
+  );
+  await createApprovedToken(
+    f.stores[0],
     "unrelated",
     { did: f.did },
     "refresh-unrelated",
@@ -540,7 +557,12 @@ test("connected-app session ownership lookup and deletion are atomic with rotati
       account: { did },
       value: () => "original",
     });
-  await f.stores[0].createToken("original", { did: f.did }, "refresh-original");
+  await createApprovedToken(
+    f.stores[0],
+    "original",
+    { did: f.did },
+    "refresh-original",
+  );
   await assert.rejects(revoke(0, "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb"), {
     status: 404,
   });
@@ -554,7 +576,12 @@ test("connected-app session ownership lookup and deletion are atomic with rotati
   assert.equal(revokeFirst[0].status, "fulfilled");
   assert.equal(revokeFirst[1].status, "rejected");
   assert.equal(await f.stores[0].readToken("successor"), null);
-  await f.stores[0].createToken("original", { did: f.did }, "refresh-original");
+  await createApprovedToken(
+    f.stores[0],
+    "original",
+    { did: f.did },
+    "refresh-original",
+  );
   const rotateFirst = await orderedAuthorityRace(
     t,
     f,
@@ -590,3 +617,193 @@ test("authorization request deletion and update cannot resurrect a consumed requ
     assert.equal(await f.stores[0].consumeRequestCode("code"), null);
   }
 });
+
+test("grant revocation fences consumed codes even after fresh approval and preserves other clients and DIDs", async (t) => {
+  const f = await oauthRaceFixture(t);
+  const [a, b] = f.stores;
+  const otherDid = "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb";
+  for (const [did, client] of [
+    [f.did, "client-a"],
+    [f.did, "client-b"],
+    [otherDid, "client-a"],
+  ])
+    await a.setAuthorizedClient(did, client, { authorizedScopes: ["atproto"] });
+  await createApprovedToken(
+    a,
+    "other-client",
+    { did: f.did, clientId: "client-b" },
+    "other-client-refresh",
+  );
+  await createApprovedToken(
+    a,
+    "other-did",
+    { did: otherDid, clientId: "client-a" },
+    "other-did-refresh",
+  );
+  await a.createRequest("old-request", { clientId: "client-a" });
+  await a.updateRequest("old-request", { did: f.did, code: "old-code" });
+  await a.runExchange(async () => {
+    assert.ok(await a.consumeRequestCode("old-code"));
+    assert.equal(await b.revokeClientGrant(f.did, "client-a"), true);
+    await b.setAuthorizedClient(f.did, "client-a", {
+      authorizedScopes: ["atproto"],
+    });
+    await assert.rejects(
+      a.createToken(
+        "old",
+        { did: f.did, clientId: "client-a", code: "old-code" },
+        "old-refresh",
+      ),
+      /Approval no longer exists/,
+    );
+  });
+  await createApprovedToken(
+    b,
+    "fresh",
+    { did: f.did, clientId: "client-a" },
+    "fresh-refresh",
+  );
+  assert.ok(await a.findTokenByRefreshToken("fresh-refresh"));
+  assert.ok(await a.findTokenByRefreshToken("other-client-refresh"));
+  assert.ok(await a.findTokenByRefreshToken("other-did-refresh"));
+  await b.revokeAllGrants(f.did);
+  assert.equal(await a.findTokenByRefreshToken("fresh-refresh"), null);
+  assert.equal(await a.findTokenByRefreshToken("other-client-refresh"), null);
+  assert.ok(await a.findTokenByRefreshToken("other-did-refresh"));
+});
+
+test("preexisting authorized requests without approval generation fail closed", async (t) => {
+  const f = await oauthRaceFixture(t);
+  const store = f.stores[0];
+  await store.createRequest("legacy", {
+    did: f.did,
+    clientId: "client",
+    code: "legacy-code",
+  });
+  await store.runExchange(async () => {
+    await store.consumeRequestCode("legacy-code");
+    await assert.rejects(
+      store.createToken(
+        "legacy-token",
+        { did: f.did, clientId: "client", code: "legacy-code" },
+        "legacy-refresh",
+      ),
+      /Approval no longer exists/,
+    );
+  });
+});
+
+for (const firstAction of ["revoke", "rotate"]) {
+  test(`client grant ${firstAction}-first serializes against refresh rotation`, async (t) => {
+    const f = await oauthRaceFixture(t);
+    await f.stores[0].setAuthorizedClient(f.did, "client-a", {
+      authorizedScopes: ["atproto"],
+    });
+    await createApprovedToken(
+      f.stores[0],
+      "family",
+      { did: f.did, clientId: "client-a" },
+      "refresh",
+    );
+    const revoke = (store) => store.revokeClientGrant(f.did, "client-a");
+    const rotate = (store) =>
+      store.rotateToken("family", "successor", "next-refresh", {});
+    const result = await orderedAuthorityRace(
+      t,
+      f,
+      () => (firstAction === "revoke" ? revoke : rotate)(f.stores[0]),
+      () => (firstAction === "revoke" ? rotate : revoke)(f.stores[1]),
+    );
+    assert.equal(result[0].status, "fulfilled");
+    assert.equal(
+      result[1].status,
+      firstAction === "revoke" ? "rejected" : "fulfilled",
+    );
+    assert.equal(
+      await f.stores[1].findTokenByRefreshToken("next-refresh"),
+      null,
+    );
+  });
+}
+
+test("forgetting one shared-device membership preserves siblings and an already published approval", async (t) => {
+  const f = await oauthRaceFixture(t);
+  const [a, b] = f.stores;
+  const otherDid = "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb";
+  await a.createDevice("shared", { lastSeenAt: new Date() });
+  // This fixture's account lookup returns the same live account for either DID.
+  await a.upsertDeviceAccount("shared", f.did);
+  await a.upsertDeviceAccount("shared", otherDid);
+  await a.createRequest("published", { clientId: "client" });
+  await a.updateRequest("published", { did: f.did, code: "published-code" });
+  assert.equal(await b.removeDeviceAccount("shared", f.did), true);
+  assert.equal(await b.removeDeviceAccount("shared", f.did), false);
+  assert.ok(await a.getDeviceAccount("shared", otherDid));
+  await a.runExchange(async () => {
+    await a.consumeRequestCode("published-code");
+    await a.createToken(
+      "published-token",
+      { did: f.did, clientId: "client", code: "published-code" },
+      "published-refresh",
+    );
+  });
+  assert.ok(await b.findTokenByRefreshToken("published-refresh"));
+});
+
+for (const kind of ["connected-apps", "account-authority"]) {
+  test(`${kind} bulk revocation fences a consumed code across fresh consent`, async (t) => {
+    const f = await oauthRaceFixture(t);
+    const [first, second] = f.stores;
+    const clientId = "client-a";
+    await first.setAuthorizedClient(f.did, clientId, {
+      authorizedScopes: ["atproto"],
+    });
+    await first.createRequest("bulk-request", { clientId });
+    await first.updateRequest("bulk-request", {
+      did: f.did,
+      code: "bulk-code",
+    });
+    await first.runExchange(async () => {
+      await first.consumeRequestCode("bulk-code");
+      if (kind === "connected-apps") {
+        const actions = createConnectedAppsActions({
+          db: f.second,
+          oauth: { stores: second },
+        });
+        await actions.revoke({ account: { did: f.did } });
+      } else {
+        const { createAccountAuthority } =
+          await import("../../dist/src/database/drizzle/account-authority.mjs");
+        const accounts = {
+          get: async () => ({
+            did: f.did,
+            email: "account@example.test",
+            status: "active",
+          }),
+          storage: { getVerifiedBinding: async () => null },
+        };
+        await createAccountAuthority({ db: f.second, accounts }).revokeLocal(
+          f.did,
+        );
+      }
+      await second.setAuthorizedClient(f.did, clientId, {
+        authorizedScopes: ["atproto"],
+      });
+      await assert.rejects(
+        first.createToken(
+          "old-bulk",
+          { did: f.did, clientId, code: "bulk-code" },
+          "old-refresh",
+        ),
+        /Approval no longer exists/,
+      );
+    });
+    await createApprovedToken(
+      second,
+      "fresh-bulk",
+      { did: f.did, clientId },
+      "fresh-bulk-refresh",
+    );
+    assert.ok(await first.findTokenByRefreshToken("fresh-bulk-refresh"));
+  });
+}

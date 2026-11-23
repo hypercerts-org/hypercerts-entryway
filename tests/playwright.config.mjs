@@ -11,6 +11,7 @@ const incomingJourney =
 // selected only by `./tests/local.sh incoming-two-node`. One-off evidence, not
 // a CI gate.
 const twoNode = process.env.INCOMING_TWO_NODE === "1";
+const lifecycleTwoNode = process.env.ACCOUNT_LIFECYCLE_TWO_NODE === "1";
 // The goat journey is selected only by `./tests/local.sh incoming-goat-journey`.
 const goatJourney = process.env.INCOMING_GOAT_JOURNEY === "1";
 const defaultMatch = [
@@ -67,6 +68,11 @@ const selected = [
     "incoming-moover-journey.spec.mjs",
   ],
   [goatJourney, "incoming-goat-journey", "incoming-goat-journey.spec.mjs"],
+  [
+    lifecycleTwoNode,
+    "account-lifecycle-two-node",
+    "account-lifecycle-two-node.spec.mjs",
+  ],
   [twoNode, "incoming-two-node", "incoming-public-journey.spec.mjs"],
   [
     incomingJourney,

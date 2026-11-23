@@ -1,3 +1,4 @@
+import { invalidateAccountApprovals } from "../oauth-approval.mjs";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { and, asc, eq, gt, isNotNull, ne, sql } from "drizzle-orm";
 import { HttpError } from "../../http/http-error.mjs";
@@ -220,6 +221,7 @@ export function createAccountAuthority({ db, accounts }) {
       await db.remove("session", eq(t.session.userId, userId));
     if (row) await clearEmailProofs(row.email);
     await clearOAuthTokensForDid(did);
+    await invalidateAccountApprovals(db, did);
     for (const { key, value } of await db.list("oauth:device-accounts"))
       if (value.did === did) await db.delete("oauth:device-accounts", key);
     for (const { key, value } of await db.list("oauth:requests"))

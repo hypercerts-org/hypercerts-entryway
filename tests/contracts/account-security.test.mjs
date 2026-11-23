@@ -1,3 +1,4 @@
+import { createApprovedOAuthToken } from "../support/approved-oauth-token.mjs";
 import { Secp256k1Keypair } from "@atproto/crypto";
 import { cidForCbor } from "@atproto/common";
 import * as plc from "@did-plc/lib";
@@ -471,7 +472,8 @@ test("email update requires both proofs, rebinds identity, and revokes DID crede
     identifier: f.alice.email,
     password: "a long existing password",
   });
-  await f.oauth.stores.createToken(
+  await createApprovedOAuthToken(
+    f.oauth.stores,
     "alice-previous-token",
     { did: f.alice.did },
     "alice-previous-refresh",
@@ -570,7 +572,8 @@ test("verified email change preserves shared-user browser sessions and cleans on
   assert.equal(secondLogin.user.id, sharedUserId);
   const sibling = await bindSiblingToSharedEmail(f, sharedUserId);
 
-  await f.oauth.stores.createToken(
+  await createApprovedOAuthToken(
+    f.oauth.stores,
     "alice-previous-token",
     { did: f.alice.did },
     "alice-previous-refresh",

@@ -1,6 +1,13 @@
 import { page, escapeHtml as esc } from "../../ui/html.mjs";
 import { accountUrl } from "../../ui/account-forms.mjs";
 import { HttpError } from "../../http/http-error.mjs";
+import {
+  endBrowserSession,
+  forgetDevice,
+  forgetOAuthDevices,
+  revokeAppAccess,
+  revokeGrant,
+} from "./operations.js";
 
 export function createConnectedAppsActions({ db, oauth, legacy, console }) {
   const revokeApps = (did) => revokeAppAccess({ db, oauth, legacy }, did);
@@ -11,22 +18,12 @@ export function createConnectedAppsActions({ db, oauth, legacy, console }) {
     },
     "grant-revoke": async ({ account, value }) => {
       const id = value("clientId");
-      await db.transact(async () => {
-        const grants = new Map(
-          (await db.get("oauth:grants", account.did)) ?? [],
+      if (!(await revokeGrant(oauth, account.did, id)))
+        throw new HttpError(
+          404,
+          "NotFound",
+          "Application permission not found",
         );
-        if (!grants.has(id))
-          throw new HttpError(
-            404,
-            "NotFound",
-            "Application permission not found",
-          );
-        for (const item of await oauth.stores.listAccountTokens(account.did))
-          if (item.data.clientId === id)
-            await oauth.stores.deleteToken(item.id);
-        grants.delete(id);
-        await db.set("oauth:grants", account.did, [...grants]);
-      });
     },
     "oauth-session-revoke": async ({ account, value }) => {
       await db.transact(async () => {
@@ -48,13 +45,10 @@ export function createConnectedAppsActions({ db, oauth, legacy, console }) {
       await legacy.revokeSession(account.did, item.id);
     },
     "browser-session-revoke": async ({ req, res, session, value }) => {
-      const item = (await oauth.listBrowserSessions(req)).find(
-        (s) => s.id === value("sessionId"),
-      );
-      if (!item)
+      const sessionId = value("sessionId");
+      if (!(await endBrowserSession(oauth, req, sessionId)))
         throw new HttpError(404, "NotFound", "Browser session not found");
-      await oauth.revokeBrowserSession(req, item.id);
-      if (item.id === session.sessionId) return res.redirect(303, "/login");
+      if (sessionId === session.sessionId) return res.redirect(303, "/login");
     },
     "browsers-revoke": async ({ req, res, account }) => {
       await forgetDevices(account.did);
@@ -62,11 +56,8 @@ export function createConnectedAppsActions({ db, oauth, legacy, console }) {
       return res.redirect(303, "/login");
     },
     "device-revoke": async ({ account, value }) => {
-      const item = (
-        await oauth.stores.listDeviceAccounts({ did: account.did })
-      ).find((s) => s.deviceId === value("deviceId"));
-      if (!item) throw new HttpError(404, "NotFound", "OAuth device not found");
-      await oauth.stores.removeDeviceAccount(item.deviceId, account.did);
+      if (!(await forgetDevice(oauth, account.did, value("deviceId"))))
+        throw new HttpError(404, "NotFound", "OAuth device not found");
     },
     "app-password-create": async ({ req, res, account, value }) => {
       console.needed();
@@ -86,17 +77,4 @@ export function createConnectedAppsActions({ db, oauth, legacy, console }) {
       await legacy.revokeAppPassword(account.did, value("name"));
     },
   };
-}
-
-export async function revokeAppAccess({ db, oauth, legacy }, did) {
-  await db.transact(async () => {
-    for (const token of await oauth.stores.listAccountTokens(did))
-      await oauth.stores.deleteToken(token.id);
-    await db.delete("oauth:grants", did);
-  });
-  await legacy?.revokeAllSessions(did);
-}
-export async function forgetOAuthDevices(oauth, did) {
-  for (const device of await oauth.stores.listDeviceAccounts({ did }))
-    await oauth.stores.removeDeviceAccount(device.deviceId, did);
 }

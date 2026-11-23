@@ -94,6 +94,7 @@ export async function createAuthentication({
     db,
     config,
     provider,
+    runAuthorization: stores.runAuthorization,
     flows,
     loginForm: forms.loginForm,
     consentForm,

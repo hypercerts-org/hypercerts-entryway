@@ -41,3 +41,11 @@ remain valid until expiration.
 **Repeat:** use a fresh isolated project for acceptance. Keep independent client
 accounts and avoid parallel state mutations. Run resilience only after these
 cases finish, because it deliberately interrupts shared services.
+
+For users managing access, ending one account-settings session applies to the
+signed-in browser identity, including its selected DIDs. It leaves remembered
+OAuth device memberships and application grants intact. Forgetting a device
+removes only the selected DID from that device. Revoking an application grant
+removes that client's grant and refresh families for the selected DID; other
+clients and DIDs remain. Changes are visible across nodes sharing the authority
+database. An already-issued access token can remain usable until its expiry.

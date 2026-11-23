@@ -1,3 +1,10 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  approvalVersion,
+  sameApprovalVersion,
+  invalidateClientApproval,
+  invalidateAccountApprovals,
+} from "../oauth-approval.mjs";
 import {
   InvalidGrantError,
   InvalidRequestError,
@@ -5,6 +12,8 @@ import {
 
 /** Constructor-injected upstream persistence, with database-owned transactions. */
 export function createOAuthStores(db, accounts, config) {
+  const exchange = new AsyncLocalStorage();
+  const authorization = new AsyncLocalStorage();
   const get = (ns, key) => db.get(`oauth:${ns}`, key);
   const set = (ns, key, value) => db.set(`oauth:${ns}`, key, value);
   const del = (ns, key) => db.delete(`oauth:${ns}`, key);
@@ -65,6 +74,9 @@ export function createOAuthStores(db, accounts, config) {
   };
   return {
     account,
+    runExchange: (operation) => exchange.run({}, operation),
+    runAuthorization: (clientId, operation) =>
+      authorization.run({ clientId, memberships: new Map() }, operation),
     createAccount: unsupported,
     authenticateAccount: unsupported,
     async getAccount(did) {
@@ -89,28 +101,42 @@ export function createOAuthStores(db, accounts, config) {
           did,
           deviceId,
           createdAt: old?.createdAt ?? new Date(),
+          membershipId: old?.membershipId ?? crypto.randomUUID(),
           updatedAt: new Date(),
         });
       });
     },
     getDeviceAccount: deviceAccount,
     async removeDeviceAccount(deviceId, did) {
-      await del("device-accounts", `${deviceId}/${did}`);
+      return transaction(() =>
+        db.deviceAccountMemberships.remove(deviceId, did),
+      );
     },
     async listDeviceAccounts(filter) {
-      const result = [];
-      for (const key of await deviceAccountKeys(filter)) {
-        const row = await get("device-accounts", key);
-        if (
-          !row ||
-          (filter.did && row.did !== filter.did) ||
-          (filter.deviceId && row.deviceId !== filter.deviceId)
-        )
-          continue;
-        const value = await deviceAccount(row.deviceId, row.did);
-        if (value) result.push(value);
-      }
-      return result;
+      const context = authorization.getStore();
+      const read = async () => {
+        const result = [];
+        for (const key of await deviceAccountKeys(filter)) {
+          const row = await get("device-accounts", key);
+          if (
+            !row ||
+            (filter.did && row.did !== filter.did) ||
+            (filter.deviceId && row.deviceId !== filter.deviceId)
+          )
+            continue;
+          const value = await deviceAccount(row.deviceId, row.did);
+          if (value) {
+            result.push(value);
+            if (context)
+              context.memberships.set(JSON.stringify([row.deviceId, row.did]), {
+                membershipId: row.membershipId ?? null,
+                version: await approvalVersion(db, row.did, context.clientId),
+              });
+          }
+        }
+        return result;
+      };
+      return context ? transaction(read) : read();
     },
     resetPasswordRequest: unsupported,
     resetPasswordConfirm: unsupported,
@@ -163,12 +189,42 @@ export function createOAuthStores(db, accounts, config) {
         const current = await get("requests", id);
         if (!current)
           throw new InvalidRequestError("Unknown authorization request");
-        await set("requests", id, { ...current, ...data });
+        const context = authorization.getStore();
+        let version = current.approvalVersion;
+        if (data.code && data.did) {
+          version = await approvalVersion(db, data.did, current.clientId);
+          if (context) {
+            const snapshot = context.memberships.get(
+              JSON.stringify([current.deviceId, data.did]),
+            );
+            const membership = await get(
+              "device-accounts",
+              `${current.deviceId}/${data.did}`,
+            );
+            const grant = (await authorized(data.did)).get(current.clientId);
+            const scopes = current.parameters?.scope?.split(" ") ?? [];
+            if (
+              context.clientId !== current.clientId ||
+              !snapshot ||
+              !membership ||
+              membership.deviceId !== current.deviceId ||
+              membership.did !== data.did ||
+              (membership.membershipId ?? null) !== snapshot.membershipId ||
+              !sameApprovalVersion(snapshot.version, version) ||
+              !grant ||
+              !scopes.every((scope) => grant.authorizedScopes?.includes(scope))
+            )
+              throw new InvalidRequestError("Authorization is no longer valid");
+          }
+        }
+        await set("requests", id, {
+          ...current,
+          ...data,
+          approvalVersion: version,
+        });
       });
     },
     async deleteRequest(id) {
-      // Participate in the same lock as update/consume so a delayed update
-      // cannot recreate a request after revocation has returned.
       await transaction(() => del("requests", id));
     },
     async consumeRequestCode(code) {
@@ -178,15 +234,35 @@ export function createOAuthStores(db, accounts, config) {
         );
         if (!found) return null;
         await del("requests", found.key);
+        const context = exchange.getStore();
+        if (context)
+          context.approval = {
+            code,
+            did: found.value.did,
+            clientId: found.value.clientId,
+            version: found.value.approvalVersion,
+          };
         return { requestId: found.key, data: found.value };
       });
     },
     async createToken(id, data, refreshToken) {
-      await set("tokens", id, {
-        data,
-        currentRefreshToken: refreshToken ?? null,
-        refreshTokens: refreshToken ? [refreshToken] : [],
-        previousIds: [],
+      await transaction(async () => {
+        const approval = exchange.getStore()?.approval;
+        const version = await approvalVersion(db, data.did, data.clientId);
+        if (
+          !approval ||
+          approval.code !== data.code ||
+          approval.did !== data.did ||
+          approval.clientId !== data.clientId ||
+          !sameApprovalVersion(approval.version, version)
+        )
+          throw new InvalidGrantError("Approval no longer exists");
+        await set("tokens", id, {
+          data,
+          currentRefreshToken: refreshToken ?? null,
+          refreshTokens: refreshToken ? [refreshToken] : [],
+          previousIds: [],
+        });
       });
     },
     readToken: (id) => tokenInfo(id),
@@ -241,6 +317,32 @@ export function createOAuthStores(db, accounts, config) {
         ({ value }) => value.data.code === code,
       );
       return found ? tokenInfo(found.key, found.value) : null;
+    },
+    async listAccountGrants(did) {
+      return [...(await authorized(did))];
+    },
+    async revokeClientGrant(did, clientId) {
+      return transaction(async () => {
+        const grants = await authorized(did);
+        if (!grants.has(clientId)) return false;
+        for (const { key, value } of await list("tokens")) {
+          if (value.data.did === did && value.data.clientId === clientId)
+            await this.deleteToken(key);
+        }
+        await invalidateClientApproval(db, did, clientId);
+        grants.delete(clientId);
+        await set("grants", did, [...grants]);
+        return true;
+      });
+    },
+    async revokeAllGrants(did) {
+      await transaction(async () => {
+        for (const { key, value } of await list("tokens")) {
+          if (value.data.did === did) await this.deleteToken(key);
+        }
+        await invalidateAccountApprovals(db, did);
+        await del("grants", did);
+      });
     },
     async listAccountTokens(did) {
       const result = [];

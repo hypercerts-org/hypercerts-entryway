@@ -5,4 +5,5 @@ export interface DeviceAccountMembershipFilter {
 
 export interface DeviceAccountMembershipReader {
   findKeys(filter: DeviceAccountMembershipFilter): Promise<string[]>;
+  remove(deviceId: string, did: string): Promise<boolean>;
 }

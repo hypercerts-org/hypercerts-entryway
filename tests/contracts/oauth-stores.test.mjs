@@ -47,6 +47,20 @@ async function fixture(t) {
   return fixture;
 }
 
+async function createApprovedToken(f, id, data, refreshToken) {
+  const clientId = data.clientId ?? "https://client.example/metadata";
+  const code = data.code ?? `code-${id}`;
+  await f.store.setAuthorizedClient(data.did, clientId, {
+    authorizedScopes: ["atproto"],
+  });
+  await f.store.createRequest(`request-${id}`, { clientId });
+  await f.store.updateRequest(`request-${id}`, { did: data.did, code });
+  await f.store.runExchange(async () => {
+    await f.store.consumeRequestCode(code);
+    await f.store.createToken(id, { ...data, clientId, code }, refreshToken);
+  });
+}
+
 test("authorization codes are consumed once across concurrent callers and restart", async (t) => {
   const f = await fixture(t);
   await f.store.createRequest("request", {
@@ -290,7 +304,7 @@ test("old refresh tokens point to current family so upstream can revoke a replay
     updatedAt: new Date(),
     expiresAt: new Date(Date.now() + 60_000),
   };
-  await f.store.createToken("token-1", data, "refresh-1");
+  await createApprovedToken(f, "token-1", data, "refresh-1");
   await f.store.rotateToken("token-1", "token-2", "refresh-2", {
     updatedAt: new Date(),
     expiresAt: new Date(Date.now() + 60_000),
@@ -310,7 +324,7 @@ test("old refresh tokens point to current family so upstream can revoke a replay
 
 test("a concurrent refresh cannot create a second token family", async (t) => {
   const f = await fixture(t);
-  await f.store.createToken("token-1", { did: f.row.did }, "refresh-1");
+  await createApprovedToken(f, "token-1", { did: f.row.did }, "refresh-1");
   await f.store.rotateToken("token-1", "token-2", "refresh-2", {});
   await assert.rejects(
     async () =>
@@ -332,8 +346,14 @@ test("DPoP and PKCE replay records survive process restart and expire", async (t
 
 test("historical token IDs persist only for family revocation across restart", async (t) => {
   const f = await fixture(t);
-  await f.store.createToken("original", { did: f.row.did }, "refresh-original");
-  await f.store.createToken(
+  await createApprovedToken(
+    f,
+    "original",
+    { did: f.row.did },
+    "refresh-original",
+  );
+  await createApprovedToken(
+    f,
     "unrelated",
     { did: f.row.did },
     "refresh-unrelated",
@@ -356,3 +376,103 @@ test("historical token IDs persist only for family revocation across restart", a
   assert.deepEqual(await f.db.list("oauth:token-successors"), []);
   assert.equal((await f.store.readToken("unrelated")).id, "unrelated");
 });
+
+for (const prompt of ["none", "hint"]) {
+  for (const change of ["revoke", "forget", "forget-and-remember", "extend"]) {
+    test(`stock ${prompt} fast path ${change} between selection and code publication`, async (t) => {
+      const f = await fixture(t);
+      const { OAuthProvider } =
+        await import("@atproto/oauth-provider/provider");
+      const { RequestManager } =
+        await import("../../node_modules/@atproto/oauth-provider/dist/request/request-manager.js");
+      const clientId = "https://client.example/metadata";
+      const requestId = "stock-request";
+      const requestUri = `urn:ietf:params:oauth:request_uri:${requestId}`;
+      const parameters = {
+        scope: "atproto",
+        login_hint: f.row.did,
+        ...(prompt === "none" ? { prompt: "none" } : {}),
+      };
+      const client = { id: clientId };
+      const deviceId = "stock-device";
+      await f.store.createDevice(deviceId, {});
+      await f.store.upsertDeviceAccount(deviceId, f.row.did);
+      if (change === "extend") {
+        const key = `${deviceId}/${f.row.did}`;
+        const { membershipId: _membershipId, ...legacyMembership } =
+          await f.db.get("oauth:device-accounts", key);
+        await f.db.set("oauth:device-accounts", key, legacyMembership);
+      }
+      await f.store.setAuthorizedClient(f.row.did, clientId, {
+        authorizedScopes: ["atproto"],
+      });
+      await f.store.createRequest(requestId, {
+        clientId,
+        deviceId,
+        parameters,
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      let release, reached;
+      const paused = new Promise((resolve) => {
+        reached = resolve;
+      });
+      const resumed = new Promise((resolve) => {
+        release = resolve;
+      });
+      const requestManager = new RequestManager(f.store, null, null, {}, {});
+      const provider = {
+        issuer: "https://issuer.example",
+        clientManager: { getClient: async () => client },
+        processAuthorizationRequest: async () => ({ parameters, requestUri }),
+        requestManager,
+        checkConsentRequired: OAuthProvider.prototype.checkConsentRequired,
+        checkLoginRequired: () => false,
+        accountManager: {
+          listDeviceAccounts: async (device) => {
+            const sessions = await f.store.listDeviceAccounts({
+              deviceId: device,
+            });
+            reached();
+            await resumed;
+            return sessions;
+          },
+        },
+      };
+      const pending = f.store.runAuthorization(clientId, () =>
+        OAuthProvider.prototype.authorize.call(
+          provider,
+          { client_id: clientId, request_uri: requestUri },
+          { deviceId, deviceMetadata: {} },
+        ),
+      );
+      await paused;
+      if (change === "revoke") {
+        assert.equal(
+          await f.store.revokeClientGrant(f.row.did, clientId),
+          true,
+        );
+        await f.store.setAuthorizedClient(f.row.did, clientId, {
+          authorizedScopes: ["atproto"],
+        });
+      } else if (change === "forget" || change === "forget-and-remember") {
+        assert.equal(
+          await f.store.removeDeviceAccount(deviceId, f.row.did),
+          true,
+        );
+        if (change === "forget-and-remember")
+          await f.store.upsertDeviceAccount(deviceId, f.row.did);
+      } else
+        await f.store.setAuthorizedClient(f.row.did, clientId, {
+          authorizedScopes: ["atproto", "transition:generic"],
+        });
+      release();
+      if (change === "extend") {
+        const result = await pending;
+        assert.ok(result.redirect.code);
+      } else {
+        await assert.rejects(pending, /Authorization is no longer valid/);
+        assert.equal(await f.store.readRequest(requestId), null);
+      }
+    });
+  }
+}
