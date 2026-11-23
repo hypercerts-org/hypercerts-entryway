@@ -45,6 +45,11 @@ export function isObservedArrivalActivation(
 }
 
 export interface ArrivalPreparationAuthority {
+  readonly staged?: {
+    readonly entrywayKey: string;
+    readonly creationPlcHead?: string;
+    readonly retireRotationKeys: readonly string[];
+  };
   readonly sourcePredecessor: Record<string, unknown>;
   readonly source: IncomingSourceFacts;
   readonly approvedRotationKeys: readonly string[];

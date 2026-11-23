@@ -7,6 +7,7 @@ const publicRun = process.env.PUBLIC_BROWSER_TESTS === "true";
 const allShapes = process.env.INCOMING_PUBLIC_SHAPES === "1";
 const incomingJourney =
   allShapes || process.env.INCOMING_PUBLIC_JOURNEY === "1";
+const lateCutover = process.env.INCOMING_LATE_CUTOVER === "1";
 // The same journey on the two-node PostgreSQL profile, once per node order, is
 // selected only by `./tests/local.sh incoming-two-node`. One-off evidence, not
 // a CI gate.
@@ -46,9 +47,17 @@ if (
   throw new Error("Unknown incoming failure phase");
 // Every preparation flow displays the one-time arrival code. Do not copy
 // their DOM into failure reports.
-if (incomingJourney || twoNode || goatJourney || mooverJourney || failures)
+if (
+  lateCutover ||
+  incomingJourney ||
+  twoNode ||
+  goatJourney ||
+  mooverJourney ||
+  failures
+)
   process.env.PLAYWRIGHT_NO_COPY_PROMPT = "1";
 const selected = [
+  [lateCutover, "incoming-late-cutover", "incoming-late-cutover.spec.mjs"],
   [
     failures,
     failurePhase === "cases"
@@ -78,6 +87,10 @@ const selected = [
 const artifactPrefix = selected?.[1] ?? "browser";
 // Projects belong to the selection that won, never to another one.
 const selectedProjects = {
+  "incoming-late-cutover": ["entryway", "destination"].map((submitAt) => ({
+    name: `cutover-at-${submitAt}`,
+    metadata: { submitAt },
+  })),
   "incoming-two-node": [
     ["entryway", "entryway-replica"],
     ["entryway-replica", "entryway"],

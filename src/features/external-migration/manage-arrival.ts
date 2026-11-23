@@ -7,7 +7,13 @@ import type { OperationOwnership } from "../../accounts/operation-ownership.js";
 import type { ArrivalTransactor } from "../../database/migration-journal.port.js";
 import type { OperationClaim } from "../../database/operation-ownership.port.js";
 import { HttpError } from "../../http/http-error.mjs";
-import type { ArrivalAggregate } from "./arrival-types.js";
+import type * as plc from "@did-plc/lib";
+import { readIncomingObservation } from "../../plc/incoming-observation.js";
+import { PlcError } from "../../plc/errors.js";
+import {
+  destinationRotationKeys,
+  type ArrivalAggregate,
+} from "./arrival-types.js";
 import { arrivalClaimInput } from "./arrival-request.js";
 import { createFreshArrivalProof } from "./fresh-proof.js";
 import { generateArrivalCode } from "./prepare-arrival.js";
@@ -70,6 +76,7 @@ const parseInput = (input: unknown): ArrivalLifecycleInput => {
  * arrival is resumed through its recorded claim and is never cancelled here. */
 export function createArrivalLifecycle({
   arrivals,
+  plcClient,
   ownership,
   authentication,
   checkCsrf,
@@ -77,6 +84,7 @@ export function createArrivalLifecycle({
   rateLimit,
 }: {
   arrivals: ArrivalTransactor;
+  plcClient: plc.Client;
   ownership: OperationOwnership;
   authentication: BrowserAuthentication;
   checkCsrf: (request: BrowserRequest, browser: unknown) => void;
@@ -108,7 +116,8 @@ export function createArrivalLifecycle({
   const refuseInactive = (aggregate: ArrivalAggregate): void => {
     if (
       aggregate.arrival.cancelledAt !== null ||
-      aggregate.progress.boundAt !== null
+      aggregate.progress.completedAt !== null ||
+      (aggregate.progress.boundAt !== null && !aggregate.arrival.staged)
     )
       throw expired();
   };
@@ -154,6 +163,78 @@ export function createArrivalLifecycle({
       },
     );
   return {
+    /** Confirm a reviewed source metadata update before admitting a final cutover. */
+    async reapprove(
+      request: BrowserRequest,
+      otp: string,
+      input: ArrivalLifecycleInput & { expectedPlcHead: string },
+    ) {
+      const principal = await requireFreshProof(
+        request,
+        otp,
+        "incoming-reapprove",
+      );
+      const initial = await read(input.operationId, principal.userId);
+      const saved = initial.arrival;
+      if (
+        !saved.staged ||
+        saved.claimOperationId === null ||
+        initial.progress.completedAt !== null
+      )
+        throw new DomainError(
+          "OperationConflict",
+          409,
+          "A claimed staged arrival is required",
+        );
+      return resumeClaimed(
+        { ...saved, claimOperationId: saved.claimOperationId },
+        async (owner) => {
+          const current = await read(input.operationId, principal.userId);
+          if (current.arrival.version !== input.expectedVersion)
+            throw versionConflict();
+          let observed;
+          try {
+            observed = await readIncomingObservation(
+              plcClient,
+              saved.did,
+              current.arrival.sourcePlcHead,
+            );
+          } catch (error) {
+            if (error instanceof PlcError)
+              throw new DomainError(
+                "IdentityConflict",
+                409,
+                "The prepared source history is no longer canonical",
+              );
+            throw new DomainError(
+              "AccountUnavailable",
+              502,
+              "The source identity cannot be observed",
+            );
+          }
+          if (observed.sourcePlcHead !== input.expectedPlcHead)
+            throw new DomainError(
+              "IdentityConflict",
+              409,
+              "The canonical head differs from the reviewed source update",
+            );
+          const changed = await arrivals.reapproveArrivalSource(owner, {
+            operationId: saved.operationId,
+            userId: principal.userId,
+            expectedVersion: input.expectedVersion,
+            expectedPlcHead: input.expectedPlcHead,
+            updates: observed.updates,
+            observedCids: observed.observedCids,
+          });
+          return {
+            operationId: changed.operationId,
+            version: changed.version,
+            expectedPlcHead: changed.sourcePlcHead,
+            approvedRotationKeys: destinationRotationKeys(changed),
+          };
+        },
+      );
+    },
     /** A fresh destination proof issues a replacement one-time code for the same
      * arrival. It performs no allocation, dispatch or obligation release. */
     async renew(

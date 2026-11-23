@@ -153,6 +153,12 @@ export function parseArrivalRequest(
             .digest("hex");
     if (fields.recoveryKey !== undefined) {
       recoveryKey = recoveryKeyValue(fields.recoveryKey);
+      if (saved.staged?.retireRotationKeys.includes(recoveryKey))
+        throw new HttpError(
+          400,
+          "InvalidRequest",
+          "The recovery key was selected for retirement",
+        );
       const custody = destinationRotationKeys({
         approvedRotationKeys: saved.approvedRotationKeys,
         recoveryKey,
@@ -190,7 +196,10 @@ export function parseArrivalRequest(
             handle: saved.handle,
             pdsId: saved.pdsId,
             endpoint: saved.endpoint,
-            sourcePlcHead: saved.sourcePlcHead,
+            sourcePlcHead:
+              method === incomingCreationMethod
+                ? (saved.staged?.creationPlcHead ?? saved.sourcePlcHead)
+                : saved.sourcePlcHead,
             generation: saved.generation,
           },
           semantic,

@@ -5,7 +5,7 @@ import type {
   BrowserRequest,
 } from "../../authentication/port.js";
 import { createFreshArrivalProof } from "./fresh-proof.js";
-import { incomingRotationKeys } from "../../plc/policy.js";
+import { incomingRotationKeys, stagedRotationKeys } from "../../plc/policy.js";
 import { readIncomingObservation } from "../../plc/incoming-observation.js";
 import type * as plc from "@did-plc/lib";
 import { HttpError } from "../../http/http-error.mjs";
@@ -32,6 +32,13 @@ export interface ArrivalHandoffFacts {
   readonly alsoKnownAs: string[];
 }
 
+type Placement = { id: string; url: string; stagedIncomingMigration?: boolean };
+export type PrepareArrivalInput = {
+  did: string;
+  handle: string;
+  retireRotationKeys?: string[];
+};
+
 export function createIncomingPreparation({
   arrivals,
   authentication,
@@ -51,7 +58,7 @@ export function createIncomingPreparation({
   checkCsrf: (request: BrowserRequest, browser: unknown) => void;
   loadBrowser: (request: BrowserRequest) => Promise<unknown>;
   rateLimit: (subject: string) => Promise<void>;
-  choosePds: () => { id: string; url: string };
+  choosePds: () => Placement;
   plcClient: plc.Client;
   entrywayKey: string;
   entrywayDid: string;
@@ -65,7 +72,7 @@ export function createIncomingPreparation({
   return async function prepareArrival(
     request: BrowserRequest,
     otp: string,
-    input: { did: string; handle: string },
+    input: PrepareArrivalInput,
   ) {
     const identity = await requireFreshProof(request, otp, "incoming-prepare");
     if (!/^did:plc:[a-z2-7]{24}$/.test(input.did))
@@ -107,14 +114,41 @@ export function createIncomingPreparation({
   }
   async function prepareOwned(
     identity: { userId: string; email: string },
-    input: { did: string; handle: string },
-    pds: { id: string; url: string },
+    input: PrepareArrivalInput,
+    pds: Placement,
   ) {
     const observed = await readIncomingObservation(plcClient, input.did);
-    const approvedRotationKeys = incomingRotationKeys(
-      observed.rotationKeys,
-      entrywayKey,
-    );
+    const staged =
+      pds.stagedIncomingMigration === true
+        ? { entrywayKey, retireRotationKeys: input.retireRotationKeys ?? [] }
+        : undefined;
+    if (input.retireRotationKeys && !staged)
+      throw new HttpError(
+        400,
+        "InvalidRequest",
+        "Rotation keys can only be retired during a staged migration",
+      );
+    let approvedRotationKeys: string[];
+    if (staged) {
+      try {
+        approvedRotationKeys = stagedRotationKeys(
+          observed.rotationKeys,
+          entrywayKey,
+          staged.retireRotationKeys,
+        );
+      } catch {
+        throw new HttpError(
+          400,
+          "InvalidRequest",
+          "Invalid rotation key selection for the destination",
+        );
+      }
+    } else {
+      approvedRotationKeys = incomingRotationKeys(
+        observed.rotationKeys,
+        entrywayKey,
+      );
+    }
     const code = generateArrivalCode();
     // An unclaimed preparation holds nothing: no DID claim, key reservation,
     // handle or email. Creating it replaces this user's earlier preparation.
@@ -130,6 +164,7 @@ export function createIncomingPreparation({
       sourcePlcHead: observed.sourcePlcHead,
       source: observed.source,
       approvedRotationKeys,
+      ...(staged ? { staged } : {}),
       codeHash: code.hash,
       codeLifetimeMs: code.lifetimeMs,
     });
@@ -142,12 +177,16 @@ export function createIncomingPreparation({
       sourceEndpoint: observed.source.services.atproto_pds!.endpoint,
       destinationEndpoint: saved.endpoint,
       expectedPlcHead: saved.sourcePlcHead,
-      handoff: {
-        ...observed.source,
-        rotationKeys: approvedRotationKeys,
-        prev: saved.sourcePlcHead,
-        type: "plc_operation",
-      },
+      ...(staged
+        ? { migrationMode: "staged", approvedRotationKeys }
+        : {
+            handoff: {
+              ...observed.source,
+              rotationKeys: approvedRotationKeys,
+              prev: saved.sourcePlcHead,
+              type: "plc_operation",
+            },
+          }),
     };
   }
 }

@@ -398,7 +398,7 @@ the acceptance contract.
 [Public incoming migration](incoming-migration.md) defines the accepted
 client-driven process for an unchanged PDS already behind Entryway. Browser OTP
 produces destination arrival authorization, separate from configurable operator
-invite codes and standard source DID proof. Entryway publishes a source-signed
+invite codes and standard source DID proof. On a staged destination, the source remains canonical during import. One source signature authorizes the final endpoint, installed repository key and approved rotation list. See [staged migration](incoming-migration.md#stage-the-transfer-before-moving-the-did). On the default path, Entryway publishes a source-signed
 authority handoff, then signs the destination operation supplied to stock creation.
 Creation publishes early cutover and creates active; a separate deactivation
 precedes client imports. This exposure is explicit, not atomic inactive creation.

@@ -183,9 +183,7 @@ checking its chosen state and choosing when to request activation. Entryway guar
 authorized activation using canonical identity/custody, placement, saved-user binding,
 backend state and durable operation ownership. It does not certify a final source
 head or full inventory, or provide a global verification-to-activation write barrier.
-Concurrent/later source writes and missing blobs may not transfer. Early PLC cutover,
-create-active then pause, pending-account guards and isolation/drain recovery remain
-required. The external-migration feature now owns the mounted incoming routes
+Concurrent or later source writes may miss the transfer. Staged-capable backends create a deactivated repository under the existing DID. The source signs the final PLC move after the client has verified the transfer. Existing backends use the earlier cutover and pause sequence. Both paths use the same pending-account and operation-recovery guards. See [staged migration](incoming-migration.md#stage-the-transfer-before-moving-the-did). The external-migration feature now owns the mounted incoming routes
 (browser pages and strict JSON, and the tool-facing XRPC surfaces selected by the
 `Entryway-Arrival-Code` header), registered explicitly through
 `compose-incoming-arrival.mjs` and `app.mjs`. A pending arrival is refused by a mix of

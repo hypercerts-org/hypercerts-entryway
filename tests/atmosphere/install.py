@@ -4,6 +4,7 @@ import os
 import pathlib
 import shutil
 import sys
+from textwrap import indent
 root, sandbox = map(pathlib.Path, sys.argv[1:])
 source = root / 'tests/atmosphere'
 registry_path = sandbox / 'stacks/components.json'
@@ -17,6 +18,15 @@ for app in ['hypercerts-entryway','entryway-fixtures','entryway-oauth-web-app','
         registry.append(entry)
     for suffix in ['.yaml','.definition.json']:
         text = (source / 'stacks' / (app + suffix)).read_text()
+        if app == 'hypercerts-entryway' and suffix == '.yaml' and os.environ.get('ENTRYWAY_LATE_CUTOVER') == '1':
+            start = text.index('  pds1:\n')
+            end = text.index('  pds2:\n', start)
+            service = text[start:end]
+            launcher = root / 'tests/support/start-pds.mjs'
+            image = indent((source / 'stacks/late-cutover-pds.yaml').read_text().rstrip(), '    ')
+            service = service.replace('    command: node tests/support/start-pds.mjs', image)
+            service = service.replace('    volumes:\n', f'    volumes:\n      - {launcher}:/app/services/pds/start-pds.mjs:ro,z\n')
+            text = text[:start] + service + text[end:]
         profile_nodes = os.environ.get('ENTRYWAY_PROFILE_NODE_COUNT')
         if profile_nodes and app == 'hypercerts-entryway':
             if profile_nodes not in ['1', '2']:

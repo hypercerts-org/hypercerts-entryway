@@ -3,6 +3,7 @@ import type { Express, NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { HttpError } from "../../http/http-error.mjs";
 import { page } from "../../ui/html.mjs";
+import type { PrepareArrivalInput } from "./prepare-arrival.js";
 import type { ArrivalSummary } from "./arrival-summary.js";
 import {
   renderExisting,
@@ -18,7 +19,16 @@ export interface IncomingBrowserOperations {
   prepareArrival(
     request: Request,
     otp: string,
-    input: { did: string; handle: string },
+    input: PrepareArrivalInput,
+  ): Promise<Record<string, unknown>>;
+  reapproveArrival(
+    request: Request,
+    otp: string,
+    input: {
+      operationId: string;
+      expectedVersion: number;
+      expectedPlcHead: string;
+    },
   ): Promise<Record<string, unknown>>;
   renewArrival(
     request: Request,
@@ -67,8 +77,10 @@ const schemas = {
     otp: code,
     did: z.string().min(1).max(200),
     handle: z.string().min(1).max(253),
+    retireRotationKeys: z.array(z.string().min(1).max(200)).max(5).optional(),
   }),
   renew: saved,
+  reapprove: saved.extend({ expectedPlcHead: z.string().min(1).max(200) }),
   cancel: saved,
   recover: saved,
   activate: saved,
@@ -81,6 +93,11 @@ const invalid = () => new HttpError(400, "InvalidRequest", "Invalid request");
 function normalize(body: unknown, json: boolean): unknown {
   if (json || !body || typeof body !== "object") return body;
   const fields = { ...(body as Record<string, unknown>) };
+  if (typeof fields.retireRotationKeys === "string") {
+    const keys = fields.retireRotationKeys.trim();
+    if (keys) fields.retireRotationKeys = keys.split(/\s+/);
+    else delete fields.retireRotationKeys;
+  }
   const version = fields.expectedVersion;
   if (typeof version === "string" && /^[0-9]{1,15}$/.test(version))
     fields.expectedVersion = Number(version);
@@ -216,10 +233,24 @@ export function mountIncomingRoutes({
       incoming.prepareArrival(req, body.otp, {
         did: body.did,
         handle: body.handle,
+        ...(body.retireRotationKeys !== undefined
+          ? { retireRotationKeys: body.retireRotationKeys }
+          : {}),
       }),
     "Arrival prepared",
     true,
     true,
+  );
+  post(
+    "reapprove",
+    (req, body) =>
+      incoming.reapproveArrival(req, body.otp, {
+        operationId: body.operationId,
+        expectedVersion: body.expectedVersion,
+        expectedPlcHead: body.expectedPlcHead,
+      }),
+    "Source update approved",
+    false,
   );
   post(
     "renew",

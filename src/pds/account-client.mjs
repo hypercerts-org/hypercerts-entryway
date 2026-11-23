@@ -9,11 +9,11 @@ import { rejectedPlcSubmission } from "./xrpc-response.js";
 
 export async function createPdsAccountClient({ config, accounts }) {
   const jwtKey = await importJWK(config.jwtJwk, "ES256K");
-  const internalAccess = async (row) =>
+  const internalAccess = async (row, audience = accounts.pdsFor(row).did) =>
     new SignJWT({ scope: "com.atproto.access" })
       .setProtectedHeader({ alg: "ES256K", typ: "at+jwt" })
       .setSubject(row.did)
-      .setAudience(accounts.pdsFor(row).did)
+      .setAudience(audience)
       .setIssuedAt()
       .setExpirationTime("30s")
       .setJti(randomBytes(16).toString("hex"))
@@ -66,5 +66,5 @@ export async function createPdsAccountClient({ config, accounts }) {
     if (!pds) fail("InvalidPds", "Choose an enrolled PDS");
     return pds;
   };
-  return { pdsCall, choosePds };
+  return { pdsCall, choosePds, internalAccess };
 }

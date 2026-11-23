@@ -1,3 +1,5 @@
+import { createServiceJwt } from "@atproto/xrpc-server";
+import { Secp256k1Keypair } from "@atproto/crypto";
 import { createDurableArrivalProvisioning } from "./features/external-migration/provision-arrival.js";
 import { createOperationOwnershipStore } from "./database/drizzle/operation-ownership.js";
 import { DomainError } from "./accounts/errors.js";
@@ -85,7 +87,10 @@ export async function composeIncomingArrival({
     config,
     accounts,
   });
-  const { choosePds } = await createPdsAccountClient({ config, accounts });
+  const { choosePds, internalAccess } = await createPdsAccountClient({
+    config,
+    accounts,
+  });
   const placement = (pdsId) => config.pds.find((pds) => pds.id === pdsId);
   const arrivalBackend = (saved) => {
     const pds = choosePds(saved.pdsId);
@@ -95,23 +100,78 @@ export async function composeIncomingArrival({
         409,
         "Arrival placement changed",
       );
+    if (
+      saved.staged &&
+      saved.staged.entrywayKey !== accounts.plcSigner.publicKey()
+    )
+      throw new DomainError(
+        "OperationConflict",
+        409,
+        "Restore the approved Entryway rotation key to continue this arrival",
+      );
     const transport = new ArrivalPdsClient({
       endpoint: saved.endpoint,
       did: saved.did,
     });
     const authorization = () =>
       `Basic ${Buffer.from(`admin:${pds.adminPassword}`).toString("base64")}`;
+    const serviceAuthorization = async (method) =>
+      `Bearer ${await createServiceJwt({
+        iss: config.serviceDid,
+        aud: pds.did,
+        lxm: method,
+        keypair: await Secp256k1Keypair.import(
+          Buffer.from(config.jwtJwk.d, "base64url"),
+        ),
+      })}`;
+    const bearer = async () => `Bearer ${await internalAccess(saved, pds.did)}`;
     return {
+      assertStagingEnabled: () => {
+        if (pds.stagedIncomingMigration !== true)
+          throw new DomainError(
+            "OperationConflict",
+            409,
+            "The saved destination is no longer configured for staged creation",
+          );
+      },
+      installedSigningKey: async () =>
+        transport.installedSigningKey(await bearer()),
+      checkStagedReadiness: async (afterCutover) =>
+        transport.checkStagedReadiness(
+          await bearer(),
+          saved.signingKey,
+          afterCutover,
+        ),
       inspect: () => transport.getAccountInfo(authorization),
-      create: (operation) =>
-        transport.createAccount({
+      create: async (operation) => {
+        return transport.createAccount({
           did: saved.did,
           handle: saved.handle,
           operation,
-        }),
+          ...(saved.staged
+            ? {
+                authorization: await serviceAuthorization(
+                  "com.atproto.server.createAccount",
+                ),
+              }
+            : {}),
+        });
+      },
       pause: () => transport.pauseAccount(authorization),
-      activate: () => transport.activateAccount(authorization),
-      reserveSigningKey: () => transport.reserveSigningKey(saved.did),
+      activate: () =>
+        transport.activateAccount(
+          saved.staged
+            ? () =>
+                serviceAuthorization("com.atproto.admin.updateSubjectStatus")
+            : authorization,
+        ),
+      reserveSigningKey: async () =>
+        transport.reserveSigningKey(
+          saved.did,
+          saved.staged
+            ? await serviceAuthorization("com.atproto.server.reserveSigningKey")
+            : undefined,
+        ),
     };
   };
   const prepareArrival = createIncomingPreparation({
@@ -126,6 +186,7 @@ export async function composeIncomingArrival({
     entrywayDid: config.serviceDid,
   });
   const lifecycle = createArrivalLifecycle({
+    plcClient: accounts.plcClient,
     arrivals,
     ownership: accounts.ownership,
     authentication,
@@ -143,6 +204,10 @@ export async function composeIncomingArrival({
     ownership: accounts.ownership,
     transact: (work) => db.transact(work),
     admitCreation: admission.admitCreation,
+    assertStagingEnabled: (saved) =>
+      arrivalBackend(saved).assertStagingEnabled(),
+    checkStagedReadiness: (saved) =>
+      arrivalBackend(saved).checkStagedReadiness(false),
     provision: createDurableArrivalProvisioning({
       arrivals,
       ownership: accounts.ownership,
@@ -245,6 +310,8 @@ export async function composeIncomingArrival({
     placement,
     backend: arrivalBackend,
     authorizeAccess: credentials.identifyArrivalAccess,
+    revokeFamilies: (ids) =>
+      legacy.arrivalSessions.revoke(ids, "arrival-completed"),
     assertCredentialLive: (familyId) =>
       legacy.arrivalSessions.assertLive(familyId),
     authentication,
@@ -298,6 +365,7 @@ export async function composeIncomingArrival({
     activateArrivalAsUser: activation.activateArrivalAsUser,
     activateArrivalWithCredential: activation.activateArrivalWithCredential,
     renewArrival: lifecycle.renew,
+    reapproveArrival: lifecycle.reapprove,
     cancelArrival: lifecycle.cancel,
     admitIncoming: async (request, input) =>
       authenticated.admit({

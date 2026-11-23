@@ -36,6 +36,7 @@ services:
       SERVICE_CONFIG_PATH: /config/config.json
       SERVICE_HANDLE_DOMAINS: .entryway.atmosbox.test
       OAUTH_CLIENT_URL: https://client.entryway.example.com
+      ENTRYWAY_LATE_CUTOVER: ${ENTRYWAY_LATE_CUTOVER:-0}
       SOURCE_FIXTURE_PUBLIC_DIR: /run/fixture-public
       SOURCE_FIXTURE_TOKEN_DIR: /run/secrets
     volumes:

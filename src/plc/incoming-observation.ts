@@ -33,7 +33,11 @@ import { sameSignedOperation, validateUnsignedOperation } from "./policy.js";
 
 /** For incoming-migration orchestration: retain the signed predecessor, not the
  * unsigned custody projection. History establishes identity state, not ownership. */
-export async function readIncomingObservation(client: plc.Client, did: string) {
+export async function readIncomingObservation(
+  client: plc.Client,
+  did: string,
+  afterHead?: string,
+) {
   const audit = await client.getAuditableLog(did);
   const observation = await validateAuditObservation(
     did,
@@ -41,7 +45,8 @@ export async function readIncomingObservation(client: plc.Client, did: string) {
     null,
     client.url,
   );
-  const head = audit.filter((entry) => !entry.nullified).at(-1);
+  const canonical = audit.filter((entry) => !entry.nullified);
+  const head = canonical.at(-1);
   const current = await client.getLastOp(did);
   if (
     !head ||
@@ -62,7 +67,22 @@ export async function readIncomingObservation(client: plc.Client, did: string) {
   const predecessor = structuredClone(head.operation);
   const { sig: _signature, ...unsigned } = plc.normalizeOp(predecessor);
   const facts = validateUnsignedOperation(unsigned);
+  const start =
+    afterHead === undefined
+      ? -1
+      : canonical.findIndex((entry) => entry.cid === afterHead);
+  if (afterHead !== undefined && start === -1)
+    throw new PlcError(
+      "InvalidCustodyObservation",
+      "The saved predecessor is no longer canonical",
+    );
   return {
+    observedCids:
+      afterHead === undefined ? [] : audit.map((entry) => entry.cid),
+    updates:
+      afterHead === undefined
+        ? []
+        : canonical.slice(start + 1).map((entry) => entry.operation),
     sourcePredecessor: predecessor,
     sourcePlcHead: head.cid,
     rotationKeys: facts.rotationKeys,

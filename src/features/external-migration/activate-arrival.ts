@@ -67,6 +67,7 @@ export function createArrivalActivation({
   backend,
   authorizeAccess,
   assertCredentialLive,
+  revokeFamilies,
   authentication,
   checkCsrf,
   loadBrowser,
@@ -86,9 +87,11 @@ export function createArrivalActivation({
       deactivated: boolean;
     } | null>;
     activate(): Promise<void>;
+    checkStagedReadiness(afterCutover: boolean): Promise<void>;
   };
   authorizeAccess: (bearer: unknown) => Promise<AuthorizedArrivalAccess>;
   assertCredentialLive: (familyId: string) => Promise<void>;
+  revokeFamilies: (familyIds: readonly string[]) => Promise<void>;
   authentication: BrowserAuthentication;
   checkCsrf: (request: BrowserRequest, browser: unknown) => void;
   loadBrowser: (request: BrowserRequest) => Promise<unknown>;
@@ -169,11 +172,9 @@ export function createArrivalActivation({
       throw recoveryRequired(
         "An unresolved external attempt must be recovered before activation",
       );
-    const move = initial.signedOperations.find(
+    let move = initial.signedOperations.find(
       (item) => item.kind === "destination-move",
     );
-    if (!move)
-      throw recoveryRequired("The saved destination move is not durable");
     // A host removed or moved since placement is the documented conflict, and
     // is decided before any backend client is built for it.
     if (placement(saved.pdsId)?.url !== saved.endpoint)
@@ -183,6 +184,48 @@ export function createArrivalActivation({
         "Arrival placement changed",
       );
     const target = backend(saved);
+    if (saved.staged && !move && saved.signingKey) {
+      // Standard clients may publish through the PDS. Record only a canonical
+      // source-signed operation extending the exact prepared predecessor. Storage
+      // verifies the signature, full ordered custody and all replacement facts.
+      const current = await readIncomingObservation(plcClient, saved.did);
+      if (current.sourcePlcHead === saved.sourcePlcHead)
+        throw new DomainError(
+          "IdentityConflict",
+          409,
+          "The source still hosts this DID",
+        );
+      await arrivals.recordSignedOperation(claim, saved.version, {
+        kind: "destination-move",
+        operationId: saved.operationId,
+        did: saved.did,
+        repositoryKey: saved.signingKey,
+        operation: { ...current.sourcePredecessor },
+        cid: current.sourcePlcHead,
+      });
+      move = (await read()).signedOperations.find(
+        (item) => item.kind === "destination-move",
+      );
+    }
+    if (!move)
+      throw recoveryRequired("The saved destination move is not durable");
+    if (
+      saved.staged &&
+      initial.admissions.some(
+        (item) => item.method === "com.atproto.identity.submitPlcOperation",
+      )
+    ) {
+      const receipt = await receipts.readExternal(claim, {
+        step: "incoming-cutover",
+        target: plcClient.url,
+        method: "com.atproto.identity.submitPlcOperation",
+        intentDigest: requestDigest({ did: saved.did, cid: move.cid }),
+      });
+      if (receipt?.state !== "acknowledged")
+        throw recoveryRequired(
+          "Resume the saved presentation before activation",
+        );
+    }
     const intentFacts = { cid: move.cid, did: saved.did, step: activationStep };
     const descriptor = {
       step: activationStep,
@@ -245,6 +288,7 @@ export function createArrivalActivation({
         backend: observed,
         activationJournaled: journaled !== null,
       });
+      if (saved.staged) await target.checkStagedReadiness(true);
       return observed;
     };
     // Every precondition is checked before the activation attempt is journaled,
@@ -356,6 +400,24 @@ export function createArrivalActivation({
         if (outcome.kind === "reconciliation-required")
           throw recoveryRequired("Activation settlement requires recovery");
         settledVersion = outcome.version;
+      }
+      if (saved.staged) {
+        const families = await arrivals.readArrivalFamilies(saved.operationId);
+        await revokeFamilies(
+          families
+            .filter((family) => family.revokedAt === null)
+            .map((family) => family.familyId),
+        );
+        const revoked = await arrivals.revokeArrivalCredentialFamilies({
+          owner: claim,
+          operationId: saved.operationId,
+          expectedVersion: settledVersion,
+        });
+        if (revoked.kind === "reconciliation-required")
+          throw recoveryRequired(
+            "Migration credential revocation requires recovery",
+          );
+        settledVersion = revoked.version;
       }
       const completed = await arrivals.completeArrivalActivation({
         owner: claim,

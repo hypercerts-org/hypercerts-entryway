@@ -1,3 +1,4 @@
+import { z } from "zod";
 import * as plc from "@did-plc/lib";
 import { cidForCbor } from "@atproto/common";
 import {
@@ -31,6 +32,9 @@ import { PlcError } from "../../plc/errors.js";
 import {
   validateHistoryOperation,
   validateIncomingHandoff,
+  validateStagedMove,
+  reapprovedSource,
+  stagedRotationKeys,
   publicRotationKey,
   assertRotationKeysPreserved,
 } from "../../plc/policy.js";
@@ -155,6 +159,37 @@ const sameTuple = (
   saved.did === input.did &&
   saved.cid === input.cid &&
   canonicalJson(JSON.parse(saved.operation)) === canonicalJson(input.operation);
+// Legacy preparations store the ordered keys directly. Staged preparations
+// persist the owner's explicit selection alongside its resulting ordered keys.
+const stagedCustody = z.strictObject({
+  version: z.literal(1),
+  mode: z.literal("staged"),
+  entrywayKey: z.string(),
+  creationPlcHead: z.string().optional(),
+  retireRotationKeys: z.array(z.string()).max(5),
+  approvedRotationKeys: z.array(z.string()).min(1).max(5),
+});
+function readCustody(
+  serialized: string,
+): Pick<ArrivalRecord, "approvedRotationKeys" | "staged"> {
+  const value: unknown = JSON.parse(serialized);
+  if (Array.isArray(value))
+    return { approvedRotationKeys: z.array(z.string()).parse(value) };
+  const {
+    entrywayKey,
+    retireRotationKeys,
+    approvedRotationKeys,
+    creationPlcHead,
+  } = stagedCustody.parse(value);
+  return {
+    approvedRotationKeys,
+    staged: {
+      entrywayKey,
+      retireRotationKeys,
+      ...(creationPlcHead ? { creationPlcHead } : {}),
+    },
+  };
+}
 function arrivalRecord(
   row: StoredRow<"arrivals">,
   reservation: StoredRow<"arrival_reservations"> | undefined,
@@ -172,7 +207,7 @@ function arrivalRecord(
     sourcePlcHead: row.source_plc_head,
     sourcePredecessor: JSON.parse(row.source_predecessor),
     source: JSON.parse(row.source_facts),
-    approvedRotationKeys: JSON.parse(row.approved_rotation_keys),
+    ...readCustody(row.approved_rotation_keys),
     recoveryKey: row.recovery_key,
     version: row.version,
     codeHash: code?.code_hash ?? "",
@@ -196,7 +231,11 @@ const familyRecord = (
 
 export function createArrivalStorage(
   db: DatabaseExecutor,
-  configuredPds: readonly { readonly id: string; readonly url: string }[],
+  configuredPds: readonly {
+    readonly id: string;
+    readonly url: string;
+    readonly stagedIncomingMigration?: boolean;
+  }[],
   authority: ArrivalAuthority,
 ): ArrivalTransactor {
   const table = db.tables.arrivals;
@@ -559,16 +598,18 @@ export function createArrivalStorage(
               ? { repositoryKey: binding!.signing_key! }
               : {}),
           })) as ArrivalSignedOperationRecord[],
-          admissions: admissions.map((item) => ({
-            operationId,
-            did: item.did,
-            userId: item.user_id,
-            method: item.method,
-            requestDigest: item.request_digest,
-            credentialIssuer: item.credential_issuer,
-            credentialJti: item.credential_jti,
-            generation: item.generation,
-          })),
+          admissions: admissions
+            .filter((item) => !item.method.startsWith("superseded:"))
+            .map((item) => ({
+              operationId,
+              did: item.did,
+              userId: item.user_id,
+              method: item.method,
+              requestDigest: item.request_digest,
+              credentialIssuer: item.credential_issuer,
+              credentialJti: item.credential_jti,
+              generation: item.generation,
+            })),
           reservation: binding
             ? {
                 signingKey: binding.signing_key,
@@ -623,6 +664,14 @@ export function createArrivalStorage(
     },
     async createArrival(input) {
       const email = normalizeEmail(input.email);
+      const custody = input.staged
+        ? {
+            version: 1,
+            mode: "staged",
+            ...input.staged,
+            approvedRotationKeys: input.approvedRotationKeys,
+          }
+        : input.approvedRotationKeys;
       try {
         const predecessor = plc.def.compatibleOp.parse(input.sourcePredecessor);
         if (
@@ -642,17 +691,35 @@ export function createArrivalStorage(
         if (canonicalJson(source) !== canonicalJson(input.source))
           throw immutableTuple();
         if (
-          input.approvedRotationKeys.length < 2 ||
+          input.approvedRotationKeys.length < (input.staged ? 1 : 2) ||
           input.approvedRotationKeys.length > 5 ||
           new Set(input.approvedRotationKeys).size !==
             input.approvedRotationKeys.length
         )
           throw immutableTuple();
         input.approvedRotationKeys.forEach(publicRotationKey);
-        assertRotationKeysPreserved(
-          normalized.rotationKeys,
-          input.approvedRotationKeys,
-        );
+        if (input.staged) {
+          const host = configuredPds.find(
+            (pds) => pds.id === input.pdsId && pds.url === input.endpoint,
+          );
+          if (
+            input.staged.creationPlcHead !== undefined ||
+            host?.stagedIncomingMigration !== true ||
+            canonicalJson(
+              stagedRotationKeys(
+                normalized.rotationKeys,
+                input.staged.entrywayKey,
+                input.staged.retireRotationKeys,
+              ),
+            ) !== canonicalJson(input.approvedRotationKeys)
+          )
+            throw immutableTuple();
+        } else {
+          assertRotationKeysPreserved(
+            normalized.rotationKeys,
+            input.approvedRotationKeys,
+          );
+        }
         if (!digestPattern.test(input.codeHash)) throw immutableTuple();
       } catch {
         throw new DomainError(
@@ -690,7 +757,7 @@ export function createArrivalStorage(
           canonicalJson(JSON.parse(saved.source_facts)) !==
             canonicalJson(input.source) ||
           canonicalJson(JSON.parse(saved.approved_rotation_keys)) !==
-            canonicalJson(input.approvedRotationKeys)
+            canonicalJson(custody)
         )
           throw immutableTuple();
         if (saved.active === 0 || (await purgeIfLapsed(saved)))
@@ -759,7 +826,7 @@ export function createArrivalStorage(
             source_endpoint: input.source.services.atproto_pds?.endpoint,
             source_predecessor: JSON.stringify(input.sourcePredecessor),
             source_facts: JSON.stringify(input.source),
-            approved_rotation_keys: JSON.stringify(input.approvedRotationKeys),
+            approved_rotation_keys: JSON.stringify(custody),
             version: 1,
             generation: 1,
             created_at: now,
@@ -832,6 +899,104 @@ export function createArrivalStorage(
       });
     },
 
+    async reapproveArrivalSource(owner, input) {
+      assertClaim(owner);
+      return db.transact(() =>
+        db.withOperationFence(owner, async () => {
+          const saved = await currentOwnedArrival(
+            input.operationId,
+            input.userId,
+            input.expectedVersion,
+          );
+          await assertArrivalOwnership(owner, saved);
+          const { staged, approvedRotationKeys } = readCustody(
+            saved.approved_rotation_keys,
+          );
+          if (!staged || saved.active === 0) throw notActionable();
+          const [signed, admissions, receipts, key] = await Promise.all([
+            db.read("arrival_signed_operations", {
+              where: eq(signedTable.operation_id, saved.operation_id),
+            }),
+            db.read("arrival_replay", {
+              where: eq(replayTable.operation_id, saved.operation_id),
+            }),
+            db.read("external_operation_attempts", {
+              where: eq(
+                db.tables.external_operation_attempts.operation_id,
+                owner.operationId,
+              ),
+            }),
+            reservation(saved.operation_id),
+          ]);
+          const submit = "com.atproto.identity.submitPlcOperation";
+          const stale = signed.find((item) => item.kind === "destination-move");
+          const submission = admissions.find((item) => item.method === submit);
+          if (
+            key?.uncertain_reason ||
+            signed.length !== Number(Boolean(stale)) ||
+            Boolean(stale) !== Boolean(submission) ||
+            (stale && input.observedCids.includes(stale.cid)) ||
+            receipts.some(
+              (item) =>
+                item.state !== "acknowledged" ||
+                item.step === "incoming-cutover",
+            )
+          )
+            throw recoveryRequired();
+          let update;
+          try {
+            update = await reapprovedSource(
+              JSON.parse(saved.source_predecessor),
+              input.updates,
+              input.expectedPlcHead,
+              stale ? JSON.parse(stale.operation) : undefined,
+            );
+          } catch {
+            throw new DomainError(
+              "IdentityConflict",
+              409,
+              "The update must retain source authority and exclude any recoverable destination move",
+            );
+          }
+          if (stale) {
+            // Keep the unique (issuer, jti) occupied. Only the superseded
+            // admission leaves the active method slot; a new one needs fresh proof.
+            await db.update(
+              "arrival_replay",
+              { method: `superseded:${submit}:${stale.cid}` },
+              and(
+                eq(replayTable.operation_id, saved.operation_id),
+                eq(replayTable.method, submit),
+              )!,
+            );
+            await db.remove(
+              "arrival_signed_operations",
+              and(
+                eq(signedTable.operation_id, saved.operation_id),
+                eq(signedTable.kind, "destination-move"),
+              )!,
+            );
+          }
+          await advance(saved, {
+            source_predecessor: JSON.stringify(update.predecessor),
+            source_plc_head: input.expectedPlcHead,
+            source_facts: JSON.stringify(update.source),
+            approved_rotation_keys: JSON.stringify({
+              version: 1,
+              mode: "staged",
+              ...staged,
+              approvedRotationKeys,
+              creationPlcHead: staged.creationPlcHead ?? saved.source_plc_head,
+            }),
+          });
+          return arrivalRecord(
+            (await row(saved.operation_id))!,
+            key,
+            await code(saved.operation_id),
+          );
+        }),
+      );
+    },
     async rotateArrivalCode(input) {
       if (!digestPattern.test(input.codeHash))
         throw new DomainError("InvalidAccount", 400, "Invalid arrival code");
@@ -848,7 +1013,11 @@ export function createArrivalStorage(
         assertCodeLifetime(input.codeLifetimeMs);
         const binding = await reservation(input.operationId);
         if (binding?.uncertain_reason) throw recoveryRequired();
-        if (saved.bound_at !== null) throw notActionable();
+        if (
+          saved.bound_at !== null &&
+          !readCustody(saved.approved_rotation_keys).staged
+        )
+          throw notActionable();
         const now = await db.databaseTime();
         const generation = saved.generation + 1;
         await db.update(
@@ -1113,7 +1282,32 @@ export function createArrivalStorage(
             saved.version !== expectedVersion
           )
             throw versionConflict();
-          if (input.kind === "destination-move") {
+          const custody = readCustody(saved.approved_rotation_keys);
+          if (custody.staged) {
+            const key = await reservation(input.operationId);
+            if (
+              input.kind !== "destination-move" ||
+              saved.bound_at === null ||
+              key?.uncertain_reason ||
+              input.repositoryKey !== key?.signing_key
+            )
+              throw immutableTuple();
+            try {
+              await validateStagedMove({
+                operation: signedOperation,
+                predecessor: JSON.parse(saved.source_predecessor),
+                repositoryKey: input.repositoryKey,
+                endpoint: saved.endpoint,
+                handle: saved.handle,
+                rotationKeys: destinationRotationKeys({
+                  ...custody,
+                  recoveryKey: saved.recovery_key,
+                }),
+              });
+            } catch {
+              throw immutableTuple();
+            }
+          } else if (input.kind === "destination-move") {
             if ((await reservation(input.operationId))?.uncertain_reason)
               throw recoveryRequired();
             if (!savedKinds.some((savedRow) => savedRow.kind === "handoff"))
@@ -1130,7 +1324,7 @@ export function createArrivalStorage(
             const handoff = savedKinds.find(
               (savedRow) => savedRow.kind === "handoff",
             )!;
-            const approved: string[] = JSON.parse(saved.approved_rotation_keys);
+            const approved = custody.approvedRotationKeys;
             const move = plc.def.operation.parse(signedOperation);
             if (
               move.verificationMethods.atproto !== input.repositoryKey ||
@@ -1148,7 +1342,7 @@ export function createArrivalStorage(
             )
               throw immutableTuple();
             try {
-              await plc.assureValidSig(approved, move);
+              await plc.assureValidSig([...approved], move);
             } catch {
               throw immutableTuple();
             }
@@ -1157,7 +1351,7 @@ export function createArrivalStorage(
               await validateIncomingHandoff({
                 operation: signedOperation,
                 expectedPredecessor: JSON.parse(saved.source_predecessor),
-                approvedRotationKeys: JSON.parse(saved.approved_rotation_keys),
+                approvedRotationKeys: custody.approvedRotationKeys,
                 source: JSON.parse(saved.source_facts),
               });
               if (facts.prev !== saved.source_plc_head) throw immutableTuple();
@@ -1389,6 +1583,17 @@ export function createArrivalStorage(
             };
           }
           if (saved.version !== expectedVersion) throw versionConflict();
+          if (
+            options?.recoveryKey &&
+            readCustody(
+              saved.approved_rotation_keys,
+            ).staged?.retireRotationKeys.includes(options.recoveryKey)
+          )
+            throw new DomainError(
+              "InvalidAccount",
+              400,
+              "The recovery key was selected for retirement",
+            );
           const authorization = await code(facts.operationId);
           if (
             !proof ||

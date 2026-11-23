@@ -105,6 +105,17 @@ export interface ArrivalTransactor {
     did: string;
     method: string;
   }): Promise<ArrivalRecord | null>;
+  reapproveArrivalSource(
+    owner: OperationClaim,
+    input: {
+      operationId: string;
+      userId: string;
+      expectedVersion: number;
+      expectedPlcHead: string;
+      updates: readonly unknown[];
+      observedCids: readonly string[];
+    },
+  ): Promise<ArrivalRecord>;
   rotateArrivalCode(input: {
     operationId: string;
     expectedVersion: number;

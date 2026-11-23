@@ -64,6 +64,7 @@ for (const mode of ["modern", "legacy"]) {
         "admitCreation",
         "bindPending",
         "prepareArrival",
+        "reapproveArrival",
         "renewArrival",
         "cancelArrival",
         "admitIncoming",

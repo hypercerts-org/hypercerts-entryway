@@ -1,11 +1,17 @@
 import { hasUnresolvedAttempt } from "./arrival-owner.js";
-import type { ArrivalAggregate } from "./arrival-types.js";
+import {
+  destinationRotationKeys,
+  type ArrivalAggregate,
+} from "./arrival-types.js";
 
 /** Secret-free facts the saved user may see about their own arrival. Never the
  * arrival code, a credential, a signed operation or a signing key. */
 export interface ArrivalSummary {
   readonly operationId: string;
   readonly version: number;
+  readonly mayReapproveSource?: boolean;
+  readonly migrationMode?: "staged";
+  readonly approvedRotationKeys?: readonly string[];
   readonly did: string;
   readonly handle: string;
   readonly state:
@@ -33,6 +39,21 @@ export function summarizeArrival(aggregate: ArrivalAggregate): ArrivalSummary {
     did: arrival.did,
     handle: arrival.handle,
     state,
+    ...(arrival.staged
+      ? {
+          migrationMode: "staged" as const,
+          mayReapproveSource:
+            arrival.claimOperationId !== null &&
+            progress.completedAt === null &&
+            (!aggregate.signedOperations.length ||
+              aggregate.admissions.some(
+                (item) =>
+                  item.method === "com.atproto.identity.submitPlcOperation",
+              )) &&
+            !hasUnresolvedAttempt(aggregate),
+          approvedRotationKeys: destinationRotationKeys(arrival),
+        }
+      : {}),
     codeExpiresAt: arrival.codeExpiresAt,
     unresolvedAttempt: hasUnresolvedAttempt(aggregate),
   };
