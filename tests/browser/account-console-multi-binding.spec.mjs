@@ -228,6 +228,12 @@ test("shared verified email keeps each tab and account action bound to its selec
 
     const accountUrl = new URL("/account", config.issuer).href;
     await firstTab.goto(accountUrl);
+    await captureGallery(firstTab, {
+      name: "settings-account-switcher",
+      description: "Shared pair independent settings account switcher",
+      heading: "Choose an account",
+      did: first.did,
+    });
     await chooseAccount(firstTab, first.did, sharedEmail);
     // The OTP rotates the browser session, so the second tab opens its chooser afterwards.
     await secondTab.goto(accountUrl);
@@ -239,6 +245,12 @@ test("shared verified email keeps each tab and account action bound to its selec
     // Deactivation is a protected page; its link and form keep the tab's DID.
     await secondTab.getByRole("link", { name: "Deactivate account" }).click();
     expect(new URL(secondTab.url()).searchParams.get("did")).toBe(second.did);
+    await captureGallery(secondTab, {
+      name: "settings-status-form",
+      description: "Shared pair second account deactivation confirmation form",
+      heading: "Deactivate account",
+      did: second.did,
+    });
     const secondForm = statusForm(secondTab);
     await expect(secondForm).toHaveCount(1);
     const secondAction = await secondForm.getAttribute("action");
@@ -378,6 +390,10 @@ test("an open app-password form stays bound to the account after a mailbox chang
       .getByRole("link", { name: "Return to account settings" })
       .click();
     await expect(stale).toHaveURL(/\/(account|login)(?:\?|$)/);
+    await captureGallery(stale, {
+      name: "stale-recovery",
+      description: "Pair stale form recovery destination",
+    });
 
     const sibling = await context.newPage();
     await signInSharedEmail(sibling, pair.email);
@@ -425,5 +441,71 @@ test("an open app-password form stays bound to the account after a mailbox chang
   } finally {
     await context.close();
     await freshContext.close();
+  }
+});
+
+test("standalone chooser can restart with another email", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    ignoreHTTPSErrors: false,
+    javaScriptEnabled: false,
+  });
+  try {
+    const page = await context.newPage();
+    await signInSharedEmail(page, shared.email);
+    await expect(
+      page.getByRole("heading", { name: "Choose an account" }),
+    ).toBeVisible();
+    await page
+      .getByRole("button", { name: "Use another email address" })
+      .click();
+    await expect(
+      page.getByRole("heading", { name: "Sign in", exact: true }),
+    ).toBeVisible();
+    await expect(page.locator('form[action="/auth/select"]')).toHaveCount(0);
+    await captureGallery(page, {
+      name: "standalone-another-email",
+      description: "Shared pair standalone chooser returned to email entry",
+      heading: "Sign in",
+    });
+  } finally {
+    await context.close();
+  }
+});
+
+test("standalone invalid code can be retried", async ({ browser }) => {
+  const context = await browser.newContext({
+    ignoreHTTPSErrors: false,
+    javaScriptEnabled: false,
+  });
+  try {
+    const page = await context.newPage();
+    await page.goto(new URL("/login", config.issuer).href);
+    const since = Date.now();
+    await page.getByLabel("Email address", { exact: true }).fill(shared.email);
+    await page.getByRole("button", { name: "Send sign-in code" }).click();
+    const message = await waitForMailpitCode({
+      recipient: shared.email,
+      since,
+    });
+    const wrong = message.code === "00000000" ? "11111111" : "00000000";
+    await page.getByLabel("Sign-in code").fill(wrong);
+    await page.getByRole("button", { name: "Verify code" }).click();
+    await expect(page.getByRole("alert")).toContainText(
+      "Invalid or expired code",
+    );
+    await captureGallery(page, {
+      name: "standalone-invalid-code",
+      description: "Shared pair invalid code with retry",
+      heading: "Check your email",
+    });
+    await page.getByLabel("Sign-in code").fill(message.code);
+    await page.getByRole("button", { name: "Verify code" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Choose an account" }),
+    ).toBeVisible();
+  } finally {
+    await context.close();
   }
 });

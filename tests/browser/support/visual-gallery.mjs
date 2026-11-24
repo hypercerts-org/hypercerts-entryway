@@ -3,6 +3,56 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 const directory = process.env.TECH685_SCREEN_DIR;
+const expectedStates = [
+  "standalone-email",
+  "standalone-code",
+  "standalone-invalid-code",
+  "standalone-expired-code",
+  "standalone-chooser-first",
+  "standalone-chooser-second",
+  "standalone-another-email",
+  "settings-account-switcher",
+  "settings-first",
+  "settings-second",
+  "settings-status-form",
+  "settings-password-form",
+  "settings-recovery-form",
+  "settings-recovery-proof",
+  "settings-app-password-result",
+  "settings-delete-confirm",
+  "stale-app-password-form",
+  "email-change-current",
+  "email-change-new",
+  "email-change-result",
+  "stale-form-rejected",
+  "stale-recovery",
+  "stale-second-action-result",
+  "recent-proof-start",
+  "recent-proof-code",
+  "recent-proof-return",
+  "account-recovery-start",
+  "account-recovery-code",
+  "account-recovery-new-email",
+  "account-recovery-result",
+  "client-start",
+  "oauth-email",
+  "oauth-code",
+  "oauth-chooser-first",
+  "oauth-chooser-second",
+  "oauth-consent-first",
+  "oauth-consent-second",
+  "oauth-choose-again",
+  "oauth-another-email",
+  "oauth-expired-flow",
+  "oauth-restarted-flow",
+  "client-callback-first",
+  "client-callback-second",
+  "client-denial",
+  "branding-primary",
+  "branding-secondary",
+  "branding-untrusted",
+  "branding-neutral",
+];
 const viewports = [
   { name: "desktop", width: 1440, height: 900 },
   { name: "narrow", width: 390, height: 844 },
@@ -35,6 +85,7 @@ export async function captureGallery(
     throw new Error(
       "Set TECH685_CANDIDATE_ID to the reviewed candidate identity",
     );
+  await expect(page.getByRole("heading").first()).toBeVisible();
   if (heading)
     await expect(
       page.getByRole("heading", { name: heading, exact: true }),
@@ -86,15 +137,29 @@ export async function captureGallery(
         JSON.parse(await readFile(join(directory, file), "utf8")),
       ),
   );
-  const rows = entries
-    .filter((entry) => entry.run === run && entry.identity === identity)
+  const observed = entries.filter(
+    (entry) => entry.run === run && entry.identity === identity,
+  );
+  const rows = observed
     .map(
       (entry) =>
         `<tr><td>${escapeHtml(entry.name)}</td><td>${escapeHtml(entry.description)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.identity)}</td><td><a href="${escapeHtml(entry.filename)}">PNG</a></td></tr>`,
     )
     .join("\n");
+  const missing = expectedStates.flatMap((name) =>
+    viewports
+      .filter(
+        (viewport) =>
+          !observed.some(
+            (entry) =>
+              entry.name === name &&
+              entry.viewport === `${viewport.width} x ${viewport.height}`,
+          ),
+      )
+      .map((viewport) => `${name} (${viewport.name})`),
+  );
   await writeFile(
     join(directory, "index.html"),
-    `<!doctype html><html lang="en"><meta charset="utf-8"><title>Entryway visual gallery</title><h1>Entryway visual gallery</h1><p>Only states observed in this run are listed. Client pages are identified separately.</p><table><thead><tr><th>State</th><th>Observed context</th><th>Viewport</th><th>Candidate</th><th>Image</th></tr></thead><tbody>${rows}</tbody></table></html>`,
+    `<!doctype html><html lang="en"><meta charset="utf-8"><title>Entryway visual gallery</title><h1>Entryway visual gallery</h1><p>Only states observed in this run are listed. Client pages are identified separately.</p><table><thead><tr><th>State</th><th>Observed context</th><th>Viewport</th><th>Candidate</th><th>Image</th></tr></thead><tbody>${rows}</tbody></table><h2>Not observed in this run</h2><ul>${missing.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></html>`,
   );
 }

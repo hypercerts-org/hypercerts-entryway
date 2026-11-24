@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { captureGallery } from "./support/visual-gallery.mjs";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, mkdirSync } from "node:fs";
 import {
@@ -134,6 +135,12 @@ test("console binds verified email to one DID and shows no browser bearer creden
 
 test("backup email requires its visible code and rejects foreign selectors, wrong codes, CSRF, and supplied DIDs", async () => {
   await openManage(page, "recovery");
+  await captureGallery(page, {
+    name: "settings-recovery-form",
+    description: "Separate account recovery email management",
+    heading: "Manage recovery email",
+    did: alice.did,
+  });
   const noMailSince = Date.now();
   const forged = await post(page, "backup-request", {
     email: backup,
@@ -193,6 +200,11 @@ test("backup email requires its visible code and rejects foreign selectors, wron
   await expect(
     page.getByRole("heading", { name: "Verify recovery email" }),
   ).toBeVisible();
+  await captureGallery(page, {
+    name: "settings-recovery-proof",
+    description: "Separate account recovery email verification",
+    heading: "Verify recovery email",
+  });
   const challengeId = await readChallengeId(
     accountForm(page, "backup-confirm"),
   );
@@ -249,6 +261,12 @@ test("backup email requires its visible code and rejects foreign selectors, wron
 
 test("optional password signs out existing sessions and enables actual PDS legacy login", async () => {
   await openManage(page, "password");
+  await captureGallery(page, {
+    name: "settings-password-form",
+    description: "Separate account optional password form",
+    heading: "Set account password",
+    did: alice.did,
+  });
   await accountForm(page, "password-set")
     .getByLabel("New account password")
     .fill(password);
@@ -280,6 +298,11 @@ test("app passwords are displayed once and revocation stops actual PDS login", a
   await expect(
     page.getByRole("heading", { name: "App password created" }),
   ).toBeVisible();
+  await captureGallery(page, {
+    name: "settings-app-password-result",
+    description: "Separate account app password result secret masked",
+    heading: "App password created",
+  });
   const appPassword = await page.getByTestId("app-password").textContent();
   expect(typeof appPassword === "string" && appPassword.length > 10).toBe(true);
   const login = await legacyLogin(alice, appPassword);
@@ -490,6 +513,11 @@ test("primary email change rejects occupied addresses and retries with visible m
   await expect(
     page.getByRole("heading", { name: "Primary email updated" }),
   ).toBeVisible();
+  await captureGallery(page, {
+    name: "account-recovery-result",
+    description: "Separate account recovered result",
+    heading: "Account recovered",
+  });
   alice.email = nextEmail;
   await signIn(page, alice);
   expect(alice.did).toBe(previousDid);
@@ -506,11 +534,21 @@ test("backup recovery verifies visible codes with retained selectors for both ma
     .click();
   const requestRecovery = async (email) => {
     await page.goto(`${config.issuer}/recover`);
+    await captureGallery(page, {
+      name: "account-recovery-start",
+      description: "Separate account recovery entry",
+      heading: "Recover your account",
+    });
     await page.getByLabel("Verified recovery email").fill(email);
     await page.getByRole("button", { name: "Send recovery code" }).click();
     await expect(
       page.getByRole("heading", { name: "Check your recovery email" }),
     ).toBeVisible();
+    await captureGallery(page, {
+      name: "account-recovery-code",
+      description: "Separate account empty recovery code",
+      heading: "Check your recovery email",
+    });
     const form = page.locator('form[action="/recover/verify"]');
     const challengeId = await readChallengeId(form);
     expect(challengeId).toMatch(/^[A-Za-z0-9_-]{24}$/);
@@ -639,6 +677,11 @@ test("backup recovery verifies visible codes with retained selectors for both ma
   await expect(
     page.getByRole("heading", { name: "Verify your new primary email" }),
   ).toBeVisible();
+  await captureGallery(page, {
+    name: "account-recovery-new-email",
+    description: "Separate account new primary email verification",
+    heading: "Verify your new primary email",
+  });
   const emailChallengeId = await readChallengeId(
     page.locator('form[action="/recover/complete"]'),
   );
@@ -716,6 +759,11 @@ test("deletion requires its visible mailbox code and retained selector after han
   await expect(
     otherPage.getByRole("heading", { name: "Confirm account deletion" }),
   ).toBeVisible();
+  await captureGallery(otherPage, {
+    name: "settings-delete-confirm",
+    description: "Separate account deletion confirmation empty code",
+    heading: "Confirm account deletion",
+  });
   const challengeId = await readChallengeId(
     accountForm(otherPage, "delete-confirm"),
   );

@@ -138,6 +138,12 @@ test("another email completes the original authorization as its own account", as
     await page
       .getByRole("button", { name: "Use another email address" })
       .click();
+    await captureGallery(page, {
+      name: "oauth-another-email",
+      description:
+        "Shared pair primary client chooser restarted with another email",
+      heading: "Sign in to authorize",
+    });
     await page.goto(authorizeUrl);
     await page.reload();
     await expect(page.getByLabel("Email address")).toBeVisible();
