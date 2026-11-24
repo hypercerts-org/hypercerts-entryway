@@ -1,3 +1,4 @@
+import { openAccountView } from "./support/account-navigation.mjs";
 import { test, expect } from "@playwright/test";
 import { readFile, writeFile, mkdir, access } from "node:fs/promises";
 import { createPublicKey, randomUUID } from "node:crypto";
@@ -100,9 +101,7 @@ async function signin(page, identity, create = false) {
       .getByRole("button", { name: "Create account", exact: true })
       .click();
   }
-  await expect(
-    page.getByRole("heading", { name: "Account settings" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
   const did = await page.getByTestId("account-did").textContent();
   if (identity.did) expect(did).toBe(identity.did);
   else identity.did = did;
@@ -410,6 +409,7 @@ test(`fresh deployment profile ${stage}`, async ({ browser }) => {
       );
       await context.setExtraHTTPHeaders(select(nodes[0]));
       await page.goto(`${config.issuer}/account`);
+      await openAccountView(page, "Apps");
       await page
         .locator('form[action="/account/grant-revoke"]')
         .filter({

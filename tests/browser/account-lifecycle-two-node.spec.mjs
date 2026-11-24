@@ -1,3 +1,7 @@
+import {
+  openAccountSection,
+  openAccountView,
+} from "./support/account-navigation.mjs";
 import { test, expect } from "@playwright/test";
 import { createHash, createPublicKey, randomUUID } from "node:crypto";
 import { decodeJwt, exportJWK, importJWK, SignJWT } from "jose";
@@ -130,6 +134,7 @@ test("cross-node grant revocation and held access token expiry", async ({
       identity.did,
       async () => {
         await page.goto(`${config.issuer}/account`);
+        await openAccountView(page, "Apps");
         const form = page
           .locator('form[action="/account/grant-revoke"]')
           .filter({
@@ -224,6 +229,7 @@ test("a form opened on one node cannot issue after a mailbox change on the other
             name: `Continue with this account: ${pair.first.handle}, ${pair.first.did}`,
           })
           .click();
+        await openAccountView(stale, "Apps");
         await stale.getByRole("link", { name: "Create app password" }).click();
         await stale.getByLabel("App password name").fill(name);
       },
@@ -237,6 +243,8 @@ test("a form opened on one node cannot issue after a mailbox change on the other
         await change.goto(
           `${config.issuer}/account?did=${encodeURIComponent(pair.first.did)}`,
         );
+        await openAccountView(change, "Account");
+        await openAccountSection(change, "Identity and email");
         const since = Date.now();
         await change
           .getByRole("button", { name: "Start email change" })
@@ -320,6 +328,7 @@ test("a form opened on one node cannot issue after a mailbox change on the other
             pair.second.did,
           );
           await expect(sibling.getByText(name, { exact: true })).toHaveCount(0);
+          await openAccountView(sibling, "Apps");
           await sibling
             .getByRole("link", { name: "Create app password" })
             .click();
@@ -352,6 +361,7 @@ test("a form opened on one node cannot issue after a mailbox change on the other
           await expect(
             owner.getByText(`control-${runId}`, { exact: true }),
           ).toHaveCount(0);
+          await openAccountView(owner, "Apps");
           await owner
             .getByRole("link", { name: "Create app password" })
             .click();

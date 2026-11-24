@@ -1,3 +1,7 @@
+import {
+  openAccountSection,
+  openAccountView,
+} from "./support/account-navigation.mjs";
 import { test, expect } from "@playwright/test";
 import { captureGallery } from "./support/visual-gallery.mjs";
 import { assertCenteredMonospace } from "./support/visual-layout.mjs";
@@ -82,7 +86,7 @@ async function signIn(page, identity, { create = false } = {}) {
       .click();
   }
   await expect(
-    page.getByRole("heading", { name: "Account settings", exact: true }),
+    page.getByRole("heading", { name: "Home", exact: true }),
   ).toBeVisible();
   identity.did = await page.getByTestId("account-did").textContent();
 }
@@ -110,8 +114,11 @@ async function mailText(messageId) {
 
 test.afterAll(() => database.close());
 
-const manageRecovery = (page) =>
-  page.getByRole("link", { name: "Manage recovery email" }).click();
+const manageRecovery = async (page) => {
+  await openAccountView(page, "Account");
+  await openAccountSection(page, "Recovery email");
+  await page.getByRole("link", { name: "Manage recovery email" }).click();
+};
 
 async function addRecoveryEmail(page, email) {
   const since = Date.now();
@@ -147,12 +154,15 @@ test("a session signed in more than ten minutes ago confirms it's you before a p
     // sign-in, with no confirmation step.
     await page.goto(new URL("/account", config.issuer).href);
     await expect(page.getByTestId("primary-email")).toContainText(owner.email);
+    await openAccountView(page, "Apps");
     const revoked = posted(page, "/account/revoke");
     await accountForm(page, "revoke").getByRole("button").click();
     expect((await revoked).status()).toBe(303);
     await expect(
-      page.getByRole("heading", { name: "Account settings", exact: true }),
+      page.getByRole("heading", { name: "Apps", exact: true }),
     ).toBeVisible();
+    await openAccountView(page, "Account");
+    await openAccountSection(page, "Identity and email");
 
     // An email change already sends its own code to the primary email, so it
     // goes straight to that step without a separate confirmation.
@@ -209,6 +219,7 @@ test("a session signed in more than ten minutes ago confirms it's you before a p
     try {
       const otherPage = await otherContext.newPage();
       await signIn(otherPage, owner);
+      await openAccountView(otherPage, "Apps");
       const form = accountForm(otherPage, "revoke");
       const foreign = await otherPage.request.post(
         new URL("/account/confirm", config.issuer).href,
@@ -273,7 +284,9 @@ test("a session signed in more than ten minutes ago confirms it's you before a p
       new URL("/account/confirm", config.issuer).href,
       {
         form: {
-          csrf: await accountForm(page, "revoke")
+          csrf: await page
+            .locator('form[action="/auth/logout"]')
+            .first()
             .locator('input[name="csrf"]')
             .inputValue(),
           did: owner.did,
@@ -363,6 +376,8 @@ test("five wrong codes lock a confirmation code until a new one is sent", async 
   try {
     await signIn(page, lockout, { create: true });
     ageSessions(lockout.email, 11);
+    await openAccountView(page, "Account");
+    await openAccountSection(page, "Password");
     await page.getByRole("link", { name: "Set account password" }).click();
     await expect(
       page.getByRole("heading", { name: "Confirm it's you" }),
@@ -418,6 +433,7 @@ test("a session past the ten-minute window still revokes app passwords, changes 
   });
   try {
     await signIn(page, exempt, { create: true });
+    await openAccountView(page, "Apps");
     await page.getByRole("link", { name: "Create app password" }).click();
     await accountForm(page, "app-password-create")
       .getByLabel("App password name")
@@ -429,16 +445,22 @@ test("a session past the ten-minute window still revokes app passwords, changes 
 
     ageSessions(exempt.email, 11);
     await page.goto(new URL("/account", config.issuer).href);
-    const row = page.locator("#passwords li").filter({ hasText: appPassword });
+    await openAccountView(page, "Apps");
+    const row = page
+      .locator("#app-passwords li")
+      .filter({ hasText: appPassword });
     await row.getByRole("button", { name: "Revoke app password" }).click();
-    await expect(page.locator("#passwords")).not.toContainText(appPassword);
+    await expect(page.locator("#app-passwords")).not.toContainText(appPassword);
     await expect(confirmHeading).toHaveCount(0);
 
+    await openAccountView(page, "Account");
+    await openAccountSection(page, "Identity and email");
     await page.getByLabel("New handle").fill(handle);
     await page.getByRole("button", { name: "Update handle" }).click();
     await expect(page.locator("main")).toContainText(handle);
     await expect(confirmHeading).toHaveCount(0);
 
+    await openAccountSection(page, "Account status and deletion");
     await page
       .getByLabel("Type your handle to delete this test account")
       .fill(handle);
@@ -458,12 +480,16 @@ test("changing an existing password asks only for the new one", async ({
   const page = await context.newPage();
   try {
     await signIn(page, passwordChange, { create: true });
+    await openAccountView(page, "Account");
+    await openAccountSection(page, "Password");
     await page.getByRole("link", { name: "Set account password" }).click();
     await setAccountPassword(page, `First password ${run}!`);
 
     // Setting a password signs every session out; a fresh sign-in is enough
     // proof to change it, with no current password.
     await signIn(page, passwordChange);
+    await openAccountView(page, "Account");
+    await openAccountSection(page, "Password");
     await page.getByRole("link", { name: "Change account password" }).click();
     await expect(
       accountForm(page, "password-set").getByLabel("New account password"),

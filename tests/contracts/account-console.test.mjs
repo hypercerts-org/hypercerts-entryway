@@ -459,6 +459,9 @@ test("multi-binding account page requires an explicit CSRF-protected choice", as
 
   const selected = await f.getPage(didB);
   assert.equal(selected.statusCode, 200);
+  assert.deepEqual(f.loadedDids, []);
+  const apps = await f.getPage(didB, "apps");
+  assert.equal(apps.statusCode, 200);
   assert.deepEqual(f.loadedDids, [didB]);
 });
 
@@ -505,8 +508,14 @@ test("account actions remain pinned to each tab's DID and reject a revoked bindi
   const first = await f.post({ did: didA });
   const second = await f.post({ did: didB });
   assert.deepEqual(f.mutations, [didA, didB]);
-  assert.equal(first.location, `/account?did=${encodeURIComponent(didA)}`);
-  assert.equal(second.location, `/account?did=${encodeURIComponent(didB)}`);
+  assert.equal(
+    first.location,
+    `/account?did=${encodeURIComponent(didA)}&view=apps#applications`,
+  );
+  assert.equal(
+    second.location,
+    `/account?did=${encodeURIComponent(didB)}&view=apps#applications`,
+  );
 
   f.setBindings([account(didB, "two.example.test")]);
   const revokedPage = await f.getPage(didA);

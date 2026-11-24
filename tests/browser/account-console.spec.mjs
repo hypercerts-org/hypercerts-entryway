@@ -1,3 +1,7 @@
+import {
+  openAccountSection,
+  openAccountView,
+} from "./support/account-navigation.mjs";
 import { test, expect } from "@playwright/test";
 import { captureGallery } from "./support/visual-gallery.mjs";
 import { DatabaseSync } from "node:sqlite";
@@ -39,6 +43,17 @@ const submit = (p, action) =>
 // Gated settings live on protected pages opened from a settings button.
 const openManage = async (p, name) => {
   await p.goto(`${config.issuer}/account`);
+  await openAccountView(p, name === "app-password" ? "Apps" : "Account");
+  if (name !== "app-password") {
+    await openAccountSection(
+      p,
+      {
+        recovery: "Recovery email",
+        password: "Password",
+        status: "Account status and deletion",
+      }[name],
+    );
+  }
   await p.locator(`a[href^="/account/manage/${name}?"]`).click();
 };
 async function readChallengeId(form) {
@@ -71,7 +86,7 @@ async function signIn(p, identity, create = false) {
       .click();
   }
   await expect(
-    p.getByRole("heading", { name: "Account settings", exact: true }),
+    p.getByRole("heading", { name: "Home", exact: true }),
   ).toBeVisible();
   identity.did = await p.getByTestId("account-did").textContent();
 }
@@ -121,7 +136,7 @@ test("console binds verified email to one DID and shows no browser bearer creden
     .map((s) => s.token);
   expect(tokens.some((token) => html.includes(token))).toBe(false);
   await expect(
-    page.getByRole("navigation", { name: "Account sections" }),
+    page.getByRole("navigation", { name: "Account navigation" }),
   ).toBeVisible();
   const actionForms = page.locator('form[action^="/account/"]');
   for (const form of await actionForms.all()) {
@@ -256,6 +271,8 @@ test("backup email requires its visible code and rejects foreign selectors, wron
   );
   expect(replay.status()).toBe(409);
   await otherPage.goto(`${config.issuer}/account`);
+  await openAccountView(otherPage, "Account");
+  await openAccountSection(otherPage, "Recovery email");
   await expect(otherPage.locator("#recovery")).not.toContainText(backup);
 });
 
@@ -287,10 +304,13 @@ test("optional password signs out existing sessions and enables actual PDS legac
   expect((await legacyLogin(alice, password)).ok()).toBe(true);
   expect((await legacyLogin(alice, `${password}wrong`)).ok()).toBe(false);
   await page.reload();
+  await openAccountView(page, "Account");
+  await openAccountSection(page, "Password");
   await expect(page.locator("#passwords")).toContainText(
     "Optional account password is enabled.",
   );
-  await expect(page.locator("#sessions")).toContainText("Account password");
+  await openAccountView(page, "Apps");
+  await expect(page.locator("#applications")).toContainText("Account password");
 });
 
 test("app passwords are displayed once and revocation stops actual PDS login", async () => {
@@ -314,9 +334,10 @@ test("app passwords are displayed once and revocation stops actual PDS login", a
   expect(login.ok()).toBe(true);
   const credentials = await login.json();
   await page.goto(`${config.issuer}/account`);
+  await openAccountView(page, "Apps");
   expect((await page.content()).includes(appPassword)).toBe(false);
   await page
-    .locator("#sessions li")
+    .locator("#applications li")
     .filter({ hasText: name })
     .getByRole("button", { name: "Revoke legacy session" })
     .click();
@@ -328,11 +349,11 @@ test("app passwords are displayed once and revocation stops actual PDS login", a
   // Ending one family leaves the app credential usable until explicitly revoked.
   expect((await legacyLogin(alice, appPassword)).ok()).toBe(true);
   await page
-    .locator("#passwords li")
+    .locator("#app-passwords li")
     .filter({ hasText: name })
     .getByRole("button", { name: "Revoke app password" })
     .click();
-  await expect(page.locator("#passwords")).not.toContainText(name);
+  await expect(page.locator("#app-passwords")).not.toContainText(name);
   expect((await legacyLogin(alice, appPassword)).ok()).toBe(false);
 });
 
@@ -351,6 +372,8 @@ test("optional password removal keeps email login and disables password login", 
     heading: "Account password removed",
   });
   await signIn(page, alice);
+  await openAccountView(page, "Account");
+  await openAccountSection(page, "Password");
   await expect(page.locator("#passwords")).toContainText(
     "This account has no account password.",
   );
@@ -358,6 +381,8 @@ test("optional password removal keeps email login and disables password login", 
 });
 
 test("individual browser-session revocation checks ownership and ends the selected session", async () => {
+  await openAccountView(otherPage, "Devices");
+  await openAccountView(page, "Devices");
   const bobsSession = await otherPage
     .locator("#sessions li")
     .filter({ hasText: "This browser" })
@@ -376,6 +401,7 @@ test("individual browser-session revocation checks ownership and ends the select
   try {
     const extraPage = await extraContext.newPage();
     await signIn(extraPage, alice);
+    await openAccountView(extraPage, "Devices");
     const sessionId = await extraPage
       .locator("#sessions li")
       .filter({ hasText: "This browser" })
@@ -404,6 +430,7 @@ test("individual application grant revocation prevents refresh through the offic
     await page.request.get(`${config.clientUrl}/client/session?client=primary`)
   ).json();
   await page.goto(`${config.issuer}/account`);
+  await openAccountView(page, "Apps");
   await accountForm(page, "grant-revoke")
     .getByRole("button", { name: "Revoke application access" })
     .click();
@@ -415,7 +442,7 @@ test("individual application grant revocation prevents refresh through the offic
     },
   );
   expect(refresh.ok()).toBe(false);
-  await expect(page.locator("#sessions")).toContainText(
+  await expect(page.locator("#applications")).toContainText(
     "No remembered application permissions.",
   );
 });

@@ -1,3 +1,7 @@
+import {
+  openAccountSection,
+  openAccountView,
+} from "./support/account-navigation.mjs";
 import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
@@ -264,6 +268,23 @@ for (const which of ["first", "second"]) {
         if (await page.locator(".account-mobile-header details").isVisible())
           await page.locator(".account-mobile-header summary").click();
       }
+      const accountLink = new URL("/account", config.issuer);
+      accountLink.searchParams.set("did", selected.did);
+      accountLink.searchParams.set("view", "account");
+      accountLink.hash = "passwords";
+      await page.goto(accountLink.href);
+      const passwordSection = page.locator("#passwords");
+      await expect(passwordSection).toBeVisible();
+      await expect(
+        passwordSection.locator("xpath=ancestor::details"),
+      ).toHaveAttribute("open", "");
+      await page.reload();
+      await expect(passwordSection).toBeVisible();
+      await expect(
+        passwordSection.locator("xpath=ancestor::details"),
+      ).toHaveAttribute("open", "");
+      expect(new URL(page.url()).searchParams.get("did")).toBe(selected.did);
+
       const mobileMenu = page.locator(".account-mobile-header details");
       if (await mobileMenu.isVisible()) {
         await mobileMenu.locator("summary").focus();
@@ -272,7 +293,7 @@ for (const which of ["first", "second"]) {
         await captureGallery(page, {
           name: "settings-mobile-menu",
           description: "Account navigation mobile menu open",
-          heading: "About",
+          heading: "Account",
           did: selected.did,
         });
         await mobileMenu
@@ -356,6 +377,8 @@ test("shared verified email keeps each tab and account action bound to its selec
     await expect(secondTab.getByTestId("account-did")).toHaveText(second.did);
 
     // Deactivation is a protected page; its link and form keep the tab's DID.
+    await openAccountView(secondTab, "Account");
+    await openAccountSection(secondTab, "Account status and deletion");
     await secondTab.getByRole("link", { name: "Deactivate account" }).click();
     expect(new URL(secondTab.url()).searchParams.get("did")).toBe(second.did);
     await captureGallery(secondTab, {
@@ -397,7 +420,7 @@ test("shared verified email keeps each tab and account action bound to its selec
     await captureGallery(secondTab, {
       name: "settings-deactivated-result",
       description: "Shared pair second account deactivated settings",
-      heading: "Home",
+      heading: "Account",
       did: second.did,
     });
     await secondTab.getByRole("link", { name: "Reactivate account" }).click();
@@ -414,7 +437,7 @@ test("shared verified email keeps each tab and account action bound to its selec
     await captureGallery(secondTab, {
       name: "settings-reactivation-result",
       description: "Shared pair second account reactivated settings",
-      heading: "Home",
+      heading: "Account",
       did: second.did,
     });
     await firstTab.reload();
@@ -446,6 +469,7 @@ test("an open app-password form stays bound to the account after a mailbox chang
       })
       .getByRole("button")
       .click();
+    await openAccountView(stale, "Apps");
     await stale.getByRole("link", { name: "Create app password" }).click();
     await captureGallery(stale, {
       name: "stale-app-password-form",
@@ -463,6 +487,8 @@ test("an open app-password form stays bound to the account after a mailbox chang
       ).href,
     );
     const oldSince = Date.now();
+    await openAccountView(change, "Account");
+    await openAccountSection(change, "Identity and email");
     await change.getByRole("button", { name: "Start email change" }).click();
     await captureGallery(change, {
       name: "email-change-current",
@@ -543,6 +569,7 @@ test("an open app-password form stays bound to the account after a mailbox chang
       pair.second.did,
     );
     await expect(sibling.getByText(name, { exact: true })).toHaveCount(0);
+    await openAccountView(sibling, "Apps");
     await sibling.getByRole("link", { name: "Create app password" }).click();
     await sibling.getByLabel("App password name").fill(`sibling-${runId}`);
     await sibling.getByRole("button", { name: "Create app password" }).click();
@@ -566,6 +593,7 @@ test("an open app-password form stays bound to the account after a mailbox chang
     await expect(
       owner.getByText(`sibling-${runId}`, { exact: true }),
     ).toHaveCount(0);
+    await openAccountView(owner, "Apps");
     await owner.getByRole("link", { name: "Create app password" }).click();
     await owner.getByLabel("App password name").fill(`owner-${runId}`);
     await owner.getByRole("button", { name: "Create app password" }).click();

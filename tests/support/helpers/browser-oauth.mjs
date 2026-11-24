@@ -38,9 +38,7 @@ export async function createAccount(page, label = "browser") {
   await page.getByLabel("Handle", { exact: true }).fill(handle);
   await page.getByLabel("Personal data server").selectOption(config.pds[0].id);
   await page.getByRole("button", { name: "Create account" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Account settings" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
   const did = await page.getByTestId("account-did").textContent();
   expect(did).toMatch(/^did:plc:/);
   return { email, handle, did };
@@ -60,9 +58,7 @@ export async function signInAccount(page, identity) {
   });
   await enterSignInCode(page, code);
   await page.getByRole("button", { name: "Verify code" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Account settings" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
   await expect(page.getByTestId("account-did")).toHaveText(identity.did);
 }
 
