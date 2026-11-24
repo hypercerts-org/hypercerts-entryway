@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { captureGallery } from "./support/visual-gallery.mjs";
 import { assertChooserStyle } from "./support/chooser-style.mjs";
+import { assertIdentityLayout } from "./support/visual-layout.mjs";
 import {
   createRealAccount,
   createSharedEmailPair,
@@ -66,6 +67,7 @@ for (const which of ["first", "second"]) {
     const context = await browser.newContext({ ignoreHTTPSErrors: false });
     try {
       const page = await context.newPage();
+      await page.setViewportSize({ width: 390, height: 844 });
       if (which === "first") {
         await page.goto(new URL("/client", config.clientUrl).href);
         await captureGallery(page, {
@@ -86,6 +88,10 @@ for (const which of ["first", "second"]) {
         did: chosen.did,
       });
       const form = selectionForm(page, chosen.did);
+      await assertIdentityLayout(form.getByRole("button"), {
+        handle: chosen.handle,
+        did: chosen.did,
+      });
       await assertChooserStyle(page, form.getByRole("button"), {
         foreground: "rgb(25, 35, 61)",
         focus: "rgb(40, 68, 172)",
@@ -96,6 +102,10 @@ for (const which of ["first", "second"]) {
 
       await form.getByRole("button").click();
       await expect(consentForm(page, chosen.did)).toBeVisible();
+      await assertIdentityLayout(page.locator(".consent-identity"), {
+        handle: chosen.handle,
+        did: chosen.did,
+      });
       await captureGallery(page, {
         name: `oauth-consent-${which}`,
         description: `Shared pair primary client consent for ${which} account`,
@@ -248,6 +258,44 @@ test("OAuth code fits and pastes at 320 pixels without JavaScript", async ({
       ),
     ).toBe(true);
     await expect(input).toBeFocused();
+    await page.keyboard.press("End");
+    await page.keyboard.press("Backspace");
+    expect(
+      await input.evaluate(
+        (element, code) => element.value === code.slice(0, -1),
+        message.code,
+      ),
+    ).toBe(true);
+    await page.keyboard.press("0");
+    expect(
+      await input.evaluate(
+        (element, code) => element.value === `${code.slice(0, -1)}0`,
+        message.code,
+      ),
+    ).toBe(true);
+    await page.keyboard.press("Home");
+    await page.keyboard.press("Delete");
+    expect(
+      await input.evaluate(
+        (element, code) => element.value === `${code.slice(1, -1)}0`,
+        message.code,
+      ),
+    ).toBe(true);
+    await page.keyboard.press("1");
+    expect(
+      await input.evaluate(
+        (element, code) => element.value === `1${code.slice(1, -1)}0`,
+        message.code,
+      ),
+    ).toBe(true);
+    await page.keyboard.press("Control+A");
+    await page.keyboard.press("Control+V");
+    expect(
+      await input.evaluate(
+        (element, code) => element.value === code,
+        message.code,
+      ),
+    ).toBe(true);
     const cells = page.locator(".otp-cells .otp-cell");
     await expect(cells).toHaveCount(8);
     const bounds = await cells.evaluateAll((elements) =>
@@ -278,6 +326,45 @@ test("OAuth code fits and pastes at 320 pixels without JavaScript", async ({
         (rect, index) => index === 0 || rect.left >= bounds[index - 1].right,
       ),
     ).toBe(true);
+    const aligned = await input.evaluate((element) => {
+      const inputRect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+      context.font = style.font;
+      const spacing = parseFloat(style.letterSpacing) || 0;
+      const left =
+        inputRect.left +
+        parseFloat(style.borderLeftWidth) +
+        parseFloat(style.paddingLeft) -
+        element.scrollLeft;
+      const cells = [...document.querySelectorAll(".otp-cells .otp-cell")];
+      const glyphsFit = [...element.value].every((digit, index) => {
+        const prefix = element.value.slice(0, index);
+        const center =
+          left +
+          context.measureText(prefix).width +
+          index * spacing +
+          context.measureText(digit).width / 2;
+        const cell = cells[index].getBoundingClientRect();
+        return (
+          Math.abs(center - (cell.left + cell.width / 2)) <=
+          Math.max(2, cell.width * 0.08)
+        );
+      });
+      const outline = parseFloat(style.outlineWidth);
+      const offset = parseFloat(style.outlineOffset);
+      return (
+        glyphsFit &&
+        element.matches(":focus-visible") &&
+        style.outlineStyle !== "none" &&
+        outline > 0 &&
+        inputRect.left - outline - offset >= 0 &&
+        inputRect.right + outline + offset <=
+          document.documentElement.clientWidth
+      );
+    });
+    expect(aligned).toBe(true);
     const fits = await input.evaluate((element) => {
       const style = getComputedStyle(element);
       const canvas = document.createElement("canvas");

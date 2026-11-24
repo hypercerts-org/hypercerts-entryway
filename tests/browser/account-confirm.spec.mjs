@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { captureGallery } from "./support/visual-gallery.mjs";
+import { assertCenteredMonospace } from "./support/visual-layout.mjs";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
@@ -190,6 +191,7 @@ test("a session signed in more than ten minutes ago confirms it's you before a p
       description: "Separate account aged session empty confirmation code",
       heading: "Confirm it's you",
     });
+    await assertCenteredMonospace(page.getByLabel("Confirmation code"));
     const challengeId = await page
       .locator('form[action="/account/confirm"] input[name="challengeId"]')
       .first()

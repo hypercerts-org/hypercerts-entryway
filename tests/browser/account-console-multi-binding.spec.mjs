@@ -4,6 +4,10 @@ import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
 import { createSharedEmailPair } from "./support/email-chooser-fixture.mjs";
 import { captureGallery } from "./support/visual-gallery.mjs";
 import { assertChooserStyle } from "./support/chooser-style.mjs";
+import {
+  assertCenteredMonospace,
+  assertIdentityLayout,
+} from "./support/visual-layout.mjs";
 
 const config = JSON.parse(
   readFileSync(
@@ -132,6 +136,9 @@ for (const which of ["first", "second"]) {
           description: "Shared pair standalone empty code entry",
           heading: "Check your email",
         });
+      await assertCenteredMonospace(
+        page.getByLabel("Sign-in code", { exact: true }),
+      );
       const message = await waitForMailpitCode({
         recipient: shared.email,
         since,
@@ -163,6 +170,10 @@ for (const which of ["first", "second"]) {
       expect(bounds.x + bounds.width).toBeLessThanOrEqual(
         page.viewportSize().width,
       );
+      await assertIdentityLayout(button, {
+        handle: selected.handle,
+        did: selected.did,
+      });
       const didText = button.locator("small");
       await expect(didText).toContainText(selected.did);
       const didFits = await didText.evaluate((element) => {
@@ -373,6 +384,9 @@ test("an open app-password form stays bound to the account after a mailbox chang
       description: "Pair stale first account current email verification",
       heading: "Verify current email",
     });
+    await assertCenteredMonospace(
+      change.getByLabel("Current email verification code"),
+    );
     const oldCode = await waitForMailpitCode({
       recipient: pair.email,
       since: oldSince,
@@ -392,6 +406,9 @@ test("an open app-password form stays bound to the account after a mailbox chang
       description: "Pair stale first account new email verification",
       heading: "Verify new email",
     });
+    await assertCenteredMonospace(
+      change.getByLabel("New email verification code"),
+    );
     const newCode = await waitForMailpitCode({
       recipient: nextEmail,
       since: newSince,
