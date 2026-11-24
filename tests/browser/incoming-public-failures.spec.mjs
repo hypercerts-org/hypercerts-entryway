@@ -277,9 +277,8 @@ test("observed today: email-code sign-in of a pending account answers 404 Unable
   const shown = await signInByEmail(page, config, destinationEmail);
   expect(shown.status).toBe(404);
   await expect(shown.heading).toHaveText("Unable to continue");
-  await expect(
-    page.getByText("Account not found", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveText("Error: Account not found");
   await expect(page.getByText(pendingText)).toHaveCount(0);
   expect(await sessionProbe(page, config)).toEqual(noSession);
 });
@@ -289,9 +288,10 @@ test("email-code sign-in of a pending account succeeds and shows the pending not
 }) => {
   const shown = await signInByEmail(page, config, destinationEmail);
   if (shown.status === 404) {
-    await expect(
-      page.getByText("Account not found", { exact: true }),
-    ).toBeVisible();
+    await expect(page.getByRole("alert")).toBeVisible();
+    await expect(page.getByRole("alert")).toHaveText(
+      "Error: Account not found",
+    );
     expect(await sessionProbe(page, config)).toEqual(noSession);
   } else {
     expect(shown.status).toBe(200);
@@ -376,9 +376,10 @@ test("observed today: OAuth authorization of the pending account cannot start by
     // reached: sign-in fails first.
     expect(await authorizeByDid(client)).toBe(404);
     await expect(client.locator("h1")).toHaveText("Unable to continue");
-    await expect(
-      client.getByText("Account not found", { exact: true }),
-    ).toBeVisible();
+    await expect(client.getByRole("alert")).toBeVisible();
+    await expect(client.getByRole("alert")).toHaveText(
+      "Error: Account not found",
+    );
     await noConsent(client);
     expect(await sessionProbe(client, config)).toEqual(noSession);
   });
@@ -391,9 +392,10 @@ test("OAuth sign-in of the pending account succeeds and is refused consent with 
   // guard's page (409). Today this first assertion fails, with 404.
   const status = await authorizeByDid(client);
   if (status === 404) {
-    await expect(
-      client.getByText("Account not found", { exact: true }),
-    ).toBeVisible();
+    await expect(client.getByRole("alert")).toBeVisible();
+    await expect(client.getByRole("alert")).toHaveText(
+      "Error: Account not found",
+    );
     await noConsent(client);
     expect(await sessionProbe(client, config)).toEqual(noSession);
   } else {
