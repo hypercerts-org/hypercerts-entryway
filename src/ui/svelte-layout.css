@@ -467,8 +467,6 @@ main[data-layout="settings"]:has(> .account-header-action) > h1 {
     display: block;
   }
   .account-sidebar {
-    display: flex;
-    flex-direction: column;
     display: none;
   }
   .account-main {
