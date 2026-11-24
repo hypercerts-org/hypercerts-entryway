@@ -966,3 +966,24 @@ test("account controls are separated by destination", async () => {
   assert.doesNotMatch(devices.body, /action="\/account\/app-password-revoke"/);
   assert.doesNotMatch(about.body, /action="\/account\/app-password-revoke"/);
 });
+
+test("recent confirmation cancel links retain the selected DID and destination", async () => {
+  const f = fixture({ authenticatedAt: minutesAgo(11) });
+  for (const did of [didA, didB]) {
+    for (const [name, destination] of [
+      ["password", "account#passwords"],
+      ["recovery", "account#recovery"],
+      ["status", "account#lifecycle"],
+      ["app-password", "apps#app-passwords"],
+    ]) {
+      const result = await f.getManage(name, did);
+      assert.equal(result.statusCode, 200);
+      assert.ok(
+        result.body.includes(
+          `href="/account?did=${encodeURIComponent(did)}&amp;view=${destination}"`,
+        ),
+        `${name} cancel link for ${did}`,
+      );
+    }
+  }
+});
