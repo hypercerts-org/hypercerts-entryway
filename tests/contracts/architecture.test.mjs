@@ -581,3 +581,51 @@ test("exact and wildcard aliases resolve Svelte owners without matching near mis
     [],
   );
 });
+
+test("aliases use TypeScript precedence and ordered mixed targets", (t) => {
+  const f = fixture(t, {
+    "src/features/account-settings/Private.svelte": "<p>private</p>",
+    "src/features/account-settings/private.ts": "export const value = 1",
+    "src/ui/Shared.svelte": "<p>shared</p>",
+    "src/ui/shared.ts": "export const value = 1",
+    "src/features/account-settings/$&.svelte": "<p>private</p>",
+  });
+  const privateSvelte = join(
+    f.root,
+    "src/features/account-settings/Private.svelte",
+  );
+  const sharedSvelte = join(f.root, "src/ui/Shared.svelte");
+  const privateTs = join(f.root, "src/features/account-settings/private.ts");
+  const sharedTs = join(f.root, "src/ui/shared.ts");
+  const check = (specifier) =>
+    f.check("src/features/email-login/alias.ts", `import '${specifier}'`);
+  const crossesFeature = (specifier) =>
+    check(specifier).some((issue) =>
+      issue.includes("imports account-settings internals"),
+    );
+
+  f.options.paths["@choice/*"] = [sharedSvelte];
+  f.options.paths["@choice/exact"] = [privateSvelte];
+  assert.ok(crossesFeature("@choice/exact"));
+  f.options.paths["@choice/specific/*"] = [privateSvelte];
+  assert.ok(crossesFeature("@choice/specific/value"));
+  f.options.paths["@choice/specific/*"] = [join(f.root, "missing/*")];
+  assert.ok(
+    check("@choice/specific/value").some((issue) =>
+      issue.includes("unresolved local import"),
+    ),
+  );
+
+  f.options.paths["@ordered"] = [privateTs, sharedSvelte];
+  assert.ok(crossesFeature("@ordered"));
+  f.options.paths["@ordered"] = [sharedTs, privateSvelte];
+  assert.deepEqual(check("@ordered"), []);
+  f.options.paths["@ordered"] = [privateSvelte, sharedTs];
+  assert.ok(crossesFeature("@ordered"));
+  f.options.paths["@literal/*"] = [
+    join(f.root, "src/features/account-settings/*.svelte"),
+  ];
+  assert.ok(crossesFeature("@literal/$&"));
+  f.options.paths["@invalid/*/*"] = [privateSvelte];
+  assert.deepEqual(check("@invalid/a/b"), []);
+});

@@ -76,6 +76,32 @@ export function importsIn(source, filename) {
   return referencesIn(source, filename).map(({ specifier }) => specifier);
 }
 
+function matchingPath(specifier, paths) {
+  if (Object.hasOwn(paths, specifier)) return [specifier, ""];
+  let best;
+  for (const pattern of Object.keys(paths)) {
+    const wildcard = pattern.indexOf("*");
+    if (wildcard < 0 || pattern.indexOf("*", wildcard + 1) >= 0) continue;
+    const prefix = pattern.slice(0, wildcard);
+    const suffix = pattern.slice(wildcard + 1);
+    if (
+      specifier.length >= prefix.length + suffix.length &&
+      specifier.startsWith(prefix) &&
+      specifier.endsWith(suffix) &&
+      (!best || prefix.length > best.prefixLength)
+    )
+      best = {
+        pattern,
+        prefixLength: prefix.length,
+        capture: specifier.slice(
+          prefix.length,
+          specifier.length - suffix.length,
+        ),
+      };
+  }
+  return best && [best.pattern, best.capture];
+}
+
 function resolveReference(specifier, filename, appRoot, options) {
   if (specifier.startsWith("#entryway-ssr/")) {
     const owner = specifier.slice("#entryway-ssr/".length);
@@ -89,28 +115,26 @@ function resolveReference(specifier, filename, appRoot, options) {
     const candidate = resolve(dirname(filename), specifier);
     return existsSync(candidate) ? candidate : undefined;
   }
-  for (const [pattern, targets] of Object.entries(options.paths ?? {})) {
-    const wildcard = pattern.indexOf("*");
-    const prefix = wildcard < 0 ? pattern : pattern.slice(0, wildcard);
-    const suffix = wildcard < 0 ? "" : pattern.slice(wildcard + 1);
-    const matches =
-      wildcard < 0
-        ? specifier === pattern
-        : specifier.length >= prefix.length + suffix.length &&
-          specifier.startsWith(prefix) &&
-          specifier.endsWith(suffix);
-    if (!matches) continue;
-    const match =
-      wildcard < 0
-        ? ""
-        : specifier.slice(prefix.length, specifier.length - suffix.length);
-    for (const target of targets) {
+  const matched = matchingPath(specifier, options.paths ?? {});
+  if (matched) {
+    const [pattern, capture] = matched;
+    for (const target of options.paths[pattern]) {
       const candidate = resolve(
         options.baseUrl ?? appRoot,
-        target.replace("*", match),
+        target.replace("*", () => capture),
       );
       if (candidate.endsWith(".svelte") && existsSync(candidate))
         return candidate;
+      const resolved = ts.resolveModuleName(
+        candidate,
+        filename,
+        {
+          ...options,
+          paths: undefined,
+        },
+        ts.sys,
+      ).resolvedModule?.resolvedFileName;
+      if (resolved) return resolved;
     }
   }
   return ts.resolveModuleName(specifier, filename, options, ts.sys)
@@ -184,14 +208,7 @@ export function moduleViolations(source, filename, appRoot, options) {
       if (
         specifier.startsWith(".") ||
         specifier.startsWith("#entryway-ssr/") ||
-        Object.keys(options.paths ?? {}).some((alias) =>
-          alias.includes("*")
-            ? specifier.length >=
-                alias.indexOf("*") + alias.length - alias.indexOf("*") - 1 &&
-              specifier.startsWith(alias.slice(0, alias.indexOf("*"))) &&
-              specifier.endsWith(alias.slice(alias.indexOf("*") + 1))
-            : specifier === alias,
-        )
+        matchingPath(specifier, options.paths ?? {})
       )
         violations.push(`${specifier}: unresolved local import`);
       continue;
