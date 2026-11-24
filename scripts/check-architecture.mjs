@@ -134,11 +134,41 @@ function resolveReference(specifier, filename, appRoot, options) {
   ).resolvedModule?.resolvedFileName;
   if (!resolved) return undefined;
   const component = virtualComponent(resolved);
-  const target =
+  let explicitDeclaration =
+    specifier.endsWith(".d.svelte.ts") || specifier.endsWith(".svelte.d.ts");
+  if (
     component &&
-    !specifier.endsWith(".d.svelte.ts") &&
-    !specifier.endsWith(".svelte.d.ts") &&
-    ts.sys.fileExists(component)
+    options.paths &&
+    !ts.isExternalModuleNameRelative(specifier)
+  ) {
+    const pattern = ts.matchPatternOrExact(
+      ts.tryParsePatterns(options.paths),
+      specifier,
+    );
+    if (pattern) {
+      const key =
+        typeof pattern === "string" ? pattern : ts.patternText(pattern);
+      const capture =
+        typeof pattern === "string"
+          ? undefined
+          : ts.matchedText(pattern, specifier);
+      for (const substitution of options.paths[key]) {
+        const expanded = capture
+          ? ts.replaceFirstStar(substitution, capture)
+          : substitution;
+        const candidate = resolve(
+          options.baseUrl ?? options.pathsBasePath ?? appRoot,
+          expanded,
+        );
+        if (candidate === resolved || candidate === component) {
+          explicitDeclaration = candidate === resolved;
+          break;
+        }
+      }
+    }
+  }
+  const target =
+    component && !explicitDeclaration && ts.sys.fileExists(component)
       ? component
       : resolved;
   return ts.sys.fileExists(target) ? realpathSync(target) : target;
