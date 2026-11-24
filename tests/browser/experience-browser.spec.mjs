@@ -303,13 +303,17 @@ test("resend invalidates the previous OTP and email correction binds the same fl
       path: "artifacts/experience-account-desktop.png",
       fullPage: true,
     });
+    const signOut = page.getByRole("button", { name: "Sign out", exact: true });
+    const identityLink = page.getByRole("link", {
+      name: "Identity",
+      exact: true,
+    });
     await page.keyboard.press("Tab");
-    await expect(page.locator('a[href="#identity"]')).toBeFocused();
-    expect(
-      await page
-        .locator('a[href="#identity"]')
-        .evaluate((element) => getComputedStyle(element).outlineStyle),
-    ).not.toBe("none");
+    await expect(signOut).toBeFocused();
+    await expect(signOut).toHaveCSS("outline-style", "solid");
+    await page.keyboard.press("Tab");
+    await expect(identityLink).toBeFocused();
+    await expect(identityLink).toHaveCSS("outline-style", "solid");
 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(new URL("/account", config.issuer).href);

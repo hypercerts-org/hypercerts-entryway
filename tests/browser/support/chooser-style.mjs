@@ -23,7 +23,8 @@ export async function assertChooserStyle(
       new RegExp(`(?:^|\\s)${className}(?:\\s|$)`),
     );
   }
-  await expect(avatar).toHaveCSS("display", "inline-flex");
+  // Grid items are blockified: inline-flex computes to flex here.
+  await expect(avatar).toHaveCSS("display", "flex");
   await expect(avatar).toHaveCSS("width", "24px");
   await expect(avatar).toHaveCSS("height", "24px");
   await expect(avatar).toHaveCSS("border-top-style", "solid");
