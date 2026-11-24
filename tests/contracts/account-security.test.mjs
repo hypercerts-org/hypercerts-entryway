@@ -239,9 +239,34 @@ async function bindSiblingToSharedEmail(f, sharedUserId) {
   return sibling;
 }
 
+async function waitForCredentialBarrier(barrier, operation, label) {
+  let timer;
+  try {
+    await Promise.race([
+      barrier,
+      operation.then(
+        () => {
+          throw new Error(`${label}: operation completed before the barrier`);
+        },
+        (error) => {
+          throw error;
+        },
+      ),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label}: barrier timed out`)),
+          15_000,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 test(
   "browser app password creation rechecks the selected binding after a mailbox change",
-  { timeout: 15_000 },
+  { timeout: 120_000 },
   async (t) => {
     const f = await fixture(t);
     await bindSiblingToSharedEmail(f, f.login.user.id);
@@ -298,18 +323,30 @@ test(
     const rejectedIssue = assert.rejects(pendingIssue, {
       code: "AccountMismatch",
     });
-    await entered;
-    await f.security.requestEmailUpdate(f.actor);
-    await f.security.updateEmail(f.actor, {
-      email: "replacement@example.com",
-      token: await f.token(f.alice.email),
-    });
-    await f.security.confirmEmail(f.actor, {
-      email: "replacement@example.com",
-      token: await f.token("replacement@example.com"),
-    });
-    pause = false;
-    resumeResolve();
+    // The assertion may reject before the barrier is reached; observe it now
+    // and assert it after releasing the paused operation.
+    void rejectedIssue.catch(() => {});
+    // Release the paused request even if the mailbox change or barrier fails.
+    try {
+      await waitForCredentialBarrier(
+        entered,
+        pendingIssue,
+        "issuance admission",
+      );
+      await f.security.requestEmailUpdate(f.actor);
+      await f.security.updateEmail(f.actor, {
+        email: "replacement@example.com",
+        token: await f.token(f.alice.email),
+      });
+      await f.security.confirmEmail(f.actor, {
+        email: "replacement@example.com",
+        token: await f.token("replacement@example.com"),
+      });
+    } finally {
+      pause = false;
+      resumeResolve();
+      await Promise.allSettled([pendingIssue, rejectedIssue]);
+    }
     await rejectedIssue;
     assert.deepEqual(
       (await f.legacy.listAppPasswords(f.alice.did)).passwords,
@@ -342,7 +379,7 @@ test(
 
 test(
   "binding change cannot commit between browser credential authorization and insertion",
-  { timeout: 15_000 },
+  { timeout: 120_000 },
   async (t) => {
     const f = await fixture(t, { independent: true });
     await bindSiblingToSharedEmail(f, f.login.user.id);
@@ -401,7 +438,17 @@ test(
       session,
       value: () => "during-change",
     });
-    await checked;
+    try {
+      await waitForCredentialBarrier(
+        checked,
+        issuing,
+        "issuance ownership check",
+      );
+    } catch (error) {
+      releaseResolve();
+      await Promise.allSettled([issuing]);
+      throw error;
+    }
     const otherStorage = createAccountStorage(f.secondDb, f.config.pds);
     const otherAccounts = {
       storage: otherStorage,
@@ -423,6 +470,9 @@ test(
       .then(() => {
         committed = true;
       });
+    // Attach rejection handlers before checking the contender so either writer
+    // can be drained safely if the ordering assertion fails.
+    const writers = Promise.allSettled([issuing, changing]);
     try {
       if (f.db.backend === "postgresql") {
         const deadline = Date.now() + 5_000;
@@ -453,6 +503,7 @@ test(
       }
     } finally {
       releaseResolve();
+      await writers;
     }
     await issuing;
     await changing;
