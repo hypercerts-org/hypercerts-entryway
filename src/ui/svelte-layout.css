@@ -28,11 +28,16 @@ body:has(> main[data-layout="standalone"]) {
   align-items: center;
 }
 main[data-layout="oauth"],
-main[data-layout="standalone"] {
+main[data-layout="standalone"],
+main[data-layout="settings"] {
+  min-height: 0;
   margin: 24px auto;
+  border: 1px solid var(--border);
+  border-radius: 20px;
 }
 main[data-layout="oauth"] {
-  width: min(497px, calc(100% - 32px));
+  width: min(497px, calc(100% - 50px));
+  padding: 40px 48px;
 }
 main[data-layout="standalone"] {
   width: min(420px, calc(100% - 32px));
@@ -66,6 +71,16 @@ main[data-layout="standalone"] > h1 {
   border: 1px solid var(--hc-line-hairline);
   border-radius: 10px;
 }
+.account-choice-details,
+.consent-identity-details {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.account-choice-details strong,
+.consent-identity-details strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
 .account-choice small {
   display: block;
   overflow-wrap: anywhere;
@@ -77,6 +92,7 @@ main[data-layout="standalone"] > h1 {
 }
 .primary-action {
   width: 100%;
+  justify-content: center;
   border-radius: 999px;
   background: var(--hc-fill-solid);
   color: var(--hc-text-on-fill);
@@ -85,7 +101,8 @@ main[data-layout="standalone"] > h1 {
   color: var(--muted);
   background: transparent;
 }
-main[data-layout="standalone"] #otp {
+main[data-layout]:not([data-layout="oauth"])
+  input[autocomplete="one-time-code"] {
   text-align: center;
   font-family: monospace;
 }
@@ -114,8 +131,8 @@ main[data-layout="standalone"] #otp {
   font-family: monospace;
   font-size: 20px;
   text-align: left;
-  letter-spacing: calc(100cqw / 8 - 1ch);
-  padding: 0 0 0 calc((100cqw / 8 - 1ch) / 2);
+  letter-spacing: calc((100cqw + 4px) / 8 - 1ch);
+  padding: 0 0 0 calc((100cqw - 28px) / 16 - 0.5ch);
 }
 .consent-identity {
   display: flex;
@@ -190,4 +207,30 @@ main[data-layout="settings"] > .account-header-action button {
 }
 .remembered-account form {
   margin-left: auto;
+}
+
+main[data-layout="oauth"]:has(.account-choice) {
+  padding: 16px;
+}
+main[data-layout="oauth"]:has(.account-choice) .auth-brandmark {
+  display: none;
+}
+main[data-layout="oauth"]:has(.account-choice) > h1 {
+  font-size: 20px;
+}
+.another-email-choice {
+  display: flex;
+  justify-content: space-between;
+}
+@media (max-width: 600px) {
+  main[data-layout="standalone"],
+  main[data-layout="settings"] {
+    padding: 32px 24px;
+  }
+  main[data-layout="oauth"] {
+    padding: 40px 48px;
+  }
+  main[data-layout="oauth"]:has(.account-choice) {
+    padding: 16px;
+  }
 }

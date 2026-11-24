@@ -14,6 +14,8 @@ export function mountRecoveryPage({ app, oauth, security, console }) {
         res,
         "Recover your account",
         `<p>Use a recovery email you verified before losing access to your primary mailbox.</p><form method="post" action="/recover/request">${hidden("csrf", browser.csrf)}${field("email", "Verified recovery email", "email", 'autocomplete="email" maxlength="320"')}<button>Send recovery code</button></form><a href="/login">Return to sign in</a>`,
+        200,
+        { layout: "standalone" },
       );
     }),
   );
@@ -33,6 +35,8 @@ export function mountRecoveryPage({ app, oauth, security, console }) {
           res,
           "Check your recovery email",
           `<p>If this is a verified recovery email, a code has been sent. Enter it and choose a new primary email.</p><form method="post" action="/recover/verify">${hidden("csrf", browser.csrf)}${hidden("challengeId", issued.challengeId ?? "")}${codeField("Recovery code")}${field("newEmail", "New primary email", "email", 'maxlength="320"')}<button>Verify recovery code</button></form><a href="/recover">Start again</a>`,
+          200,
+          { layout: "standalone" },
         );
       }
       if (req.params.action === "verify") {
@@ -44,6 +48,8 @@ export function mountRecoveryPage({ app, oauth, security, console }) {
           res,
           "Verify your new primary email",
           `<p>Enter the verification code sent to the new primary email. Existing sessions will end after recovery.</p><form method="post" action="/recover/complete">${hidden("csrf", browser.csrf)}${hidden("challengeId", issued.challengeId ?? "")}${codeField("New primary email verification code")}<button>Complete account recovery</button></form>`,
+          200,
+          { layout: "standalone" },
         );
       }
       if (req.params.action === "complete") {
@@ -54,6 +60,8 @@ export function mountRecoveryPage({ app, oauth, security, console }) {
           res,
           "Account recovered",
           '<p>Your primary email was updated and existing sessions were ended.</p><a href="/login">Sign in with your recovered account</a>',
+          200,
+          { layout: "standalone" },
         );
       }
       throw new HttpError(404, "NotFound", "Unknown recovery operation");

@@ -28,6 +28,8 @@ export function createConsent({
   const { save, readCurrentIntent, pageForFlow } = flows;
   const describeScope = (value) => {
     if (value === "atproto") return "Sign in with your AT Protocol account.";
+    if (value === "transition:generic")
+      return "Create, update, and delete any repository records, upload media, read and change preferences, and use most services except chat. This does not include account management.";
     if (value === "transition:email") return "Read your account email address.";
     const repo = RepoPermission.fromString(value);
     if (repo)
@@ -70,7 +72,7 @@ export function createConsent({
       csrf: browser.csrf,
       did: account.did,
       handle: account.handle ?? account.did,
-      clientName: flow.clientName ?? "Your application",
+      clientName: flow.clientName?.trim() || flow.clientId,
       scopes: scopeGroups(flow.parameters?.scope),
       canChoose: Boolean(flow.authUserId),
     }).body;

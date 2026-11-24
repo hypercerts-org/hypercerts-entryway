@@ -44,6 +44,6 @@ export function createLoginForms({ fields }) {
       ],
       prompt: "Choose one account linked to your verified email.",
     }).body +
-    `<form method="post" action="/auth/another-account">${fields(flow, browser)}<button class="secondary">Use another email address</button></form>`;
+    `<form method="post" action="/auth/another-account">${fields(flow, browser)}<button class="account-choice another-email-choice"><span>Use another email address</span><span aria-hidden="true">›</span></button></form>`;
   return { loginForm, otpForm, accountSelectionForm };
 }

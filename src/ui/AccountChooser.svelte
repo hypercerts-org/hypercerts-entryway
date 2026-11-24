@@ -27,7 +27,7 @@
       aria-label={`Continue with this account: ${account.handle ?? account.did}, ${account.did}`}
     >
       <Avatar name={account.handle ?? account.did} size="sm" />
-      <span>
+      <span class="account-choice-details">
         <strong>{account.handle ?? account.did}</strong><small>
           {account.did}{account.status ? ` · ${account.status}` : ""}
         </small>

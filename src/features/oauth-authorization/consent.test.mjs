@@ -135,3 +135,24 @@ test("consent describes parsed permissions and retains exact unknown scopes", ()
   for (const value of ["approve", "deny"])
     assert.match(html, new RegExp(`name="decision" value="${value}"`));
 });
+
+test("consent identifies a nameless client and explains broad transitional access", () => {
+  const { consentForm } = createConsent({ flows: {} });
+  const html = consentForm(
+    {
+      id: "flow",
+      clientName: "",
+      clientId: "https://client.example/metadata?x=1&y=2",
+      parameters: { scope: "atproto transition:generic" },
+    },
+    { csrf: "token" },
+    { did: "did:plc:example", handle: "owner.example" },
+  );
+  assert.match(html, /https:\/\/client\.example\/metadata\?x=1&amp;y=2/);
+  assert.match(html, /transition:generic/);
+  assert.match(html, /Create, update, and delete any repository records/);
+  assert.match(html, /upload media, read and change preferences/);
+  assert.match(html, /most services except chat/);
+  assert.match(html, /does not include account management/);
+  assert.doesNotMatch(html, /Your application/);
+});

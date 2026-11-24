@@ -19,7 +19,9 @@
 
 <div class="consent-identity">
   <Avatar name={handle} size="sm" />
-  <div><strong>{handle}</strong><small>{did}</small></div>
+  <div class="consent-identity-details">
+    <strong>{handle}</strong><small>{did}</small>
+  </div>
 </div>
 {#if canChoose}
   <form method="post" action="/auth/choose">
