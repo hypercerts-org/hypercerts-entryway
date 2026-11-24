@@ -10,7 +10,7 @@ const directory = await mkdtemp(join(tmpdir(), "entryway-smtp-"));
 const key = join(directory, "key.pem");
 const cert = join(directory, "cert.pem");
 const generated = spawnSync(
-  "openssl",
+  "/usr/bin/openssl",
   [
     "req",
     "-x509",

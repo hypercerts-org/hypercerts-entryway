@@ -2,19 +2,41 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:net";
-import nodemailer from "nodemailer";
 import { openDatabase } from "../../dist/src/database/connection.js";
 import { createMailOutbox } from "../../dist/src/database/drizzle/mail-outbox.js";
 import { createMailFeature } from "../../dist/src/mail/delivery.js";
 import { createSmtpMailTransport } from "../../dist/src/mail/smtp.js";
 import { countMailpitMessages } from "./helpers/mailpit.mjs";
 
-const mailpit = nodemailer.createTransport({
-  host: "mail-capture",
-  port: 2525,
-  secure: false,
-  ignoreTLS: true,
-});
+const mailpit = new URL(process.env.MAILPIT_URL);
+if (
+  mailpit.protocol !== "https:" ||
+  mailpit.hostname !== "mailpit.atmosbox.test" ||
+  mailpit.username ||
+  mailpit.password
+)
+  throw new Error("Invalid sandbox Mailpit endpoint");
+async function forwardToMailpit(recipient, raw) {
+  // Mailpit's send API accepts structured messages, so preserve the received MIME as an attachment.
+  const response = await fetch(new URL("/api/v1/send", mailpit), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      From: { Email: "sender@example.test" },
+      To: [{ Email: recipient }],
+      Subject: "SMTP relay fixture",
+      Attachments: [
+        {
+          Filename: "received.eml",
+          ContentType: "message/rfc822",
+          Content: Buffer.from(raw).toString("base64"),
+        },
+      ],
+    }),
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (!response.ok) throw new Error("Mailpit forwarding failed");
+}
 let scenario;
 let attempts = 0;
 let forwardError;
@@ -50,11 +72,7 @@ const server = createServer((socket) => {
           continue;
         }
         socket.pause();
-        void mailpit
-          .sendMail({
-            envelope: { from: "sender@example.test", to: [recipient] },
-            raw,
-          })
+        void forwardToMailpit(recipient, raw)
           .then(() => {
             if (scenario === "lost" && attempts === 1) socket.destroy();
             else {
@@ -146,5 +164,4 @@ try {
   for (const socket of sockets) socket.destroy();
   await new Promise((resolve) => server.close(resolve));
   await db.close();
-  mailpit.close();
 }
