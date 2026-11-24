@@ -736,7 +736,7 @@ npm run test:incoming-reconciliation
 npm run test:ci-lifecycle
 ```
 
-The explicit helper script covers `stock-plc-mailpit.test.mjs`,
+The explicit helper script covers `mailpit.test.mjs`, `stock-plc-mailpit.test.mjs`,
 `incoming-public-io.test.mjs`, `incoming-journey.test.mjs` and
 `tests/atmosphere/project-incoming-access.test.mjs`.
 The native CI checks job runs it separately: helper files are not contract-discovered.
