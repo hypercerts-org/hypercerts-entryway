@@ -155,7 +155,9 @@ export async function captureGallery(
       page.getByRole("heading", { name: heading, exact: true }),
     ).toBeVisible();
   if (did)
-    await expect(page.getByText(did, { exact: false }).first()).toBeVisible();
+    await expect(
+      page.getByText(did, { exact: false }).filter({ visible: true }).first(),
+    ).toBeVisible();
   const codes = page.locator(
     'input[name="otp"], input[name="token"], input[autocomplete="one-time-code"]',
   );

@@ -1,3 +1,7 @@
+import {
+  openAccountSection,
+  openAccountView,
+} from "../../browser/support/account-navigation.mjs";
 import { expect } from "@playwright/test";
 import { isDeepStrictEqual } from "node:util";
 import { call, errorName, json, ok } from "./incoming-journey.mjs";
@@ -333,9 +337,7 @@ export async function signUpOrdinary(page, { config, access, email, handle }) {
   await page.getByLabel("Handle", { exact: true }).fill(handle);
   await page.getByLabel("Personal data server").selectOption(config.pds[0].id);
   await page.getByRole("button", { name: "Create account" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Account settings" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
   const did = await page.getByTestId("account-did").textContent();
   expect(did).toMatch(/^did:plc:/);
   return { did, handle, head: await plcHead(access, did) };
@@ -351,6 +353,8 @@ export async function expectOrdinaryAccountUnchanged(
   expect(shown.status()).toBe(200);
   await expect(page.getByTestId("account-did")).toHaveText(account.did);
   await expect(page.getByTestId("account-handle")).toHaveText(account.handle);
+  await openAccountView(page, "Account");
+  await openAccountSection(page, "Identity and email");
   await expect(page.getByTestId("primary-email")).toHaveText(
     `${email} (verified)`,
   );

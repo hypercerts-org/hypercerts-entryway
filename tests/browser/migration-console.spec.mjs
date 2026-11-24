@@ -214,6 +214,8 @@ test("console migrates its own DID, record and blob between enrolled PDSs with m
     await signIn(page, false, true);
     await page.reload();
     await expect(page.getByTestId("account-did")).toHaveText(did);
+    await openAccountView(page, "Account");
+    await openAccountSection(page, "Data server");
     await expect(page.locator("#migration")).toContainText(target.url);
     await expect(page.locator("#migration")).toContainText(
       "Contact the service operator",
