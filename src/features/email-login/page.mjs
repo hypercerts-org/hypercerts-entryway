@@ -17,7 +17,7 @@ export function maskEmail(email) {
   return `${maskDottedSegments(text.slice(0, at))}@${maskDottedSegments(text.slice(at + 1))}`;
 }
 
-export function createLoginForms({ fields }) {
+export function createLoginForms() {
   const loginForm = (flow, browser) =>
     renderEmailForm({ flow: flow.id, csrf: browser.csrf }).body;
   const otpForm = (flow, browser, error = "", changeEmail = flow.email) => {
@@ -43,7 +43,7 @@ export function createLoginForms({ fields }) {
         { name: "csrf", value: browser.csrf },
       ],
       prompt: "Choose one account linked to your verified email.",
-    }).body +
-    `<form method="post" action="/auth/another-account">${fields(flow, browser)}<button class="account-choice another-email-choice"><span>Use another email address</span><span aria-hidden="true">›</span></button></form>`;
+      anotherEmailAction: "/auth/another-account",
+    }).body;
   return { loginForm, otpForm, accountSelectionForm };
 }

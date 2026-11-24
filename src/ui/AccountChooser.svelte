@@ -11,8 +11,10 @@
     action: string;
     fields: { name: string; value: string }[];
     prompt: string;
+    anotherEmailAction?: string;
   }
-  let { accounts, action, fields, prompt }: Props = $props();
+  let { accounts, action, fields, prompt, anotherEmailAction }: Props =
+    $props();
 </script>
 
 <p role="status">{prompt}</p>
@@ -36,3 +38,14 @@
     </button>
   </form>
 {/each}
+
+{#if anotherEmailAction}
+  <form method="post" action={anotherEmailAction}>
+    {#each fields as field (field.name)}
+      <input type="hidden" name={field.name} value={field.value} />
+    {/each}
+    <button class="account-choice another-email-choice">
+      <span>Use another email address</span><span aria-hidden="true">›</span>
+    </button>
+  </form>
+{/if}

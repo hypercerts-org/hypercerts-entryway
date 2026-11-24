@@ -234,3 +234,98 @@ main[data-layout="oauth"]:has(.account-choice) > h1 {
     padding: 16px;
   }
 }
+
+/* Keep consent compact while leaving the requester and each permission legible. */
+main[data-layout="oauth"]:has(.consent-identity) {
+  width: min(384px, calc(100% - 50px));
+  padding: 20px 16px;
+}
+main[data-layout="oauth"]:has(.consent-identity) > .auth-brandmark {
+  display: none;
+}
+main[data-layout="oauth"]:has(.consent-identity) > h1 {
+  margin: 0 0 20px;
+  font-size: 20px;
+}
+.consent-identity {
+  margin-bottom: 16px;
+}
+.scope-list {
+  display: grid;
+  gap: 14px;
+  padding: 0;
+  list-style: none;
+}
+.scope-label {
+  display: block;
+  margin-bottom: 4px;
+}
+.scope-detail + .scope-detail {
+  margin-top: 8px;
+}
+.scope-detail p {
+  margin: 0;
+}
+.scope-detail code {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.85em;
+}
+.consent-actions,
+.consent-account-actions {
+  margin-top: 20px;
+}
+.consent-actions button,
+.consent-account-actions button {
+  justify-content: center;
+  margin-top: 0;
+}
+.consent-account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.consent-account-actions form {
+  margin: 0;
+}
+@media (max-width: 600px) {
+  main[data-layout="oauth"]:has(.consent-identity) {
+    padding: 20px 16px;
+  }
+  .consent-account-actions {
+    flex-direction: column;
+  }
+  .consent-account-actions button {
+    width: 100%;
+  }
+}
+
+/* Keep the account sign-out reachable beside the heading on narrow screens. */
+main[data-layout="settings"]:has(> .account-header-action) > h1 {
+  padding-right: 90px;
+}
+@media (max-width: 480px) {
+  main[data-layout="settings"] > .account-header-action {
+    float: right;
+    margin: -4.5em 0 0;
+  }
+  main[data-layout="settings"] > .account-header-action button {
+    min-height: 36px;
+    padding: 6px 10px;
+  }
+}
+.code-actions form {
+  margin-bottom: 0;
+}
+.code-actions .secondary-action {
+  min-height: 40px;
+  margin-top: 8px;
+  padding: 8px 10px;
+}
+.code-actions .muted {
+  margin: 6px 0;
+  font-size: 14px;
+}
+.code-actions label {
+  margin-top: 10px;
+}
