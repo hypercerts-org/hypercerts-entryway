@@ -311,6 +311,16 @@ test("shared verified email keeps each tab and account action bound to its selec
       heading: "Reactivate account",
       did: second.did,
     });
+    await secondTab.getByRole("button", { name: "Reactivate account" }).click();
+    await expect(
+      secondTab.getByText("Status: active", { exact: true }),
+    ).toBeVisible();
+    await captureGallery(secondTab, {
+      name: "settings-reactivation-result",
+      description: "Shared pair second account reactivated settings",
+      heading: "Account settings",
+      did: second.did,
+    });
     await firstTab.reload();
     await expect(firstTab.getByTestId("account-did")).toHaveText(first.did);
     await expect(

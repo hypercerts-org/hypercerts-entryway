@@ -803,4 +803,9 @@ test("deletion requires its visible mailbox code and retained selector after han
   await expect(
     otherPage.getByRole("heading", { name: "Test account deleted" }),
   ).toBeVisible();
+  await captureGallery(otherPage, {
+    name: "settings-delete-result",
+    description: "Separate synthetic test account deletion result",
+    heading: "Test account deleted",
+  });
 });

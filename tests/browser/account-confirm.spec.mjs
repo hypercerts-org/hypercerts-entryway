@@ -472,3 +472,93 @@ test("changing an existing password asks only for the new one", async ({
     await context.close();
   }
 });
+
+test("expired recent confirmation offers a recovery destination", async ({
+  browser,
+}) => {
+  const account = {
+    email: `confirm-expired-${run}@example.com`,
+    handle: `cx-${run}.entryway.atmosbox.test`,
+    pdsId: "pds1",
+  };
+  const context = await browser.newContext({ ignoreHTTPSErrors: false });
+  try {
+    const page = await context.newPage();
+    await signIn(page, account, { create: true });
+    ageSessions(account.email, 11);
+    await manageRecovery(page);
+    const since = Date.now();
+    await page.getByRole("button", { name: "Send code" }).click();
+    const challengeId = await accountForm(page, "confirm")
+      .locator('input[name="challengeId"]')
+      .first()
+      .inputValue();
+    const code = await waitForMailpitCode({ recipient: account.email, since });
+    const row = database
+      .prepare("SELECT value FROM key_value_state WHERE namespace=? AND key=?")
+      .get("security:challenges", challengeId);
+    expect(row).toBeTruthy();
+    const challenge = JSON.parse(row.value);
+    challenge.expiresAt = Date.now() - 1_000;
+    const updated = database
+      .prepare("UPDATE key_value_state SET value=? WHERE namespace=? AND key=?")
+      .run(JSON.stringify(challenge), "security:challenges", challengeId);
+    expect(Number(updated.changes)).toBe(1);
+    await page.getByLabel("Confirmation code").fill(code.code);
+    const response = posted(page, "/account/confirm");
+    await page.getByRole("button", { name: "Confirm and continue" }).click();
+    expect((await response).status()).toBe(400);
+    await expect(
+      page.getByRole("heading", { name: "Confirmation code expired" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "Return to account settings" }),
+    ).toBeVisible();
+    await captureGallery(page, {
+      name: "recent-proof-expired",
+      description: "Separate account expired confirmation recovery destination",
+      heading: "Confirmation code expired",
+    });
+  } finally {
+    await context.close();
+  }
+});
+
+test("a replaced confirmation directs the user to restart", async ({
+  browser,
+}) => {
+  const account = {
+    email: `confirm-replaced-${run}@example.com`,
+    handle: `cr-${run}.entryway.atmosbox.test`,
+    pdsId: "pds1",
+  };
+  const context = await browser.newContext({ ignoreHTTPSErrors: false });
+  try {
+    const first = await context.newPage();
+    await signIn(first, account, { create: true });
+    ageSessions(account.email, 11);
+    await manageRecovery(first);
+    await first.getByRole("button", { name: "Send code" }).click();
+    const second = await context.newPage();
+    await second.goto(new URL("/account", config.issuer).href);
+    await manageRecovery(second);
+    await second.getByRole("button", { name: "Send code" }).click();
+    const response = posted(first, "/account/confirm");
+    await first.getByRole("button", { name: "Send a new code" }).click();
+    expect((await response).status()).toBe(400);
+    await expect(
+      first.getByRole("heading", { name: "Confirmation code no longer valid" }),
+    ).toBeVisible();
+    await expect(
+      first.getByRole("link", { name: "Return to account settings" }),
+    ).toBeVisible();
+    await captureGallery(first, {
+      name: "recent-proof-unusable",
+      description:
+        "Separate account replaced confirmation recovery destination",
+      heading: "Confirmation code no longer valid",
+    });
+  } finally {
+    await context.close();
+  }
+});
