@@ -157,7 +157,7 @@ test("another email completes the original authorization as its own account", as
       name: "oauth-another-email",
       description:
         "Shared pair primary client chooser restarted with another email",
-      heading: "Sign in to authorize",
+      heading: "Sign in",
     });
     await page.goto(authorizeUrl);
     await page.reload();

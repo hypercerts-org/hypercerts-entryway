@@ -523,11 +523,6 @@ test("primary email change rejects occupied addresses and retries with visible m
   await expect(
     page.getByRole("heading", { name: "Primary email updated" }),
   ).toBeVisible();
-  await captureGallery(page, {
-    name: "account-recovery-result",
-    description: "Separate account recovered result",
-    heading: "Account recovered",
-  });
   alice.email = nextEmail;
   await signIn(page, alice);
   expect(alice.did).toBe(previousDid);
@@ -735,6 +730,11 @@ test("backup recovery verifies visible codes with retained selectors for both ma
   await expect(
     page.getByRole("heading", { name: "Account recovered" }),
   ).toBeVisible();
+  await captureGallery(page, {
+    name: "account-recovery-result",
+    description: "Separate account recovered result",
+    heading: "Account recovered",
+  });
   alice.email = nextEmail;
   await signIn(page, alice);
   expect(alice.did).toBe(previousDid);
