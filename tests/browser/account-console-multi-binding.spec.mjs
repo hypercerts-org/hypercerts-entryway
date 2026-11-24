@@ -309,9 +309,24 @@ test("an open app-password form stays bound to the account after a mailbox chang
       change.getByRole("heading", { name: "Primary email updated" }),
     ).toBeVisible();
 
+    const staleResponse = stale.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        new URL(response.url()).pathname === "/account/app-password-create",
+    );
     await stale.getByRole("button", { name: "Create app password" }).click();
-    await expect(stale.getByRole("alert")).toBeVisible();
+    expect((await staleResponse).status()).toBe(403);
+    await expect(stale.getByRole("alert")).toHaveText(
+      "The selected account is not linked to this verified identity",
+    );
     await expect(stale.getByTestId("app-password")).toHaveCount(0);
+    await expect(
+      stale.getByRole("link", { name: "Return to account settings" }),
+    ).toHaveAttribute("href", "/account");
+    await stale
+      .getByRole("link", { name: "Return to account settings" })
+      .click();
+    await expect(stale).toHaveURL(/\/(account|login)(?:\?|$)/);
 
     const sibling = await context.newPage();
     await signInSharedEmail(sibling, pair.email);
@@ -319,10 +334,37 @@ test("an open app-password form stays bound to the account after a mailbox chang
       pair.second.did,
     );
     await expect(sibling.getByText(name, { exact: true })).toHaveCount(0);
+    await sibling.getByRole("link", { name: "Create app password" }).click();
+    await sibling.getByLabel("App password name").fill(`sibling-${runId}`);
+    await sibling.getByRole("button", { name: "Create app password" }).click();
+    await expect(sibling.getByTestId("app-password")).toBeVisible();
+    await sibling
+      .getByRole("link", { name: "Return to account settings" })
+      .click();
+    await expect(
+      sibling.getByText(`sibling-${runId}`, { exact: true }),
+    ).toBeVisible();
     const owner = await freshContext.newPage();
     await signInSharedEmail(owner, nextEmail);
     await expect(owner.getByTestId("account-did")).toHaveText(pair.first.did);
     await expect(owner.getByText(name, { exact: true })).toHaveCount(0);
+    await expect(
+      owner.getByText(`sibling-${runId}`, { exact: true }),
+    ).toHaveCount(0);
+    await owner.getByRole("link", { name: "Create app password" }).click();
+    await owner.getByLabel("App password name").fill(`owner-${runId}`);
+    await owner.getByRole("button", { name: "Create app password" }).click();
+    await expect(owner.getByTestId("app-password")).toBeVisible();
+    await owner
+      .getByRole("link", { name: "Return to account settings" })
+      .click();
+    await expect(
+      owner.getByText(`owner-${runId}`, { exact: true }),
+    ).toBeVisible();
+    await sibling.reload();
+    await expect(
+      sibling.getByText(`owner-${runId}`, { exact: true }),
+    ).toHaveCount(0);
   } finally {
     await context.close();
     await freshContext.close();

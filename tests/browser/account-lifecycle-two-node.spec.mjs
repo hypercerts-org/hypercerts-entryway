@@ -274,10 +274,21 @@ test("a form opened on one node cannot issue after a mailbox change on the other
       0,
       pair.first.did,
       async () => {
+        const response = stale.waitForResponse(
+          (item) =>
+            item.request().method() === "POST" &&
+            new URL(item.url()).pathname === "/account/app-password-create",
+        );
         await stale
           .getByRole("button", { name: "Create app password" })
           .click();
-        await expect(stale.getByRole("alert")).toBeVisible();
+        expect((await response).status()).toBe(403);
+        await expect(stale.getByRole("alert")).toHaveText(
+          "The selected account is not linked to this verified identity",
+        );
+        await expect(
+          stale.getByRole("link", { name: "Return to account settings" }),
+        ).toHaveAttribute("href", "/account");
         await expect(stale.getByTestId("app-password")).toHaveCount(0);
       },
       { page: stale },
@@ -319,6 +330,12 @@ test("a form opened on one node cannot issue after a mailbox change on the other
             .getByRole("button", { name: "Create app password" })
             .click();
           await expect(sibling.getByTestId("app-password")).toBeVisible();
+          await sibling
+            .getByRole("link", { name: "Return to account settings" })
+            .click();
+          await expect(
+            sibling.getByText(`control-${runId}`, { exact: true }),
+          ).toBeVisible();
         },
         { page: sibling },
       );
@@ -335,6 +352,20 @@ test("a form opened on one node cannot issue after a mailbox change on the other
           await expect(
             owner.getByText(`control-${runId}`, { exact: true }),
           ).toHaveCount(0);
+          await owner
+            .getByRole("link", { name: "Create app password" })
+            .click();
+          await owner.getByLabel("App password name").fill(`owner-${runId}`);
+          await owner
+            .getByRole("button", { name: "Create app password" })
+            .click();
+          await expect(owner.getByTestId("app-password")).toBeVisible();
+          await owner
+            .getByRole("link", { name: "Return to account settings" })
+            .click();
+          await expect(
+            owner.getByText(`owner-${runId}`, { exact: true }),
+          ).toBeVisible();
         },
         { page: owner },
       );
