@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { beginAuthorization, consentForm } from "./support/oauth-client.mjs";
 import {
   authorizeBrowserApp,
   browserUrl,
@@ -256,6 +257,60 @@ test("revoking an OAuth grant blocks refresh while a previously issued access to
     await page.getByRole("button", { name: "Refresh authorization" }).click();
     expect((await refresh).status()).toBe(400);
     await expect(page.getByRole("status")).toContainText("Error");
+
+    await page
+      .getByLabel("Authorize another handle or DID")
+      .fill(identity.handle);
+    await page.getByLabel("Account prompt").selectOption("consent");
+    const par = page.waitForRequest(
+      (request) =>
+        request.url() === `${config.issuer}/oauth/par` &&
+        request.method() === "POST",
+    );
+    await page
+      .getByRole("button", { name: "Start another authorization" })
+      .click();
+    expect(new URLSearchParams((await par).postData()).get("prompt")).toBe(
+      "consent",
+    );
+    const approval = consentForm(page, identity.did);
+    await expect(approval).toBeVisible();
+    const exchange = page.waitForResponse(
+      (response) =>
+        response.url() === `${config.issuer}/oauth/token` &&
+        response
+          .request()
+          .postData()
+          ?.includes("grant_type=authorization_code") &&
+        response.ok(),
+    );
+    await approval.getByRole("button", { name: "Allow access" }).click();
+    const issued = await (await exchange).json();
+    expect(issued.sub).toBe(identity.did);
+    expect(
+      typeof issued.refresh_token === "string" &&
+        issued.refresh_token.length > 0,
+      "authorization issued a refresh token",
+    ).toBe(true);
+    await expect(page.locator("#verified-did")).toHaveText(identity.did);
+    const renewed = page.waitForResponse(
+      (response) =>
+        response.url() === `${config.issuer}/oauth/token` &&
+        response.request().postData()?.includes("grant_type=refresh_token") &&
+        response.ok(),
+    );
+    await page.getByRole("button", { name: "Refresh authorization" }).click();
+    const renewedResponse = await renewed;
+    expect(
+      new URLSearchParams(renewedResponse.request().postData()).get(
+        "refresh_token",
+      ) === issued.refresh_token,
+      "refresh presents the newly issued token",
+    ).toBe(true);
+    expect((await renewedResponse.json()).sub).toBe(identity.did);
+    await expect(page.getByRole("status")).toHaveText(
+      "Authorization refreshed",
+    );
   } finally {
     await context.close();
   }
@@ -335,6 +390,19 @@ test("foreign-DID device removal is isolated; login_hint constrains public-clien
     await bobConsent.getByRole("button", { name: "Allow access" }).click();
     expect((await approval).status()).toBe(303);
     await expect(sharedPage.locator("#verified-did")).toHaveText(bob.did);
+
+    // Forget Bob's membership on the shared device. Alice must remain a
+    // remembered choice while Bob needs a new identity proof.
+    await beginAuthorization(sharedPage, { prompt: "select_account" });
+    await expect(consentForm(sharedPage, alice.did)).toHaveCount(1);
+    await expect(consentForm(sharedPage, bob.did)).toHaveCount(1);
+    await signInAccount(sharedPage, bob);
+    expect(
+      (await accountAction(sharedPage, "device-revoke", { deviceId })).status(),
+    ).toBe(303);
+    await beginAuthorization(sharedPage, { prompt: "select_account" });
+    await expect(consentForm(sharedPage, alice.did)).toHaveCount(1);
+    await expect(consentForm(sharedPage, bob.did)).toHaveCount(0);
   } finally {
     await shared.close();
     await creator.close();

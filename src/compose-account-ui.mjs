@@ -4,12 +4,12 @@ import { HttpError } from "./http/http-error.mjs";
 import { mountAccountSettingsPage } from "./features/account-settings/page.mjs";
 import { createAccountSettingsActions } from "./features/account-settings/actions.mjs";
 import { mountRecoveryPage } from "./features/account-recovery/page.mjs";
+import { createConnectedAppsActions } from "./features/connected-apps/actions.mjs";
 import {
-  createConnectedAppsActions,
+  queryConnectedApps,
   revokeAppAccess,
-} from "./features/connected-apps/actions.mjs";
+} from "./features/connected-apps/operations.js";
 import {
-  loadConnectedApps,
   renderConnectedApps,
   renderAppPasswords,
   renderAppPasswordForm,
@@ -26,7 +26,7 @@ export function mountAccountUi(context) {
   const dependencies = { ...context, console };
   mountAccountSettingsPage({
     ...dependencies,
-    loadConnections: (req, did) => loadConnectedApps(context, req, did),
+    loadConnections: (req, did) => queryConnectedApps(context, req, did),
     renderConnections: renderConnectedApps,
     renderAppPasswords,
     renderAppPasswordForm,
