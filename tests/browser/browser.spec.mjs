@@ -223,7 +223,7 @@ async function signup(identity, { negativeOtp = false } = {}) {
       .fill(otp === "00000000" ? "11111111" : "00000000");
     await page.getByRole("button", { name: "Verify code" }).click();
     await expect(page.getByRole("alert")).toHaveText(
-      "Invalid or expired code. Please try again.",
+      "Error: Invalid or expired code. Please try again.",
     );
   }
   await page.getByLabel("Sign-in code").fill(otp);
