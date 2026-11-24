@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Button, Input } from "@hypercerts-org/ui-svelte";
   type BackupEmail = { email: string; verified: boolean };
   type Props = {
     kind: "password" | "recovery" | "status";
@@ -32,7 +33,7 @@
       name="did"
       value={did}
     /><label>
-      New account password<input
+      New account password<Input
         name="password"
         type="password"
         autocomplete="new-password"
@@ -40,9 +41,9 @@
         maxlength="256"
         required
       />
-    </label><button type="submit">
+    </label><Button type="submit">
       {passwordEnabled ? "Change account password" : "Set account password"}
-    </button>
+    </Button>
   </form>
   {#if passwordEnabled}
     <h2>Remove account password</h2>
@@ -52,7 +53,7 @@
         type="hidden"
         name="did"
         value={did}
-      /><button type="submit">Remove account password</button>
+      /><Button type="submit">Remove account password</Button>
     </form>
   {/if}
 {:else if kind === "recovery"}
@@ -70,11 +71,11 @@
               type="hidden"
               name="did"
               value={did}
-            /><input type="hidden" name="email" value={item.email} /><button
+            /><input type="hidden" name="email" value={item.email} /><Button
               type="submit"
             >
               Remove recovery email
-            </button>
+            </Button>
           </form>
         </li>{/each}
     </ul>{:else}<p class="muted">No verified recovery email.</p>{/if}
@@ -84,14 +85,14 @@
       name="did"
       value={did}
     /><label>
-      Recovery email address<input
+      Recovery email address<Input
         name="email"
         type="email"
         autocomplete="email"
         maxlength="320"
         required
       />
-    </label><button type="submit">Send recovery verification</button>
+    </label><Button type="submit">Send recovery verification</Button>
   </form>
 {:else}
   <p>
@@ -108,9 +109,9 @@
       type="hidden"
       name="status"
       value={active ? "deactivated" : "active"}
-    /><button type="submit">
+    /><Button type="submit">
       {active ? "Deactivate account" : "Reactivate account"}
-    </button>
+    </Button>
   </form>
 {/if}
 <p>

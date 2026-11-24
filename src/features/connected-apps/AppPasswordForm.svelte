@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Button, Checkbox, Input } from "@hypercerts-org/ui-svelte";
   let { csrf, did }: { csrf: string; did: string } = $props();
 </script>
 
@@ -10,11 +11,12 @@
   <input type="hidden" name="csrf" value={csrf} />
   <input type="hidden" name="did" value={did} />
   <label>
-    App password name<input name="name" type="text" maxlength="64" required />
+    App password name<Input name="name" type="text" maxlength="64" required />
   </label>
-  <label class="check">
-    <input type="checkbox" name="privileged" value="true" />Allow direct-message
-    access
-  </label>
-  <button type="submit">Create app password</button>
+  <Checkbox
+    label="Allow direct-message access"
+    name="privileged"
+    value="true"
+  />
+  <Button type="submit">Create app password</Button>
 </form>
