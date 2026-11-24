@@ -112,11 +112,6 @@
       "kind": "co-located contract test"
     },
     {
-      "path": "src/features/account-deletion/page.mjs",
-      "owner": "account-deletion",
-      "kind": "preserved/extracted MJS; checkJs remains false"
-    },
-    {
       "path": "src/features/account-deletion/xrpc-routes.mjs",
       "owner": "account-deletion",
       "kind": "preserved/extracted MJS; checkJs remains false"
@@ -202,11 +197,6 @@
       "kind": "preserved/extracted MJS; checkJs remains false"
     },
     {
-      "path": "src/features/connected-apps/page.mjs",
-      "owner": "connected-apps",
-      "kind": "preserved/extracted MJS; checkJs remains false"
-    },
-    {
       "path": "src/features/connected-apps/xrpc-routes.mjs",
       "owner": "connected-apps",
       "kind": "preserved/extracted MJS; checkJs remains false"
@@ -235,11 +225,6 @@
       "path": "src/features/handle-change/change-handle.test.mjs",
       "owner": "handle-change",
       "kind": "co-located contract test"
-    },
-    {
-      "path": "src/features/handle-change/page.mjs",
-      "owner": "handle-change",
-      "kind": "preserved/extracted MJS; checkJs remains false"
     },
     {
       "path": "src/features/handle-change/xrpc-routes.mjs",
@@ -293,11 +278,6 @@
     },
     {
       "path": "src/features/pds-migration/move-between-pds.mjs",
-      "owner": "pds-migration",
-      "kind": "preserved/extracted MJS; checkJs remains false"
-    },
-    {
-      "path": "src/features/pds-migration/page.mjs",
       "owner": "pds-migration",
       "kind": "preserved/extracted MJS; checkJs remains false"
     },

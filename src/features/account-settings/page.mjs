@@ -5,7 +5,7 @@ import {
   renderProtectedPage,
 } from "#entryway-ssr/account-settings";
 import { page, escapeHtml as esc } from "../../ui/html.mjs";
-import { form, manageLink, settingsLink } from "../../ui/account-forms.mjs";
+import { form, settingsLink } from "../../ui/account-forms.mjs";
 
 function renderIdentityPanel({
   a,
@@ -234,15 +234,9 @@ export function mountAccountSettingsPage({
         b,
         accountContext,
       });
-      const statusAction = manageLink(
-        "status",
-        a.status === "active" ? "Deactivate account" : "Reactivate account",
-        accountContext,
-      );
       const lifecycle = renderLifecycle({
         csrf,
         a,
-        statusAction,
         accountContext,
       });
       const migrationPanel = renderMigration({
