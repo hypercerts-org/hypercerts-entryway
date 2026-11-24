@@ -3,68 +3,114 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 const directory = process.env.TECH685_SCREEN_DIR;
-const expectedStates = [
-  "recent-proof-expired",
-  "recent-proof-unusable",
-  "settings-reactivation-result",
-  "settings-delete-result",
-  "oauth-untrusted-chooser",
-  "recent-proof-invalid",
-  "oauth-remembered-entry",
-  "oauth-remembered-code",
-  "settings-deactivated-result",
-  "settings-reactivate-form",
-  "settings-password-set-result",
-  "settings-password-removed-result",
-  "standalone-email",
-  "standalone-code",
-  "standalone-invalid-code",
-  "standalone-expired-code",
-  "standalone-chooser-first",
-  "standalone-chooser-second",
-  "standalone-another-email",
-  "settings-account-switcher",
-  "settings-first",
-  "settings-second",
-  "settings-status-form",
-  "settings-password-form",
-  "settings-recovery-form",
-  "settings-recovery-proof",
-  "settings-app-password-result",
-  "settings-delete-confirm",
-  "stale-app-password-form",
-  "email-change-current",
-  "email-change-new",
-  "email-change-result",
-  "stale-form-rejected",
-  "stale-recovery",
-  "stale-second-action-result",
-  "recent-proof-start",
-  "recent-proof-code",
-  "recent-proof-return",
-  "account-recovery-start",
-  "account-recovery-code",
-  "account-recovery-new-email",
-  "account-recovery-result",
-  "client-start",
-  "oauth-email",
-  "oauth-code",
-  "oauth-chooser-first",
-  "oauth-chooser-second",
-  "oauth-consent-first",
-  "oauth-consent-second",
-  "oauth-choose-again",
-  "oauth-another-email",
-  "oauth-expired-flow",
-  "oauth-restarted-flow",
-  "client-callback-first",
-  "client-callback-second",
-  "client-denial",
-  "branding-primary",
-  "branding-secondary",
-  "branding-untrusted",
-  "branding-neutral",
+const journeys = [
+  {
+    title: "Standalone sign in",
+    states: [
+      "standalone-email",
+      "standalone-code",
+      "standalone-invalid-code",
+      "standalone-expired-code",
+      "standalone-chooser-first",
+      "standalone-chooser-second",
+      "standalone-another-email",
+    ],
+  },
+  {
+    title: "Client authorization",
+    states: [
+      "client-start",
+      "oauth-email",
+      "oauth-code",
+      "oauth-chooser-first",
+      "oauth-consent-first",
+      "oauth-choose-again",
+      "oauth-chooser-second",
+      "oauth-consent-second",
+      "oauth-another-email",
+      "client-callback-first",
+      "client-callback-second",
+      "client-denial",
+      "oauth-untrusted-chooser",
+    ],
+  },
+  {
+    title: "Returning and expired authorization",
+    states: [
+      "oauth-remembered-entry",
+      "oauth-remembered-code",
+      "oauth-expired-flow",
+      "oauth-restarted-flow",
+    ],
+  },
+  {
+    title: "Account settings",
+    states: [
+      "settings-first",
+      "settings-second",
+      "settings-account-switcher",
+      "settings-password-form",
+      "settings-password-set-result",
+      "settings-password-removed-result",
+      "settings-app-password-result",
+      "settings-recovery-form",
+      "settings-recovery-proof",
+    ],
+  },
+  {
+    title: "Account status and deletion",
+    states: [
+      "settings-status-form",
+      "settings-deactivated-result",
+      "settings-reactivate-form",
+      "settings-reactivation-result",
+      "settings-delete-confirm",
+      "settings-delete-result",
+    ],
+  },
+  {
+    title: "Email change and stale forms",
+    states: [
+      "stale-app-password-form",
+      "email-change-current",
+      "email-change-new",
+      "email-change-result",
+      "stale-form-rejected",
+      "stale-recovery",
+      "stale-second-action-result",
+    ],
+  },
+  {
+    title: "Recent confirmation",
+    states: [
+      "recent-proof-start",
+      "recent-proof-code",
+      "recent-proof-invalid",
+      "recent-proof-expired",
+      "recent-proof-unusable",
+      "recent-proof-return",
+    ],
+  },
+  {
+    title: "Account recovery",
+    states: [
+      "account-recovery-start",
+      "account-recovery-code",
+      "account-recovery-new-email",
+      "account-recovery-result",
+    ],
+  },
+  {
+    title: "Branding",
+    states: [
+      "branding-neutral",
+      "branding-primary",
+      "branding-secondary",
+      "branding-untrusted",
+    ],
+  },
 ];
+const expectedStates = journeys.flatMap((journey) => journey.states);
 const viewports = [
   { name: "desktop", width: 1440, height: 900 },
   { name: "narrow", width: 390, height: 844 },
@@ -174,29 +220,39 @@ export async function captureGallery(
   const observed = entries.filter(
     (entry) => entry.run === run && entry.identity === identity,
   );
-  const cards = expectedStates
-    .map((name) => {
-      const entries = viewports.map((viewport) =>
-        observed.find(
-          (entry) =>
-            entry.name === name &&
-            entry.viewport === `${viewport.width} x ${viewport.height}`,
-        ),
-      );
-      const description = entries.find(Boolean)?.description;
-      if (!description) return "";
-      const previews = entries
-        .map((entry, index) => {
-          const label = index === 0 ? "Desktop" : "Mobile";
-          if (!entry)
-            return `<figure><figcaption>${label}</figcaption><p>Not observed in this run</p></figure>`;
-          const filename = escapeHtml(entry.filename);
-          return `<figure><figcaption>${label} <span>· ${escapeHtml(entry.viewport)}</span></figcaption><a class="image-link" href="${filename}"><img src="${filename}" alt="${escapeHtml(description)} — ${label.toLowerCase()} view" loading="lazy"></a></figure>`;
-        })
-        .join("");
-      return `<article id="${escapeHtml(name)}"><h2>${escapeHtml(description)}</h2><p>${escapeHtml(name)}</p><div class="previews">${previews}</div></article>`;
-    })
+  const cards = (name) => {
+    const entries = viewports.map((viewport) =>
+      observed.find(
+        (entry) =>
+          entry.name === name &&
+          entry.viewport === `${viewport.width} x ${viewport.height}`,
+      ),
+    );
+    const description = entries.find(Boolean)?.description;
+    if (!description) return "";
+    const previews = entries
+      .map((entry, index) => {
+        const label = index === 0 ? "Desktop" : "Mobile";
+        if (!entry)
+          return `<figure><figcaption>${label}</figcaption><p>Not observed in this run</p></figure>`;
+        const filename = escapeHtml(entry.filename);
+        return `<figure><figcaption>${label} <span>· ${escapeHtml(entry.viewport)}</span></figcaption><a class="image-link" href="${filename}"><img src="${filename}" alt="${escapeHtml(description)} — ${label.toLowerCase()} view" loading="lazy"></a></figure>`;
+      })
+      .join("");
+    return `<article id="${escapeHtml(name)}"><h3>${escapeHtml(description)}</h3><p>${escapeHtml(name)}</p><div class="previews">${previews}</div></article>`;
+  };
+  const sections = journeys
+    .map(
+      (journey, index) =>
+        `<section aria-labelledby="journey-${index + 1}"><h2 id="journey-${index + 1}">${escapeHtml(journey.title)}</h2>${journey.states.map(cards).join("\n")}</section>`,
+    )
     .join("\n");
+  const navigation = journeys
+    .map(
+      (journey, index) =>
+        `<li><a href="#journey-${index + 1}">${escapeHtml(journey.title)}</a></li>`,
+    )
+    .join("");
   const missing = expectedStates.flatMap((name) =>
     viewports
       .filter(
@@ -212,7 +268,7 @@ export async function captureGallery(
   await writeFile(
     join(directory, "index.html"),
     `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Entryway visual gallery</title><style>
-:root{font-family:system-ui,-apple-system,sans-serif;color:#17213a;background:#f2f5fa;line-height:1.5}*{box-sizing:border-box}body{margin:0}main{max-width:1500px;margin:auto;padding:1.5rem}article{background:white;border:1px solid #d5deec;border-radius:12px;margin:1rem 0 1.5rem;padding:1rem;box-shadow:0 2px 8px #2036560b}article h2{margin:0;font-size:1.15rem}article p{margin:.2rem 0 1rem;color:#526079}.previews{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:1rem;align-items:start}figure{margin:0;min-width:0}figcaption{font-weight:650;margin-bottom:.4rem}figcaption span{font-weight:400;color:#526079}.image-link{display:flex;justify-content:center;background:#e8edf5;border:1px solid #cbd7e8;border-radius:8px;overflow:hidden;padding:.35rem}.image-link img{display:block;width:100%;height:auto;object-fit:contain}figure:nth-child(2) img{max-width:420px}@media(max-width:650px){main{padding:1rem}.previews{grid-template-columns:1fr}}
-</style></head><body><main><h1>Entryway visual gallery</h1><p>Only states observed in this run are listed. Select a preview to open its original image.</p>${cards}<h2>Not observed in this run</h2><ul>${missing.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></main></body></html>`,
+:root{font-family:system-ui,-apple-system,sans-serif;color:#17213a;background:#f2f5fa;line-height:1.5}*{box-sizing:border-box}body{margin:0}main{max-width:1500px;margin:auto;padding:1.5rem}article{background:white;border:1px solid #d5deec;border-radius:12px;margin:1rem 0 1.5rem;padding:1rem;box-shadow:0 2px 8px #2036560b}article h3{margin:0;font-size:1.15rem}article p{margin:.2rem 0 1rem;color:#526079}.previews{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:1rem;align-items:start}figure{margin:0;min-width:0}figcaption{font-weight:650;margin-bottom:.4rem}figcaption span{font-weight:400;color:#526079}.image-link{display:flex;justify-content:center;background:#e8edf5;border:1px solid #cbd7e8;border-radius:8px;overflow:hidden;padding:.35rem}.image-link img{display:block;width:100%;height:auto;object-fit:contain}figure:nth-child(2) img{max-width:420px}@media(max-width:650px){main{padding:1rem}.previews{grid-template-columns:1fr}}
+</style></head><body><main><h1>Entryway visual gallery</h1><p>Only states observed in this run are listed. Select a preview to open its original image.</p><nav aria-label="Gallery sections"><h2>Jump to a journey</h2><ul>${navigation}</ul></nav>${sections}<h2>Not observed in this run</h2><ul>${missing.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></main></body></html>`,
   );
 }
