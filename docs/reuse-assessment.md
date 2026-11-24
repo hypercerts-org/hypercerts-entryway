@@ -270,3 +270,13 @@ feature owners. Operational probes have consumer-owned guards, locks and cleanup
 the raw interop profile still reports the inherited moderation requirement as a
 product failure. No production/DR/zero-downtime/real-provider qualification is
 inferred from these synthetic local checks.
+
+### Certified sign-in assets
+
+Entryway uses the Certified brandmark and monochrome wordmark from the ePDS
+auth-service public assets at revision `e84da4d5e2d0c1950e14a4e362734ee28b2faab7`.
+The original files are `packages/auth-service/public/certified-brandmark.svg` and
+`packages/auth-service/public/certified-text-monochrome.svg`; they are copied
+unchanged under `src/ui/assets`. They are used under the ePDS MIT license,
+reproduced alongside the assets. The assets are packaged locally and do not
+change trusted-client branding policy.

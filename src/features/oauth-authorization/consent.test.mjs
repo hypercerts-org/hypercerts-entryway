@@ -107,3 +107,31 @@ test("a pending incoming arrival is never offered reactivation and authorizes no
   assert.match(pages[0].body, /unfinished incoming migration/);
   assert.doesNotMatch(pages[0].body, /reactivate this|Open account settings/);
 });
+
+test("consent describes parsed permissions and retains exact unknown scopes", () => {
+  const { consentForm } = createConsent({ flows: {} });
+  const html = consentForm(
+    {
+      id: "flow",
+      clientName: "<client>",
+      authUserId: "user",
+      parameters: {
+        scope:
+          "atproto repo:app.bsky.feed.post?action=create rpc:com.example.write?aud=* unknown:scope",
+      },
+    },
+    { csrf: "token" },
+    { did: "did:plc:example", handle: "owner.example" },
+  );
+  assert.match(
+    html,
+    /Permitted record actions: create in app\.bsky\.feed\.post/,
+  );
+  assert.match(html, /Call com\.example\.write on \*/);
+  assert.match(html, /unknown:scope/);
+  assert.match(html, /Review the exact permission requested below/);
+  assert.match(html, /&lt;client(?:&gt;|>)/);
+  assert.doesNotMatch(html, /<client>/);
+  for (const value of ["approve", "deny"])
+    assert.match(html, new RegExp(`name="decision" value="${value}"`));
+});

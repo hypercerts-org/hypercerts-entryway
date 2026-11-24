@@ -86,6 +86,9 @@
   },
   "imports": {
     "#entryway-ssr/*": "./dist/ssr/*.js",
-    "#entryway-css": "./dist/ssr/hypercerts-ui.css"
+    "#entryway-css": "./dist/ssr/hypercerts-ui.css",
+    "#entryway-layout-css": "./dist/ssr/svelte-layout.css",
+    "#entryway-brandmark": "./dist/ssr/certified-brandmark.svg",
+    "#entryway-wordmark": "./dist/ssr/certified-text-monochrome.svg"
   }
 }

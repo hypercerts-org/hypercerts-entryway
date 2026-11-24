@@ -1,7 +1,14 @@
+import {
+  AccountPermission,
+  BlobPermission,
+  IdentityPermission,
+  RepoPermission,
+  RpcPermission,
+} from "@atproto/oauth-scopes";
 import { approvalVersion } from "../../database/oauth-approval.mjs";
 import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { escapeHtml } from "../../ui/html.mjs";
-import { hidden } from "../../ui/forms.mjs";
+import { renderConsent } from "#entryway-ssr/oauth-authorization";
 import { matchesAuthorizationHint } from "../../accounts/rules.js";
 import {
   completeAuthorization,
@@ -18,11 +25,55 @@ export function createConsent({
   pendingArrival,
   clientRequestsSignupConsentSkip,
 }) {
-  const { fields, save, readCurrentIntent, pageForFlow } = flows;
-  const chooseAnotherAccountForm = (flow, browser) =>
-    `<form method="post" action="/auth/choose">${fields(flow, browser)}<button class="secondary">Choose a different account</button></form>`;
+  const { save, readCurrentIntent, pageForFlow } = flows;
+  const describeScope = (value) => {
+    if (value === "atproto") return "Sign in with your AT Protocol account.";
+    if (value === "transition:email") return "Read your account email address.";
+    const repo = RepoPermission.fromString(value);
+    if (repo)
+      return `Permitted record actions: ${repo.action.join(", ")} in ${repo.collection.join(", ")}.`;
+    const rpc = RpcPermission.fromString(value);
+    if (rpc) return `Call ${rpc.lxm.join(", ")} on ${rpc.aud}.`;
+    const account = AccountPermission.fromString(value);
+    if (account)
+      return `${account.action.join(" and ")} account ${account.attr}.`;
+    const identity = IdentityPermission.fromString(value);
+    if (identity) return `Change identity ${identity.attr}.`;
+    const blob = BlobPermission.fromString(value);
+    if (blob) return `Upload media with types ${blob.accept.join(", ")}.`;
+    return "Review the exact permission requested below.";
+  };
+  const scopeGroups = (scope) => {
+    const groups = new Map();
+    const labels = {
+      atproto: "AT Protocol account access",
+      account: "Account data permissions",
+      blob: "Blob permissions",
+      identity: "Identity permissions",
+      include: "Included permission sets",
+      repo: "Repository permissions",
+      rpc: "Service permissions",
+      transition: "Legacy permissions",
+    };
+    for (const value of (scope ?? "").split(" ").filter(Boolean)) {
+      const label = labels[value.split(":", 1)[0]] ?? "Requested permissions";
+      const values = groups.get(label) ?? [];
+      if (!values.some((item) => item.value === value))
+        values.push({ value, description: describeScope(value) });
+      groups.set(label, values);
+    }
+    return [...groups].map(([label, values]) => ({ label, values }));
+  };
   const consentForm = (flow, browser, account) =>
-    `<div class="account"><strong>${escapeHtml(account.handle ?? account.did)}</strong><br><small>${escapeHtml(account.did)}</small>${flow.authUserId ? chooseAnotherAccountForm(flow, browser) + `<form method="post" action="/auth/another-account">${fields(flow, browser)}<button class="secondary">Use another email address</button></form>` : ""}</div><p><strong>${escapeHtml(flow.clientName ?? "Your application")}</strong> requests access:</p><p><code>${escapeHtml(flow.parameters?.scope)}</code></p><form method="post" action="/auth/consent">${fields(flow, browser)}${hidden("did", account.did)}<button name="decision" value="approve">Allow access</button> <button class="secondary" name="decision" value="deny">Cancel</button></form>`;
+    renderConsent({
+      flow: flow.id,
+      csrf: browser.csrf,
+      did: account.did,
+      handle: account.handle ?? account.did,
+      clientName: flow.clientName ?? "Your application",
+      scopes: scopeGroups(flow.parameters?.scope),
+      canChoose: Boolean(flow.authUserId),
+    }).body;
   // Loads what completeAuthorization needs, then lets the caller's policy decide
   // whether this sign-in may issue the code without showing consent. Every
   // lookup that precedes issuing the code is inside the try, so any failure

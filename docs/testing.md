@@ -680,7 +680,12 @@ npm run test:incoming-reconciliation
 npm run test:ci-lifecycle
 ```
 
-ESLint dependencies remain isolated under `scripts/lint`; these checks need no
+Svelte SSR entries are compiled into `dist/ssr` by `npm run build`; the same
+build runs in both service and browser images. `npm run typecheck` also runs
+Svelte type and accessibility diagnostics, while lint and formatting include
+components. Run the build before contract tests that load these renderers.
+
+ESLint and Svelte checking dependencies remain isolated under `scripts/lint`; these checks need no
 AiaB or Docker daemon. Script-disabled installation suppresses automatic lifecycle
 scripts, including Lefthook's hook installation. The explicit rebuild runs the
 reviewed native setup for better-sqlite3 and esbuild only. Do not run a plain root

@@ -66,3 +66,14 @@ await copyFile(
   new URL(import.meta.resolve("@hypercerts-org/ui-svelte/styles.css")),
   "dist/ssr/hypercerts-ui.css",
 );
+
+await copyFile("src/ui/svelte-layout.css", "dist/ssr/svelte-layout.css");
+
+await copyFile(
+  "src/ui/assets/certified-brandmark.svg",
+  "dist/ssr/certified-brandmark.svg",
+);
+await copyFile(
+  "src/ui/assets/certified-text-monochrome.svg",
+  "dist/ssr/certified-text-monochrome.svg",
+);
