@@ -48,6 +48,12 @@ const journeys = [
     states: [
       "settings-first",
       "settings-second",
+      "settings-home",
+      "settings-account",
+      "settings-devices",
+      "settings-apps",
+      "settings-about",
+      "settings-mobile-menu",
       "settings-account-switcher",
       "settings-password-form",
       "settings-password-set-result",

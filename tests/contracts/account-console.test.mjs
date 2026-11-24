@@ -319,12 +319,15 @@ function fixture({ authenticatedAt = new Date() } = {}) {
       return this;
     },
   });
-  const getPage = async (did) => {
+  const getPage = async (did, view) => {
     const res = response();
     await routes.get("GET /account")(
       {
         method: "GET",
-        query: did === undefined ? {} : { did },
+        query: {
+          ...(did === undefined ? {} : { did }),
+          ...(view ? { view } : {}),
+        },
         body: {},
         headers: {},
       },
@@ -487,7 +490,7 @@ test("stale selected-DID console requests return to visible email sign-in withou
 test("account actions remain pinned to each tab's DID and reject a revoked binding", async () => {
   const f = fixture();
   const tabA = await f.getPage(didA);
-  const tabB = await f.getPage(didB);
+  const tabB = await f.getPage(didB, "account");
   assert.match(tabA.body, new RegExp(didA));
   assert.doesNotMatch(tabA.body, new RegExp(didB));
   assert.match(tabB.body, new RegExp(didB));
@@ -898,10 +901,10 @@ test("connected-app controls retain the selected DID and escape client names", a
   assert.match(body, new RegExp(`name="csrf" value="${csrf}"`));
 });
 
-test("app password inventory and revoke control remain in the passwords section", async () => {
-  const response = await fixture().getPage(didA);
+test("app password inventory and revoke control remain in the apps section", async () => {
+  const response = await fixture().getPage(didA, "apps");
   const section = response.body.match(
-    /<section id="passwords"[\s\S]*?<\/section>/,
+    /<section id="app-passwords"[\s\S]*?<\/section>/,
   )?.[0];
   assert.ok(section);
   assert.match(
@@ -909,4 +912,48 @@ test("app password inventory and revoke control remain in the passwords section"
     /<li>[\s\S]*?test app[\s\S]*?action="\/account\/app-password-revoke"/,
   );
   assert.match(section, new RegExp(`name="did" value="${didA}"`));
+});
+
+test("account navigation preserves the selected DID across every view", async () => {
+  const f = fixture();
+  for (const did of [didA, didB]) {
+    for (const view of ["home", "account", "devices", "apps", "about"]) {
+      const response = await f.getPage(did, view === "home" ? undefined : view);
+      assert.equal(response.statusCode, 200);
+      assert.match(
+        response.body,
+        new RegExp(`<h1>${view[0].toUpperCase() + view.slice(1)}</h1>`),
+      );
+      assert.match(response.body, /aria-label="Account navigation"/);
+      assert.match(
+        response.body,
+        new RegExp(
+          `href="/account\\?did=${encodeURIComponent(did)}(?:&amp;view=${view})?" aria-current="page"`,
+        ),
+      );
+      assert.doesNotMatch(
+        response.body,
+        new RegExp(did === didA ? didB : didA),
+      );
+    }
+  }
+});
+
+test("account controls are separated by destination", async () => {
+  const f = fixture();
+  const home = await f.getPage(didA);
+  const account = await f.getPage(didA, "account");
+  const devices = await f.getPage(didA, "devices");
+  const apps = await f.getPage(didA, "apps");
+  const about = await f.getPage(didA, "about");
+  assert.doesNotMatch(
+    home.body,
+    /action="\/account\/(?:grant-revoke|app-password-revoke)"/,
+  );
+  assert.match(account.body, /id="identity"/);
+  assert.match(account.body, /id="passwords"/);
+  assert.doesNotMatch(account.body, /action="\/account\/app-password-revoke"/);
+  assert.match(apps.body, /action="\/account\/app-password-revoke"/);
+  assert.doesNotMatch(devices.body, /action="\/account\/app-password-revoke"/);
+  assert.doesNotMatch(about.body, /action="\/account\/app-password-revoke"/);
 });

@@ -222,12 +222,69 @@ for (const which of ["first", "second"]) {
       await captureGallery(page, {
         name: `settings-${which}`,
         description: `Shared pair ${which} account settings and sections`,
-        heading: "Account settings",
+        heading: "Home",
         did: selected.did,
       });
       await page.reload();
       expect(new URL(page.url()).searchParams.get("did")).toBe(selected.did);
       await expect(page.getByTestId("account-did")).toHaveText(selected.did);
+      for (const [view, heading] of [
+        ["home", "Home"],
+        ["account", "Account"],
+        ["devices", "Devices"],
+        ["apps", "Apps"],
+        ["about", "About"],
+      ]) {
+        if (view !== "home") {
+          const mobileMenu = page.locator(".account-mobile-header details");
+          if (await mobileMenu.isVisible())
+            await mobileMenu.locator("summary").click();
+          await page
+            .getByRole("navigation", { name: "Account navigation" })
+            .getByRole("link", { name: heading, exact: true })
+            .click();
+        }
+        await expect(
+          page.getByRole("heading", { name: heading, exact: true }),
+        ).toBeVisible();
+        expect(new URL(page.url()).searchParams.get("did")).toBe(selected.did);
+        const active = page
+          .getByRole("navigation", { name: "Account navigation" })
+          .getByRole("link", { name: heading, exact: true });
+        if (await page.locator(".account-mobile-header details").isVisible())
+          await page.locator(".account-mobile-header summary").click();
+        await expect(active).toHaveAttribute("aria-current", "page");
+        if (which === "first")
+          await captureGallery(page, {
+            name: `settings-${view}`,
+            description: `Account navigation ${heading} screen`,
+            heading,
+            did: selected.did,
+          });
+        if (await page.locator(".account-mobile-header details").isVisible())
+          await page.locator(".account-mobile-header summary").click();
+      }
+      const mobileMenu = page.locator(".account-mobile-header details");
+      if (await mobileMenu.isVisible()) {
+        await mobileMenu.locator("summary").focus();
+        await page.keyboard.press("Enter");
+        await expect(mobileMenu).toHaveAttribute("open", "");
+        await captureGallery(page, {
+          name: "settings-mobile-menu",
+          description: "Account navigation mobile menu open",
+          heading: "About",
+          did: selected.did,
+        });
+        await mobileMenu
+          .getByRole("link", { name: "Apps", exact: true })
+          .focus();
+        await page.keyboard.press("Enter");
+      } else {
+        await page
+          .getByRole("navigation", { name: "Account navigation" })
+          .getByRole("link", { name: "Apps", exact: true })
+          .click();
+      }
       await page.getByRole("link", { name: "Create app password" }).click();
       const accountPosts = [];
       page.on("request", (request) => {
@@ -340,7 +397,7 @@ test("shared verified email keeps each tab and account action bound to its selec
     await captureGallery(secondTab, {
       name: "settings-deactivated-result",
       description: "Shared pair second account deactivated settings",
-      heading: "Account settings",
+      heading: "Home",
       did: second.did,
     });
     await secondTab.getByRole("link", { name: "Reactivate account" }).click();
@@ -357,7 +414,7 @@ test("shared verified email keeps each tab and account action bound to its selec
     await captureGallery(secondTab, {
       name: "settings-reactivation-result",
       description: "Shared pair second account reactivated settings",
-      heading: "Account settings",
+      heading: "Home",
       did: second.did,
     });
     await firstTab.reload();
