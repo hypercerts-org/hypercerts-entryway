@@ -295,6 +295,8 @@ test("console migrates its own DID, record and blob between enrolled PDSs with m
     expect(approved.status()).toBe(200);
     expect((await approved.json()).pending).toBe(true);
     await page.goto(`${config.issuer}/account`);
+    await openAccountView(page, "Account");
+    await openAccountSection(page, "Data server");
     const resume = page.getByRole("button", {
       name: "Resume data server migration",
     });
@@ -340,6 +342,8 @@ test("console migrates its own DID, record and blob between enrolled PDSs with m
         ).status(),
       ).toBe(409);
       await page.goto(`${config.issuer}/account`);
+      await openAccountView(page, "Account");
+      await openAccountSection(page, "Data server");
       const retry = page.getByRole("button", {
         name: "Resume data server migration",
       });
@@ -407,6 +411,8 @@ test("console migrates its own DID, record and blob between enrolled PDSs with m
 
   await signIn(page);
   await expect(page.getByTestId("account-did")).toHaveText(did);
+  await openAccountView(page, "Account");
+  await openAccountSection(page, "Identity and email");
   await expect(page.locator("#identity")).toContainText(target.url);
   const rkey = record.uri.split("/").at(-1);
   const copiedRecord = await page.request.get(

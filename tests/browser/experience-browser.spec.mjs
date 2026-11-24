@@ -290,9 +290,7 @@ test("resend invalidates the previous OTP and email correction binds the same fl
       .getByLabel("Personal data server")
       .selectOption(config.pds[0].id);
     await page.getByRole("button", { name: "Create account" }).click();
-    await expect(
-      page.getByRole("heading", { name: "Account settings" }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
     await expect(page.getByTestId("primary-email")).toContainText(
       replacementEmail,
     );
@@ -303,23 +301,22 @@ test("resend invalidates the previous OTP and email correction binds the same fl
       path: "artifacts/experience-account-desktop.png",
       fullPage: true,
     });
-    const signOut = page.getByRole("button", { name: "Sign out", exact: true });
-    const identityLink = page.getByRole("link", {
-      name: "Identity",
-      exact: true,
-    });
+    const homeLink = page
+      .getByRole("navigation", { name: "Account navigation" })
+      .getByRole("link", { name: "Home", exact: true });
+    await homeLink.focus();
+    await expect(homeLink).toBeFocused();
+    await expect(homeLink).toHaveCSS("outline-style", "solid");
     await page.keyboard.press("Tab");
-    await expect(signOut).toBeFocused();
-    await expect(signOut).toHaveCSS("outline-style", "solid");
-    await page.keyboard.press("Tab");
-    await expect(identityLink).toBeFocused();
-    await expect(identityLink).toHaveCSS("outline-style", "solid");
+    await expect(
+      page
+        .getByRole("navigation", { name: "Account navigation" })
+        .getByRole("link", { name: "Account", exact: true }),
+    ).toBeFocused();
 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(new URL("/account", config.issuer).href);
-    await expect(
-      page.getByRole("heading", { name: "Account settings" }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
     await page.screenshot({
       path: "artifacts/experience-account-narrow.png",
       fullPage: true,
@@ -330,7 +327,7 @@ test("resend invalidates the previous OTP and email correction binds the same fl
     }));
     expect(widths.page).toBeLessThanOrEqual(widths.viewport + 1);
     await expect(
-      page.getByText(`Repository hosted at ${config.pds[0].url}`),
+      page.getByText(`Your account data is hosted at ${config.pds[0].url}.`),
     ).toBeVisible();
   } finally {
     await context.close();

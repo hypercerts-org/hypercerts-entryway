@@ -453,6 +453,10 @@ test("primary email change rejects occupied addresses and retries with visible m
   const previousDid = alice.did;
   const nextEmail = `changed-${run}@example.com`;
 
+  await openAccountView(otherPage, "Account");
+  await openAccountSection(otherPage, "Identity and email");
+  await openAccountView(page, "Account");
+  await openAccountSection(page, "Identity and email");
   await submit(otherPage, "email-request");
   const foreignChallengeId = await accountForm(otherPage, "email-update")
     .locator('input[name="challengeId"]')
@@ -541,6 +545,8 @@ test("primary email change rejects occupied addresses and retries with visible m
   );
 
   await page.goto(`${config.issuer}/account`);
+  await openAccountView(page, "Account");
+  await openAccountSection(page, "Identity and email");
   const restoredChallengeId = await accountForm(page, "email-confirm")
     .locator('input[name="challengeId"]')
     .inputValue();
@@ -776,6 +782,7 @@ test("recovery email removal and all-browser sign-out take effect", async () => 
   const row = page.locator("li").filter({ hasText: backup });
   await row.getByRole("button", { name: "Remove recovery email" }).click();
   await expect(page.locator("#recovery")).not.toContainText(backup);
+  await openAccountView(page, "Devices");
   await page.getByRole("button", { name: "Sign out all browsers" }).click();
   await expect(
     page.getByRole("heading", { name: "Sign in", exact: true }),
@@ -788,6 +795,8 @@ test("recovery email removal and all-browser sign-out take effect", async () => 
 
 test("deletion requires its visible mailbox code and retained selector after handle confirmation", async () => {
   await otherPage.goto(`${config.issuer}/account`);
+  await openAccountView(otherPage, "Account");
+  await openAccountSection(otherPage, "Account status and deletion");
   await otherPage
     .getByLabel("Type your handle to delete this test account")
     .fill(bob.handle);

@@ -34,9 +34,7 @@ test("prepare isolated authority drill identities on both PDSs", async ({
       await page.getByLabel("Handle", { exact: true }).fill(identity.handle);
       await page.getByLabel("Personal data server").selectOption(pds.id);
       await page.getByRole("button", { name: "Create account" }).click();
-      await expect(
-        page.getByRole("heading", { name: "Account settings" }),
-      ).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
       identity.did = await page.getByTestId("account-did").textContent();
       expect(identity.did).toMatch(/^did:plc:/);
       identities.push(identity);

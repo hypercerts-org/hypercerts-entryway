@@ -934,6 +934,10 @@ test(
     const page = await browser.newPage();
     const identity = await createAccount(page, "destination-probe");
     const password = `Public qualification ${randomUUID()}!`;
+    const { openAccountSection, openAccountView } =
+      await import("../browser/support/account-navigation.mjs");
+    await openAccountView(page, "Account");
+    await openAccountSection(page, "Password");
     await page.locator('a[href^="/account/manage/password?"]').click();
     const form = page.locator('form[action="/account/password-set"]');
     await form.getByLabel("New account password").fill(password);

@@ -27,13 +27,13 @@ test("external account verifies its destination email, then uses OAuth on the cl
       ).toBeVisible();
     else
       await expect(
-        page.getByRole("heading", { name: "Account settings", exact: true }),
+        page.getByRole("heading", { name: "Home", exact: true }),
       ).toBeVisible();
     return;
   }
   expect(report.status).toBe("passed");
   await expect(
-    page.getByRole("heading", { name: "Account settings", exact: true }),
+    page.getByRole("heading", { name: "Home", exact: true }),
   ).toBeVisible();
   await expect(page.getByTestId("account-did")).toHaveText(identity.did);
   await page.goto(

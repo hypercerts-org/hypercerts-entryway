@@ -1,3 +1,7 @@
+import {
+  openAccountSection,
+  openAccountView,
+} from "./support/account-navigation.mjs";
 import { test, expect } from "@playwright/test";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
@@ -523,6 +527,8 @@ test("handle update, deactivate, reactivate, revoke and delete use a disposable 
   const disposable = identities[2];
   await signup(disposable);
   await page.goto(`${config.issuer}/account`);
+  await openAccountView(page, "Account");
+  await openAccountSection(page, "Identity and email");
   const updated = `new-${randomUUID().replaceAll("-", "").slice(0, 14)}.entryway.atmosbox.test`;
   await page.getByLabel("New handle").fill(updated);
   await page.getByRole("button", { name: "Update handle" }).click();
@@ -549,6 +555,8 @@ test("handle update, deactivate, reactivate, revoke and delete use a disposable 
   await completeConsent(disposable.did);
   expect((await session("secondary")).session.handle).toBe(updated);
   await page.goto(`${config.issuer}/account`);
+  await openAccountView(page, "Account");
+  await openAccountSection(page, "Account status and deletion");
   await page
     .getByRole("link", { name: "Deactivate account", exact: true })
     .click();
@@ -582,6 +590,7 @@ test("handle update, deactivate, reactivate, revoke and delete use a disposable 
   expect((await session()).session.handle).toBe(updated);
   const current = await session();
   await page.goto(`${config.issuer}/account`);
+  await openAccountView(page, "Apps");
   await page.getByRole("button", { name: "Revoke all app sessions" }).click();
   const revoked = await page.request.post(
     `${config.clientUrl}/client/refresh`,
@@ -591,6 +600,8 @@ test("handle update, deactivate, reactivate, revoke and delete use a disposable 
     },
   );
   expect(revoked.ok()).toBe(false);
+  await openAccountView(page, "Account");
+  await openAccountSection(page, "Account status and deletion");
   await page
     .getByLabel("Type your handle to delete this test account")
     .fill(updated);

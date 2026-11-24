@@ -1,3 +1,4 @@
+import { openAccountView } from "./support/account-navigation.mjs";
 import { test, expect } from "@playwright/test";
 import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
@@ -730,7 +731,8 @@ async function revokeBrowserSession(page, identity) {
   await test.step("revocation removes the browser SDK client's server session", async () => {
     const account = await page.context().newPage();
     await account.goto(`${config.issuer}/account`);
-    const sessions = account.locator("#sessions");
+    await openAccountView(account, "Apps");
+    const sessions = account.locator("#applications");
     const sdkSession = sessions
       .locator("li")
       .filter({
