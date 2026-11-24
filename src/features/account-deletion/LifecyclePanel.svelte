@@ -5,6 +5,7 @@
 
 <section id="lifecycle" aria-labelledby="lifecycle-title">
   <h2 id="lifecycle-title">Account lifecycle</h2>
+  <p>Status: {status}</p>
   <p>
     Deactivation pauses repository writes. Reactivation restores them. Deleting
     the account removes the repository and blobs; the DID history remains.

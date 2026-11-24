@@ -74,6 +74,7 @@ export const renderManagementRows = (
       email: props.email,
       handle: props.handle,
       passwordEnabled: props.passwordEnabled,
+      status: props.status,
       identity: snippet(props.identity),
       handleForm: snippet(props.handleForm),
       recovery: snippet(props.recovery),

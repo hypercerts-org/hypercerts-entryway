@@ -56,8 +56,6 @@
     <dd data-testid="primary-email">{account.email} (verified)</dd>
     <dt>Created</dt>
     <dd>{createdLabel}</dd>
-    <dt>Account status</dt>
-    <dd>Status: {account.status}</dd>
   </dl>
   <p class="muted">
     These settings apply only to the selected DID. {#if canSwitchAccount}<a

@@ -13,6 +13,7 @@
     email,
     handle,
     passwordEnabled,
+    status,
     identity,
     handleForm,
     recovery,
@@ -23,6 +24,7 @@
     email: string;
     handle: string;
     passwordEnabled: boolean;
+    status: string;
     identity: Snippet;
     handleForm: Snippet;
     recovery: Snippet;
@@ -62,7 +64,7 @@
     {
       key: "lifecycle",
       label: "Account status and deletion",
-      value: "Manage account availability",
+      value: status,
       icon: CirclePower,
       content: lifecycle,
     },

@@ -223,6 +223,7 @@ export function mountAccountSettingsPage({
           email: a.email,
           handle: a.handle,
           passwordEnabled: state.passwordEnabled,
+          status: a.status,
           identity,
           handleForm: renderHandle({ a, csrf, accountContext }),
           recovery: backup,
