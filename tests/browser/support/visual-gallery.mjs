@@ -120,12 +120,31 @@ export async function captureGallery(
         height: viewport.height,
       });
       const filename = `${name}-${viewport.name}.png`;
+      const passwords = page.locator('input[type="password"]');
+      const populatedPasswords = [];
+      for (const password of await passwords.all()) {
+        if (
+          await password.evaluate((element) => {
+            if (
+              !(element instanceof HTMLInputElement) ||
+              typeof element.value !== "string"
+            )
+              throw new Error("Cannot inspect password input");
+            return element.value.length > 0;
+          })
+        )
+          populatedPasswords.push(password);
+      }
       await page.screenshot({
         path: join(directory, filename),
         fullPage: true,
         animations: "disabled",
+        maskColor: "#454545",
+        style:
+          'input[type="password"] { color: transparent !important; -webkit-text-fill-color: transparent !important; }',
         mask: [
-          page.locator('input[type="password"], [data-testid="app-password"]'),
+          ...populatedPasswords,
+          page.locator('[data-testid="app-password"]'),
           ...mask,
         ],
       });
@@ -155,11 +174,28 @@ export async function captureGallery(
   const observed = entries.filter(
     (entry) => entry.run === run && entry.identity === identity,
   );
-  const rows = observed
-    .map(
-      (entry) =>
-        `<tr><td>${escapeHtml(entry.name)}</td><td>${escapeHtml(entry.description)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.identity)}</td><td><a href="${escapeHtml(entry.filename)}">PNG</a></td></tr>`,
-    )
+  const cards = expectedStates
+    .map((name) => {
+      const entries = viewports.map((viewport) =>
+        observed.find(
+          (entry) =>
+            entry.name === name &&
+            entry.viewport === `${viewport.width} x ${viewport.height}`,
+        ),
+      );
+      const description = entries.find(Boolean)?.description;
+      if (!description) return "";
+      const previews = entries
+        .map((entry, index) => {
+          const label = index === 0 ? "Desktop" : "Mobile";
+          if (!entry)
+            return `<figure><figcaption>${label}</figcaption><p>Not observed in this run</p></figure>`;
+          const filename = escapeHtml(entry.filename);
+          return `<figure><figcaption>${label} <span>· ${escapeHtml(entry.viewport)}</span></figcaption><a class="image-link" href="${filename}"><img src="${filename}" alt="${escapeHtml(description)} — ${label.toLowerCase()} view" loading="lazy"></a></figure>`;
+        })
+        .join("");
+      return `<article id="${escapeHtml(name)}"><h2>${escapeHtml(description)}</h2><p>${escapeHtml(name)}</p><div class="previews">${previews}</div></article>`;
+    })
     .join("\n");
   const missing = expectedStates.flatMap((name) =>
     viewports
@@ -175,6 +211,8 @@ export async function captureGallery(
   );
   await writeFile(
     join(directory, "index.html"),
-    `<!doctype html><html lang="en"><meta charset="utf-8"><title>Entryway visual gallery</title><h1>Entryway visual gallery</h1><p>Only states observed in this run are listed. Client pages are identified separately.</p><table><thead><tr><th>State</th><th>Observed context</th><th>Viewport</th><th>Candidate</th><th>Image</th></tr></thead><tbody>${rows}</tbody></table><h2>Not observed in this run</h2><ul>${missing.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></html>`,
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Entryway visual gallery</title><style>
+:root{font-family:system-ui,-apple-system,sans-serif;color:#17213a;background:#f2f5fa;line-height:1.5}*{box-sizing:border-box}body{margin:0}main{max-width:1500px;margin:auto;padding:1.5rem}article{background:white;border:1px solid #d5deec;border-radius:12px;margin:1rem 0 1.5rem;padding:1rem;box-shadow:0 2px 8px #2036560b}article h2{margin:0;font-size:1.15rem}article p{margin:.2rem 0 1rem;color:#526079}.previews{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:1rem;align-items:start}figure{margin:0;min-width:0}figcaption{font-weight:650;margin-bottom:.4rem}figcaption span{font-weight:400;color:#526079}.image-link{display:flex;justify-content:center;background:#e8edf5;border:1px solid #cbd7e8;border-radius:8px;overflow:hidden;padding:.35rem}.image-link img{display:block;width:100%;height:auto;object-fit:contain}figure:nth-child(2) img{max-width:420px}@media(max-width:650px){main{padding:1rem}.previews{grid-template-columns:1fr}}
+</style></head><body><main><h1>Entryway visual gallery</h1><p>Only states observed in this run are listed. Select a preview to open its original image.</p>${cards}<h2>Not observed in this run</h2><ul>${missing.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></main></body></html>`,
   );
 }
