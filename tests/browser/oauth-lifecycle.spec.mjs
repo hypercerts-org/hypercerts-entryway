@@ -406,6 +406,7 @@ test("foreign-DID device removal is isolated; login_hint constrains public-clien
     await expect(consentForm(sharedPage, alice.did)).toHaveCount(1);
     await expect(consentForm(sharedPage, bob.did)).toHaveCount(1);
     await signInAccount(sharedPage, bob);
+    await openAccountView(sharedPage, "Devices");
     expect(
       (await accountAction(sharedPage, "device-revoke", { deviceId })).status(),
     ).toBe(303);
