@@ -119,11 +119,20 @@ function resolveReference(specifier, filename, appRoot, options) {
   if (matched) {
     const [pattern, capture] = matched;
     for (const target of options.paths[pattern]) {
+      const wildcard = target.indexOf("*");
+      const expanded =
+        capture && wildcard >= 0
+          ? target.slice(0, wildcard) + capture + target.slice(wildcard + 1)
+          : target;
       const candidate = resolve(
-        options.baseUrl ?? appRoot,
-        target.replace("*", () => capture),
+        options.baseUrl ?? options.pathsBasePath ?? appRoot,
+        expanded,
       );
-      if (candidate.endsWith(".svelte") && existsSync(candidate))
+      if (
+        (candidate.endsWith(".svelte") ||
+          ts.isAnySupportedFileExtension(target)) &&
+        ts.sys.fileExists(candidate)
+      )
         return candidate;
       const resolved = ts.resolveModuleName(
         candidate,

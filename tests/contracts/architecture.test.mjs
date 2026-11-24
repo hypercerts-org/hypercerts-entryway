@@ -629,3 +629,67 @@ test("aliases use TypeScript precedence and ordered mixed targets", (t) => {
   f.options.paths["@invalid/*/*"] = [privateSvelte];
   assert.deepEqual(check("@invalid/a/b"), []);
 });
+
+test("alias targets preserve stars for exact and empty matches and use the config path base", (t) => {
+  const f = fixture(t, {
+    "src/features/account-settings/*.svelte": "<p>private</p>",
+    "src/features/account-settings/item.svelte": "<p>private</p>",
+  });
+  f.options.pathsBasePath = join(f.root, "config");
+  f.options.paths["@exact-star"] = [
+    "../src/features/account-settings/*.svelte",
+  ];
+  f.options.paths["@empty/*"] = ["../src/features/account-settings/*.svelte"];
+  const check = (specifier) =>
+    f.check("src/features/email-login/alias.ts", `import '${specifier}'`);
+  for (const specifier of ["@exact-star", "@empty/", "@empty/item"]) {
+    assert.ok(
+      check(specifier).some((issue) =>
+        issue.includes(
+          "feature email-login imports account-settings internals",
+        ),
+      ),
+      specifier,
+    );
+  }
+});
+
+test("an existing explicit JavaScript alias target wins over TypeScript substitution", (t) => {
+  const f = fixture(t, {
+    "src/ui/first.ts": "import '@target';",
+    "src/ui/target.mjs": "import './first.js';",
+    "src/ui/target.mts": "export const value = 1;",
+  });
+  f.write(
+    "tsconfig.json",
+    JSON.stringify({
+      compilerOptions: {
+        module: "NodeNext",
+        moduleResolution: "NodeNext",
+        allowJs: true,
+        paths: { "@target": ["./src/ui/target.mjs"] },
+      },
+      include: ["src/**/*"],
+    }),
+  );
+  assert.ok(
+    checkArchitecture(f.root).violations.some((issue) =>
+      issue.includes("import cycle:"),
+    ),
+  );
+});
+
+test("empty wildcard capture leaves the target star literal before trying the next target", (t) => {
+  const f = fixture(t, {
+    "src/features/account-settings/private.ts": "export const value = 1",
+    "src/ui/shared.ts": "export const value = 1",
+  });
+  f.options.paths["@empty/*"] = [
+    join(f.root, "src/features/account-settings/*/private.ts"),
+    join(f.root, "src/ui/shared.ts"),
+  ];
+  assert.deepEqual(
+    f.check("src/features/email-login/alias.ts", "import '@empty/'"),
+    [],
+  );
+});
