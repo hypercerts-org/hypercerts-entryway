@@ -4,6 +4,14 @@ import { join } from "node:path";
 
 const directory = process.env.TECH685_SCREEN_DIR;
 const expectedStates = [
+  "oauth-untrusted-chooser",
+  "recent-proof-invalid",
+  "oauth-remembered-entry",
+  "oauth-remembered-code",
+  "settings-deactivated-result",
+  "settings-reactivate-form",
+  "settings-password-set-result",
+  "settings-password-removed-result",
   "standalone-email",
   "standalone-code",
   "standalone-invalid-code",

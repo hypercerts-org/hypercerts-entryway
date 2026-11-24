@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { captureGallery } from "./support/visual-gallery.mjs";
+import { assertChooserStyle } from "./support/chooser-style.mjs";
 import {
   createRealAccount,
   createSharedEmailPair,
@@ -85,6 +86,10 @@ for (const which of ["first", "second"]) {
         did: chosen.did,
       });
       const form = selectionForm(page, chosen.did);
+      await assertChooserStyle(page, form.getByRole("button"), {
+        foreground: "rgb(25, 35, 61)",
+        focus: "rgb(40, 68, 172)",
+      });
       const submitted = await form.evaluate((element) =>
         Object.fromEntries(new FormData(element).entries()),
       );
@@ -288,6 +293,34 @@ test("OAuth denial returns to the independent client", async ({ browser }) => {
       description:
         "Independent client return after shared pair first account denied consent",
       heading: "Hypercerts test client",
+    });
+  } finally {
+    await context.close();
+  }
+});
+
+test("untrusted OAuth client uses neutral chooser colors", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    ignoreHTTPSErrors: false,
+    javaScriptEnabled: false,
+  });
+  try {
+    const page = await context.newPage();
+    await beginAuthorization(page, { client: "untrusted", prompt: "consent" });
+    const message = await requestVisibleCode(page, shared.email);
+    await verifyVisibleCode(page, message.code);
+    const button = selectionForm(page, shared.second.did).getByRole("button");
+    await assertChooserStyle(page, button, {
+      foreground: "rgb(24, 51, 44)",
+      focus: "rgb(8, 122, 88)",
+    });
+    await captureGallery(page, {
+      name: "oauth-untrusted-chooser",
+      description: "Shared pair untrusted client neutral chooser",
+      heading: "Choose an account",
+      did: shared.second.did,
     });
   } finally {
     await context.close();

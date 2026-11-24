@@ -274,6 +274,11 @@ test("optional password signs out existing sessions and enables actual PDS legac
   await expect(
     page.getByRole("heading", { name: "Account password updated" }),
   ).toBeVisible();
+  await captureGallery(page, {
+    name: "settings-password-set-result",
+    description: "Separate account password updated result",
+    heading: "Account password updated",
+  });
   const account = await page.request.get(`${config.issuer}/account`, {
     maxRedirects: 0,
   });
@@ -340,6 +345,11 @@ test("optional password removal keeps email login and disables password login", 
   await expect(
     page.getByRole("heading", { name: "Account password removed" }),
   ).toBeVisible();
+  await captureGallery(page, {
+    name: "settings-password-removed-result",
+    description: "Separate account password removed result",
+    heading: "Account password removed",
+  });
   await signIn(page, alice);
   await expect(page.locator("#passwords")).toContainText(
     "This account has no account password.",

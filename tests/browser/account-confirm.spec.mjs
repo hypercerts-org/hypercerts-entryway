@@ -237,6 +237,12 @@ test("a session signed in more than ten minutes ago confirms it's you before a p
       "Invalid or already used token",
     );
 
+    await captureGallery(page, {
+      name: "recent-proof-invalid",
+      description: "Separate account confirmation rejected code retry",
+      heading: "Confirm it's you",
+    });
+
     // The other session's attempt and the wrong guess did not consume the
     // owner's code. Confirming returns to the page the user opened.
     await page.getByLabel("Confirmation code").fill(first.code);

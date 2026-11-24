@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
 import { createSharedEmailPair } from "./support/email-chooser-fixture.mjs";
 import { captureGallery } from "./support/visual-gallery.mjs";
+import { assertChooserStyle } from "./support/chooser-style.mjs";
 
 const config = JSON.parse(
   readFileSync(
@@ -175,6 +176,10 @@ for (const which of ["first", "second"]) {
       )
         await page.keyboard.press("Tab");
       await expect(button).toBeFocused();
+      await assertChooserStyle(page, button, {
+        foreground: "rgb(24, 51, 44)",
+        focus: "rgb(8, 122, 88)",
+      });
       await captureGallery(page, {
         name: `standalone-chooser-${which}`,
         description: `Shared pair chooser with ${which} account focused`,
@@ -281,6 +286,19 @@ test("shared verified email keeps each tab and account action bound to its selec
     await expect(
       secondTab.getByText("Status: deactivated", { exact: true }),
     ).toBeVisible();
+    await captureGallery(secondTab, {
+      name: "settings-deactivated-result",
+      description: "Shared pair second account deactivated settings",
+      heading: "Account settings",
+      did: second.did,
+    });
+    await secondTab.getByRole("link", { name: "Reactivate account" }).click();
+    await captureGallery(secondTab, {
+      name: "settings-reactivate-form",
+      description: "Shared pair second account reactivation form",
+      heading: "Reactivate account",
+      did: second.did,
+    });
     await firstTab.reload();
     await expect(firstTab.getByTestId("account-did")).toHaveText(first.did);
     await expect(
