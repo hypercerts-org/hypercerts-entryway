@@ -253,3 +253,78 @@ test("shared verified email keeps each tab and account action bound to its selec
     await context.close();
   }
 });
+
+test("an open app-password form stays bound to the account after a mailbox change", async ({
+  browser,
+}) => {
+  test.setTimeout(180_000);
+  const pair = await createSharedEmailPair(browser, { prefix: "st", runId });
+  const nextEmail = `st-${runId}-new@example.test`;
+  const name = `stale-${runId}`;
+  const context = await browser.newContext({ ignoreHTTPSErrors: false });
+  const freshContext = await browser.newContext({ ignoreHTTPSErrors: false });
+  try {
+    const stale = await context.newPage();
+    await signInSharedEmail(stale, pair.email);
+    await stale
+      .locator('form[action="/auth/select"]')
+      .filter({
+        has: stale.locator(`input[name="did"][value="${pair.first.did}"]`),
+      })
+      .getByRole("button")
+      .click();
+    await stale.getByRole("link", { name: "Create app password" }).click();
+    await stale.getByLabel("App password name").fill(name);
+
+    const change = await context.newPage();
+    await change.goto(
+      new URL(
+        `/account?did=${encodeURIComponent(pair.first.did)}`,
+        config.issuer,
+      ).href,
+    );
+    const oldSince = Date.now();
+    await change.getByRole("button", { name: "Start email change" }).click();
+    const oldCode = await waitForMailpitCode({
+      recipient: pair.email,
+      since: oldSince,
+    });
+    await change
+      .getByLabel("Current email verification code")
+      .fill(oldCode.code);
+    await change
+      .getByLabel("New primary email", { exact: true })
+      .fill(nextEmail);
+    const newSince = Date.now();
+    await change
+      .getByRole("button", { name: "Verify current email and continue" })
+      .click();
+    const newCode = await waitForMailpitCode({
+      recipient: nextEmail,
+      since: newSince,
+    });
+    await change.getByLabel("New email verification code").fill(newCode.code);
+    await change.getByRole("button", { name: "Confirm new email" }).click();
+    await expect(
+      change.getByRole("heading", { name: "Primary email updated" }),
+    ).toBeVisible();
+
+    await stale.getByRole("button", { name: "Create app password" }).click();
+    await expect(stale.getByRole("alert")).toBeVisible();
+    await expect(stale.getByTestId("app-password")).toHaveCount(0);
+
+    const sibling = await context.newPage();
+    await signInSharedEmail(sibling, pair.email);
+    await expect(sibling.getByTestId("account-did")).toHaveText(
+      pair.second.did,
+    );
+    await expect(sibling.getByText(name, { exact: true })).toHaveCount(0);
+    const owner = await freshContext.newPage();
+    await signInSharedEmail(owner, nextEmail);
+    await expect(owner.getByTestId("account-did")).toHaveText(pair.first.did);
+    await expect(owner.getByText(name, { exact: true })).toHaveCount(0);
+  } finally {
+    await context.close();
+    await freshContext.close();
+  }
+});

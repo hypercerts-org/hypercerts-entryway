@@ -9,6 +9,8 @@ import {
   hasFailure,
 } from "../support/database-fixture.mjs";
 import { createSecurityPrimitives } from "../../dist/src/accounts/security-primitives.mjs";
+import { createOperationOwnership } from "../../dist/src/accounts/operation-ownership.js";
+import { createConnectedAppsActions } from "../../dist/src/features/connected-apps/actions.mjs";
 import { createAccountAccess } from "../../dist/src/accounts/account-access.mjs";
 import { createArrivalStorage } from "../../dist/src/database/drizzle/migration-arrival.js";
 import { createOperationOwnershipStore } from "../../dist/src/database/drizzle/operation-ownership.js";
@@ -21,7 +23,11 @@ import { join } from "node:path";
 import test from "node:test";
 import express from "express";
 import { exportJWK, generateKeyPair } from "jose";
-import { openTestDatabase } from "../support/database-fixture.mjs";
+import {
+  openTestDatabase,
+  testDatabaseConfiguration,
+} from "../support/database-fixture.mjs";
+import { openDatabase } from "../../dist/src/database/connection.js";
 import { createOAuth } from "../../dist/src/features/oauth-authorization/provider.mjs";
 import { createLegacy } from "../../dist/src/oauth/legacy-credentials.mjs";
 import { createAccountSecurity } from "../../dist/src/compose-account-security.mjs";
@@ -31,7 +37,7 @@ import { createMailOutbox } from "../../dist/src/database/drizzle/mail-outbox.js
 import { MailTransportError } from "../../dist/src/mail/port.js";
 import { createOtpMessage } from "../../dist/src/mail/templates.js";
 
-async function fixture(t, { initialLogin = true } = {}) {
+async function fixture(t, { initialLogin = true, independent = false } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "entryway-account-security-"));
   const path = join(directory, "account-authority.sqlite");
   const { privateKey } = await generateKeyPair("ES256K", { extractable: true });
@@ -103,6 +109,10 @@ async function fixture(t, { initialLogin = true } = {}) {
   await accounts.save(alice);
   await accounts.save(bob);
   const f = { accounts, config, alice, bob, failMail: false, sends: 0 };
+  if (independent && db.backend === "postgresql") {
+    f.secondDb = await openDatabase(await testDatabaseConfiguration(path));
+    t.after(() => f.secondDb.close());
+  } else f.secondDb = db;
   const messages = new Map();
   async function boot() {
     const read = db.get.bind(db);
@@ -223,6 +233,180 @@ async function bindSiblingToSharedEmail(f, sharedUserId) {
   });
   return sibling;
 }
+
+test("browser app password creation rechecks the selected binding after a mailbox change", async (t) => {
+  const f = await fixture(t);
+  await bindSiblingToSharedEmail(f, f.login.user.id);
+  const ownership = createOperationOwnership({
+    store: createOperationOwnershipStore(f.db),
+  });
+  f.accounts.serialized = (did, run, intent) =>
+    ownership.accountStep(did, intent, run);
+  const accountAccess = createAccountAccess(f.accounts.storage);
+  const actions = createConnectedAppsActions({
+    db: f.db,
+    accounts: f.accounts,
+    accountAccess,
+    security: f.security,
+    legacy: f.legacy,
+    console: { needed() {} },
+  });
+  const session = await f.oauth.requireSession({
+    headers: { cookie: f.login.cookie },
+  });
+  const response = {
+    set() {},
+    status() {
+      return this;
+    },
+    type() {
+      return this;
+    },
+    send() {},
+  };
+  const issue = (did, principal, identity, name) =>
+    actions["app-password-create"]({
+      req: { body: {} },
+      res: response,
+      account: { did },
+      principal,
+      session: identity,
+      value: () => name,
+    });
+  await f.security.requestEmailUpdate(f.actor);
+  await f.security.updateEmail(f.actor, {
+    email: "replacement@example.com",
+    token: await f.token(f.alice.email),
+  });
+  await f.security.confirmEmail(f.actor, {
+    email: "replacement@example.com",
+    token: await f.token("replacement@example.com"),
+  });
+  await assert.rejects(issue(f.alice.did, f.actor, session, "stale-name"), {
+    code: "AccountMismatch",
+  });
+  assert.deepEqual(
+    (await f.legacy.listAppPasswords(f.alice.did)).passwords,
+    [],
+  );
+  assert.deepEqual((await f.legacy.listAppPasswords(f.bob.did)).passwords, []);
+  const newLogin = await f.signIn("replacement@example.com");
+  const newSession = await f.oauth.requireSession({
+    headers: { cookie: newLogin.cookie },
+  });
+  await issue(f.alice.did, newLogin.actor, newSession, "new-owner");
+  const siblingLogin = await f.signIn(f.alice.email);
+  const siblingSession = await f.oauth.requireSession({
+    headers: { cookie: siblingLogin.cookie },
+  });
+  await issue(f.bob.did, siblingLogin.actor, siblingSession, "sibling-owner");
+  assert.equal(
+    (await f.legacy.listAppPasswords(f.bob.did)).passwords[0].name,
+    "sibling-owner",
+  );
+  assert.equal(
+    (await f.legacy.listAppPasswords(f.alice.did)).passwords[0].name,
+    "new-owner",
+  );
+});
+
+test("binding change cannot commit between browser credential authorization and insertion", async (t) => {
+  const f = await fixture(t, { independent: true });
+  await bindSiblingToSharedEmail(f, f.login.user.id);
+  const ownership = createOperationOwnership({
+    store: createOperationOwnershipStore(f.db),
+  });
+  f.accounts.serialized = (did, run, intent) =>
+    ownership.accountStep(did, intent, run);
+  const access = createAccountAccess(f.accounts.storage);
+  let checkedResolve, releaseResolve;
+  const checked = new Promise((resolve) => {
+    checkedResolve = resolve;
+  });
+  const release = new Promise((resolve) => {
+    releaseResolve = resolve;
+  });
+  const gatedAccess = {
+    async requireBoundAccount(identity, did) {
+      const account = await access.requireBoundAccount(identity, did);
+      checkedResolve();
+      await release;
+      return account;
+    },
+  };
+  const actions = createConnectedAppsActions({
+    db: f.db,
+    accounts: f.accounts,
+    accountAccess: gatedAccess,
+    security: f.security,
+    legacy: f.legacy,
+    console: { needed() {} },
+  });
+  const session = await f.oauth.requireSession({
+    headers: { cookie: f.login.cookie },
+  });
+  const res = {
+    set() {},
+    status() {
+      return this;
+    },
+    type() {
+      return this;
+    },
+    send() {},
+  };
+  const issuing = actions["app-password-create"]({
+    req: { body: {} },
+    res,
+    account: f.alice,
+    principal: f.actor,
+    session,
+    value: () => "during-change",
+  });
+  await checked;
+  const otherStorage = createAccountStorage(f.secondDb, f.config.pds);
+  const otherAccounts = {
+    storage: otherStorage,
+    get: (did) => otherStorage.getByDid(did),
+  };
+  const authority = createAccountAuthority({
+    db: f.secondDb,
+    accounts: otherAccounts,
+  });
+  let committed = false;
+  const changing = authority
+    .commitEmailChange({
+      did: f.alice.did,
+      email: "after-change@example.com",
+      previousEmail: f.alice.email,
+      recovery: false,
+      verified: true,
+    })
+    .then(() => {
+      committed = true;
+    });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(
+      committed,
+      false,
+      "binding change must wait for the issuance transaction",
+    );
+  } finally {
+    releaseResolve();
+  }
+  await issuing;
+  await changing;
+  assert.equal(
+    (await f.accounts.get(f.alice.did)).email,
+    "after-change@example.com",
+  );
+  assert.equal(
+    (await f.legacy.listAppPasswords(f.alice.did)).passwords[0].name,
+    "during-change",
+  );
+  assert.deepEqual((await f.legacy.listAppPasswords(f.bob.did)).passwords, []);
+});
 
 test("shared-email password reset and login answer like an unknown email", async (t) => {
   const f = await fixture(t);
