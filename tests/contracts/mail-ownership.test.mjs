@@ -499,3 +499,145 @@ test("admin operation preserves false and stable persistence failure", async (t)
     status: 503,
   });
 });
+
+test("interactive delivery observes the durable state after another worker wins the claim", async (t) => {
+  const { db, first, second } = await fixture(t);
+  const mail = createMailFeature({
+    outbox: first,
+    transport: {
+      async deliver() {
+        assert.fail("interactive caller must not send");
+      },
+    },
+  });
+  for (const state of [
+    "sending",
+    "delivered",
+    "queued",
+    "failed",
+    "expired",
+    "superseded",
+  ]) {
+    const email = `${state}@example.test`;
+    const pending = await mail.queueOtp({
+      email,
+      otp: "12345678",
+      type: "sign-in",
+    });
+    const [row] = await db.read("mail_outbox", {
+      where: eq(db.tables.mail_outbox.recipient, email),
+    });
+    const claim = await second.claimAttempt(
+      row.id,
+      "other",
+      60_000,
+      Date.now(),
+    );
+    assert.ok(claim);
+    if (state === "delivered") await second.markDelivered(claim, Date.now());
+    if (state === "queued")
+      await second.markFailure(
+        claim,
+        Date.now(),
+        Date.now() + 30_000,
+        "rejected",
+      );
+    if (state === "failed")
+      await second.markFailure(claim, Date.now(), null, "permanent");
+    if (state === "expired") await second.expire(row.expires_at);
+    if (state === "superseded")
+      await second.supersede(email, "sign-in", Date.now());
+    if (["sending", "delivered", "queued"].includes(state))
+      await pending.deliver();
+    else
+      await assert.rejects(pending.deliver(), { code: "MailDeliveryFailed" });
+  }
+});
+
+test("admin reports acceptance completed by a competing worker", async (t) => {
+  const { first, second } = await fixture(t);
+  const mail = createMailFeature({
+    outbox: {
+      ...first,
+      async claimAttempt(id, _worker, lease, now) {
+        const claim = await second.claimAttempt(id, "other", lease, now);
+        assert.ok(claim);
+        assert.equal(await second.markDelivered(claim, now), true);
+        return null;
+      },
+    },
+    transport: {
+      async deliver() {
+        assert.fail("unclaimed message was sent");
+      },
+    },
+  });
+  assert.equal(
+    await mail.sendAdmin({
+      email: "recipient@example.test",
+      subject: "Notice",
+      text: "Body",
+    }),
+    true,
+  );
+});
+
+test("admin rejects NUL in content or subject before enqueue", async () => {
+  let sends = 0;
+  const admin = await createAdminMessage({
+    mail: {
+      async sendAdmin() {
+        sends++;
+        return true;
+      },
+    },
+  });
+  const row = { did: "did:plc:recipient", email: "recipient@example.test" };
+  const input = {
+    senderDid: "did:plc:sender",
+    subject: "Notice",
+    content: "Body",
+  };
+  for (const invalid of [
+    { ...input, content: "a\0b" },
+    { ...input, subject: "a\0b" },
+  ])
+    await assert.rejects(admin.sendEmail(row, invalid), {
+      error: "InvalidRequest",
+      status: 400,
+    });
+  assert.equal(sends, 0);
+});
+
+test("compound proof dispatch succeeds while another worker sends or has accepted it", async (t) => {
+  const { db, first, second } = await fixture(t);
+  const mail = createMailFeature({
+    outbox: first,
+    transport: {
+      async deliver() {
+        assert.fail("proof already claimed");
+      },
+    },
+  });
+  for (const accepted of [false, true]) {
+    const email = `${accepted}@example.test`;
+    const pending = await mail.queueProof({
+      email,
+      token: `${"a".repeat(24)}.12345678`,
+      purpose: "email-old",
+    });
+    const [row] = await db.read("mail_outbox", {
+      where: eq(db.tables.mail_outbox.recipient, email),
+    });
+    const claim = await second.claimAttempt(
+      row.id,
+      "other",
+      60_000,
+      Date.now(),
+    );
+    assert.ok(claim);
+    if (accepted)
+      assert.equal(await second.markDelivered(claim, Date.now()), true);
+    await pending.deliver();
+  }
+});

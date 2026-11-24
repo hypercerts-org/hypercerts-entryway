@@ -9,6 +9,7 @@ export async function createAdminMessage({ mail }) {
       typeof content !== "string" ||
       !content ||
       content.length > 16_000 ||
+      content.includes("\0") ||
       typeof senderDid !== "string"
     )
       fail("InvalidRequest", "Provide bounded email content and senderDid");

@@ -217,7 +217,10 @@ live in the [project document](https://linear.app/hypercerts/document/m1-accepta
 
 Operators configure authenticated SMTP with `MAIL_SMTP_MODE=tls`,
 `MAIL_SMTP_HOST`, `MAIL_SMTP_PORT`, `MAIL_SMTP_USER`, `MAIL_SMTP_PASSWORD`, and
-`MAIL_FROM`. The relay must accept implicit TLS; Entryway verifies its certificate
+`MAIL_FROM`. Set `MAIL_FROM` to one ASCII dot-atom mailbox, such as
+`sender@example.test`, optionally preceded by a plain display name, such as
+`Entryway Support <sender@example.test>`. Display names may contain letters,
+digits, spaces, periods, underscores and hyphens. The relay must accept implicit TLS; Entryway verifies its certificate
 and hostname using Node's trusted certificate authorities. For a private CA, inject
 its certificate through a protected file and set `NODE_EXTRA_CA_CERTS` to that
 file before starting Entryway. Do not disable TLS verification. Supply credentials

@@ -144,8 +144,7 @@ export function loadSmtpConfiguration(env) {
     !Number.isInteger(port) ||
     port < 1 ||
     port > 65535 ||
-    !sender.trim() ||
-    /[\r\n]/.test(sender)
+    !isSmtpSender(sender)
   )
     invalid();
   if (mode === "private") {
@@ -166,4 +165,19 @@ export function loadSmtpConfiguration(env) {
     user: env.MAIL_SMTP_USER,
     password: env.MAIL_SMTP_PASSWORD,
   };
+}
+
+// Accept one ASCII dot-atom mailbox, optionally preceded by a plain display name.
+function isSmtpSender(value) {
+  const match =
+    /^(?:[A-Za-z0-9][A-Za-z0-9 ._-]* <)?([A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*)@([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*)(>)?$/.exec(
+      value,
+    );
+  if (!match || value.includes("<") !== (match[3] === ">")) return false;
+  const [, local, domain] = match;
+  return (
+    local.length <= 64 &&
+    local.length + domain.length + 1 <= 254 &&
+    domain.split(".").every((label) => label.length <= 63)
+  );
 }

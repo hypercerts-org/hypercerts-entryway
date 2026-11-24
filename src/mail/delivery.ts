@@ -170,7 +170,16 @@ export function createMailFeature({
     await outbox.enqueue(entry);
     return {
       async deliver() {
-        if ((await deliverEntry(entry)) !== true) throw new MailDeliveryError();
+        if ((await deliverEntry(entry)) === true) return;
+        const status = await outbox.status(entry.id);
+        if (status?.state === "delivered") return;
+        if (
+          status &&
+          ["queued", "sending"].includes(status.state) &&
+          currentTime() < status.expiresAt
+        )
+          return;
+        throw new MailDeliveryError();
       },
     };
   }
@@ -203,7 +212,8 @@ export function createMailFeature({
       };
       try {
         await outbox.enqueue(entry);
-        return (await deliverEntry(entry)) === true;
+        if ((await deliverEntry(entry)) === true) return true;
+        return (await outbox.status(entry.id))?.state === "delivered";
       } catch {
         throw new MailDeliveryError();
       }

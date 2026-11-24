@@ -27,6 +27,7 @@ import { createAccountSecurity } from "../../dist/src/compose-account-security.m
 import { createAccountStorage } from "../../dist/src/database/drizzle/account-storage.js";
 import { createMailFeature } from "../../dist/src/mail/create-mail.js";
 import { createMailOutbox } from "../../dist/src/database/drizzle/mail-outbox.js";
+import { MailTransportError } from "../../dist/src/mail/port.js";
 import { createOtpMessage } from "../../dist/src/mail/templates.js";
 
 async function fixture(t, { initialLogin = true } = {}) {
@@ -100,7 +101,7 @@ async function fixture(t, { initialLogin = true } = {}) {
   };
   await accounts.save(alice);
   await accounts.save(bob);
-  const f = { accounts, config, alice, bob };
+  const f = { accounts, config, alice, bob, failMail: false, sends: 0 };
   const messages = new Map();
   async function boot() {
     const read = db.get.bind(db);
@@ -115,6 +116,8 @@ async function fixture(t, { initialLogin = true } = {}) {
       outbox: createMailOutbox(db),
       transport: {
         deliver: async (message) => {
+          f.sends++;
+          if (f.failMail) throw new MailTransportError("permanent");
           const otp = /Use (\d{8}) to/.exec(message.text)?.[1];
           const token = /confirmation token is ([A-Za-z0-9_-]+\.\d{8})/.exec(
             message.text,
@@ -2376,4 +2379,108 @@ test("the confirmation email names its purpose and keeps the code format", () =>
   );
   assert.match(message.text, /^Use 12345678 to confirm it's you\. /);
   assert.match(message.html, /Use this code to confirm it's you\./);
+});
+
+test("reset and recovery remain neutral during transport outage and only eligible requests queue", async (t) => {
+  const f = await fixture(t);
+  await f.security.requestBackupEmail(f.actor, {
+    email: "backup-outage@example.test",
+  });
+  await f.security.confirmBackupEmail(f.actor, {
+    email: "backup-outage@example.test",
+    token: await f.token("backup-outage@example.test"),
+  });
+  await f.accounts.save({
+    ...f.bob,
+    email: "unverified@example.test",
+    emailVerified: false,
+  });
+  const previous = new Set(
+    (await f.db.read("mail_outbox")).map(({ id }) => id),
+  );
+  const sends = f.sends;
+  f.failMail = true;
+  assert.deepEqual(
+    await f.security.requestPasswordReset({ email: f.alice.email }),
+    {},
+  );
+  assert.deepEqual(
+    await f.security.requestPasswordReset({ email: "absent@example.test" }),
+    {},
+  );
+  assert.deepEqual(
+    await f.security.requestPasswordReset({ email: "unverified@example.test" }),
+    {},
+  );
+  await bindSiblingToSharedEmail(f, f.login.user.id);
+  assert.deepEqual(
+    await f.security.requestPasswordReset({ email: f.alice.email }),
+    {},
+  );
+  assert.deepEqual(
+    await f.security.requestRecovery({ email: "backup-outage@example.test" }),
+    {},
+  );
+  assert.deepEqual(
+    await f.security.requestRecovery({ email: "absent-recovery@example.test" }),
+    {},
+  );
+  assert.deepEqual(
+    await f.security.requestRecovery({ email: f.alice.email }),
+    {},
+  );
+  assert.equal(f.sends, sends);
+  const queued = (await f.db.read("mail_outbox")).filter(
+    ({ id }) => !previous.has(id),
+  );
+  assert.equal(queued.length, 2);
+  assert.deepEqual(queued.map(({ purpose }) => purpose).sort(), [
+    "password-reset",
+    "recovery-backup",
+  ]);
+  assert.ok(queued.every(({ state }) => state === "queued"));
+  const result = await f.mail.retryPending();
+  assert.equal(result.failed, 2);
+  assert.equal(f.sends, sends + 2);
+  const final = (await f.db.read("mail_outbox")).filter(
+    ({ id }) => !previous.has(id),
+  );
+  assert.ok(
+    final.every(
+      ({ state, last_error_code }) =>
+        state === "failed" && last_error_code === "TransportRejected",
+    ),
+  );
+});
+
+test("password reset accepts a verified binding when the account verification flag is absent", async (t) => {
+  const f = await fixture(t);
+  const current = await f.accounts.get(f.alice.did);
+  const { emailVerified: _flag, ...withoutFlag } = current;
+  await f.accounts.save(withoutFlag);
+  assert.equal((await f.accounts.get(f.alice.did)).emailVerified, undefined);
+  assert.deepEqual(
+    await f.security.requestPasswordReset({ email: f.alice.email }),
+    {},
+  );
+  const token = await f.token(f.alice.email);
+  assert.equal(typeof token, "string");
+  await f.security.resetPassword({
+    token,
+    password: "verified account password",
+  });
+  assert.equal(
+    await f.legacy.verifyPassword(f.alice.did, "verified account password"),
+    true,
+  );
+  await f.accounts.save({
+    ...(await f.accounts.get(f.alice.did)),
+    emailVerified: false,
+  });
+  const before = (await f.db.read("mail_outbox")).length;
+  assert.deepEqual(
+    await f.security.requestPasswordReset({ email: f.alice.email }),
+    {},
+  );
+  assert.equal((await f.db.read("mail_outbox")).length, before);
 });

@@ -111,6 +111,14 @@ export function createMailOutbox(db: DatabaseExecutor): MailOutboxTransactor {
     });
   }
   return {
+    async status(id) {
+      const row = (
+        await db.read("mail_outbox", { where: eq(t.id, id), limit: 1 })
+      )[0];
+      return row
+        ? { state: row.state as OutboxState, expiresAt: row.expires_at }
+        : null;
+    },
     async listRetryable(now, limit) {
       return (
         await db.read("mail_outbox", {

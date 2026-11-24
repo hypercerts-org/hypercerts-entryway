@@ -17,9 +17,21 @@ export function createAccountRecovery({
       // A reset token is DID-bound, so a shared email cannot choose an account
       // here (TECH-783). It gets the same reply as an unknown email (TECH-733).
       const row = rows.length === 1 ? rows[0] : null;
+      const binding =
+        row && row.emailVerified === undefined
+          ? await accounts.storage.getVerifiedBinding(row.did)
+          : null;
+      const verified =
+        row?.emailVerified === true ||
+        (row?.emailVerified === undefined &&
+          binding?.email === email &&
+          (await accounts.storage.isVerifiedUserEmail({
+            userId: binding.userId,
+            email,
+          })));
       if (
         !row ||
-        row.emailVerified !== true ||
+        !verified ||
         ["deleted", "provisioning"].includes(row.status)
       ) {
         await rate(email);

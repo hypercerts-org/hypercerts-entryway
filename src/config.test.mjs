@@ -123,3 +123,44 @@ test("SMTP TLS configuration requires complete credentials and never echoes valu
         !/private|secret|example/.test(error.message),
     );
 });
+
+test("SMTP sender is exactly one supported mailbox", () => {
+  const base = {
+    MAIL_SMTP_MODE: "tls",
+    MAIL_SMTP_HOST: "relay.example",
+    MAIL_SMTP_PORT: "465",
+    MAIL_SMTP_USER: "user",
+    MAIL_SMTP_PASSWORD: "password",
+  };
+  for (const sender of [
+    "sender@example.test",
+    "Entryway Support <sender@example.test>",
+    "alerts+ops@relay.example",
+  ])
+    assert.equal(
+      loadSmtpConfiguration({ ...base, MAIL_FROM: sender }).sender,
+      sender,
+    );
+  for (const sender of [
+    "secret",
+    "secret@",
+    "@example.test",
+    "a..b@example.test",
+    "a@-example.test",
+    "a@example..test",
+    "a@example.test,b@example.test",
+    "Name <a@example.test>, b@example.test",
+    "a@example.test>",
+    "Name <a@example.test",
+    "Name\n<a@example.test>",
+    "a\u0000@example.test",
+    `${"a".repeat(65)}@example.test`,
+    `a@${"b".repeat(64)}.test`,
+  ])
+    assert.throws(
+      () => loadSmtpConfiguration({ ...base, MAIL_FROM: sender }),
+      (error) =>
+        error.code === "InvalidSmtpConfiguration" &&
+        !error.message.includes(sender),
+    );
+});

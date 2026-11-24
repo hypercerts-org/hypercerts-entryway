@@ -586,7 +586,12 @@ test("challenge mail queues atomically and dispatches only after commit", async 
   let failQueue = false;
   const f = await fixture(t, {
     async queueOtp(request) {
-      if (request.type === "signup") return { async deliver() {} };
+      if (request.type === "signup")
+        return {
+          async deliver() {
+            delivered++;
+          },
+        };
       assert.equal(request.type, "plc-operation");
       await db.set("fixture:queued-mail", request.email, {
         type: request.type,
@@ -623,8 +628,7 @@ test("challenge mail queues atomically and dispatches only after commit", async 
   failQueue = false;
   await f.protocolOperations.requestPlcOperationSignature(row);
   assert.equal(delivered, 1);
-  assert.equal(await db.get("outbox", row.email), null);
+  assert.ok(await db.get("fixture:queued-mail", row.email));
   await f.protocolOperations.requestSignup({ email: "unchanged@example.com" });
-  assert.equal(await db.get("outbox", "unchanged@example.com"), null);
-  assert.equal(delivered, 1);
+  assert.equal(delivered, 2);
 });
