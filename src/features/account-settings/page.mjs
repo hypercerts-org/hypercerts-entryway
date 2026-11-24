@@ -2,15 +2,14 @@ import {
   renderIdentity,
   renderRecoveryPanel,
   renderPasswordPanel,
+  renderProtectedPage,
 } from "#entryway-ssr/account-settings";
 import { page, escapeHtml as esc } from "../../ui/html.mjs";
 import {
   codeField,
-  field,
   hidden,
   form,
   manageLink,
-  rows,
   settingsLink,
 } from "../../ui/account-forms.mjs";
 
@@ -49,8 +48,6 @@ function renderRecoveryPanelHtml({ security, state, accountContext }) {
   }).body;
 }
 
-const recoveryStatus = (item) =>
-  `<strong>${esc(item.email)}</strong><span>${item.verified ? "Verified" : "Awaiting verification"}</span>`;
 const passwordLabel = (state) =>
   state.passwordEnabled ? "Change account password" : "Set account password";
 function renderPasswordPanelHtml({
@@ -90,13 +87,18 @@ const renderPasswordPage = async ({
   account,
 }) => {
   const state = await security.summary(principal);
-  const removeForm = state.passwordEnabled
-    ? `<h2>Remove account password</h2><p>Email sign-in remains available after the password is removed.</p>${form("password-remove", browser.csrf, "", "Remove account password", accountContext)}`
-    : "";
   page(
     res,
     passwordLabel(state),
-    `${selectedIdentity(account)}<p>Changing or removing the password ends all sessions and removes existing app passwords.</p>${form("password-set", browser.csrf, field("password", "New account password", "password", 'autocomplete="new-password" minlength="12" maxlength="256"'), passwordLabel(state), accountContext)}${removeForm}${backLink(accountContext)}`,
+    renderProtectedPage({
+      kind: "password",
+      csrf: browser.csrf,
+      did: accountContext.did,
+      handle: account.handle,
+      passwordEnabled: state.passwordEnabled,
+    }).body,
+    200,
+    { layout: "settings" },
   );
 };
 
@@ -109,26 +111,36 @@ const renderRecoveryPage = async ({
   account,
 }) => {
   const state = await security.summary(principal);
-  const csrf = browser.csrf;
   page(
     res,
     "Manage recovery email",
-    `${selectedIdentity(account)}<p>Add an email you can still access if your primary mailbox is lost. Each recovery address must be verified before it can restore access.</p>
-      ${rows(state.backupEmails ?? [], (item) => `${recoveryStatus(item)}${form("backup-remove", csrf, hidden("email", item.email), "Remove recovery email", accountContext)}`, "No verified recovery email.")}
-      ${form("backup-request", csrf, field("email", "Recovery email address", "email", 'autocomplete="email" maxlength="320"'), "Send recovery verification", accountContext)}${backLink(accountContext)}`,
+    renderProtectedPage({
+      kind: "recovery",
+      csrf: browser.csrf,
+      did: accountContext.did,
+      handle: account.handle,
+      backupEmails: state.backupEmails ?? [],
+    }).body,
+    200,
+    { layout: "settings" },
   );
 };
 
 const renderStatusPage = ({ res, account, browser, accountContext }) => {
   const active = account.status === "active";
   const label = active ? "Deactivate account" : "Reactivate account";
-  const explanation = active
-    ? "Deactivation pauses repository writes and signs out connected apps. You can reactivate the account later."
-    : "Reactivation restores repository writes.";
   page(
     res,
     label,
-    `${selectedIdentity(account)}<p>${explanation}</p>${form("status", browser.csrf, hidden("status", active ? "deactivated" : "active"), label, accountContext)}${backLink(accountContext)}`,
+    renderProtectedPage({
+      kind: "status",
+      csrf: browser.csrf,
+      did: accountContext.did,
+      handle: account.handle,
+      active,
+    }).body,
+    200,
+    { layout: "settings" },
   );
 };
 
@@ -147,6 +159,8 @@ function mountProtectedPages({ console, security, renderAppPasswordForm }) {
         res,
         "Create app password",
         `${selectedIdentity(account)}${renderAppPasswordForm({ csrf: browser.csrf, accountContext })}${backLink(accountContext)}`,
+        200,
+        { layout: "settings" },
       ),
   });
   console.mountProtectedPage("recovery", {
