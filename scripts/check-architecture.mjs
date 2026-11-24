@@ -77,29 +77,7 @@ export function importsIn(source, filename) {
 }
 
 function matchingPath(specifier, paths) {
-  if (Object.hasOwn(paths, specifier)) return [specifier, ""];
-  let best;
-  for (const pattern of Object.keys(paths)) {
-    const wildcard = pattern.indexOf("*");
-    if (wildcard < 0 || pattern.indexOf("*", wildcard + 1) >= 0) continue;
-    const prefix = pattern.slice(0, wildcard);
-    const suffix = pattern.slice(wildcard + 1);
-    if (
-      specifier.length >= prefix.length + suffix.length &&
-      specifier.startsWith(prefix) &&
-      specifier.endsWith(suffix) &&
-      (!best || prefix.length > best.prefixLength)
-    )
-      best = {
-        pattern,
-        prefixLength: prefix.length,
-        capture: specifier.slice(
-          prefix.length,
-          specifier.length - suffix.length,
-        ),
-      };
-  }
-  return best && [best.pattern, best.capture];
+  return ts.matchPatternOrExact(ts.tryParsePatterns({ ...paths }), specifier);
 }
 
 function resolveReference(specifier, filename, appRoot, options) {
@@ -141,10 +119,7 @@ function resolveReference(specifier, filename, appRoot, options) {
     options.paths &&
     !ts.isExternalModuleNameRelative(specifier)
   ) {
-    const pattern = ts.matchPatternOrExact(
-      ts.tryParsePatterns(options.paths),
-      specifier,
-    );
+    const pattern = matchingPath(specifier, options.paths);
     if (pattern) {
       const key =
         typeof pattern === "string" ? pattern : ts.patternText(pattern);
