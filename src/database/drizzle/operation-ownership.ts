@@ -132,6 +132,51 @@ export const recoveryHistoryFor = (row: {
   return recoveryHistory;
 };
 
+/** Classify only receipts with an authorization bound to the exact dispatcher.
+ * The supersession marker also binds the immutable intent it retired. */
+export function classifyCutoverReceipt(row: {
+  id: string;
+  operation_id: string;
+  execution_attempt_id: string;
+  target: string;
+  step: string;
+  method: string;
+  intent_digest: string;
+  state: string;
+  recovery: string | null;
+  result: string | null;
+}): "approved" | "retry-retired" | "superseded" | "other" {
+  if (
+    row.step !== "incoming-cutover" ||
+    row.method !== "com.atproto.identity.submitPlcOperation" ||
+    !/^[a-f0-9]{64}$/.test(row.intent_digest)
+  )
+    return "other";
+  try {
+    if (recoveryHistoryFor(row).at(-1)?.action !== "retry-if-safe")
+      return "other";
+    if (row.state === "recovery-approved" && row.result === null)
+      return "approved";
+    if (row.state !== "acknowledged") return "other";
+    if (
+      row.result === JSON.stringify({ recovery: "replay-safe" }) ||
+      row.result === JSON.stringify({ recovery: "unapplied" })
+    )
+      return "retry-retired";
+    if (
+      row.result ===
+      JSON.stringify({
+        recovery: "superseded",
+        intentDigest: row.intent_digest,
+      })
+    )
+      return "superseded";
+  } catch {
+    return "other";
+  }
+  return "other";
+}
+
 export function createOperationOwnershipStore(
   db: DatabaseExecutor,
 ): OperationOwnershipStore {
@@ -435,14 +480,17 @@ export function createOperationOwnershipStore(
     async readExternal(claim, input) {
       return db.transact(async () => {
         await assertActive(claim);
-        const previous = await latestExternal(claim.operationId, input.step);
-        if (
-          previous?.step === "incoming-cutover" &&
-          previous.state === "acknowledged" &&
-          JSON.stringify(previous.result) ===
-            JSON.stringify({ recovery: "superseded" })
-        )
-          return null;
+        const rows = await db.read("external_operation_attempts", {
+          where: and(
+            eq(external.operation_id, claim.operationId),
+            eq(external.step, input.step),
+          ),
+          orderBy: [desc(external.created_at), desc(external.id)],
+          limit: 1,
+        });
+        const row = rows[0];
+        const previous = row ? externalRow(row) : null;
+        if (row && classifyCutoverReceipt(row) === "superseded") return null;
         if (previous && !matches(previous, input)) throw recoveryRequired();
         return previous;
       });

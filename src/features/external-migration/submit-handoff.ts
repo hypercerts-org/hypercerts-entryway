@@ -235,6 +235,60 @@ export function createAuthenticatedArrival({
       });
     return { state: "published" as const, cid: handoff.cid };
   };
+  const continueReplay = (
+    input: { operationId: string; userId: string; method: IncomingMethod },
+    digest: string,
+  ) => {
+    return underOwner(
+      input.operationId,
+      input.userId,
+      async (owner, locked) => {
+        const accepted = acceptedReplay(locked, input.method, digest);
+        if (input.method === incomingCreationMethod) {
+          if (provision) return provision(owner, locked);
+          return {
+            operationId: locked.arrival.operationId,
+            did: accepted.did,
+            requestDigest: accepted.requestDigest,
+            generation: accepted.generation,
+          };
+        }
+        return dispatchSaved(owner, locked);
+      },
+    );
+  };
+  const reconcileCreation = async (
+    input: { operationId: string; userId: string },
+    aggregate: ArrivalAggregate,
+  ) => {
+    const move = aggregate.signedOperations.find(
+      (item) => item.kind === "destination-move",
+    );
+    if (
+      !aggregate.arrival.staged &&
+      aggregate.progress.canonicalHandoffCid === null &&
+      !move
+    ) {
+      const directory = await readIncomingObservation(
+        client,
+        aggregate.arrival.did,
+      );
+      const handoff = aggregate.signedOperations.find(
+        (item) => item.kind === "handoff",
+      );
+      if (
+        handoff &&
+        [aggregate.arrival.sourcePlcHead, handoff.cid].includes(
+          directory.sourcePlcHead,
+        )
+      ) {
+        const result = await api.continueHandoff(input);
+        if (result.state !== "published")
+          return { state: "pending" as const, operationId: input.operationId };
+      }
+    }
+    return api.continueCreation(input);
+  };
   const api = {
     async admit(input: {
       operationId: string;
@@ -289,30 +343,7 @@ export function createAuthenticatedArrival({
       // after the identity moves the source key no longer verifies. It resumes
       // the saved continuation under the recorded claim instead of admitting
       // again. Every new admission is fully verified below.
-      if (recorded) {
-        const ids = { operationId: input.operationId, userId: input.userId };
-        return underOwner(
-          ids.operationId,
-          ids.userId,
-          async (owner, locked) => {
-            const accepted = acceptedReplay(
-              locked,
-              input.method,
-              parsed.requestDigest,
-            );
-            if (input.method === incomingCreationMethod) {
-              if (provision) return provision(owner, locked);
-              return {
-                operationId: locked.arrival.operationId,
-                did: accepted.did,
-                requestDigest: accepted.requestDigest,
-                generation: accepted.generation,
-              };
-            }
-            return dispatchSaved(owner, locked);
-          },
-        );
-      }
+      if (recorded) return continueReplay(input, parsed.requestDigest);
       const authorization = await verify({
         presentation: input.presentation,
         method: input.method,
@@ -573,33 +604,7 @@ export function createAuthenticatedArrival({
           (item) => item.method === incomingCreationMethod,
         )
       ) {
-        const move = aggregate.signedOperations.find(
-          (item) => item.kind === "destination-move",
-        );
-        if (
-          !aggregate.arrival.staged &&
-          aggregate.progress.canonicalHandoffCid === null &&
-          !move
-        ) {
-          const directory = await readIncomingObservation(
-            client,
-            aggregate.arrival.did,
-          );
-          const handoff = aggregate.signedOperations.find(
-            (item) => item.kind === "handoff",
-          );
-          if (
-            handoff &&
-            [aggregate.arrival.sourcePlcHead, handoff.cid].includes(
-              directory.sourcePlcHead,
-            )
-          ) {
-            const result = await api.continueHandoff(input);
-            if (result.state !== "published")
-              return { state: "pending" as const, operationId };
-          }
-        }
-        return api.continueCreation(input);
+        return reconcileCreation(input, aggregate);
       }
       if (
         aggregate.admissions.some(

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { requestDigest } from "../../accounts/operation-ownership.js";
-import { recoveryHistoryFor } from "./operation-ownership.js";
+import { classifyCutoverReceipt } from "./operation-ownership.js";
 import * as plc from "@did-plc/lib";
 import { cidForCbor } from "@atproto/common";
 import {
@@ -41,31 +41,46 @@ import {
   assertRotationKeysPreserved,
 } from "../../plc/policy.js";
 
-// An operator attests isolation and upstream drain for this exact attempt.
-// The PLC history is independently verified before this authorization is consumed.
-function recoverableCutover(row: {
-  id: string;
-  operation_id: string;
-  execution_attempt_id: string;
-  target: string;
-  state: string;
-  recovery: string | null;
-}): boolean {
-  if (row.state !== "recovery-approved" || !row.recovery) return false;
-  try {
-    return recoveryHistoryFor(row).at(-1)?.action === "retry-if-safe";
-  } catch {
-    return false;
-  }
-}
-function supersededCutover(row: {
-  state: string;
-  result: string | null;
-}): boolean {
-  return (
-    row.state === "acknowledged" &&
-    row.result === JSON.stringify({ recovery: "superseded" })
+type CutoverReceipt = StoredRow<"external_operation_attempts">;
+/** Superseded receipts are historical. A retry-retired receipt is safe only
+ * when followed by the latest approved attempt for the same exact intent. */
+function cutoversPermitReapproval(
+  receipts: readonly CutoverReceipt[],
+  did: string,
+  cid: string | undefined,
+): boolean {
+  const ordered = [...receipts].sort(
+    (a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id),
   );
+  const active = ordered.filter((row, index) => {
+    const kind = classifyCutoverReceipt(row);
+    if (kind === "superseded") return false;
+    if (kind !== "retry-retired") return true;
+    return !ordered
+      .slice(index + 1)
+      .some(
+        (later) =>
+          classifyCutoverReceipt(later) === "superseded" &&
+          later.intent_digest === row.intent_digest &&
+          later.target === row.target,
+      );
+  });
+  if (!active.length) return true;
+  const latest = active.at(-1)!;
+  if (
+    !cid ||
+    latest.intent_digest !== requestDigest({ cid, did }) ||
+    classifyCutoverReceipt(latest) !== "approved"
+  )
+    return false;
+  return active
+    .slice(0, -1)
+    .every(
+      (row) =>
+        classifyCutoverReceipt(row) === "retry-retired" &&
+        row.intent_digest === latest.intent_digest &&
+        row.target === latest.target,
+    );
 }
 const signingKeyPattern = /^did:key:z[1-9A-HJ-NP-Za-km-z]+$/;
 const digestPattern = /^[a-f0-9]{64}$/;
@@ -595,6 +610,64 @@ export function createArrivalStorage(
     return version;
   };
 
+  async function verifyArrivalSource(
+    input: Parameters<ArrivalTransactor["createArrival"]>[0],
+  ) {
+    try {
+      const predecessor = plc.def.compatibleOp.parse(input.sourcePredecessor);
+      if (canonicalJson(predecessor) !== canonicalJson(input.sourcePredecessor))
+        throw immutableTuple();
+      const normalized = plc.normalizeOp(predecessor);
+      const { sig: _signature, ...sourceFacts } = normalized;
+      validateHistoryOperation(sourceFacts);
+      if (String(await cidForCbor(predecessor)) !== input.sourcePlcHead)
+        throw immutableTuple();
+      const source = {
+        services: normalized.services,
+        verificationMethods: normalized.verificationMethods,
+        alsoKnownAs: normalized.alsoKnownAs,
+      };
+      if (canonicalJson(source) !== canonicalJson(input.source))
+        throw immutableTuple();
+      if (
+        input.approvedRotationKeys.length < (input.staged ? 1 : 2) ||
+        input.approvedRotationKeys.length > 5 ||
+        new Set(input.approvedRotationKeys).size !==
+          input.approvedRotationKeys.length
+      )
+        throw immutableTuple();
+      input.approvedRotationKeys.forEach(publicRotationKey);
+      if (input.staged) {
+        const host = configuredPds.find(
+          (pds) => pds.id === input.pdsId && pds.url === input.endpoint,
+        );
+        if (
+          input.staged.creationPlcHead !== undefined ||
+          host?.stagedIncomingMigration !== true ||
+          canonicalJson(
+            stagedRotationKeys(
+              normalized.rotationKeys,
+              input.staged.entrywayKey,
+              input.staged.retireRotationKeys,
+            ),
+          ) !== canonicalJson(input.approvedRotationKeys)
+        )
+          throw immutableTuple();
+      } else {
+        assertRotationKeysPreserved(
+          normalized.rotationKeys,
+          input.approvedRotationKeys,
+        );
+      }
+      if (!digestPattern.test(input.codeHash)) throw immutableTuple();
+    } catch {
+      throw new DomainError(
+        "InvalidAccount",
+        400,
+        "Actual signed source preparation authority is required",
+      );
+    }
+  }
   return {
     async readArrivalAggregate(operationId, ownerUserId) {
       return db.transact(async () => {
@@ -629,9 +702,10 @@ export function createArrivalStorage(
             })
           : [];
         return {
-          hasCutoverReceipt: cutoverReceipts.some(
-            (receipt) =>
-              !supersededCutover(receipt) && !recoverableCutover(receipt),
+          hasCutoverReceipt: !cutoversPermitReapproval(
+            cutoverReceipts,
+            saved.did,
+            signed.find((item) => item.kind === "destination-move")?.cid,
           ),
           arrival: arrivalRecord(saved, binding, await code(operationId)),
           signedOperations: signed.map((item) => ({
@@ -718,62 +792,7 @@ export function createArrivalStorage(
             approvedRotationKeys: input.approvedRotationKeys,
           }
         : input.approvedRotationKeys;
-      try {
-        const predecessor = plc.def.compatibleOp.parse(input.sourcePredecessor);
-        if (
-          canonicalJson(predecessor) !== canonicalJson(input.sourcePredecessor)
-        )
-          throw immutableTuple();
-        const normalized = plc.normalizeOp(predecessor);
-        const { sig: _signature, ...sourceFacts } = normalized;
-        validateHistoryOperation(sourceFacts);
-        if (String(await cidForCbor(predecessor)) !== input.sourcePlcHead)
-          throw immutableTuple();
-        const source = {
-          services: normalized.services,
-          verificationMethods: normalized.verificationMethods,
-          alsoKnownAs: normalized.alsoKnownAs,
-        };
-        if (canonicalJson(source) !== canonicalJson(input.source))
-          throw immutableTuple();
-        if (
-          input.approvedRotationKeys.length < (input.staged ? 1 : 2) ||
-          input.approvedRotationKeys.length > 5 ||
-          new Set(input.approvedRotationKeys).size !==
-            input.approvedRotationKeys.length
-        )
-          throw immutableTuple();
-        input.approvedRotationKeys.forEach(publicRotationKey);
-        if (input.staged) {
-          const host = configuredPds.find(
-            (pds) => pds.id === input.pdsId && pds.url === input.endpoint,
-          );
-          if (
-            input.staged.creationPlcHead !== undefined ||
-            host?.stagedIncomingMigration !== true ||
-            canonicalJson(
-              stagedRotationKeys(
-                normalized.rotationKeys,
-                input.staged.entrywayKey,
-                input.staged.retireRotationKeys,
-              ),
-            ) !== canonicalJson(input.approvedRotationKeys)
-          )
-            throw immutableTuple();
-        } else {
-          assertRotationKeysPreserved(
-            normalized.rotationKeys,
-            input.approvedRotationKeys,
-          );
-        }
-        if (!digestPattern.test(input.codeHash)) throw immutableTuple();
-      } catch {
-        throw new DomainError(
-          "InvalidAccount",
-          400,
-          "Actual signed source preparation authority is required",
-        );
-      }
+      await verifyArrivalSource(input);
       if (
         !input.operationId ||
         !input.did.startsWith("did:") ||
@@ -976,25 +995,22 @@ export function createArrivalStorage(
           ]);
           const submit = "com.atproto.identity.submitPlcOperation";
           const stale = signed.find((item) => item.kind === "destination-move");
-          const submission = admissions.find((item) => item.method === submit);
+          const submission = admissions.some((item) => item.method === submit);
           if (
             key?.uncertain_reason ||
             signed.length !== Number(Boolean(stale)) ||
             Boolean(stale) !== Boolean(submission) ||
             (stale && input.observedCids.includes(stale.cid)) ||
-            receipts.some((item) => {
-              if (item.step !== "incoming-cutover")
-                return item.state !== "acknowledged";
-              if (supersededCutover(item)) return false;
-              const intent =
-                stale && requestDigest({ cid: stale.cid, did: saved.did });
-              return (
-                !stale ||
-                item.method !== submit ||
-                item.intent_digest !== intent ||
-                !recoverableCutover(item)
-              );
-            })
+            receipts.some(
+              (item) =>
+                item.step !== "incoming-cutover" &&
+                item.state !== "acknowledged",
+            ) ||
+            !cutoversPermitReapproval(
+              receipts.filter((item) => item.step === "incoming-cutover"),
+              saved.did,
+              stale?.cid,
+            )
           )
             throw recoveryRequired();
           let update;
@@ -1015,13 +1031,16 @@ export function createArrivalStorage(
           for (const receipt of receipts) {
             if (
               receipt.step === "incoming-cutover" &&
-              recoverableCutover(receipt)
+              classifyCutoverReceipt(receipt) === "approved"
             )
               await db.update(
                 "external_operation_attempts",
                 {
                   state: "acknowledged",
-                  result: JSON.stringify({ recovery: "superseded" }),
+                  result: JSON.stringify({
+                    recovery: "superseded",
+                    intentDigest: receipt.intent_digest,
+                  }),
                   updated_at: await db.databaseTime(),
                 },
                 eq(db.tables.external_operation_attempts.id, receipt.id),

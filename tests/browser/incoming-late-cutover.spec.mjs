@@ -211,24 +211,38 @@ test("a public incoming migration keeps the source DID until the staged reposito
   const primaryHandle = sourceIdentity.alsoKnownAs.findIndex((alias) =>
     alias.startsWith("at://"),
   );
+  const identityFields = {
+    ...recommended,
+    alsoKnownAs: [
+      `at://${handle}`,
+      ...sourceIdentity.alsoKnownAs.filter(
+        (_, index) => index !== primaryHandle,
+      ),
+    ],
+    verificationMethods: {
+      ...sourceIdentity.verificationMethods,
+      atproto: recommended.verificationMethods.atproto,
+    },
+    services: { ...sourceIdentity.services, ...recommended.services },
+  };
+  if (!direct) {
+    expect(recommended.rotationKeys).not.toEqual(rotationKeys);
+    const narrower = await signAtSource(access, {
+      source,
+      sourceEmail,
+      fields: identityFields,
+    });
+    expect(narrower.rotationKeys).toEqual(recommended.rotationKeys);
+    expect(narrower.prev).toBe(predecessor);
+    const rejected = await admitted(handoffMethod, { operation: narrower });
+    expect(rejected.status).toBe(400);
+    expect(rejected.error).toBe("InvalidPlcOperation");
+    expect(await plcAudit(access, did)).toEqual(historyBeforeMove);
+  }
   const operation = await signAtSource(access, {
     source,
     sourceEmail,
-    fields: {
-      ...recommended,
-      rotationKeys,
-      alsoKnownAs: [
-        `at://${handle}`,
-        ...sourceIdentity.alsoKnownAs.filter(
-          (_, index) => index !== primaryHandle,
-        ),
-      ],
-      verificationMethods: {
-        ...sourceIdentity.verificationMethods,
-        atproto: recommended.verificationMethods.atproto,
-      },
-      services: { ...sourceIdentity.services, ...recommended.services },
-    },
+    fields: { ...identityFields, rotationKeys },
   });
   expect(operation.prev).toBe(predecessor);
   expect(await plcAudit(access, did)).toEqual(historyBeforeMove);

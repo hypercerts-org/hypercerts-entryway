@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { eq } from "drizzle-orm";
 import { cidForCbor } from "@atproto/common";
 import { Secp256k1Keypair } from "@atproto/crypto";
 import * as plc from "@did-plc/lib";
@@ -10,6 +11,7 @@ import {
   handle,
   endpoint,
 } from "../support/helpers/incoming-arrival-fixture.mjs";
+import { summarizeArrival } from "../../dist/src/features/external-migration/arrival-summary.js";
 import { createInvites } from "../../dist/src/features/account-registration/invites.mjs";
 import {
   stagedRotationKeys,
@@ -236,6 +238,7 @@ for (const direct of [false, true]) {
       );
       const updatedHead = String(await cidForCbor(updated));
       const dispatch = f.ownership.dispatch;
+      let dispatchCount = 0;
       const race = t.mock.method(
         f.ownership,
         "dispatch",
@@ -245,7 +248,9 @@ for (const direct of [false, true]) {
           return dispatch(input, {
             ...callbacks,
             send: async () => {
-              // Change the source after the durable marker and before the send.
+              if (++dispatchCount === 1)
+                throw new Error("interrupted before send");
+              // Change the source after the second durable marker and before the send.
               f.audit.push({
                 did: f.did,
                 operation: updated,
@@ -259,6 +264,20 @@ for (const direct of [false, true]) {
           });
         },
       );
+      await assert.rejects(
+        f.composed.submitIncomingHandoff(submission),
+        /interrupted before send/,
+      );
+      const first = await f.store.pendingExternal(`arrival:${f.did}`);
+      await f.store.approveRecovery({
+        operationId: first.operationId,
+        externalAttemptId: first.id,
+        executionAttemptId: first.executionAttemptId,
+        target: first.target,
+        dispatcherIsolationReference: "case/first-isolation",
+        upstreamDrainReference: "case/first-drain",
+        action: "retry-if-safe",
+      });
       await assert.rejects(f.composed.submitIncomingHandoff(submission), {
         code: "OperationRecoveryRequired",
       });
@@ -291,6 +310,42 @@ for (const direct of [false, true]) {
         ).signedOperations.length,
         1,
       );
+      assert.equal(
+        summarizeArrival(
+          await f.arrivals.readArrivalAggregate(
+            prepared.operationId,
+            f.principal.userId,
+          ),
+        ).mayReapproveSource,
+        true,
+      );
+      const predecessor = (await f.db.read("external_operation_attempts")).find(
+        (item) => item.id === first.id,
+      );
+      assert.deepEqual(JSON.parse(predecessor.result), {
+        recovery: "replay-safe",
+      });
+      const attemptsTable = f.db.tables.external_operation_attempts;
+      await f.db.update(
+        "external_operation_attempts",
+        { intent_digest: "a".repeat(64) },
+        eq(attemptsTable.id, first.id),
+      );
+      assert.equal(
+        summarizeArrival(
+          await f.arrivals.readArrivalAggregate(
+            prepared.operationId,
+            f.principal.userId,
+          ),
+        ).mayReapproveSource,
+        false,
+      );
+      await f.db.update(
+        "external_operation_attempts",
+        { intent_digest: predecessor.intent_digest },
+        eq(attemptsTable.id, first.id),
+      );
+
       assert.equal(f.publicationAttempts.length, 0);
       const status = await f.arrivals.readArrivalAccess(f.did);
       const consent = {
@@ -309,6 +364,42 @@ for (const direct of [false, true]) {
         }),
         { code: "IdentityConflict" },
       );
+      const originalReceipt = (
+        await f.db.read("external_operation_attempts")
+      ).find((item) => item.id === receipt.id);
+      for (const recovery of [
+        null,
+        "[]",
+        JSON.stringify([
+          {
+            ...JSON.parse(originalReceipt.recovery)[0],
+            externalAttemptId: "wrong",
+          },
+        ]),
+      ]) {
+        await f.db.update(
+          "external_operation_attempts",
+          { recovery },
+          eq(attemptsTable.id, receipt.id),
+        );
+        const summary = summarizeArrival(
+          await f.arrivals.readArrivalAggregate(
+            prepared.operationId,
+            f.principal.userId,
+          ),
+        );
+        assert.equal(summary.mayReapproveSource, false);
+        if (recovery === null)
+          await assert.rejects(
+            f.composed.reapproveArrival(f.request, "fresh-otp", consent),
+            { code: "OperationRecoveryRequired" },
+          );
+      }
+      await f.db.update(
+        "external_operation_attempts",
+        { recovery: originalReceipt.recovery },
+        eq(attemptsTable.id, receipt.id),
+      );
       const approvedUpdate = await f.composed.reapproveArrival(
         f.request,
         "fresh-otp",
@@ -318,7 +409,10 @@ for (const direct of [false, true]) {
         (item) => item.id === receipt.id,
       );
       assert.equal(retired.state, "acknowledged");
-      assert.deepEqual(JSON.parse(retired.result), { recovery: "superseded" });
+      assert.deepEqual(JSON.parse(retired.result), {
+        recovery: "superseded",
+        intentDigest: retired.intent_digest,
+      });
       assert.equal(
         JSON.parse(retired.recovery)[0].dispatcherIsolationReference,
         "case/isolation",
@@ -341,6 +435,20 @@ for (const direct of [false, true]) {
       await assert.rejects(f.composed.submitIncomingHandoff(submission), {
         code: "OperationConflict",
       });
+      await f.db.update(
+        "external_operation_attempts",
+        { recovery: null },
+        eq(attemptsTable.id, receipt.id),
+      );
+      submission.presentation = await f.credential();
+      await assert.rejects(f.composed.submitIncomingHandoff(submission), {
+        code: "OperationRecoveryRequired",
+      });
+      await f.db.update(
+        "external_operation_attempts",
+        { recovery: retired.recovery },
+        eq(attemptsTable.id, receipt.id),
+      );
       submission.presentation = await f.credential();
       const changedSigner = t.mock.method(
         Secp256k1MigrationPlcSigner.prototype,
