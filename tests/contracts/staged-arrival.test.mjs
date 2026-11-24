@@ -21,8 +21,9 @@ import {
 
 const create = "com.atproto.server.createAccount";
 
-for (const direct of [false, true]) {
-  test(`staged arrival keeps the source canonical through transfer and validates ${direct ? "a client-published" : "an Entryway-submitted"} cutover`, async (t) => {
+for (const scenario of ["interrupted", "acknowledged", "direct"]) {
+  const direct = scenario === "direct";
+  test(`staged arrival keeps the source canonical through transfer and validates ${scenario} cutover`, async (t) => {
     const f = await fixture(t, "modern", "distinct-handle");
     const target = f.config.pds[0];
     target.stagedIncomingMigration = true;
@@ -259,7 +260,9 @@ for (const direct of [false, true]) {
                 createdAt: new Date().toISOString(),
               });
               race.mock.restore();
-              return callbacks.send();
+              // Exercise an actual acknowledged receipt with a null result, with
+              // the source update visible when the caller observes the directory.
+              return scenario === "acknowledged" ? null : callbacks.send();
             },
           });
         },
@@ -283,6 +286,14 @@ for (const direct of [false, true]) {
       });
       const receipt = await f.store.pendingExternal(`arrival:${f.did}`);
       assert.equal(receipt.step, "incoming-cutover");
+      if (scenario === "acknowledged") {
+        assert.equal(receipt.state, "acknowledged");
+        assert.equal(receipt.result, null);
+        const row = (await f.db.read("external_operation_attempts")).find(
+          (item) => item.id === receipt.id,
+        );
+        assert.equal(row.result, "null");
+      }
       const blocked = await f.arrivals.readArrivalAccess(f.did);
       await assert.rejects(
         f.composed.reapproveArrival(f.request, "fresh-otp", {
@@ -367,6 +378,27 @@ for (const direct of [false, true]) {
       const originalReceipt = (
         await f.db.read("external_operation_attempts")
       ).find((item) => item.id === receipt.id);
+      for (const result of ["{}", "true", "not-json", '"null"']) {
+        await f.db.update(
+          "external_operation_attempts",
+          { result },
+          eq(attemptsTable.id, receipt.id),
+        );
+        assert.equal(
+          summarizeArrival(
+            await f.arrivals.readArrivalAggregate(
+              prepared.operationId,
+              f.principal.userId,
+            ),
+          ).mayReapproveSource,
+          false,
+        );
+      }
+      await f.db.update(
+        "external_operation_attempts",
+        { result: originalReceipt.result },
+        eq(attemptsTable.id, receipt.id),
+      );
       for (const recovery of [
         null,
         "[]",

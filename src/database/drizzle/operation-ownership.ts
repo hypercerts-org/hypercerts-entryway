@@ -155,7 +155,10 @@ export function classifyCutoverReceipt(row: {
   try {
     if (recoveryHistoryFor(row).at(-1)?.action !== "retry-if-safe")
       return "other";
-    if (row.state === "recovery-approved" && row.result === null)
+    if (
+      row.state === "recovery-approved" &&
+      (row.result === null || row.result === "null")
+    )
       return "approved";
     if (row.state !== "acknowledged") return "other";
     if (
