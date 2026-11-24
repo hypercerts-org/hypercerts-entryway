@@ -27,6 +27,7 @@
   }: Props = $props();
 </script>
 
+<p>Account DID: <code>{did}</code></p>
 {#if mode === "start"}
   {#if notMade}<p role="alert">
       Your change was not made. It has been more than ten minutes since you

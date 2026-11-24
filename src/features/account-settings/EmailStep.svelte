@@ -37,6 +37,7 @@
   );
 </script>
 
+<p>Account DID: <code>{did}</code></p>
 <p role="status">{message}</p>
 <form method="post" action={`/account/${action}`}>
   <input type="hidden" name="csrf" value={csrf} /><input
