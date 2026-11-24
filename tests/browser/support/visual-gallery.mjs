@@ -187,7 +187,7 @@ export async function captureGallery(
         animations: "disabled",
         maskColor: "#454545",
         style:
-          'input[type="password"] { color: transparent !important; -webkit-text-fill-color: transparent !important; }',
+          'input[type="password"], [data-testid="app-password"], [data-testid="app-password"] * { color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important; }',
         mask: [
           ...populatedPasswords,
           page.locator('[data-testid="app-password"]'),
