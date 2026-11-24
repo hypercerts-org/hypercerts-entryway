@@ -3,7 +3,6 @@ export type MailPurpose = "sign-in" | "proof";
 export interface MailMessage {
   recipient: string;
   purpose: string;
-  code: string;
   subject: string;
   text: string;
   html: string;

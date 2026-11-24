@@ -49,10 +49,7 @@ export async function createProtocolOperations({
     operations,
     await createScopeReferences({ db, config, accounts, ...operations }),
   );
-  Object.assign(
-    operations,
-    await createAdminMessage({ db, config, accounts, ...operations }),
-  );
+  Object.assign(operations, await createAdminMessage({ mail: plcMail }));
   return {
     ...operations,
     checkAccountStatus: (row) =>

@@ -223,14 +223,26 @@ The ID is only a selector: consumption still verifies the code and binds the
 proof to its DID, purpose, email, version, expiry and single-use state. XRPC
 callers continue to submit the full compound token.
 
+## Supported email operations
+
+Operators should expect email for browser sign-in and resend, signup, account
+verification and email changes, password reset and recovery, account deletion,
+PLC confirmation, migration proofs, and authorized administrative messages.
+Requests that cannot identify an eligible account retain their neutral response
+and send no message. Password reset and recovery queue eligible mail for the
+worker, so the response does not expose an SMTP outage. Browser forms can retain
+an issued selector and accept the emailed code; protocol clients can use the
+compound proof token included in the email. SMS signup verification remains a
+separate channel.
+
 ## Durable mail attempts
 
-Queueing atomically expires/supersedes older messages for the same recipient and
-purpose and removes that purpose's captured projection. A worker changes a
+Queueing atomically expires/supersedes older proof messages for the same recipient and
+purpose. Administrative messages are independent and do not supersede proofs or each other. A worker changes a
 queued row to `sending` using a unique attempt ID, claim version and a 30-second
 database-clock lease. Another worker cannot claim an active attempt. A replaced
-or superseded attempt cannot mark delivery, change retry state or restore its
-captured code. Delivery and capture projection commit in the same transaction.
+or superseded attempt cannot mark delivery or change retry state. Completion clears
+private message content from the row.
 The transport itself receives a formed message and runs outside SQL.
 
 The existing three-attempt budget, 250/750 ms retry delays, ten-minute code
@@ -238,9 +250,22 @@ lifetime and retention windows remain. An expired sending lease can be retried
 within that budget and lifetime, retaining `delivery_uncertain`. A final attempt
 with an expired lease becomes failed with an unknown delivery outcome and clears
 the stored code. Positive SMTP acknowledgement marks delivery; a negative SMTP
-reply records rejection. Lost replies and connection errors conservatively
+reply records retryable rejection for 4xx and permanent failure for 5xx. Lost replies and connection errors conservatively
 record an unknown outcome. A retry after uncertainty can deliver duplicate mail;
 this is not exactly-once SMTP delivery.
+
+Operators can inspect aggregate delivery status without exposing recipients or
+message content. For either supported database, run the following read-only query
+against the selected authority database; `DeliveryUnknown` indicates an uncertain
+acknowledgement, while `TransportRejected` is a terminal 5xx response. Queued or
+sending rows may be retried by the worker; terminal rows are pruned after the
+retention window. SMTP acceptance does not confirm inbox receipt.
+
+```sql
+SELECT state, last_error_code, delivery_uncertain, COUNT(*) AS messages
+FROM mail_outbox
+GROUP BY state, last_error_code, delivery_uncertain;
+```
 
 ## Authentication ordering
 

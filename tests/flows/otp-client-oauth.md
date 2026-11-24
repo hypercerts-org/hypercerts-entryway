@@ -56,8 +56,10 @@ Mailpit messages. The account chooser and remembered-device cases create a secon
 real PDS account for a sandbox-only shared-email fixture through the reviewed
 account authority helper; this does not test joining-PDS association import. The
 remembered-device cases age one account's device row directly in the database.
-The original cases read the test outbox; experience cases use the private Mailpit
-API. Do not describe every imported case as an SMTP end-to-end proof.
+The browser cases read delivered codes through the private Mailpit API. The
+experience cases age the stored verification or authorization flow to exercise
+expiry, then check the expired code or dead flow and a usable replacement.
+Do not describe every imported case as an SMTP end-to-end proof.
 
 **Repeat:** `fresh` supplies isolated state. Ordinary browser identities use
 run-specific names where implemented; a repeated persistent run is not a clean

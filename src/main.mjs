@@ -18,10 +18,7 @@ const lifecycle = createLifecycle({
 const mail = createMailFeature({
   workerId: lifecycle.instanceId,
   outbox: createMailOutbox(db),
-  transport: createSmtpMailTransport({
-    host: process.env.MAIL_SMTP_HOST ?? "mail-capture",
-    port: Number(process.env.MAIL_SMTP_PORT ?? 2525),
-  }),
+  transport: createSmtpMailTransport(config.mail),
 });
 const { app, reconcile } = await createApp({ config, db, mail, lifecycle });
 lifecycle.initialize();

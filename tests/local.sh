@@ -215,6 +215,8 @@ case "$command" in
     ;;
   contracts)
     require_state
+    compose run --rm --no-deps test node tests/support/smtp-tls-relay.mjs
+    compose run --rm --no-deps test node tests/support/smtp-data-faults.mjs
     compose run --rm --no-deps test node tests/support/run-contracts.mjs 2>&1 | tee "$artifacts/contracts.log" | python3 "$root/scripts/ci-summary.py"
     ;;
   database-contracts|database-dialects)

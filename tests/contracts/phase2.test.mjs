@@ -5,16 +5,19 @@ import { DatabaseSync } from "node:sqlite";
 import { randomBytes } from "node:crypto";
 import { Secp256k1Keypair } from "@atproto/crypto";
 import * as plc from "@did-plc/lib";
-import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
+import {
+  waitForMailpitCode,
+  waitForMailpitSubject,
+} from "../support/helpers/mailpit.mjs";
 
 const integration = process.env.SERVICE_CONFIG_PATH ? test : test.skip;
 let config, db, main, identity, adminAccount;
 const password = `spike-${randomBytes(20).toString("hex")}`;
 const unique = randomBytes(6).toString("hex");
-const mail = (email, namespace = "outbox") => {
+const sms = (email) => {
   const row = db
     .prepare("SELECT value FROM key_value_state WHERE namespace=? AND key=?")
-    .get(namespace, email);
+    .get("sms-outbox", email);
   return row && JSON.parse(row.value);
 };
 const bearer = (session) => `Bearer ${session.accessJwt}`;
@@ -69,14 +72,21 @@ const call = (name, body, auth, options = {}) =>
 async function signup(label, pdsId = "pds1", extra = {}) {
   const email = `api-${unique}-${label}@example.com`;
   const handle = `api-${randomBytes(6).toString("hex")}.entryway.atmosbox.test`;
+  const since = Date.now();
   await request(config.issuer, "/signup/request-code", { body: { email } });
+  const verificationCode = (
+    await waitForMailpitCode({ recipient: email, since })
+  ).code;
   const session = await call("server.createAccount", {
     email,
     handle,
     pdsId,
     password,
-    verificationCode: mail(email).otp,
+    verificationCode,
     ...extra,
+    ...(extra.verificationPhone
+      ? { emailVerificationCode: verificationCode }
+      : {}),
   });
   const binding = db
     .prepare("SELECT user_id FROM account_bindings WHERE did=?")
@@ -114,8 +124,11 @@ integration(
   async () => {
     const email = `api-${unique}-password-policy@example.com`;
     const handle = `api-${randomBytes(6).toString("hex")}.entryway.atmosbox.test`;
+    const since = Date.now();
     await request(config.issuer, "/signup/request-code", { body: { email } });
-    const verificationCode = mail(email).otp;
+    const verificationCode = (
+      await waitForMailpitCode({ recipient: email, since })
+    ).code;
     const rejected = await call(
       "server.createAccount",
       { email, handle, verificationCode, password: "short" },
@@ -277,12 +290,17 @@ integration(
   "email change verifies both addresses, preserves DID and invalidates prior credentials",
   async () => {
     const a = await signup("email");
+    let since = Date.now();
     await call("server.requestEmailConfirmation", {}, bearer(a), {
       origin: a.pds.url,
     });
+    const confirmationToken = (
+      await waitForMailpitCode({ recipient: a.email, since })
+    ).token;
+    assert.ok(confirmationToken);
     await call(
       "server.confirmEmail",
-      { email: a.email, token: mail(a.email).token },
+      { email: a.email, token: confirmationToken },
       bearer(a),
       {
         origin: a.pds.url,
@@ -290,20 +308,25 @@ integration(
     );
     await call(
       "server.confirmEmail",
-      { email: a.email, token: mail(a.email).token },
+      { email: a.email, token: confirmationToken },
       bearer(a),
       {
         status: 400,
       },
     );
+    since = Date.now();
     const pending = await call("server.requestEmailUpdate", {}, bearer(a), {
       origin: a.pds.url,
     });
     assert.equal(pending.tokenRequired, true);
+    const oldToken = (await waitForMailpitCode({ recipient: a.email, since }))
+      .token;
+    assert.ok(oldToken);
     const nextEmail = `api-${unique}-changed@example.com`;
+    since = Date.now();
     await call(
       "server.updateEmail",
-      { email: nextEmail, token: mail(a.email).token },
+      { email: nextEmail, token: oldToken },
       bearer(a),
       {
         origin: a.pds.url,
@@ -313,9 +336,12 @@ integration(
       origin: a.pds.url,
     });
     assert.equal(before.email, a.email);
+    const newToken = (await waitForMailpitCode({ recipient: nextEmail, since }))
+      .token;
+    assert.ok(newToken);
     await call(
       "server.confirmEmail",
-      { email: nextEmail, token: mail(nextEmail).token },
+      { email: nextEmail, token: newToken },
       bearer(a),
       { origin: a.pds.url },
     );
@@ -335,10 +361,14 @@ integration(
   "password reset is purpose-bound, single use and revokes old sessions",
   async () => {
     const a = await signup("reset");
+    const since = Date.now();
     await call("server.requestPasswordReset", { email: a.email }, undefined, {
       origin: a.pds.url,
     });
-    const token = mail(a.email).token;
+    const token = (
+      await waitForMailpitCode({ recipient: a.email, since, timeoutMs: 45_000 })
+    ).token;
+    assert.ok(token);
     await call(
       "server.deleteAccount",
       { did: a.did, password, token },
@@ -522,7 +552,28 @@ integration(
       password: `${password}-admin`,
     });
     assert.equal(session.did, adminAccount.did);
+    const adminMailSince = Date.now();
     await call(
+      "admin.sendEmail",
+      {
+        recipientDid: adminAccount.did,
+        senderDid: config.serviceDid,
+        subject: "Denied fixture",
+        content: "A denied local mail delivery test",
+      },
+      admin(config.pds[0]),
+      { status: 403 },
+    );
+    await assert.rejects(
+      waitForMailpitSubject({
+        recipient: adminAccount.email,
+        since: adminMailSince,
+        subject: "Denied fixture",
+        timeoutMs: 2_000,
+      }),
+      /Timed out/,
+    );
+    const result = await call(
       "admin.sendEmail",
       {
         recipientDid: adminAccount.did,
@@ -533,18 +584,13 @@ integration(
       admin(adminAccount.pds),
       { origin: adminAccount.pds.url },
     );
-    const messages = db
-      .prepare(
-        "SELECT value FROM key_value_state WHERE namespace='mail-outbox'",
-      )
-      .all()
-      .map((r) => JSON.parse(r.value));
-    assert.ok(
-      messages.some(
-        (m) =>
-          m.recipientDid === adminAccount.did && m.subject === "Spike fixture",
-      ),
-    );
+    assert.equal(result.sent, true);
+    const message = await waitForMailpitSubject({
+      recipient: adminAccount.email,
+      since: adminMailSince,
+      subject: "Spike fixture",
+    });
+    assert.equal(message.Text.includes("A local mail delivery test"), true);
     const newEmail = `api-${unique}-admin-new@example.com`;
     await call(
       "admin.updateAccountEmail",
@@ -585,11 +631,7 @@ integration(
     const invited = await signup("invited", "pds1", {
       inviteCode: code,
       verificationPhone: phone,
-      verificationCode: mail(phone, "sms-outbox").otp,
-      // signup() requests the email proof immediately before createAccount.
-      get emailVerificationCode() {
-        return mail(`api-${unique}-invited@example.com`).otp;
-      },
+      verificationCode: sms(phone).otp,
     });
     const used = await call(
       "server.getAccountInviteCodes",
@@ -646,10 +688,13 @@ integration(
     await call("server.activateAccount", {}, bearer(deactivated), {
       origin: a.pds.url,
     });
+    const since = Date.now();
     await call("server.requestAccountDelete", {}, bearer(deactivated), {
       origin: a.pds.url,
     });
-    const token = mail(a.email).token;
+    const token = (await waitForMailpitCode({ recipient: a.email, since }))
+      .token;
+    assert.ok(token);
     await call(
       "server.deleteAccount",
       { did: a.did, token, password: "wrong-password" },
@@ -697,11 +742,14 @@ integration(
       bearer(a),
       { origin: a.pds.url },
     );
+    const since = Date.now();
     await request(config.issuer, "/migration/request", {
       body: { pdsId: "pds2" },
       auth: bearer(a),
     });
-    const token = mail(a.email).token;
+    const token = (await waitForMailpitCode({ recipient: a.email, since }))
+      .token;
+    assert.ok(token);
     await call(
       "server.createAccount",
       { did: identity.did, pdsId: "pds2", token },

@@ -31,7 +31,8 @@ let db,
   releaseAccountCheckpoint,
   profileMail,
   releaseProfileMail,
-  profileMailClaim;
+  profileMailClaim,
+  profileMailCompletions;
 process.on("message", async ({ id, command, args }) => {
   try {
     let result;
@@ -169,9 +170,15 @@ process.on("message", async ({ id, command, args }) => {
         releaseAccountCheckpoint();
         break;
       case "profileMailOpen":
+        profileMailCompletions = [];
         profileMail = createMailFeature({
           outbox: {
             ...mail,
+            async markDelivered(...parameters) {
+              const accepted = await mail.markDelivered(...parameters);
+              profileMailCompletions.push(accepted);
+              return accepted;
+            },
             async claimAttempt(...parameters) {
               const claim = await mail.claimAttempt(...parameters);
               if (claim)
@@ -202,6 +209,9 @@ process.on("message", async ({ id, command, args }) => {
         break;
       case "profileMailSend":
         result = await profileMail.sendOtp(args);
+        break;
+      case "profileMailCompletions":
+        result = profileMailCompletions;
         break;
       case "profileMailRetry":
         result = await profileMail.retryPending();
@@ -329,7 +339,20 @@ process.on("message", async ({ id, command, args }) => {
           },
           mail: createMailFeature({
             outbox: mail,
-            transport: { async deliver() {} },
+            transport: {
+              async deliver(message) {
+                const otp = /Use (\d{8}) to/.exec(message.text)?.[1];
+                const token =
+                  /confirmation token is ([A-Za-z0-9_-]+\.\d{8})/.exec(
+                    message.text,
+                  )?.[1];
+                await db.set(
+                  "fixture:mail",
+                  token ? token.split(".")[0] : message.recipient,
+                  { otp, token },
+                );
+              },
+            },
           }),
         });
         break;
@@ -363,7 +386,20 @@ process.on("message", async ({ id, command, args }) => {
           authority: createAccountAuthority({ db, accounts }),
           mail: createMailFeature({
             outbox: mail,
-            transport: { async deliver() {} },
+            transport: {
+              async deliver(message) {
+                const otp = /Use (\d{8}) to/.exec(message.text)?.[1];
+                const token =
+                  /confirmation token is ([A-Za-z0-9_-]+\.\d{8})/.exec(
+                    message.text,
+                  )?.[1];
+                await db.set(
+                  "fixture:mail",
+                  token ? token.split(".")[0] : message.recipient,
+                  { otp, token },
+                );
+              },
+            },
           }),
         });
         break;

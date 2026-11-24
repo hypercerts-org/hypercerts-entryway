@@ -15,12 +15,6 @@ const mailbox = new DatabaseSync(
     "/entryway-data/account-authority.sqlite",
   { readOnly: true },
 );
-const mail = (email) => {
-  const row = mailbox
-    .prepare("SELECT value FROM key_value_state WHERE namespace=? AND key=?")
-    .get("outbox", email);
-  return row ? JSON.parse(row.value) : null;
-};
 const accountForm = (page, action) =>
   page.locator(`form[action="/account/${action}"]`);
 const recoveryRun = process.env.MANAGED_RECOVERY_RUN;
@@ -36,9 +30,13 @@ const target = config.pds.find((p) => p.id === "pds2");
 async function signIn(page, create = false, pendingMigration = false) {
   await page.goto(`${config.issuer}/login`);
   await page.getByLabel("Email address", { exact: true }).fill(identity.email);
+  const since = Date.now();
   await page.getByRole("button", { name: "Send sign-in code" }).click();
-  await expect.poll(() => mail(identity.email)?.type).toBe("sign-in");
-  await page.getByLabel("Sign-in code").fill(mail(identity.email).otp);
+  const { code } = await waitForMailpitCode({
+    recipient: identity.email,
+    since,
+  });
+  await page.getByLabel("Sign-in code").fill(code);
   await page.getByRole("button", { name: "Verify code" }).click();
   if (create) {
     await page.getByLabel("Handle", { exact: true }).fill(identity.handle);
@@ -143,7 +141,6 @@ test("console migrates its own DID, record and blob between enrolled PDSs with m
   await expect(
     page.getByRole("heading", { name: "Confirm data server migration" }),
   ).toBeVisible();
-  await expect.poll(() => mail(identity.email)?.type).toBe("account-migrate");
   const selector = accountForm(page, "migration-confirm").locator(
     'input[name="challengeId"]',
   );

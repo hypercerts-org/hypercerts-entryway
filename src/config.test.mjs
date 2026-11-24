@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   loadOAuthClientPolicy,
+  loadSmtpConfiguration,
   loadOperationLeaseConfiguration,
 } from "../dist/src/config.mjs";
 
@@ -71,5 +72,95 @@ test("invalid operation leases fail startup with a stable code", () => {
       () => loadOperationLeaseConfiguration({ OPERATION_LEASE_MS: value }),
       (error) => error.code === "InvalidOperationLeaseConfiguration",
       value,
+    );
+});
+
+test("SMTP configuration preserves private capture and requires explicit private relays", () => {
+  assert.deepEqual(loadSmtpConfiguration({}), {
+    mode: "private",
+    host: "mail-capture",
+    port: 2525,
+    sender: "Entryway sandbox <entryway@entryway.test>",
+  });
+  assert.equal(
+    loadSmtpConfiguration({
+      MAIL_SMTP_MODE: "private",
+      MAIL_SMTP_HOST: "internal-relay",
+    }).host,
+    "internal-relay",
+  );
+  assert.throws(
+    () => loadSmtpConfiguration({ MAIL_SMTP_HOST: "internal-relay" }),
+    { code: "InvalidSmtpConfiguration" },
+  );
+});
+
+test("SMTP TLS configuration requires complete credentials and never echoes values", () => {
+  const valid = {
+    MAIL_SMTP_MODE: "tls",
+    MAIL_SMTP_HOST: "relay.example",
+    MAIL_SMTP_PORT: "465",
+    MAIL_SMTP_USER: "private-user",
+    MAIL_SMTP_PASSWORD: "private-password",
+    MAIL_FROM: "sender@example.test",
+  };
+  assert.equal(loadSmtpConfiguration(valid).mode, "tls");
+  for (const invalid of [
+    { ...valid, MAIL_SMTP_USER: "" },
+    { ...valid, MAIL_SMTP_PASSWORD: "" },
+    { ...valid, MAIL_SMTP_HOST: "" },
+    { ...valid, MAIL_SMTP_PORT: "" },
+    { ...valid, MAIL_FROM: "" },
+    { ...valid, MAIL_FROM: "x\r\nbcc: secret" },
+    { MAIL_SMTP_MODE: "private", MAIL_SMTP_USER: "private-user" },
+    { MAIL_SMTP_MODE: "private", MAIL_SMTP_PASSWORD: "private-password" },
+    { ...valid, MAIL_SMTP_MODE: "bad" },
+  ])
+    assert.throws(
+      () => loadSmtpConfiguration(invalid),
+      (error) =>
+        error.code === "InvalidSmtpConfiguration" &&
+        !/private|secret|example/.test(error.message),
+    );
+});
+
+test("SMTP sender is exactly one supported mailbox", () => {
+  const base = {
+    MAIL_SMTP_MODE: "tls",
+    MAIL_SMTP_HOST: "relay.example",
+    MAIL_SMTP_PORT: "465",
+    MAIL_SMTP_USER: "user",
+    MAIL_SMTP_PASSWORD: "password",
+  };
+  for (const sender of [
+    "sender@example.test",
+    "Entryway Support <sender@example.test>",
+    "alerts+ops@relay.example",
+  ])
+    assert.equal(
+      loadSmtpConfiguration({ ...base, MAIL_FROM: sender }).sender,
+      sender,
+    );
+  for (const sender of [
+    "secret",
+    "secret@",
+    "@example.test",
+    "a..b@example.test",
+    "a@-example.test",
+    "a@example..test",
+    "a@example.test,b@example.test",
+    "Name <a@example.test>, b@example.test",
+    "a@example.test>",
+    "Name <a@example.test",
+    "Name\n<a@example.test>",
+    "a\u0000@example.test",
+    `${"a".repeat(65)}@example.test`,
+    `a@${"b".repeat(64)}.test`,
+  ])
+    assert.throws(
+      () => loadSmtpConfiguration({ ...base, MAIL_FROM: sender }),
+      (error) =>
+        error.code === "InvalidSmtpConfiguration" &&
+        !error.message.includes(sender),
     );
 });

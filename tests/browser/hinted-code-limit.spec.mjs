@@ -5,7 +5,10 @@
 // attempt uses a fresh browser context, as an unrelated visitor would.
 import { test, expect } from "@playwright/test";
 import { config, createAccount } from "../support/helpers/browser-oauth.mjs";
-import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
+import {
+  NoMailpitMessageError,
+  waitForMailpitCode,
+} from "../support/helpers/mailpit.mjs";
 
 const AUTOMATIC_CODES = 2;
 const WINDOW_MS = 600_000;
@@ -73,7 +76,7 @@ test("a hinted account gets two automatic codes, then an email form that sends a
     const html = await page.content();
     expect(html).not.toContain(account.email);
     expect(html).not.toContain(localPart);
-    await expect(nextCode(3_000)).rejects.toThrow("Timed out");
+    await expect(nextCode(3_000)).rejects.toThrow(NoMailpitMessageError);
 
     await page.getByLabel("Email address").fill(account.email);
     await page.getByRole("button", { name: "Send sign-in code" }).click();

@@ -105,11 +105,8 @@ test(
       { email: "takeover@example.test", otp: "12345678", type: "sign-in" },
       { timeoutMs: 190_000 },
     );
-    const oldMailRejected = assert.rejects(
-      oldMail,
-      (error) => error.code === "MailDeliveryFailed",
-    );
-    const heldMailClaim = await mailHeld;
+    const heldMailClaim = await Promise.race([mailHeld, oldMail]);
+    assert.ok(heldMailClaim, "Mail sender completed before transport was held");
     assert.equal(heldMailClaim.leaseMs, 30_000);
     const accountHeld = first.event("external-acknowledgement-paused");
     const oldAccount = first.command(
@@ -157,6 +154,7 @@ test(
     );
     const mailResult = await second.command("profileMailRetry");
     assert.equal(mailResult.delivered, 1);
+    assert.deepEqual(await second.command("profileMailCompletions"), [true]);
     const mailTakeoverMs = Date.now() - lostAt;
     assert.equal(mailTakeoverMs <= 75_000, true);
     const delivered = (await db.read("mail_outbox"))[0];
@@ -182,9 +180,12 @@ test(
     first.resumeScheduling();
     await first.command("releaseAccountCheckpoint");
     await first.command("releaseProfileMail");
-    await Promise.all([staleRejected, oldMailRejected]);
+    await staleRejected;
+    assert.equal(await oldMail, undefined);
+    assert.deepEqual(await first.command("profileMailCompletions"), [false]);
+    assert.deepEqual(await second.command("profileMailCompletions"), [true]);
     assert.equal(effects.get(did), 1);
-    assert.equal((await db.read("mail_outbox"))[0].state, "delivered");
+    assert.deepEqual((await db.read("mail_outbox"))[0], delivered);
     await assert.rejects(
       second.command("accountStatus", {
         did: uncertain,
@@ -228,6 +229,9 @@ test(
           mailTakeoverMs,
           staleAccountRejected: true,
           staleMailRejected: true,
+          staleMailCompletionAccepted: false,
+          successorMailCompletionAccepted: true,
+          staleMailSenderResolved: true,
           uncertainAttemptRetained: true,
           unrelatedProgress: true,
           identity: candidateIdentity(),

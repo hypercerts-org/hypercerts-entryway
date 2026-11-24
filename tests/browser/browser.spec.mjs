@@ -3,7 +3,10 @@ import { DatabaseSync } from "node:sqlite";
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { createPublicKey, randomUUID } from "node:crypto";
 import { SignJWT, importJWK, exportJWK } from "jose";
-import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
+import {
+  NoMailpitMessageError,
+  waitForMailpitCode,
+} from "../support/helpers/mailpit.mjs";
 
 const config = JSON.parse(
   readFileSync(
@@ -21,10 +24,6 @@ const read = mailbox.prepare(
 );
 const kv = (namespace, key) => {
   const row = read.get(namespace, key);
-  return row ? JSON.parse(row.value) : null;
-};
-const outbox = (email) => {
-  const row = read.get("outbox", email);
   return row ? JSON.parse(row.value) : null;
 };
 const runId = Date.now().toString(36);
@@ -209,12 +208,15 @@ async function signup(identity, { negativeOtp = false } = {}) {
   } else await begin({ prompt: "create" });
   await expect(page.getByLabel("Email address")).toBeVisible();
   await page.getByLabel("Email address").fill(identity.email);
+  const since = Date.now();
   await page.getByRole("button", { name: "Send sign-in code" }).click();
   await expect(
     page.getByRole("heading", { name: "Check your email" }),
   ).toBeVisible();
-  await expect.poll(() => outbox(identity.email)?.otp).toMatch(/^\d{8}$/);
-  const otp = outbox(identity.email).otp;
+  const { code: otp } = await waitForMailpitCode({
+    recipient: identity.email,
+    since,
+  });
   if (negativeOtp) {
     await page
       .getByLabel("Sign-in code")
@@ -286,14 +288,16 @@ test("second stock PDS onboarding and independent resource audience", async () =
 
 test("existing device session reuses login across two real OAuth clients", async () => {
   const alice = identities[0];
-  const mailBefore = outbox(alice.email).createdAt;
+  const since = Date.now();
   await begin({ identifier: alice.handle });
   await expect(page.getByTestId("signed-in-did")).toHaveText(alice.did);
   await begin({ identifier: alice.handle, client: "secondary" });
   await expect(consent(alice.did)).toBeVisible();
   await completeConsent(alice.did);
   expect((await session("secondary")).did).toBe(alice.did);
-  expect(outbox(alice.email).createdAt).toEqual(mailBefore);
+  await expect(
+    waitForMailpitCode({ recipient: alice.email, since, timeoutMs: 2_000 }),
+  ).rejects.toThrow(NoMailpitMessageError);
 });
 
 test("an email hint for a remembered account goes straight to consent for a new client without a code", async () => {
@@ -301,7 +305,7 @@ test("an email hint for a remembered account goes straight to consent for a new 
   // been approved: like a stock PDS, Entryway selects the remembered session and
   // shows consent instead of sending a code.
   const bob = identities[1];
-  const mailBefore = outbox(bob.email).createdAt;
+  const since = Date.now();
   const url = new URL("/client/login", config.clientUrl);
   url.searchParams.set("identifier", config.issuer);
   url.searchParams.set("email", bob.email);
@@ -312,7 +316,9 @@ test("an email hint for a remembered account goes straight to consent for a new 
   ).toBeVisible();
   await completeConsent(bob.did);
   expect((await session("untrusted")).did).toBe(bob.did);
-  expect(outbox(bob.email).createdAt).toEqual(mailBefore);
+  await expect(
+    waitForMailpitCode({ recipient: bob.email, since, timeoutMs: 2_000 }),
+  ).rejects.toThrow(NoMailpitMessageError);
 });
 
 test("a returning account that approved a client still sees consent after a code sign-in", async ({
@@ -396,6 +402,7 @@ test("CSRF, hostile Origin and unvalidated callback parameters are rejected", as
   await page.goto(`${config.issuer}/login`);
   const flow = await page.locator('input[name="flow"]').inputValue();
   const csrf = await page.locator('input[name="csrf"]').inputValue();
+  const since = Date.now();
   const wrongToken = await page.request.post(`${config.issuer}/auth/email`, {
     form: { flow, csrf: "wrong", email: "not-sent@example.com" },
     headers: { origin: config.issuer },
@@ -406,7 +413,13 @@ test("CSRF, hostile Origin and unvalidated callback parameters are rejected", as
     headers: { origin: "https://attacker.example" },
   });
   expect(wrongOrigin.status()).toBe(400);
-  expect(outbox("not-sent@example.com")).toBeNull();
+  await expect(
+    waitForMailpitCode({
+      recipient: "not-sent@example.com",
+      since,
+      timeoutMs: 2_000,
+    }),
+  ).rejects.toThrow(NoMailpitMessageError);
   const unpushed = await page.request.get(
     `${config.issuer}/oauth/authorize?client_id=https://attacker.example/client.json&redirect_uri=https://attacker.example/callback`,
     { maxRedirects: 0 },
@@ -425,8 +438,9 @@ test("email codes stop accepting guesses and sending is rate limited", async () 
       form: { flow, csrf, email },
       headers: { origin: config.issuer },
     });
+  const since = Date.now();
   expect((await send()).status()).toBe(200);
-  const otp = outbox(email).otp;
+  const { code: otp } = await waitForMailpitCode({ recipient: email, since });
   const wrong = otp === "00000000" ? "11111111" : "00000000";
   for (let attempt = 0; attempt < 5; attempt++) {
     const response = await page.request.post(`${config.issuer}/auth/verify`, {

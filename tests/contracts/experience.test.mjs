@@ -73,7 +73,7 @@ test("page renderer escapes titles and preserves security policy without externa
   );
 });
 
-test("mail capture projection is written only after SMTP accepts delivery", async (t) => {
+test("SMTP acceptance marks delivery and clears the stored code", async (t) => {
   const { sqlite, outbox } = await fixture();
   t.after(async () => await sqlite.close());
   const fakeClock = clock();
@@ -88,19 +88,6 @@ test("mail capture projection is written only after SMTP accepts delivery", asyn
     otp: "12345678",
     type: "sign-in",
   });
-  const projected = JSON.parse(
-    (
-      await query(
-        sqlite,
-        "SELECT value FROM key_value_state WHERE namespace='outbox'",
-        [],
-        "get",
-      )
-    ).value,
-  );
-  assert.equal(projected.email, "person@example.com");
-  assert.equal(projected.otp, "12345678");
-  assert.equal(projected.type, "sign-in");
   assert.equal(
     (await query(sqlite, "SELECT state,code FROM mail_outbox", [], "get"))
       .state,
@@ -160,8 +147,7 @@ test("pending delivery survives service restart", async (t) => {
     id: "retry-row",
     recipient: "person@example.com",
     purpose: "sign-in",
-    code: "12345678",
-    projectionField: "otp",
+    payload: { kind: "otp", code: "12345678" },
     createdAt: fakeClock.now(),
     expiresAt: fakeClock.now() + 600_000,
     attemptCount: 1,
@@ -209,8 +195,7 @@ test("expired and superseded queued codes are never sent by recovery retry", asy
     id: "expired-row",
     recipient: "person@example.com",
     purpose: "sign-in",
-    code: "11111111",
-    projectionField: "otp",
+    payload: { kind: "otp", code: "11111111" },
     createdAt: fakeClock.now() - 600_001,
     expiresAt: fakeClock.now() - 1,
     attemptCount: 0,
@@ -220,7 +205,7 @@ test("expired and superseded queued codes are never sent by recovery retry", asy
   const stale = {
     ...expired,
     id: "stale-row",
-    code: "22222222",
+    payload: { kind: "otp", code: "22222222" },
     createdAt: fakeClock.now(),
     expiresAt: fakeClock.now() + 600_000,
     nextAttemptAt: fakeClock.now(),
@@ -337,7 +322,7 @@ test("retry worker skips a message while its SMTP attempt is active", async (t) 
   );
 });
 
-test("late SMTP acknowledgement after code expiry never projects a usable code", async (t) => {
+test("late SMTP acknowledgement after code expiry cannot restore a usable code", async (t) => {
   const { sqlite, outbox } = await fixture();
   t.after(async () => await sqlite.close());
   const fakeClock = clock();
@@ -379,7 +364,7 @@ test("late SMTP acknowledgement after code expiry never projects a usable code",
   );
 });
 
-test("outbox and fixture projections expire on bounded retention windows", async (t) => {
+test("terminal outbox entries expire on bounded retention windows", async (t) => {
   const { sqlite, outbox } = await fixture();
   t.after(async () => await sqlite.close());
   const fakeClock = clock();
@@ -395,7 +380,7 @@ test("outbox and fixture projections expire on bounded retention windows", async
     purpose: "email-old",
   });
   fakeClock.advance(10 * 60_000 + 1);
-  assert.equal((await mail.pruneExpired()) >= 1, true);
+  assert.equal(await mail.pruneExpired(), 0);
   assert.equal(
     (
       await query(
@@ -463,7 +448,7 @@ test("exhausted delivery stores no fixture message or code and returns a safe er
     (
       await query(
         sqlite,
-        "SELECT state,code,projection_token FROM mail_outbox",
+        "SELECT state,code,proof_token FROM mail_outbox",
         [],
         "get",
       )
@@ -471,14 +456,8 @@ test("exhausted delivery stores no fixture message or code and returns a safe er
     "failed",
   );
   assert.equal(
-    (
-      await query(
-        sqlite,
-        "SELECT code,projection_token FROM mail_outbox",
-        [],
-        "get",
-      )
-    ).code,
+    (await query(sqlite, "SELECT code,proof_token FROM mail_outbox", [], "get"))
+      .code,
     null,
   );
   assert.equal(

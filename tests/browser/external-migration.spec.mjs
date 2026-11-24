@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { DatabaseSync } from "node:sqlite";
+import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
 import { readFileSync, writeFileSync } from "node:fs";
 const config = JSON.parse(
   readFileSync(process.env.SERVICE_CONFIG_PATH, "utf8"),
@@ -7,25 +7,18 @@ const config = JSON.parse(
 const reportPath = "artifacts/external-migration.json";
 const report = JSON.parse(readFileSync(reportPath, "utf8"));
 const identity = report.identity;
-const mailbox = new DatabaseSync("/entryway-data/account-authority.sqlite", {
-  readOnly: true,
-});
-const mail = () =>
-  JSON.parse(
-    mailbox
-      .prepare("SELECT value FROM key_value_state WHERE namespace=? AND key=?")
-      .get("outbox", identity.email)?.value ?? "null",
-  );
-test.afterAll(() => mailbox.close());
-
 test("external account verifies its destination email, then uses OAuth on the cluster", async ({
   page,
 }) => {
   await page.goto(`${config.issuer}/login`);
   await page.getByLabel("Email address", { exact: true }).fill(identity.email);
+  const since = Date.now();
   await page.getByRole("button", { name: "Send sign-in code" }).click();
-  await expect.poll(() => mail()?.type).toBe("sign-in");
-  await page.getByLabel("Sign-in code").fill(mail().otp);
+  const { code } = await waitForMailpitCode({
+    recipient: identity.email,
+    since,
+  });
+  await page.getByLabel("Sign-in code").fill(code);
   await page.getByRole("button", { name: "Verify code" }).click();
   if (process.env.EXTERNAL_PHASE === "prepare") {
     if (!["account-bound", "complete"].includes(report.phase))

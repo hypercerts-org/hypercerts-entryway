@@ -68,19 +68,37 @@ async function fixture(t, plcMail) {
       },
     },
   };
+  const captured = new Map();
   const protocolOperations = await createProtocolOperations({
-    plcMail,
+    plcMail: plcMail ?? {
+      async queueOtp(request) {
+        return {
+          async deliver() {
+            captured.set(request.email, request.otp);
+          },
+        };
+      },
+    },
     db,
     config,
     accounts,
   });
-  return { db, config, accounts, row, op, rotation, protocolOperations };
+  return {
+    db,
+    config,
+    accounts,
+    row,
+    op,
+    rotation,
+    protocolOperations,
+    captured,
+  };
 }
 
 test("signup and phone proofs are purpose-bound, single-use, expire and exhaust attempts", async (t) => {
-  const { protocolOperations, db } = await fixture(t);
+  const { protocolOperations, db, captured } = await fixture(t);
   await protocolOperations.requestSignup({ email: " Alice@Example.COM " });
-  const emailToken = (await db.get("outbox", "alice@example.com")).otp;
+  const emailToken = captured.get("alice@example.com");
   await protocolOperations.requestPhoneVerification({
     phoneNumber: "+491234567890",
   });
@@ -124,7 +142,7 @@ test("signup and phone proofs are purpose-bound, single-use, expire and exhaust 
     },
   );
   await protocolOperations.requestSignup({ email: "attempts@example.com" });
-  const exhausted = (await db.get("outbox", "attempts@example.com")).otp;
+  const exhausted = captured.get("attempts@example.com");
   for (let i = 0; i < 5; i++)
     await assert.rejects(
       async () =>
@@ -145,7 +163,7 @@ test("signup and phone proofs are purpose-bound, single-use, expire and exhaust 
     },
   );
   await protocolOperations.requestSignup({ email: "expired@example.com" });
-  const token = (await db.get("outbox", "expired@example.com")).otp;
+  const token = captured.get("expired@example.com");
   const key = "signup:expired@example.com";
   await db.set("entryway:challenges", key, {
     ...(await db.get("entryway:challenges", key)),
@@ -164,9 +182,10 @@ test("signup and phone proofs are purpose-bound, single-use, expire and exhaust 
 });
 
 test("PLC operation signing requires current authority and a single-use account email proof", async (t) => {
-  const { protocolOperations, db, row, rotation, op } = await fixture(t);
+  const { protocolOperations, db, row, rotation, op, captured } =
+    await fixture(t);
   await protocolOperations.requestPlcOperationSignature(row);
-  const token = (await db.get("outbox", row.email)).otp;
+  const token = captured.get(row.email);
   await assert.rejects(
     protocolOperations.signPlcOperation(row, { token, services: {} }),
     {
@@ -202,9 +221,9 @@ test("PLC operation signing requires current authority and a single-use account 
 });
 
 test("PLC authorization commits wrong guesses and rolls back proof when history fails", async (t) => {
-  const { protocolOperations, db, row } = await fixture(t);
+  const { protocolOperations, db, row, captured } = await fixture(t);
   await protocolOperations.requestPlcOperationSignature(row);
-  const token = (await db.get("outbox", row.email)).otp;
+  const token = captured.get(row.email);
   const challengeKey = `plc-operation:${row.did}:${row.email}`;
   await assert.rejects(
     protocolOperations.signPlcOperation(row, { token: "wrong" }),
@@ -231,9 +250,9 @@ test("PLC authorization commits wrong guesses and rolls back proof when history 
 });
 
 test("concurrent PLC releases consume one proof and response loss requires fresh confirmation", async (t) => {
-  const { protocolOperations, db, row } = await fixture(t);
+  const { protocolOperations, db, row, captured } = await fixture(t);
   await protocolOperations.requestPlcOperationSignature(row);
-  const token = (await db.get("outbox", row.email)).otp;
+  const token = captured.get(row.email);
   const outcomes = await Promise.allSettled([
     protocolOperations.signPlcOperation(row, { token }),
     protocolOperations.signPlcOperation(row, { token }),
@@ -257,9 +276,9 @@ test("concurrent PLC releases consume one proof and response loss requires fresh
 });
 
 test("PLC signing rejects unknown fields, invalid endpoint URLs and keys without consuming a valid proof", async (t) => {
-  const { protocolOperations, db, row } = await fixture(t);
+  const { protocolOperations, row, captured } = await fixture(t);
   await protocolOperations.requestPlcOperationSignature(row);
-  const token = (await db.get("outbox", row.email)).otp;
+  const token = captured.get(row.email);
   await assert.rejects(
     protocolOperations.signPlcOperation(row, { token, did: "did:plc:other" }),
     {
@@ -293,9 +312,9 @@ test("PLC signing rejects unknown fields, invalid endpoint URLs and keys without
 });
 
 test("password reset invalidates outstanding PLC signatures even through fresh PDS service authorization", async (t) => {
-  const { protocolOperations, db, row } = await fixture(t);
+  const { protocolOperations, db, row, captured } = await fixture(t);
   await protocolOperations.requestPlcOperationSignature(row);
-  const staleCode = (await db.get("outbox", row.email)).otp;
+  const staleCode = captured.get(row.email);
   // account-security increments this durable epoch on recovery/reset/revocation.
   // A PDS can still issue a fresh service JWT from a stateless old access token.
   await db.set("security:versions", row.did, 1);
@@ -313,7 +332,7 @@ test("password reset invalidates outstanding PLC signatures even through fresh P
   await db.set("entryway:challenges", key, unversioned);
   await assert.rejects(
     protocolOperations.signPlcOperation(row, {
-      token: (await db.get("outbox", row.email)).otp,
+      token: captured.get(row.email),
     }),
     {
       error: "InvalidToken",
@@ -321,14 +340,15 @@ test("password reset invalidates outstanding PLC signatures even through fresh P
   );
   await db.set("entryway:challenges", key, current);
   await protocolOperations.signPlcOperation(row, {
-    token: (await db.get("outbox", row.email)).otp,
+    token: captured.get(row.email),
   });
 });
 
 test("PLC signing rechecks email authority and deletion after asynchronous directory resolution", async (t) => {
-  const { protocolOperations, accounts, db, row, op } = await fixture(t);
+  const { protocolOperations, accounts, db, row, op, captured } =
+    await fixture(t);
   await protocolOperations.requestPlcOperationSignature(row);
-  const token = (await db.get("outbox", row.email)).otp;
+  const token = captured.get(row.email);
   const authenticatedSnapshot = { ...row };
   let release, entered;
   const reached = new Promise((resolve) => {
@@ -356,7 +376,8 @@ test("PLC signing rechecks email authority and deletion after asynchronous direc
 });
 
 test("pending migration blocks PLC request, signing and submission including work already awaiting the directory", async (t) => {
-  const { protocolOperations, accounts, db, row, op } = await fixture(t);
+  const { protocolOperations, accounts, db, row, op, captured } =
+    await fixture(t);
   let migrationPending = false;
   accounts.assertNoMigration = (did) => {
     assert.equal(did, row.did);
@@ -367,7 +388,7 @@ test("pending migration blocks PLC request, signing and submission including wor
       });
   };
   await protocolOperations.requestPlcOperationSignature(row);
-  const token = (await db.get("outbox", row.email)).otp;
+  const token = captured.get(row.email);
   let release, entered;
   const reached = new Promise((resolve) => {
     entered = resolve;
@@ -559,12 +580,18 @@ test("parallel protocol attempt reservations preserve the configured limit", asy
   assert.equal((await db.get("entryway:limits", "parallel")).count, 3);
 });
 
-test("PLC-only mail queues atomically and dispatches only after challenge commit", async (t) => {
+test("challenge mail queues atomically and dispatches only after commit", async (t) => {
   let db, row;
   let delivered = 0;
   let failQueue = false;
   const f = await fixture(t, {
     async queueOtp(request) {
+      if (request.type === "signup")
+        return {
+          async deliver() {
+            delivered++;
+          },
+        };
       assert.equal(request.type, "plc-operation");
       await db.set("fixture:queued-mail", request.email, {
         type: request.type,
@@ -601,8 +628,7 @@ test("PLC-only mail queues atomically and dispatches only after challenge commit
   failQueue = false;
   await f.protocolOperations.requestPlcOperationSignature(row);
   assert.equal(delivered, 1);
-  assert.equal(await db.get("outbox", row.email), null);
+  assert.ok(await db.get("fixture:queued-mail", row.email));
   await f.protocolOperations.requestSignup({ email: "unchanged@example.com" });
-  assert.ok(await db.get("outbox", "unchanged@example.com"));
-  assert.equal(delivered, 1);
+  assert.equal(delivered, 2);
 });

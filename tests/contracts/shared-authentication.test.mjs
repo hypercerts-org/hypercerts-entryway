@@ -115,7 +115,7 @@ test(
     assert.equal(challenges.length, 2);
     assert.equal(challenges.filter((row) => !row.value.consumedAt).length, 1);
     const current = challenges.find((row) => !row.value.consumedAt);
-    const captured = await db.get("outbox", account.email);
+    const captured = await db.get("fixture:mail", current.key);
     assert.equal(captured.token.split(".")[0] === current.key, true);
     const consumed = await Promise.allSettled([
       first.command("securityConsume", { token: captured.token }),
@@ -153,7 +153,7 @@ test(
     await second.command("authenticationOpen");
     const email = "browser-owner@example.test";
     await first.command("authenticationSend", { email });
-    const otp = (await db.get("outbox", email)).otp;
+    const otp = (await db.get("fixture:mail", email)).otp;
     let entered, release;
     const ready = new Promise((resolve) => {
         entered = resolve;
@@ -199,7 +199,7 @@ test(
     );
     assert.equal((await db.read("session")).length, 1);
     await second.command("authenticationSend", { email });
-    const current = (await db.get("outbox", email)).otp;
+    const current = (await db.get("fixture:mail", email)).otp;
     const wrong = (current[0] === "0" ? "1" : "0") + current.slice(1);
     for (let attempt = 0; attempt < 5; attempt++) {
       const response = await (attempt % 2 ? first : second).command(
@@ -236,7 +236,7 @@ test(
     await second.command("authenticationOpen");
     const email = "replacement@example.test";
     await second.command("authenticationSend", { email });
-    const old = (await db.get("outbox", email)).otp;
+    const old = (await db.get("fixture:mail", email)).otp;
     const wrong = (old[0] === "0" ? "1" : "0") + old.slice(1);
     const paused = first.event("verification-consumed");
     const verification = first.command("authenticationVerify", {
@@ -269,7 +269,7 @@ test(
     }
     assert.deepEqual(await verification, { ok: false, status: 400 });
     await resend;
-    const current = (await db.get("outbox", email)).otp;
+    const current = (await db.get("fixture:mail", email)).otp;
     assert.equal(
       (await second.command("authenticationVerify", { email, otp: old })).ok,
       false,
@@ -294,7 +294,12 @@ test("resending replaces same-timestamp sign-in proofs without invalidating othe
   t.after(() => db.close());
   const mail = createMailFeature({
     outbox: createMailOutbox(db),
-    transport: { async deliver() {} },
+    transport: {
+      async deliver(message) {
+        const otp = /Use (\d{8}) to/.exec(message.text)?.[1];
+        await db.set("fixture:mail", message.recipient, { otp });
+      },
+    },
   });
   const authentication = await createBetterAuthAuthentication({
     db,
@@ -307,16 +312,16 @@ test("resending replaces same-timestamp sign-in proofs without invalidating othe
   const email = "replacement@example.test";
   const otherEmail = "other@example.test";
   await authentication.sendSignInCode(email);
-  const old = (await db.get("outbox", email)).otp;
+  const old = (await db.get("fixture:mail", email)).otp;
   await authentication.sendSignInCode(otherEmail);
-  const other = (await db.get("outbox", otherEmail)).otp;
+  const other = (await db.get("fixture:mail", otherEmail)).otp;
   const wrong = (old[0] === "0" ? "1" : "0") + old.slice(1);
   assert.equal(
     (await authentication.verifySignInCode({ email, otp: wrong })).ok,
     false,
   );
   await authentication.sendSignInCode(email);
-  const current = (await db.get("outbox", email)).otp;
+  const current = (await db.get("fixture:mail", email)).otp;
   assert.equal(
     (await authentication.verifySignInCode({ email, otp: old })).ok,
     false,
@@ -363,7 +368,12 @@ test("independent authentication instances order wrong guesses with replacement 
   };
   const mail = createMailFeature({
     outbox: createMailOutbox(db),
-    transport: { async deliver() {} },
+    transport: {
+      async deliver(message) {
+        const otp = /Use (\d{8}) to/.exec(message.text)?.[1];
+        await db.set("fixture:mail", message.recipient, { otp });
+      },
+    },
   });
   const first = await createBetterAuthAuthentication({
     db: firstDb,
@@ -377,7 +387,7 @@ test("independent authentication instances order wrong guesses with replacement 
   });
   const email = "instance-owner@example.test";
   await second.sendSignInCode(email);
-  const old = (await db.get("outbox", email)).otp;
+  const old = (await db.get("fixture:mail", email)).otp;
   const wrong = (old[0] === "0" ? "1" : "0") + old.slice(1);
   const verification = first.verifySignInCode({ email, otp: wrong });
   await paused;
@@ -387,7 +397,7 @@ test("independent authentication instances order wrong guesses with replacement 
   release();
   assert.deepEqual(await verification, { ok: false, status: 400 });
   await resend;
-  const current = (await db.get("outbox", email)).otp;
+  const current = (await db.get("fixture:mail", email)).otp;
   assert.equal((await second.verifySignInCode({ email, otp: old })).ok, false);
   assert.equal(
     (await first.verifySignInCode({ email, otp: current })).ok,
@@ -399,7 +409,7 @@ test("independent authentication instances order wrong guesses with replacement 
   );
   assert.equal((await db.read("session")).length, 1);
   await second.sendSignInCode(email);
-  const limitedCode = (await db.get("outbox", email)).otp;
+  const limitedCode = (await db.get("fixture:mail", email)).otp;
   const wrongGuess =
     (limitedCode[0] === "0" ? "1" : "0") + limitedCode.slice(1);
   for (let attempt = 0; attempt < 5; attempt++)

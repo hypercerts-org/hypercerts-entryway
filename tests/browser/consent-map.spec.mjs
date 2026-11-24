@@ -8,7 +8,10 @@
 import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { openDatabase } from "../../dist/src/database/connection.js";
-import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
+import {
+  NoMailpitMessageError,
+  waitForMailpitCode,
+} from "../support/helpers/mailpit.mjs";
 
 const config = JSON.parse(
   readFileSync(
@@ -67,7 +70,7 @@ async function enterEmailedCode(target, email, since) {
 async function expectNoCodeSent(email, since) {
   await expect(
     waitForMailpitCode({ recipient: email, since, timeoutMs: 3_000 }),
-  ).rejects.toThrow("Timed out");
+  ).rejects.toThrow(NoMailpitMessageError);
 }
 
 // Signs up through `client` with prompt=create and stops after "Create

@@ -529,8 +529,10 @@ export const mail_outbox = table(
     recipient: text("recipient").notNull(),
     purpose: text("purpose").notNull(),
     code: text("code"),
-    projection_field: text("projection_field").notNull(),
-    projection_token: text("projection_token"),
+    subject: text("subject"),
+    text: text("text"),
+    message_kind: text("message_kind").notNull(),
+    proof_token: text("proof_token"),
     state: text("state").notNull(),
     last_error_code: text("last_error_code"),
     created_at: count("created_at").notNull(),
@@ -553,8 +555,8 @@ export const mail_outbox = table(
       t.created_at,
     ),
     check(
-      "mail_projection_field",
-      sql`${t.projection_field} IN ('otp','token')`,
+      "mail_message_kind",
+      sql`${t.message_kind} IN ('otp','proof','admin')`,
     ),
     check("mail_attempts", sql`${t.attempt_count} BETWEEN 0 AND 3`),
     check(
