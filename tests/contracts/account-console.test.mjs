@@ -861,3 +861,23 @@ test("a refused confirmation code explains the rate limit and offers a plain sig
     },
   );
 });
+
+test("connected-app controls retain the selected DID and escape client names", async () => {
+  const { renderConnectedApps } = await import("#entryway-ssr/connected-apps");
+  const { body } = renderConnectedApps({
+    csrf,
+    did: didB,
+    grants: [["<client>", { authorizedScopes: ["read"] }]],
+    tokens: [],
+    legacySessions: [],
+    baSessions: [],
+    devices: [],
+    sessionId: "session-one",
+    deviceId: "device-one",
+  });
+  assert.match(body, /&lt;client>/);
+  assert.doesNotMatch(body, /<client>/);
+  assert.match(body, /action="\/account\/grant-revoke"/);
+  assert.match(body, new RegExp(`name="did" value="${didB}"`));
+  assert.match(body, new RegExp(`name="csrf" value="${csrf}"`));
+});

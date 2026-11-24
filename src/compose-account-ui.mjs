@@ -13,13 +13,13 @@ import {
   renderConnectedApps,
   renderAppPasswords,
   renderAppPasswordForm,
-} from "./features/connected-apps/page.mjs";
+} from "#entryway-ssr/connected-apps";
 import { createDeletionActions } from "./features/account-deletion/actions.mjs";
-import { renderLifecyclePanel } from "./features/account-deletion/page.mjs";
+import { renderLifecyclePanel } from "#entryway-ssr/account-deletion";
 import { createMigrationActions } from "./features/pds-migration/actions.mjs";
-import { renderMigrationPanel } from "./features/pds-migration/page.mjs";
+import { renderMigrationPanel } from "#entryway-ssr/pds-migration";
 import { createHandleActions } from "./features/handle-change/actions.mjs";
-import { renderHandleForm } from "./features/handle-change/page.mjs";
+import { renderHandleForm } from "#entryway-ssr/handle-change";
 
 export function mountAccountUi(context) {
   const console = createAccountConsole(context);
@@ -27,12 +27,47 @@ export function mountAccountUi(context) {
   mountAccountSettingsPage({
     ...dependencies,
     loadConnections: (req, did) => queryConnectedApps(context, req, did),
-    renderConnections: renderConnectedApps,
-    renderAppPasswords,
-    renderAppPasswordForm,
-    renderHandle: renderHandleForm,
-    renderLifecycle: renderLifecyclePanel,
-    renderMigration: renderMigrationPanel,
+    renderConnections: ({ csrf, accountContext, session, b, ...connected }) =>
+      renderConnectedApps({
+        ...connected,
+        csrf,
+        did: accountContext.did,
+        sessionId: session.sessionId,
+        deviceId: b.deviceId,
+      }).body,
+    renderAppPasswords: ({ appPasswords, csrf, accountContext }) =>
+      renderAppPasswords({
+        passwords: appPasswords.passwords ?? [],
+        csrf,
+        did: accountContext.did,
+      }).body,
+    renderAppPasswordForm: ({ csrf, accountContext }) =>
+      renderAppPasswordForm({ csrf, did: accountContext.did }).body,
+    renderHandle: ({ csrf, a, accountContext }) =>
+      renderHandleForm({ csrf, did: accountContext.did, handle: a.handle })
+        .body,
+    renderLifecycle: ({ csrf, a, accountContext }) =>
+      renderLifecyclePanel({ csrf, did: accountContext.did, status: a.status })
+        .body,
+    renderMigration: ({
+      config,
+      a,
+      csrf,
+      accountContext,
+      migrationState,
+      migrationRecovery,
+      migration,
+    }) =>
+      migration
+        ? renderMigrationPanel({
+            servers: config.pds,
+            pdsId: a.pdsId,
+            csrf,
+            did: accountContext.did,
+            migrationState,
+            recoveryRequired: migrationRecovery?.state === "dispatched",
+          }).body
+        : "",
   });
   console.mountActions(
     createAccountSettingsActions({

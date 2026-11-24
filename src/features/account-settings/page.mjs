@@ -1,3 +1,8 @@
+import {
+  renderIdentity,
+  renderRecoveryPanel,
+  renderPasswordPanel,
+} from "#entryway-ssr/account-settings";
 import { page, escapeHtml as esc } from "../../ui/html.mjs";
 import {
   codeField,
@@ -5,8 +10,6 @@ import {
   hidden,
   form,
   manageLink,
-  stamp,
-  section,
   rows,
   settingsLink,
 } from "../../ui/account-forms.mjs";
@@ -17,19 +20,6 @@ export const newEmailConfirmFields = (challengeId, email) =>
   hidden("email", email) +
   codeField("New email verification code");
 
-function renderEmailChange({ security, state, csrf, accountContext }) {
-  if (!security) return "";
-  let confirmation = "";
-  if (state.pendingEmail) {
-    const email =
-      typeof state.pendingEmail === "string"
-        ? state.pendingEmail
-        : state.pendingEmail.email;
-    confirmation = `<p>Awaiting verification of ${esc(email)}.</p>${form("email-confirm", csrf, newEmailConfirmFields(state.pendingEmailChallengeId, email), "Confirm new email", accountContext)}`;
-  }
-  return `<h3>Change primary email</h3><p>Verify your current email, then your new email. Your browser sessions will stay signed in for any other linked accounts. Sign in with your new email to access this account after the change.</p>${form("email-request", csrf, "", "Start email change", accountContext)}${confirmation}`;
-}
-
 function renderIdentityPanel({
   a,
   csrf,
@@ -39,44 +29,31 @@ function renderIdentityPanel({
   accountContext,
   canSwitchAccount,
 }) {
-  return section(
-    "identity",
-    "Identity and email",
-    `
-      <div class="account-context" aria-label="Current account and data host"><strong data-testid="account-handle">${esc(a.handle)}</strong><span>Signed in as ${esc(a.email)}</span><span>Repository hosted at ${esc(a.pdsUrl)}</span><span>Account DID <code data-testid="account-did">${esc(a.did)}</code></span></div>
-      <dl class="identity"><dt>Handle</dt><dd>${esc(a.handle)}</dd><dt>Account DID</dt><dd><code>${esc(a.did)}</code></dd><dt>Personal data server</dt><dd>${esc(a.pdsUrl)}</dd><dt>Primary email</dt><dd data-testid="primary-email">${esc(a.email)} (verified)</dd><dt>Created</dt><dd>${esc(stamp(a.createdAt))}</dd><dt>Account status</dt><dd>Status: ${esc(a.status)}</dd></dl>
-      <p class="muted">These settings apply only to the selected DID. ${canSwitchAccount ? '<a href="/account">Switch linked account</a>' : ""}</p>
-      ${renderHandle({ a, csrf, accountContext })}
-      ${renderEmailChange({ security, state, csrf, accountContext })}
-    `,
+  return (
+    renderIdentity({
+      account: a,
+      csrf,
+      security: Boolean(security),
+      canSwitchAccount,
+      pendingEmail: state.pendingEmail,
+      pendingEmailChallengeId: state.pendingEmailChallengeId,
+    }).body + renderHandle({ a, csrf, accountContext })
   );
+}
+
+function renderRecoveryPanelHtml({ security, state, accountContext }) {
+  return renderRecoveryPanel({
+    security: Boolean(security),
+    backupEmails: state.backupEmails ?? [],
+    did: accountContext.did,
+  }).body;
 }
 
 const recoveryStatus = (item) =>
   `<strong>${esc(item.email)}</strong><span>${item.verified ? "Verified" : "Awaiting verification"}</span>`;
-
-// Settings changes that need a recent session are a button here. The button
-// opens a protected page, which asks a stale session to confirm it's you before
-// it shows the form.
-function renderRecoveryPanel({ security, state, accountContext }) {
-  return section(
-    "recovery",
-    "Recovery email",
-    security
-      ? `
-      <p>Add an email you can still access if your primary mailbox is lost. Each recovery address must be verified before it can restore access.</p>
-      ${rows(state.backupEmails ?? [], recoveryStatus, "No verified recovery email.")}
-      ${manageLink("recovery", "Manage recovery email", accountContext)}
-      <p><a href="/recover">Recover an account using a verified recovery email</a></p>
-    `
-      : "<p>Recovery email setup is not available yet.</p>",
-  );
-}
-
 const passwordLabel = (state) =>
   state.passwordEnabled ? "Change account password" : "Set account password";
-
-function renderPasswordPanel({
+function renderPasswordPanelHtml({
   security,
   legacy,
   state,
@@ -85,23 +62,16 @@ function renderPasswordPanel({
   renderAppPasswords,
   accountContext,
 }) {
-  if (!(security && legacy))
-    return section(
-      "passwords",
-      "Passwords",
-      "<p>Password management is not available yet.</p>",
-    );
-  const passwordStatus = state.passwordEnabled
-    ? "Optional account password is enabled."
-    : "This account has no account password. Email sign-in remains available.";
-  return section(
-    "passwords",
-    "Passwords",
-    `
-      <p>${passwordStatus} Passwords here support apps that use the legacy AT Protocol sign-in API. Changing or removing a password ends all sessions and removes existing app passwords.</p>
-      ${manageLink("password", passwordLabel(state), accountContext)}
-      ${renderAppPasswords({ appPasswords, csrf, accountContext })}
-    `,
+  return (
+    renderPasswordPanel({
+      security: Boolean(security),
+      legacy: Boolean(legacy),
+      passwordEnabled: state.passwordEnabled,
+      did: accountContext.did,
+    }).body +
+    (security && legacy
+      ? renderAppPasswords({ appPasswords, csrf, accountContext })
+      : "")
   );
 }
 
@@ -241,12 +211,12 @@ export function mountAccountSettingsPage({
         accountContext,
         canSwitchAccount,
       });
-      const backup = renderRecoveryPanel({
+      const backup = renderRecoveryPanelHtml({
         security,
         state,
         accountContext,
       });
-      const passwords = renderPasswordPanel({
+      const passwords = renderPasswordPanelHtml({
         security,
         legacy,
         state,
@@ -288,7 +258,9 @@ export function mountAccountSettingsPage({
       page(
         res,
         "Account settings",
-        `<p>Manage your sign-in, recovery options, and connected applications.</p><nav class="section-nav" aria-label="Account sections"><a href="#identity">Identity</a><a href="#recovery">Recovery</a><a href="#passwords">Passwords</a><a href="#sessions">Sessions</a><a href="#lifecycle">Lifecycle</a>${migration ? '<a href="#migration">Data server</a>' : ""}</nav>${identity}${backup}${passwords}${sessions}${lifecycle}${migrationPanel}${form("/auth/logout", csrf, "", "Sign out", accountContext, 'class="signout"')}`,
+        `${form("/auth/logout", csrf, "", "Sign out", accountContext, 'class="account-header-action"')}<p>Manage your sign-in, recovery options, and connected applications.</p><nav class="section-nav" aria-label="Account sections"><a href="#identity">Identity</a><a href="#recovery">Recovery</a><a href="#passwords">Passwords</a><a href="#sessions">Sessions</a><a href="#lifecycle">Lifecycle</a>${migration ? '<a href="#migration">Data server</a>' : ""}</nav>${identity}${backup}${passwords}${sessions}${lifecycle}${migrationPanel}`,
+        200,
+        { layout: "settings" },
       );
     }),
   );
