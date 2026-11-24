@@ -28,23 +28,25 @@ test.beforeAll(async ({ browser }) => {
 });
 
 /** Open the client sign-in and verify the shared email, ending at the chooser. */
-async function reachChooser(page) {
+async function reachChooser(page, pair = shared, { capture = false } = {}) {
   await beginAuthorization(page, { prompt: "consent" });
   const authorizeUrl = page.url();
   await expect(page.getByLabel("Email address")).toBeVisible();
-  await captureGallery(page, {
-    name: "oauth-email",
-    description: "Shared pair primary client fresh email entry",
-    heading: "Sign in to authorize",
-  });
-  const message = await requestVisibleCode(page, shared.email);
-  await captureGallery(page, {
-    name: "oauth-code",
-    description: "Shared pair primary client empty code entry",
-    heading: "Check your email",
-  });
+  if (capture)
+    await captureGallery(page, {
+      name: "oauth-email",
+      description: "Shared pair primary client fresh email entry",
+      heading: "Sign in to authorize",
+    });
+  const message = await requestVisibleCode(page, pair.email);
+  if (capture)
+    await captureGallery(page, {
+      name: "oauth-code",
+      description: "Shared pair primary client empty code entry",
+      heading: "Check your email",
+    });
   const beforeProof = await page.content();
-  for (const account of [shared.first, shared.second])
+  for (const account of [pair.first, pair.second])
     expect(beforeProof).not.toContain(account.did);
   await expect(page.locator('form[action="/auth/select"]')).toHaveCount(0);
 
@@ -76,7 +78,7 @@ for (const which of ["first", "second"]) {
           heading: "Hypercerts test client",
         });
       }
-      await reachChooser(page);
+      await reachChooser(page, shared, { capture: which === "first" });
       await expect(page.locator('form[action="/auth/select"]')).toHaveCount(2);
       for (const account of [first, second])
         await expect(selectionForm(page, account.did)).toHaveCount(1);
@@ -234,6 +236,8 @@ test("each linked account has its own button and status, and consent can return 
 test("OAuth code fits and pastes at 320 pixels without JavaScript", async ({
   browser,
 }) => {
+  test.setTimeout(180_000);
+  const pair = await createSharedEmailPair(browser, { prefix: "c3", runId });
   const context = await browser.newContext({
     ignoreHTTPSErrors: false,
     javaScriptEnabled: false,
@@ -243,7 +247,7 @@ test("OAuth code fits and pastes at 320 pixels without JavaScript", async ({
   try {
     const page = await context.newPage();
     await beginAuthorization(page, { prompt: "consent" });
-    const message = await requestVisibleCode(page, shared.email);
+    const message = await requestVisibleCode(page, pair.email);
     const input = page.getByLabel("Sign-in code");
     await page.evaluate(
       (code) => navigator.clipboard.writeText(code),
@@ -387,20 +391,22 @@ test("OAuth code fits and pastes at 320 pixels without JavaScript", async ({
     await expect(
       page.getByRole("heading", { name: "Choose an account" }),
     ).toBeVisible();
-    await expect(selectionForm(page, shared.second.did)).toBeVisible();
+    await expect(selectionForm(page, pair.second.did)).toBeVisible();
   } finally {
     await context.close();
   }
 });
 
 test("OAuth denial returns to the independent client", async ({ browser }) => {
+  test.setTimeout(180_000);
+  const pair = await createSharedEmailPair(browser, { prefix: "cd", runId });
   const context = await browser.newContext({ ignoreHTTPSErrors: false });
   try {
     const page = await context.newPage();
-    await reachChooser(page);
-    await selectionForm(page, shared.first.did).getByRole("button").click();
-    await expect(consentForm(page, shared.first.did)).toBeVisible();
-    await consentForm(page, shared.first.did)
+    await reachChooser(page, pair);
+    await selectionForm(page, pair.first.did).getByRole("button").click();
+    await expect(consentForm(page, pair.first.did)).toBeVisible();
+    await consentForm(page, pair.first.did)
       .getByRole("button", { name: "Cancel" })
       .click();
     expect(new URL(page.url()).origin).toBe(new URL(config.clientUrl).origin);
@@ -413,7 +419,7 @@ test("OAuth denial returns to the independent client", async ({ browser }) => {
     await captureGallery(page, {
       name: "client-denial",
       description:
-        "Independent client return after shared pair first account denied consent",
+        "Independent client return after first account denied consent",
       heading: "Application request failed",
     });
   } finally {
@@ -424,6 +430,8 @@ test("OAuth denial returns to the independent client", async ({ browser }) => {
 test("untrusted OAuth client uses neutral chooser colors", async ({
   browser,
 }) => {
+  test.setTimeout(180_000);
+  const pair = await createSharedEmailPair(browser, { prefix: "cu", runId });
   const context = await browser.newContext({
     ignoreHTTPSErrors: false,
     javaScriptEnabled: false,
@@ -431,9 +439,9 @@ test("untrusted OAuth client uses neutral chooser colors", async ({
   try {
     const page = await context.newPage();
     await beginAuthorization(page, { client: "untrusted", prompt: "consent" });
-    const message = await requestVisibleCode(page, shared.email);
+    const message = await requestVisibleCode(page, pair.email);
     await verifyVisibleCode(page, message.code);
-    const button = selectionForm(page, shared.second.did).getByRole("button");
+    const button = selectionForm(page, pair.second.did).getByRole("button");
     await assertChooserStyle(page, button, {
       foreground: "rgb(26, 19, 15)",
       background: "rgb(247, 247, 247)",
@@ -443,7 +451,7 @@ test("untrusted OAuth client uses neutral chooser colors", async ({
       name: "oauth-untrusted-chooser",
       description: "Shared pair untrusted client neutral chooser",
       heading: "Choose an account",
-      did: shared.second.did,
+      did: pair.second.did,
     });
   } finally {
     await context.close();
