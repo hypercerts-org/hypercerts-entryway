@@ -335,22 +335,6 @@ main[data-layout="settings"]:has(> .account-header-action) > h1 {
 }
 
 /* Account console: persistent desktop navigation and a native mobile menu. */
-main[data-layout="settings"]:has(.account-shell) {
-  width: min(1100px, calc(100% - 32px));
-  padding: 0;
-  overflow: visible;
-}
-main[data-layout="settings"]:has(.account-shell) > small {
-  display: none;
-}
-main[data-layout="settings"]:has(.account-shell) > h1 {
-  margin: 0;
-  padding: 16px 24px 16px 264px;
-  border-bottom: 1px solid var(--border);
-  font:
-    600 20px/1.4 system-ui,
-    sans-serif;
-}
 .account-shell {
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
@@ -479,15 +463,6 @@ main[data-layout="settings"]:has(.account-shell) > h1 {
   gap: 6px;
 }
 @media (max-width: 700px) {
-  main[data-layout="settings"]:has(.account-shell) {
-    width: 100%;
-    margin: 0;
-    border: 0;
-    border-radius: 0;
-  }
-  main[data-layout="settings"]:has(.account-shell) > h1 {
-    padding: 16px;
-  }
   .account-shell {
     display: block;
   }

@@ -155,7 +155,7 @@
                 : undefined}
           >
             <span class="destination-icon" aria-hidden="true">
-              {link.icon}
+              <link.icon aria-hidden="true" size={24} />
             </span><span>
               <strong>{link.label}</strong><small>{link.description}</small>
             </span><ChevronRight aria-hidden="true" size={20} />
