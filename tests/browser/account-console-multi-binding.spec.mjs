@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
 import { createSharedEmailPair } from "./support/email-chooser-fixture.mjs";
+import { captureGallery } from "./support/visual-gallery.mjs";
 
 const config = JSON.parse(
   readFileSync(
@@ -105,6 +106,12 @@ for (const which of ["first", "second"]) {
           submissions.push({ path, status: response.status() });
       });
       await page.goto(new URL("/login", config.issuer).href);
+      if (which === "first")
+        await captureGallery(page, {
+          name: "standalone-email",
+          description: "Shared pair standalone email entry",
+          heading: "Sign in",
+        });
       for (const account of [shared.first, shared.second]) {
         expect(await page.content()).not.toContain(account.did);
         expect(await page.content()).not.toContain(account.handle);
@@ -118,6 +125,12 @@ for (const which of ["first", "second"]) {
         expect(await page.content()).not.toContain(account.did);
         expect(await page.content()).not.toContain(account.handle);
       }
+      if (which === "first")
+        await captureGallery(page, {
+          name: "standalone-code",
+          description: "Shared pair standalone empty code entry",
+          heading: "Check your email",
+        });
       const message = await waitForMailpitCode({
         recipient: shared.email,
         since,
@@ -162,6 +175,12 @@ for (const which of ["first", "second"]) {
       )
         await page.keyboard.press("Tab");
       await expect(button).toBeFocused();
+      await captureGallery(page, {
+        name: `standalone-chooser-${which}`,
+        description: `Shared pair chooser with ${which} account focused`,
+        heading: "Choose an account",
+        did: selected.did,
+      });
       await page.keyboard.press("Enter");
       await page.waitForURL((url) => url.pathname === "/account");
       expect(submissions).toEqual([
@@ -172,6 +191,12 @@ for (const which of ["first", "second"]) {
       expect(new URL(page.url()).pathname).toBe("/account");
       expect(new URL(page.url()).searchParams.get("did")).toBe(selected.did);
       await expect(page.getByTestId("account-did")).toHaveText(selected.did);
+      await captureGallery(page, {
+        name: `settings-${which}`,
+        description: `Shared pair ${which} account settings and sections`,
+        heading: "Account settings",
+        did: selected.did,
+      });
       await page.reload();
       expect(new URL(page.url()).searchParams.get("did")).toBe(selected.did);
       await expect(page.getByTestId("account-did")).toHaveText(selected.did);
@@ -274,6 +299,12 @@ test("an open app-password form stays bound to the account after a mailbox chang
       .getByRole("button")
       .click();
     await stale.getByRole("link", { name: "Create app password" }).click();
+    await captureGallery(stale, {
+      name: "stale-app-password-form",
+      description: "Pair stale first account app password form",
+      heading: "Create app password",
+      did: pair.first.did,
+    });
     await stale.getByLabel("App password name").fill(name);
 
     const change = await context.newPage();
@@ -285,6 +316,11 @@ test("an open app-password form stays bound to the account after a mailbox chang
     );
     const oldSince = Date.now();
     await change.getByRole("button", { name: "Start email change" }).click();
+    await captureGallery(change, {
+      name: "email-change-current",
+      description: "Pair stale first account current email verification",
+      heading: "Verify current email",
+    });
     const oldCode = await waitForMailpitCode({
       recipient: pair.email,
       since: oldSince,
@@ -299,6 +335,11 @@ test("an open app-password form stays bound to the account after a mailbox chang
     await change
       .getByRole("button", { name: "Verify current email and continue" })
       .click();
+    await captureGallery(change, {
+      name: "email-change-new",
+      description: "Pair stale first account new email verification",
+      heading: "Verify new email",
+    });
     const newCode = await waitForMailpitCode({
       recipient: nextEmail,
       since: newSince,
@@ -309,6 +350,11 @@ test("an open app-password form stays bound to the account after a mailbox chang
       change.getByRole("heading", { name: "Primary email updated" }),
     ).toBeVisible();
 
+    await captureGallery(change, {
+      name: "email-change-result",
+      description: "Pair stale first account email updated",
+      heading: "Primary email updated",
+    });
     const staleResponse = stale.waitForResponse(
       (response) =>
         response.request().method() === "POST" &&
@@ -320,6 +366,11 @@ test("an open app-password form stays bound to the account after a mailbox chang
       "The selected account is not linked to this verified identity",
     );
     await expect(stale.getByTestId("app-password")).toHaveCount(0);
+    await captureGallery(stale, {
+      name: "stale-form-rejected",
+      description: "Pair stale first account form rejected with recovery link",
+      heading: "Account operation could not be completed",
+    });
     await expect(
       stale.getByRole("link", { name: "Return to account settings" }),
     ).toHaveAttribute("href", "/account");
@@ -338,6 +389,12 @@ test("an open app-password form stays bound to the account after a mailbox chang
     await sibling.getByLabel("App password name").fill(`sibling-${runId}`);
     await sibling.getByRole("button", { name: "Create app password" }).click();
     await expect(sibling.getByTestId("app-password")).toBeVisible();
+    await captureGallery(sibling, {
+      name: "stale-second-action-result",
+      description:
+        "Pair stale second account app password created secret masked",
+      heading: "App password created",
+    });
     await sibling
       .getByRole("link", { name: "Return to account settings" })
       .click();

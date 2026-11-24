@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { captureGallery } from "./support/visual-gallery.mjs";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
@@ -171,6 +172,11 @@ test("a session signed in more than ten minutes ago confirms it's you before a p
       page.getByRole("heading", { name: "Confirm it's you" }),
     ).toBeVisible();
     expect(new URL(page.url()).pathname).toBe("/account/manage/recovery");
+    await captureGallery(page, {
+      name: "recent-proof-start",
+      description: "Separate account aged session confirmation start",
+      heading: "Confirm it's you",
+    });
     await expect(accountForm(page, "backup-request")).toHaveCount(0);
     await expect(
       page.locator("strong", { hasText: owner.email }),
@@ -179,6 +185,11 @@ test("a session signed in more than ten minutes ago confirms it's you before a p
     const sent = posted(page, "/account/confirm/start");
     await page.getByRole("button", { name: "Send code" }).click();
     expect((await sent).status()).toBe(200);
+    await captureGallery(page, {
+      name: "recent-proof-code",
+      description: "Separate account aged session empty confirmation code",
+      heading: "Confirm it's you",
+    });
     const challengeId = await page
       .locator('form[action="/account/confirm"] input[name="challengeId"]')
       .first()
@@ -236,6 +247,11 @@ test("a session signed in more than ten minutes ago confirms it's you before a p
       page.getByRole("heading", { name: "Manage recovery email" }),
     ).toBeVisible();
     expect(new URL(page.url()).pathname).toBe("/account/manage/recovery");
+    await captureGallery(page, {
+      name: "recent-proof-return",
+      description: "Separate account confirmation returned to recovery form",
+      heading: "Manage recovery email",
+    });
 
     // The confirmation covers both recovery-email steps.
     const backup = await addRecoveryEmail(page, backupEmail);
