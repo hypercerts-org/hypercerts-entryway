@@ -124,7 +124,7 @@ export function createOAuthStores(db, accounts, config) {
               throw new InvalidRequestError(
                 "Authorization request belongs to another device",
               );
-            return { flowId: row.entryFlowId };
+            if (row.entryFlowId) return { flowId: row.entryFlowId };
           }
           await set("requests", context.requestId, {
             ...row,

@@ -116,6 +116,26 @@ export function createBrowserFlow({
     await save(flow);
     return flow;
   };
+  // Call within the transaction that validates the current attempt.
+  const replaceFlow = async (current, browser, extra = {}, restart = false) => {
+    const next = await newFlow(browser, {
+      ...(restart ? {} : { createdAt: current.createdAt }),
+      requestUri: current.requestUri,
+      requestRecordId: current.requestRecordId,
+      requestOwner: current.requestOwner,
+      clientId: current.clientId,
+      clientName: current.clientName,
+      parameters: current.parameters,
+      accountHint: current.accountHint,
+      otpRequestCount: current.otpRequestCount,
+      lastOtpSentAt: current.lastOtpSentAt,
+      ...extra,
+    });
+    if (next.requestRecordId)
+      await stores.setAuthorizationFlow(next, current.id);
+    await db.delete("auth-flows", current.id);
+    return next;
+  };
   const readFlow = async (id, browser) => {
     const flow = await db.get("auth-flows", String(id ?? ""));
     if (!flow || flow.deviceId !== browser.deviceId) {
@@ -194,6 +214,7 @@ export function createBrowserFlow({
     fields,
     save,
     newFlow,
+    replaceFlow,
     async bindFlow(flow, previousId) {
       if (flow.requestRecordId)
         await stores.setAuthorizationFlow(flow, previousId);

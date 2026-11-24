@@ -231,6 +231,13 @@ async function fixture(
       `<form method="post" action="/auth/email">${flows.fields(flow, browser)}<label>Email address</label><input type="email"></form>`,
     consentForm: (consentFlow, _browser, account) =>
       `<form method="post" action="/auth/consent"><input name="did" value="${account.did}"><input name="account-hint" value="${consentFlow.accountHint ?? ""}"></form>`,
+    resumeFlow: async (_req, res, flow, browser) =>
+      flows.pageForFlow(
+        res,
+        "Sign in",
+        `<form method="post" action="/auth/email">${flows.fields(flow, browser)}</form>`,
+        flow,
+      ),
     async startEmailCode(res, codeFlow, _browser, email, options) {
       if (automaticLimit && options?.automatic) return "auto-limit";
       emailCodes.push({
@@ -337,12 +344,12 @@ async function fixture(
       );
       return res;
     },
-    async approve(did, flowId = flow.id) {
+    async approve(did, flowId = flow.id, decision = "approve") {
       const res = response();
       await handlers.get("/auth/consent")(
         {
           headers: { origin: "https://entryway.example.test" },
-          body: { flow: flowId, csrf, did, decision: "approve" },
+          body: { flow: flowId, csrf, did, decision },
         },
         res,
         (error) => {
@@ -948,4 +955,51 @@ test("authorization refresh resumes only the current request flow", async (t) =>
     3,
   );
   await assert.rejects(() => f.flows.readFlow(original.id, f.browser));
+});
+
+test("hinted code successor retains request ownership", async (t) => {
+  const f = await fixture(t, {
+    realAdmission: true,
+    loginHint: "account-1.example.test",
+    remembered: [],
+  });
+  await f.startAuthorization();
+  assert.equal(f.emailCodes.length, 1);
+  const active = await f.stores.readRequest("request-id");
+  assert.equal(active.entryFlowId, f.emailCodes[0].flowId);
+  const flow = await f.db.get("auth-flows", active.entryFlowId);
+  assert.equal(flow.requestRecordId, "request-id");
+  assert.equal(flow.accountHint, hostedFirst.did);
+});
+
+test("remembered email consent successor retains request ownership", async (t) => {
+  const f = await fixture(t, {
+    realAdmission: true,
+    emailAccounts: { "owner@example.test": [ownerRow] },
+  });
+  const response = await f.startAuthorization(emailHint);
+  assert.match(response.body, /action="\/auth\/consent"/);
+  const active = await f.stores.readRequest("request-id");
+  const flow = await f.db.get("auth-flows", active.entryFlowId);
+  assert.equal(flow.requestRecordId, "request-id");
+  assert.equal(flow.consentDid, ownerRow.did);
+});
+
+test("retired consent cannot approve or deny after the same account is reverified", async (t) => {
+  const did = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+  const f = await fixture(t, { realAdmission: true });
+  await f.startAuthorization();
+  const record = await f.stores.readRequest("request-id");
+  const old = await f.db.get("auth-flows", record.entryFlowId);
+  const next = await f.db.transact(() => f.flows.replaceFlow(old, f.browser));
+  await f.db.set("auth-flows", next.id, {
+    ...next,
+    authDid: did,
+    authEmail: verifiedEmail,
+    authUserId: identity.userId,
+  });
+  assert.equal((await f.approve(did, old.id)).statusCode, 400);
+  assert.equal((await f.approve(did, old.id, "deny")).statusCode, 400);
+  assert.equal((await f.stores.readRequest("request-id")).entryFlowId, next.id);
+  assert.equal((await f.approve(did, next.id)).statusCode, 303);
 });

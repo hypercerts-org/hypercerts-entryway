@@ -456,8 +456,12 @@ async function verificationFixture(
         return browser;
       },
     },
+    checkLoginRequired: () => false,
     requestManager: { async get() {} },
     accountManager: {
+      async getDeviceAccount(_device, did) {
+        return { account: { did, handle: "owner.example.test" } };
+      },
       async upsertDeviceAccount(deviceId, did) {
         await db.set("fixture-device-accounts", deviceId, did);
       },
@@ -531,11 +535,14 @@ async function verificationFixture(
     csrf: "test-csrf",
     createdAt: new Date(),
   });
-  mountEmailLogin({
+  const emailRoutes = mountEmailLogin({
     app: fakeApp(handlers),
     db,
     flows,
     authenticated,
+    provider,
+    consentForm: (flow, _browser, account) =>
+      `<form action="/auth/consent">${flow.id} ${account.did}</form>`,
     authentication: {
       async queueSignInCode() {
         return { async deliver() {} };
@@ -584,6 +591,14 @@ async function verificationFixture(
   return {
     db,
     flow,
+    async resume(id = flow.id) {
+      const res = fakeResponse();
+      await emailRoutes.resumeFlow({}, res, await db.get("auth-flows", id), {
+        ...browser,
+        csrf: "test-csrf",
+      });
+      return res;
+    },
     gate,
     get cookies() {
       return cookies;
@@ -1082,4 +1097,46 @@ test("a newer resend for the same email invalidates a paused flow authentication
     200,
   );
   assert.equal(f.cookies, 1);
+});
+
+test("refresh restores OTP, verified chooser and selected consent without sending a code", async (t) => {
+  const f = await verificationFixture(t, "multiple-accounts");
+  assert.match((await f.resume()).body, /action="\/auth\/verify"/);
+  await f.request("/auth/verify", { otp: "valid-proof" });
+  assert.match((await f.resume()).body, /action="\/auth\/select"/);
+  const did = "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb";
+  await f.request("/auth/select", { did });
+  const consent = await f.resume();
+  assert.match(consent.body, /action="\/auth\/consent"/);
+  assert.match(consent.body, new RegExp(did));
+});
+
+test("same mailbox reproof does not restore the retired chooser", async (t) => {
+  const f = await verificationFixture(t, "multiple-accounts");
+  await f.request("/auth/verify", { otp: "valid-proof" });
+  const old = f.flow.id;
+  const response = await f.request("/auth/another-account", {});
+  const next = response.body.match(/name="flow" value="([^"]+)"/)?.[1];
+  assert.ok(next);
+  const send = await f.request("/auth/email", {
+    flow: next,
+    email: "old@example.test",
+  });
+  assert.equal(send.statusCode, 200);
+  const verified = await f.request("/auth/verify", {
+    flow: next,
+    otp: "valid-proof",
+  });
+  assert.equal(verified.statusCode, 200);
+  const stale = await f.request("/auth/select", {
+    flow: old,
+    did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
+  });
+  assert.equal(stale.statusCode, 400);
+  assert.equal((await f.db.get("auth-flows", next)).authDid, undefined);
+  const valid = await f.request("/auth/select", {
+    flow: next,
+    did: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
+  });
+  assert.equal(valid.statusCode, 200);
 });

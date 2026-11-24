@@ -58,7 +58,7 @@ export async function createAuthentication({
     pendingArrival: createPendingArrivalGuard(accounts.storage),
     clientRequestsSignupConsentSkip,
   });
-  const { startEmailCode } = mountEmailLogin({
+  const { startEmailCode, resumeFlow } = mountEmailLogin({
     app,
     db,
     authentication,
@@ -67,6 +67,8 @@ export async function createAuthentication({
     forms,
     signupForm,
     authenticated,
+    provider,
+    consentForm,
     getAccountSecurity,
     async forgetBrowserAccounts(deviceId) {
       for (const entry of await provider.accountManager.listDeviceAccounts(
@@ -101,6 +103,7 @@ export async function createAuthentication({
     loginForm: forms.loginForm,
     consentForm,
     startEmailCode,
+    resumeFlow,
     getAccountByHint: (hint) => accounts.get(hint),
     listAccountsByEmail: (email) => accounts.storage.listByEmail(email),
     priorConsentSkip,

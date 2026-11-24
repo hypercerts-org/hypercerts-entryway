@@ -64,6 +64,8 @@ export function mountEmailLogin({
   authenticated,
   getAccountSecurity,
   forgetBrowserAccounts,
+  provider,
+  consentForm,
 }) {
   const {
     save,
@@ -375,21 +377,7 @@ export function mountEmailLogin({
           current.authEmail !== identity.email
         )
           throw new InvalidRequestError("Verified sign-in session expired");
-        const next = await newFlow(browser, {
-          createdAt: current.createdAt,
-          requestUri: current.requestUri,
-          requestRecordId: current.requestRecordId,
-          requestOwner: current.requestOwner,
-          clientId: current.clientId,
-          clientName: current.clientName,
-          parameters: current.parameters,
-          accountHint: current.accountHint,
-          otpRequestCount: current.otpRequestCount,
-          lastOtpSentAt: current.lastOtpSentAt,
-        });
-        await flows.bindFlow(next, current.id);
-        await db.delete("auth-flows", current.id);
-        return next;
+        return flows.replaceFlow(current, browser);
       });
       return pageForFlow(
         res,
@@ -470,5 +458,64 @@ export function mountEmailLogin({
   );
   // Lets authorization start the same rate-limited code send as the email
   // form, for an email login_hint on the redirect URL or a hinted account.
-  return { startEmailCode: sendCode };
+  const resumeFlow = async (req, res, flow, browser) => {
+    if (flow.authUserId && flow.authEmail) {
+      const identity = await requireChooserIdentity(req, flow);
+      const resolution = await getAccountSecurity()?.assertLoginEmail(identity);
+      const accounts = linkedAccounts(resolution).filter((account) =>
+        matchesLoginHint(flow, account),
+      );
+      if (flow.authDid) {
+        const account = accounts.find(
+          (candidate) =>
+            candidate.did === flow.authDid && candidate.status === "active",
+        );
+        const session =
+          account &&
+          (await provider.accountManager.getDeviceAccount(
+            browser.deviceId,
+            account.did,
+          ));
+        if (!session || provider.checkLoginRequired(session))
+          throw new InvalidRequestError("Sign in to this account first");
+        return pageForFlow(
+          res,
+          "Authorize application",
+          consentForm(flow, browser, account),
+          flow,
+        );
+      }
+      if (!accounts.length)
+        throw new InvalidRequestError("No linked account is available");
+      return pageForFlow(
+        res,
+        "Choose an account",
+        forms.accountSelectionForm(flow, browser, accounts),
+        flow,
+      );
+    }
+    if (flow.consentDid) {
+      const session = await provider.accountManager.getDeviceAccount(
+        browser.deviceId,
+        flow.consentDid,
+      );
+      if (
+        !session ||
+        session.account.deactivated ||
+        provider.checkLoginRequired(session) ||
+        !matchesLoginHint(flow, session.account)
+      )
+        throw new InvalidRequestError("Sign in to this account first");
+      return pageForFlow(
+        res,
+        "Authorize application",
+        consentForm(flow, browser, session.account),
+        flow,
+      );
+    }
+    if (flow.email)
+      return pageForFlow(res, "Check your email", otpForm(flow, browser), flow);
+    return pageForFlow(res, "Sign in", loginForm(flow, browser), flow);
+  };
+  return { startEmailCode: sendCode, resumeFlow };
 }

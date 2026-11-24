@@ -508,6 +508,10 @@ test("one authorization attempt owns a request across replacement", async (t) =>
     async (entry) => {
       entered();
       await waiting;
+      await assert.rejects(() =>
+        f.store.updateRequest(id, { expiresAt: new Date() }),
+      );
+      await assert.rejects(() => f.store.deleteRequest(id));
       const flow = {
         id: "first",
         clientId,
@@ -520,19 +524,29 @@ test("one authorization attempt owns a request across replacement", async (t) =>
     },
   );
   await started;
-  assert.deepEqual(
-    await f.store.admitAuthorization(clientId, deviceId, peek, () => {
-      throw new Error("competing operation ran");
-    }),
-    { flowId: undefined },
+  const flow = await f.store.admitAuthorization(
+    clientId,
+    deviceId,
+    peek,
+    async (entry) => {
+      const winner = {
+        id: "winner",
+        clientId,
+        deviceId,
+        requestRecordId: id,
+        requestOwner: entry.owner,
+      };
+      await f.db.transact(() => f.store.setAuthorizationFlow(winner));
+      return winner;
+    },
   );
   release();
-  const flow = await first;
+  await assert.rejects(first, /Authorization attempt is no longer active/);
   assert.deepEqual(
     await f.store.admitAuthorization(clientId, deviceId, peek, () => {
       throw new Error("refresh reran authorization");
     }),
-    { flowId: "first" },
+    { flowId: "winner" },
   );
   const replacement = { ...flow, id: "replacement" };
   await f.db.transact(() => f.store.setAuthorizationFlow(replacement, flow.id));

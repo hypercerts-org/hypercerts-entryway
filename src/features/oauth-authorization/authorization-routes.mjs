@@ -55,6 +55,7 @@ export function mountAuthorizationRoutes({
   loginForm,
   consentForm,
   startEmailCode,
+  resumeFlow,
   getAccountByHint,
   listAccountsByEmail,
   priorConsentSkip,
@@ -115,18 +116,10 @@ export function mountAuthorizationRoutes({
         throw new InvalidRequestError(
           "This sign-in choice has already been used",
         );
-      const next = await newFlow(browser, {
-        requestUri: current.requestUri,
-        clientId: current.clientId,
-        clientName: current.clientName,
-        createdAt: current.createdAt,
-        otpRequestCount: current.otpRequestCount,
-        lastOtpSentAt: current.lastOtpSentAt,
+      return flows.replaceFlow(current, browser, {
         parameters,
         accountHint: did,
       });
-      await db.delete("auth-flows", current.id);
-      return next;
     });
     if (!email)
       return pageForFlow(
@@ -204,14 +197,18 @@ export function mountAuthorizationRoutes({
     if (!session) return false;
     if (await signInApprovedAccount(res, browser, flow, session.account.did))
       return true;
-    const consentFlow = await newFlow(browser, {
-      requestUri: flow.requestUri,
-      clientId: flow.clientId,
-      clientName: flow.clientName,
-      parameters: result.parameters,
-      accountHint: session.account.did,
+    const consentFlow = await db.transact(async () => {
+      const current = await flows.refreshFlow(flow, browser);
+      if (current.authEmail || current.authDid || current.authUserId)
+        throw new InvalidRequestError(
+          "This sign-in choice has already been used",
+        );
+      return flows.replaceFlow(current, browser, {
+        parameters: result.parameters,
+        accountHint: session.account.did,
+        consentDid: session.account.did,
+      });
     });
-    await db.delete("auth-flows", flow.id);
     pageForFlow(
       res,
       "Authorize application",
@@ -332,7 +329,7 @@ export function mountAuthorizationRoutes({
             "Sign-in is still starting. Try again.",
           );
         const flow = await flows.readFlow(admitted.flowId, browser);
-        return pageForFlow(res, "Sign in", loginForm(flow, browser), flow);
+        return resumeFlow(req, res, flow, browser);
       }
       const { result, flow } = admitted;
       if ("redirect" in result)
@@ -417,20 +414,14 @@ export function mountAuthorizationRoutes({
         const current = await db.get("auth-flows", expired.id);
         if (!current || current.deviceId !== browser.deviceId)
           throw new InvalidRequestError("This sign-in is no longer active");
-        const next = await newFlow(browser, {
-          requestUri: current.requestUri,
-          requestRecordId: current.requestRecordId,
-          requestOwner: current.requestOwner,
-          clientId: current.clientId,
-          clientName: current.clientName,
-          parameters: current.parameters,
-          otpRequestCount: current.otpRequestCount,
-          lastOtpSentAt: current.lastOtpSentAt,
-          ...(selectedDid ? { accountHint: selectedDid } : {}),
-        });
-        await flows.bindFlow(next, current.id);
-        await db.delete("auth-flows", current.id);
-        return next;
+        return flows.replaceFlow(
+          current,
+          browser,
+          {
+            ...(selectedDid ? { accountHint: selectedDid } : {}),
+          },
+          true,
+        );
       });
       return pageForFlow(res, "Sign in", loginForm(flow, browser), flow);
     }),
