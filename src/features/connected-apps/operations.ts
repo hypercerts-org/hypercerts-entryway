@@ -21,6 +21,7 @@ export interface ConnectedAppsDependencies<Request> {
     revokeBrowserSession(req: Request, sessionId: string): Promise<void>;
     stores: {
       listAccountTokens(did: string): Promise<Token[]>;
+      deleteToken(id: string): Promise<void>;
       listAccountGrants(did: string): Promise<Grant[]>;
       listDeviceAccounts(filter: { did: string }): Promise<Device[]>;
       revokeClientGrant(did: string, clientId: string): Promise<boolean>;
@@ -109,6 +110,22 @@ export function forgetDevice<Request>(
   deviceId: string,
 ): Promise<boolean> {
   return oauth.stores.removeDeviceAccount(deviceId, did);
+}
+
+export async function revokeOAuthSession<Request>(
+  db: { transact<T>(operation: () => Promise<T>): Promise<T> },
+  oauth: ConnectedAppsDependencies<Request>["oauth"],
+  did: string,
+  sessionId: string,
+): Promise<boolean> {
+  return db.transact(async () => {
+    const token = (await oauth.stores.listAccountTokens(did)).find(
+      (item) => item.id === sessionId,
+    );
+    if (!token) return false;
+    await oauth.stores.deleteToken(token.id);
+    return true;
+  });
 }
 
 export function revokeGrant<Request>(

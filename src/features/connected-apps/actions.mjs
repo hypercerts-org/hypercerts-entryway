@@ -7,6 +7,7 @@ import {
   forgetOAuthDevices,
   revokeAppAccess,
   revokeGrant,
+  revokeOAuthSession,
 } from "./operations.js";
 
 export function createConnectedAppsActions({ db, oauth, legacy, console }) {
@@ -26,14 +27,10 @@ export function createConnectedAppsActions({ db, oauth, legacy, console }) {
         );
     },
     "oauth-session-revoke": async ({ account, value }) => {
-      await db.transact(async () => {
-        const item = (await oauth.stores.listAccountTokens(account.did)).find(
-          (s) => s.id === value("sessionId"),
-        );
-        if (!item)
-          throw new HttpError(404, "NotFound", "OAuth session not found");
-        await oauth.stores.deleteToken(item.id);
-      });
+      if (
+        !(await revokeOAuthSession(db, oauth, account.did, value("sessionId")))
+      )
+        throw new HttpError(404, "NotFound", "OAuth session not found");
     },
     "legacy-session-revoke": async ({ account, value }) => {
       console.needed();

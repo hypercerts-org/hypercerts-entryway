@@ -35,7 +35,10 @@ are. A confirmation code works only for the session that asked and only once,
 and five wrong guesses spend it until the user asks for a new code. Revoking an
 app password, changing the handle and starting account deletion never ask a
 stale session to confirm, and changing a password asks for no current password.
-Browser-session removal does not necessarily revoke OAuth refresh credentials, and existing access tokens can
+Each protected page identifies the selected handle and DID. A stale or revoked
+binding returns to the account chooser; select a current identity or sign in
+again before retrying. OAuth session removal looks up and removes the selected
+DID's session atomically. Browser-session removal does not necessarily revoke OAuth refresh credentials, and existing access tokens can
 remain valid until expiration.
 
 **Repeat:** use a fresh isolated project for acceptance. Keep independent client
