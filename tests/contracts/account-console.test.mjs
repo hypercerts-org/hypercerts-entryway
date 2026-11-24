@@ -271,27 +271,30 @@ function fixture({ authenticatedAt = new Date() } = {}) {
       .filter((name) => !fixtureActions.has(name))
       .map((name) => [name, async () => ran.push(name)]),
   );
-  console.mountActions({
-    ...policyActions,
-    revoke: async ({ account: selected }) => mutations.push(selected.did),
-    // A protected action reading its input both ways handlers do today.
-    "backup-request": async ({ account: selected, req, value }) => {
-      requests.push({
-        did: selected.did,
-        email: value("email"),
-        password: String(req.body.password ?? ""),
-      });
+  console.mountActions(
+    {
+      ...policyActions,
+      revoke: async ({ account: selected }) => mutations.push(selected.did),
+      // A protected action reading its input both ways handlers do today.
+      "backup-request": async ({ account: selected, req, value }) => {
+        requests.push({
+          did: selected.did,
+          email: value("email"),
+          password: String(req.body.password ?? ""),
+        });
+      },
+      // A mailbox-code step: its own challengeId and token fields share names with
+      // the confirmation form's.
+      "backup-confirm": async ({ account: selected, value, token }) => {
+        proofs.push({
+          did: selected.did,
+          challengeId: value("challengeId"),
+          token: token(),
+        });
+      },
     },
-    // A mailbox-code step: its own challengeId and token fields share names with
-    // the confirmation form's.
-    "backup-confirm": async ({ account: selected, value, token }) => {
-      proofs.push({
-        did: selected.did,
-        challengeId: value("challengeId"),
-        token: token(),
-      });
-    },
-  });
+    { revoke: "&view=apps#applications" },
+  );
 
   const response = () => ({
     headersSent: false,
