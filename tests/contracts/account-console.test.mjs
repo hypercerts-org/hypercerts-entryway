@@ -797,21 +797,22 @@ test("the confirmation forms need the console's CSRF token and selected account"
 
 const assertEnded = (
   res,
-  { status, heading, message, did, signIn = false },
+  { status, heading, message, did, signIn = false, destination = "account" },
 ) => {
   assert.equal(res.statusCode, status);
   assert.ok(res.body.includes(`<h1>${heading}</h1>`));
   assert.ok(res.body.includes(`role="alert">${message}</p>`));
   assert.ok(
-    res.body.includes(`href="/account?did=${encodeURIComponent(did)}"`),
+    res.body.includes(
+      `href="/account?did=${encodeURIComponent(did)}&amp;view=${destination}"`,
+    ),
   );
   assert.doesNotMatch(res.body, /<form|could not be completed/);
   if (signIn)
     // Only the rate-limit page points at sign-in, as one plain secondary line.
     assert.ok(
-      res.body.includes(
-        '<p class="muted">You can also <a href="/login">sign in again</a>.</p>',
-      ) && res.body.split("/login").length === 2,
+      res.body.includes(`href="/login?did=${encodeURIComponent(did)}"`) &&
+        res.body.split("/login?").length === 2,
     );
   else assert.doesNotMatch(res.body, /sign in again|\/login/i);
 };
@@ -886,6 +887,7 @@ test("a refused confirmation code explains the rate limit and offers a plain sig
         "Too many codes were requested for this email address. Try again in a few minutes.",
       did: didA,
       signIn: true,
+      destination: "account#recovery",
     },
   );
 });
@@ -985,5 +987,64 @@ test("recent confirmation cancel links retain the selected DID and destination",
         `${name} cancel link for ${did}`,
       );
     }
+  }
+});
+
+test("ended confirmation keeps allowlisted destinations and rejects untrusted return targets", async () => {
+  const f = fixture({ authenticatedAt: minutesAgo(11) });
+  for (const [returnTo, destination] of [
+    ["recovery", "account#recovery"],
+    ["app-password", "apps#app-passwords"],
+    ["https://evil.example", "account"],
+  ]) {
+    f.failWith(
+      "complete",
+      new HttpError(400, "ExpiredToken", "This token has expired"),
+    );
+    const expired = await f.postConfirm({
+      did: didB,
+      body: { challengeId: "unused", token: "12345678", returnTo },
+    });
+    assertEnded(expired, {
+      status: 400,
+      heading: "Confirmation code expired",
+      message: "This code has expired. Start the change again.",
+      did: didB,
+      destination,
+    });
+    f.failWith(
+      "resend",
+      new HttpError(400, "InvalidToken", "Invalid or already used token"),
+    );
+    const invalid = await f.postConfirm({
+      did: didB,
+      body: { challengeId: "unused", resend: "1", returnTo },
+    });
+    assertEnded(invalid, {
+      status: 400,
+      heading: "Confirmation code no longer valid",
+      message: "This code can no longer be used. Start the change again.",
+      did: didB,
+      destination,
+    });
+  }
+  f.failWith(
+    "begin",
+    new HttpError(429, "RateLimitExceeded", "Too many attempts"),
+  );
+  for (const [returnTo, destination] of [
+    ["recovery", "account#recovery"],
+    ["app-password", "apps#app-passwords"],
+  ]) {
+    const limited = await f.postStart({ did: didB, body: { returnTo } });
+    assertEnded(limited, {
+      status: 429,
+      heading: "Too many codes requested",
+      message:
+        "Too many codes were requested for this email address. Try again in a few minutes.",
+      did: didB,
+      signIn: true,
+      destination,
+    });
   }
 });
