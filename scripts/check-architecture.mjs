@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
-import { resolve, relative, sep } from "node:path";
+import { dirname, resolve, relative, sep } from "node:path";
 import ts from "typescript6";
 import { parse } from "svelte/compiler";
 import { pathToFileURL } from "node:url";
@@ -89,64 +89,53 @@ function resolveReference(specifier, filename, appRoot, options) {
     );
     return existsSync(candidate) ? candidate : undefined;
   }
-  const virtualComponent = (path) => {
-    if (path.endsWith(".d.svelte.ts"))
-      return `${path.slice(0, -".d.svelte.ts".length)}.svelte`;
-    if (path.endsWith(".svelte.d.ts")) return path.slice(0, -".d.ts".length);
-    return undefined;
-  };
-  const host = {
-    ...ts.sys,
-    getCurrentDirectory: () => appRoot,
-    fileExists(path) {
-      if (ts.sys.fileExists(path)) return true;
-      const component = virtualComponent(path);
-      return Boolean(component && ts.sys.fileExists(component));
-    },
-  };
+  if (
+    ts.isExternalModuleNameRelative(specifier) &&
+    specifier.endsWith(".svelte")
+  ) {
+    const candidate = resolve(dirname(filename), specifier);
+    return ts.sys.fileExists(candidate) ? realpathSync(candidate) : undefined;
+  }
+  const host = { ...ts.sys, getCurrentDirectory: () => appRoot };
+  const pattern =
+    options.paths && !ts.isExternalModuleNameRelative(specifier)
+      ? matchingPath(specifier, options.paths)
+      : undefined;
+  if (pattern) {
+    const key = typeof pattern === "string" ? pattern : ts.patternText(pattern);
+    const capture =
+      typeof pattern === "string"
+        ? undefined
+        : ts.matchedText(pattern, specifier);
+    for (const substitution of options.paths[key]) {
+      const expanded = capture
+        ? ts.replaceFirstStar(substitution, capture)
+        : substitution;
+      const candidate = resolve(ts.getPathsBasePath(options, host), expanded);
+      if (
+        (candidate.endsWith(".svelte") ||
+          ts.isAnySupportedFileExtension(substitution)) &&
+        ts.sys.fileExists(candidate)
+      )
+        return realpathSync(candidate);
+      const resolved = ts.resolveModuleName(
+        candidate,
+        filename,
+        { ...options, paths: undefined },
+        host,
+      ).resolvedModule?.resolvedFileName;
+      if (resolved) return realpathSync(resolved);
+    }
+  }
   const resolved = ts.resolveModuleName(
     specifier,
     filename,
     { ...options, paths: options.paths && { ...options.paths } },
     host,
   ).resolvedModule?.resolvedFileName;
-  if (!resolved) return undefined;
-  const component = virtualComponent(resolved);
-  let explicitDeclaration =
-    specifier.endsWith(".d.svelte.ts") || specifier.endsWith(".svelte.d.ts");
-  if (
-    component &&
-    options.paths &&
-    !ts.isExternalModuleNameRelative(specifier)
-  ) {
-    const pattern = matchingPath(specifier, options.paths);
-    if (pattern) {
-      const key =
-        typeof pattern === "string" ? pattern : ts.patternText(pattern);
-      const capture =
-        typeof pattern === "string"
-          ? undefined
-          : ts.matchedText(pattern, specifier);
-      for (const substitution of options.paths[key]) {
-        const expanded = capture
-          ? ts.replaceFirstStar(substitution, capture)
-          : substitution;
-        const candidate = resolve(
-          options.baseUrl ?? options.pathsBasePath ?? appRoot,
-          expanded,
-        );
-        if (candidate === resolved || candidate === component) {
-          explicitDeclaration = candidate === resolved;
-          break;
-        }
-      }
-    }
-  }
-  const target =
-    component && !explicitDeclaration && ts.sys.fileExists(component)
-      ? component
-      : resolved;
-  return ts.sys.fileExists(target) ? realpathSync(target) : target;
+  return resolved && ts.sys.fileExists(resolved)
+    ? realpathSync(resolved)
+    : resolved;
 }
 
 export function moduleViolations(source, filename, appRoot, options) {
