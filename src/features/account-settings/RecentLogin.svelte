@@ -25,6 +25,20 @@
     message,
     signIn = false,
   }: Props = $props();
+  const cancelSection = $derived(
+    returnTo === "password"
+      ? "passwords"
+      : returnTo === "recovery"
+        ? "recovery"
+        : returnTo === "status"
+          ? "lifecycle"
+          : "",
+  );
+  const cancelUrl = $derived(
+    returnTo === "app-password"
+      ? `/account?did=${encodeURIComponent(did)}&view=apps#app-passwords`
+      : `/account?did=${encodeURIComponent(did)}&view=account${cancelSection ? `#${cancelSection}` : ""}`,
+  );
 </script>
 
 <p>Account DID: <code>{did}</code></p>
@@ -50,9 +64,7 @@
     </button>
   </form>
   <p>
-    <a href={`/account?did=${encodeURIComponent(did)}`}>
-      Cancel and return to account settings
-    </a>
+    <a href={cancelUrl}> Cancel and return to account settings </a>
   </p>
 {:else if mode === "confirm"}
   {#if error}<p role="alert">{error}</p>{/if}
@@ -67,11 +79,11 @@
       type="hidden"
       name="did"
       value={did}
-    /><input type="hidden" name="challengeId" value={challengeId} /><label
-      for="reconfirm-code"
-    >
-      Confirmation code
-    </label><input
+    /><input type="hidden" name="challengeId" value={challengeId} /><input
+      type="hidden"
+      name="returnTo"
+      value={returnTo}
+    /><label for="reconfirm-code"> Confirmation code </label><input
       id="reconfirm-code"
       name="token"
       inputmode="numeric"
@@ -89,21 +101,19 @@
       value={did}
     /><input type="hidden" name="challengeId" value={challengeId} /><input
       type="hidden"
-      name="resend"
-      value="1"
-    /><button class="secondary">Send a new code</button>
+      name="returnTo"
+      value={returnTo}
+    /><input type="hidden" name="resend" value="1" /><button class="secondary">
+      Send a new code
+    </button>
   </form>
   <p>
-    <a href={`/account?did=${encodeURIComponent(did)}`}>
-      Cancel and return to account settings
-    </a>
+    <a href={cancelUrl}> Cancel and return to account settings </a>
   </p>
 {:else}
   <p role="alert">{message}</p>
   <p>
-    <a href={`/account?did=${encodeURIComponent(did)}`}>
-      Return to account settings
-    </a>
+    <a href={cancelUrl}> Return to account settings </a>
   </p>
   {#if signIn}<p class="muted">
       You can also <a href="/login">sign in again</a>.

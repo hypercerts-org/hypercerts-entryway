@@ -115,7 +115,9 @@
   </form>
 {/if}
 <p>
-  <a href={`/account?did=${encodeURIComponent(did)}`}>
+  <a
+    href={`/account?did=${encodeURIComponent(did)}&view=account#${kind === "password" ? "passwords" : kind === "recovery" ? "recovery" : "lifecycle"}`}
+  >
     Return to account settings
   </a>
 </p>

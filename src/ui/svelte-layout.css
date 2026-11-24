@@ -491,8 +491,25 @@ main[data-layout="settings"]:has(> .account-header-action) > h1 {
     cursor: pointer;
     padding: 8px;
   }
-  .account-mobile-header details[open] {
-    flex: 1;
+  .mobile-menu-panel {
+    position: absolute;
+    z-index: 5;
+    top: 100%;
+    left: 0;
+    width: min(280px, calc(100vw - 32px));
+    padding: 12px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px #0002;
+  }
+  .mobile-menu-panel nav {
+    margin: 0 0 12px;
+  }
+  .mobile-menu-panel nav a {
+    display: flex;
+    align-items: center;
+    gap: 10px;
   }
 }
 
@@ -559,12 +576,64 @@ main[data-layout="account"] .account-main > :not(header) {
 }
 .account-operation-rows summary {
   cursor: pointer;
-  padding: 22px 24px;
-  font-weight: 650;
+  list-style: none;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
 }
-.account-operation-rows details > section,
-.account-operation-rows details > form {
-  margin: 0 24px;
+.account-operation-rows summary::-webkit-details-marker {
+  display: none;
+}
+.account-operation-rows summary strong,
+.account-operation-rows summary small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.account-operation-rows details[open] summary,
+.account-operation-rows summary:hover {
+  background: var(--page);
+}
+.account-operation-rows details[open] .row-chevron {
+  transform: rotate(90deg);
+}
+.account-operation-content {
+  padding: 0 24px 16px;
+}
+.account-main .settings-list {
+  background: transparent;
+  border-radius: 0;
+}
+.account-main .settings-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 0;
+}
+.account-main .settings-list li span {
+  margin: 0;
+}
+.account-main .settings-list form {
+  margin: 0;
+}
+.account-main .settings-list button {
+  margin: 0;
+  min-height: 36px;
+  padding: 6px 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+}
+@media (max-width: 700px) {
+  .account-main .settings-list li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+  .account-main .settings-list form {
+    margin-top: 4px;
+  }
 }
 @media (max-width: 700px) {
   main[data-layout="account"] .account-shell {

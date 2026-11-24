@@ -1,32 +1,22 @@
 import {
   renderAccountShell,
+  renderManagementRows,
   renderIdentity,
   renderRecoveryPanel,
   renderPasswordPanel,
   renderProtectedPage,
 } from "#entryway-ssr/account-settings";
 import { page, escapeHtml as esc } from "../../ui/html.mjs";
-import { settingsLink } from "../../ui/account-forms.mjs";
 
-function renderIdentityPanel({
-  a,
-  csrf,
-  security,
-  state,
-  renderHandle,
-  accountContext,
-  canSwitchAccount,
-}) {
-  return (
-    renderIdentity({
-      account: a,
-      csrf,
-      security: Boolean(security),
-      canSwitchAccount,
-      pendingEmail: state.pendingEmail,
-      pendingEmailChallengeId: state.pendingEmailChallengeId,
-    }).body + renderHandle({ a, csrf, accountContext })
-  );
+function renderIdentityPanel({ a, csrf, security, state, canSwitchAccount }) {
+  return renderIdentity({
+    account: a,
+    csrf,
+    security: Boolean(security),
+    canSwitchAccount,
+    pendingEmail: state.pendingEmail,
+    pendingEmailChallengeId: state.pendingEmailChallengeId,
+  }).body;
 }
 
 function renderRecoveryPanelHtml({ security, state, accountContext }) {
@@ -54,9 +44,6 @@ function renderPasswordPanelHtml({ security, legacy, state, accountContext }) {
 
 const selectedIdentity = (account) =>
   `<p>Selected account: <strong>${esc(account.handle)}</strong> (<code>${esc(account.did)}</code>)</p>`;
-
-const backLink = (accountContext) =>
-  `<p>${settingsLink(accountContext.did)}</p>`;
 
 const renderPasswordPage = async ({
   res,
@@ -138,7 +125,7 @@ function mountProtectedPages({ console, security, renderAppPasswordForm }) {
       page(
         res,
         "Create app password",
-        `${selectedIdentity(account)}${renderAppPasswordForm({ csrf: browser.csrf, accountContext })}${backLink(accountContext)}`,
+        `${selectedIdentity(account)}${renderAppPasswordForm({ csrf: browser.csrf, accountContext })}<p><a href="/account?did=${encodeURIComponent(accountContext.did)}&amp;view=apps#app-passwords">Return to app passwords</a></p>`,
         200,
         { layout: "settings" },
       ),
@@ -206,8 +193,6 @@ export function mountAccountSettingsPage({
           csrf,
           security,
           state,
-          renderHandle,
-          accountContext,
           canSwitchAccount,
         });
         const backup = renderRecoveryPanelHtml({
@@ -234,7 +219,17 @@ export function mountAccountSettingsPage({
               : null,
           migration,
         });
-        content = `<div class="account-operation-rows"><details><summary>Identity and email</summary>${identity}</details><details><summary>Recovery email</summary>${backup}</details><details><summary>Password</summary>${passwords}</details><details><summary>Account status and deletion</summary>${lifecycle}</details>${migrationPanel ? `<details><summary>Data server</summary>${migrationPanel}</details>` : ""}</div>`;
+        content = renderManagementRows({
+          email: a.email,
+          handle: a.handle,
+          passwordEnabled: state.passwordEnabled,
+          identity,
+          handleForm: renderHandle({ a, csrf, accountContext }),
+          recovery: backup,
+          password: passwords,
+          lifecycle,
+          migration: migrationPanel || undefined,
+        }).body;
       } else if (view === "devices" || view === "apps") {
         const connected = await loadConnections(req, a.did, view);
         const sessions = renderConnections({
@@ -261,6 +256,7 @@ export function mountAccountSettingsPage({
           view,
           canSwitchAccount,
           csrf,
+          migrationAvailable: Boolean(migration),
           content,
         }).body,
         200,

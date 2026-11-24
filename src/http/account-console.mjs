@@ -211,9 +211,9 @@ export function createAccountConsole({
         signIn: true,
       });
     }
-    return confirmPage(res, ctx, { challengeId: begun.challengeId });
+    return confirmPage(res, ctx, { challengeId: begun.challengeId, returnTo });
   };
-  const runAction = async ({ action, handler, ctx, req, res }) => {
+  const runAction = async ({ destination, handler, ctx, req, res }) => {
     const value = (name) => String(req.body[name] ?? "").trim();
     try {
       await handler({ ...ctx, req, res, value, token: () => value("token") });
@@ -239,29 +239,13 @@ export function createAccountConsole({
         { layout: "settings" },
       );
     }
-    if (!res.headersSent) {
-      const target = action.startsWith("backup-")
-        ? "account#recovery"
-        : action.startsWith("email-") || action === "handle"
-          ? "account#identity"
-          : action.startsWith("password-")
-            ? "account#passwords"
-            : action.startsWith("migration-")
-              ? "account#migration"
-              : action === "status" || action.startsWith("delete")
-                ? "account#lifecycle"
-                : action.startsWith("browser") || action === "device-revoke"
-                  ? "devices#sessions"
-                  : action.startsWith("app-password-")
-                    ? "apps#app-passwords"
-                    : "apps#applications";
-      res.redirect(303, `${accountUrl(ctx.account.did)}&view=${target}`);
-    }
+    if (!res.headersSent)
+      res.redirect(303, `${accountUrl(ctx.account.did)}${destination}`);
   };
   /** Every console action runs through here. A gated action from a session that
    * is no longer recent is not made: the user confirms, returns to the page
    * that owns it and makes the change again. */
-  const dispatch = async ({ action, handler, ctx, req, res }) => {
+  const dispatch = async ({ action, destination, handler, ctx, req, res }) => {
     // Resolve the request-carried DID against the live verified binding on every action.
     if (security) await security.summary(ctx.principal);
     if (!noRecentLogin.has(action) && !(await isRecent(ctx.principal))) {
@@ -271,8 +255,10 @@ export function createAccountConsole({
         notMade: true,
       });
     }
-    return await runAction({ action, handler, ctx, req, res });
+    return await runAction({ destination, handler, ctx, req, res });
   };
+  const cancelReturn = (req) =>
+    protectedPages.has(req.body.returnTo) ? req.body.returnTo : SETTINGS;
   const confirmWithCode = async (ctx, req, res) => {
     const challengeId = String(req.body.challengeId ?? "");
     const code = String(req.body.token ?? "").trim();
@@ -287,6 +273,7 @@ export function createAccountConsole({
       if (!retryableCodeFailures.has(error_.error)) throw error_;
       return confirmPage(res, ctx, {
         challengeId,
+        returnTo: cancelReturn(req),
         error: error_.message,
         status: error_.status,
       });
@@ -299,6 +286,7 @@ export function createAccountConsole({
       const issued = await security.resendReconfirm(ctx.principal, challengeId);
       return confirmPage(res, ctx, {
         challengeId: issued.challengeId,
+        returnTo: cancelReturn(req),
         resent: true,
       });
     } catch (error_) {
@@ -308,6 +296,7 @@ export function createAccountConsole({
       if (error_.error !== "RateLimitExceeded") throw error_;
       return confirmPage(res, ctx, {
         challengeId,
+        returnTo: cancelReturn(req),
         error: error_.message,
         status: error_.status,
       });
@@ -353,7 +342,7 @@ export function createAccountConsole({
       }),
     );
   };
-  const mountActions = (actions) => {
+  const mountActions = (actions, destinations = {}) => {
     app.post(
       "/account/:action",
       express.urlencoded({ extended: false, limit: "16kb" }),
@@ -367,6 +356,7 @@ export function createAccountConsole({
           if (!ctx) return;
           await dispatch({
             action,
+            destination: destinations[action] ?? "",
             handler: actions[action],
             ctx,
             req: request,

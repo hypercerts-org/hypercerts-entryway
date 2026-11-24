@@ -41,6 +41,6 @@
     />
   </label><button type="submit">Move to destination data server</button>
 </form>
-<a href={`/account?did=${encodeURIComponent(did)}`}>
+<a href={`/account?did=${encodeURIComponent(did)}&view=account#migration`}>
   Return to account settings
 </a>

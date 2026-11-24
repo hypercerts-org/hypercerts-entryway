@@ -20,6 +20,7 @@
     canSwitchAccount,
     csrf,
     content,
+    migrationAvailable,
   }: {
     did: string;
     handle: string;
@@ -29,6 +30,7 @@
     canSwitchAccount: boolean;
     csrf: string;
     content: Snippet;
+    migrationAvailable: boolean;
   } = $props();
   const base = $derived(`/account?did=${encodeURIComponent(did)}`);
   const links: {
@@ -110,22 +112,23 @@
       {#if view !== "home"}<a href={base}>
           <ArrowLeft aria-hidden="true" size={18} /> Home
         </a>{/if}
-      <details>
-        <summary>
-          <Menu aria-hidden="true" size={18} /> Menu
-        </summary>{@render navigation()}{#if canSwitchAccount}<a
-            href="/account"
-          >
-            Switch linked account
-          </a>{/if}
-        <form method="post" action="/auth/logout">
-          <input type="hidden" name="csrf" value={csrf} /><input
-            type="hidden"
-            name="did"
-            value={did}
-          /><button type="submit">Sign out</button>
-        </form>
-      </details>
+      {#if view === "home"}<details>
+          <summary>
+            <Menu aria-hidden="true" size={18} /> Menu
+          </summary>
+          <div class="mobile-menu-panel">
+            {@render navigation()}{#if canSwitchAccount}<a href="/account">
+                Switch linked account
+              </a>{/if}
+            <form method="post" action="/auth/logout">
+              <input type="hidden" name="csrf" value={csrf} /><input
+                type="hidden"
+                name="did"
+                value={did}
+              /><button type="submit">Sign out</button>
+            </form>
+          </div>
+        </details>{/if}
       <h1>{links.find((link) => link.view === view)?.label}</h1>
       <strong>Entryway</strong>
     </header>
@@ -169,9 +172,12 @@
           Account password
         </a><a id="lifecycle" href={`${url("account")}#lifecycle`}>
           Account lifecycle
-        </a><a id="migration" href={`${url("account")}#migration`}>
-          Data server
-        </a>
+        </a>{#if migrationAvailable}<a
+            id="migration"
+            href={`${url("account")}#migration`}
+          >
+            Data server
+          </a>{/if}
       </div>
     {:else if view === "about"}
       <h2>About your account</h2>
@@ -185,13 +191,13 @@
         </strong>. Entryway manages your sign-in and account settings. Connected
         applications receive only the access you authorize.
       </p>
-      <p>
-        You can change your data server in <a
-          href={`${url("account")}#migration`}
-        >
-          Account settings
-        </a> when migration is available.
-      </p>
+      {#if migrationAvailable}<p>
+          Review data-server migration in <a
+            href={`${url("account")}#migration`}
+          >
+            Account settings
+          </a>.
+        </p>{/if}
     {:else}
       {@render content()}
     {/if}

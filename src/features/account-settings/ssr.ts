@@ -1,3 +1,4 @@
+import ManagementRows from "./ManagementRows.svelte";
 import AccountShell from "./AccountShell.svelte";
 import AccountResult from "./AccountResult.svelte";
 import { render } from "svelte/server";
@@ -47,4 +48,38 @@ export const renderAccountShell = (
     render: () => `<div>${props.content}</div>`,
   }));
   return render(AccountShell, { props: { ...props, content } });
+};
+
+type ManagementContent =
+  | "identity"
+  | "handleForm"
+  | "recovery"
+  | "password"
+  | "lifecycle"
+  | "migration";
+export const renderManagementRows = (
+  props: Omit<ComponentProps<typeof ManagementRows>, ManagementContent> & {
+    identity: string;
+    handleForm: string;
+    recovery: string;
+    password: string;
+    lifecycle: string;
+    migration?: string;
+  },
+) => {
+  const snippet = (html: string) =>
+    createRawSnippet(() => ({ render: () => `<div>${html}</div>` }));
+  return render(ManagementRows, {
+    props: {
+      email: props.email,
+      handle: props.handle,
+      passwordEnabled: props.passwordEnabled,
+      identity: snippet(props.identity),
+      handleForm: snippet(props.handleForm),
+      recovery: snippet(props.recovery),
+      password: snippet(props.password),
+      lifecycle: snippet(props.lifecycle),
+      ...(props.migration ? { migration: snippet(props.migration) } : {}),
+    },
+  });
 };

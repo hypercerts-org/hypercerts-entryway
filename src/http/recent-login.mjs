@@ -63,11 +63,12 @@ export function createRecentLoginPages(renderRecentLogin) {
   const confirmPage = (
     res,
     ctx,
-    { challengeId, resent = false, error, status = 200 },
+    { challengeId, returnTo, resent = false, error, status = 200 },
   ) =>
     render(res, ctx, "Confirm it's you", status, {
       mode: "confirm",
       challengeId,
+      returnTo,
       resent,
       error,
     });

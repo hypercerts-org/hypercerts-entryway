@@ -49,6 +49,6 @@
     </label>{/if}
   <button type="submit">Permanently delete account</button>
 </form>
-<a href={`/account?did=${encodeURIComponent(did)}`}>
+<a href={`/account?did=${encodeURIComponent(did)}&view=account#lifecycle`}>
   Return to account settings
 </a>

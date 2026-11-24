@@ -20,7 +20,7 @@
   </p>
   <a href="/login">Sign in again</a>
   <p>
-    <a href={`/account?did=${encodeURIComponent(did)}`}>
+    <a href={`/account?did=${encodeURIComponent(did)}&view=account#passwords`}>
       Return to account settings
     </a>
   </p>

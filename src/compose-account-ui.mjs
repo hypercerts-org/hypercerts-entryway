@@ -91,11 +91,40 @@ export function mountAccountUi(context) {
       ...dependencies,
       revokeApps: (did) => revokeAppAccess(context, did),
     }),
+    {
+      "backup-request": "&view=account#recovery",
+      "backup-confirm": "&view=account#recovery",
+      "backup-remove": "&view=account#recovery",
+      "email-request": "&view=account#identity",
+      "email-update": "&view=account#identity",
+      "email-confirm": "&view=account#identity",
+      "password-set": "&view=account#passwords",
+      "password-remove": "&view=account#passwords",
+      status: "&view=account#lifecycle",
+    },
   );
-  console.mountActions(createConnectedAppsActions(dependencies));
-  console.mountActions(createDeletionActions(dependencies));
-  console.mountActions(createMigrationActions(dependencies));
-  console.mountActions(createHandleActions(dependencies));
+  console.mountActions(createConnectedAppsActions(dependencies), {
+    revoke: "&view=apps#applications",
+    "grant-revoke": "&view=apps#applications",
+    "oauth-session-revoke": "&view=apps#applications",
+    "legacy-session-revoke": "&view=apps#applications",
+    "browser-session-revoke": "&view=devices#sessions",
+    "browsers-revoke": "&view=devices#sessions",
+    "device-revoke": "&view=devices#sessions",
+    "app-password-create": "&view=apps#app-passwords",
+    "app-password-revoke": "&view=apps#app-passwords",
+  });
+  console.mountActions(createDeletionActions(dependencies), {
+    delete: "&view=account#lifecycle",
+    "delete-confirm": "&view=account#lifecycle",
+  });
+  console.mountActions(createMigrationActions(dependencies), {
+    "migration-request": "&view=account#migration",
+    "migration-confirm": "&view=account#migration",
+  });
+  console.mountActions(createHandleActions(dependencies), {
+    handle: "&view=account#handle",
+  });
   mountRecoveryPage(dependencies);
   // Retain the account console's authenticated error response for unknown actions.
   context.app.post(
