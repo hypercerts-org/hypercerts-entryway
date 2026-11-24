@@ -532,6 +532,7 @@ test("handle update, deactivate, reactivate, revoke and delete use a disposable 
   const updated = `new-${randomUUID().replaceAll("-", "").slice(0, 14)}.entryway.atmosbox.test`;
   await page.getByLabel("New handle").fill(updated);
   await page.getByRole("button", { name: "Update handle" }).click();
+  await expect(page.locator("#handle")).toBeVisible();
   await expect(page.locator("#handle")).toContainText(
     `Current handle: ${updated}`,
   );

@@ -25,7 +25,7 @@ export async function openAccountView(page, name) {
 
 export async function openAccountSection(page, name) {
   const disclosure = page.locator(".account-operation-rows details").filter({
-    has: page.getByText(name, { exact: true }),
+    has: page.locator("summary").getByText(name, { exact: true }),
   });
   if (!(await disclosure.evaluate((element) => element.open))) {
     await disclosure.locator("summary").click();
