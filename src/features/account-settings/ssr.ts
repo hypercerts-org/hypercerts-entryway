@@ -1,6 +1,7 @@
 import { render } from "svelte/server";
 import type { ComponentProps } from "svelte";
 import Identity from "./Identity.svelte";
+import RecentLogin from "./RecentLogin.svelte";
 import ProtectedPage from "./ProtectedPage.svelte";
 import RecoveryPanel from "./RecoveryPanel.svelte";
 import PasswordPanel from "./PasswordPanel.svelte";
@@ -17,3 +18,6 @@ export const renderPasswordPanel = (
 export const renderProtectedPage = (
   props: ComponentProps<typeof ProtectedPage>,
 ) => render(ProtectedPage, { props });
+
+export const renderRecentLogin = (props: ComponentProps<typeof RecentLogin>) =>
+  render(RecentLogin, { props });

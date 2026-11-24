@@ -10,11 +10,7 @@ import {
 import {
   noRecentLogin,
   retryableCodeFailures,
-  startPage,
-  confirmPage,
-  endedPage,
-  expiredPage,
-  unusablePage,
+  createRecentLoginPages,
 } from "./recent-login.mjs";
 const invalidSelection = () =>
   new HttpError(
@@ -42,7 +38,10 @@ export function createAccountConsole({
   oauth,
   security,
   legacy,
+  renderRecentLogin,
 }) {
+  const { startPage, confirmPage, endedPage, expiredPage, unusablePage } =
+    createRecentLoginPages(renderRecentLogin);
   const pendingArrival = createPendingArrivalGuard(accounts.storage);
   const guarded = (handler) => async (req, res, next) => {
     try {
