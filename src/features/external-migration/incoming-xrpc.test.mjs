@@ -916,6 +916,25 @@ test("an exact replay of an admitted handoff is not verified after the identity 
   assert.equal(fresh.json.error, "OperationConflict");
 });
 
+test("an admission replaced before acquiring its claim cannot replay the replacement", async (t) => {
+  const s = await published(t);
+  const { f } = s;
+  const resume = f.ownership.resumePending;
+  t.mock.method(f.ownership, "resumePending", async (...args) => {
+    await query(
+      f.db,
+      "UPDATE arrival_replay SET request_digest = ? WHERE operation_id = ? AND method = ?",
+      ["a".repeat(64), s.prepared.operationId, incomingHandoffMethod],
+      "run",
+    );
+    return resume(...args);
+  });
+  const response = await submit(s);
+  assert.equal(response.status, 409, response.text);
+  assert.equal(response.json.error, "OperationConflict");
+  assert.equal(f.publicationAttempts.length, 1);
+});
+
 for (const fault of ["unavailable", "head-race"])
   test(`a ${fault} directory during handoff dispatch is retryable, never an identity conflict`, async (t) => {
     const s = await begin(t);

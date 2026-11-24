@@ -171,6 +171,7 @@ export async function reapprovedSource(
     if (keys.indexOf(staleSigner) < keys.indexOf(currentSigner))
       return invalid();
   }
+  // Process unbounded history sequentially to bound cryptographic work.
   for (const update of updates) {
     const candidate = plc.def.operation.parse(update);
     if (
@@ -210,6 +211,9 @@ export async function validateStagedMove(input: {
     const predecessor = plc.def.compatibleOp.parse(input.predecessor);
     const facts = plc.normalizeOp(predecessor);
     const candidate = plc.def.operation.parse(input.operation);
+    const primaryHandle = facts.alsoKnownAs.findIndex((alias) =>
+      alias.startsWith("at://"),
+    );
     const expected = {
       type: "plc_operation",
       prev: String(await cidForCbor(predecessor)),
@@ -228,7 +232,7 @@ export async function validateStagedMove(input: {
       },
       alsoKnownAs: [
         `at://${input.handle}`,
-        ...facts.alsoKnownAs.filter((alias) => !alias.startsWith("at://")),
+        ...facts.alsoKnownAs.filter((_, index) => index !== primaryHandle),
       ],
     };
     if (!sameSignedOperation(input.operation, expected)) return invalid();

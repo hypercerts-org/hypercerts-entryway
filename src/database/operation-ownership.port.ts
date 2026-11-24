@@ -65,6 +65,7 @@ export interface ExternalAttempt extends ExternalAttemptInput {
  * operator recovery may still approve observing or safely retrying them. */
 export const observedAcknowledgedSteps: readonly string[] = [
   "incoming-activation",
+  "incoming-cutover",
 ];
 export interface OperatorRecovery {
   readonly operationId: string;

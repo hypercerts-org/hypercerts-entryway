@@ -67,8 +67,11 @@ ${post("/incoming/code", csrf, "", "Send me a fresh email code", true)}
       resume,
     );
   if (summary.migrationMode === "staged" && summary.approvedRotationKeys) {
+    const approvedKeys = summary.approvedRotationKeys
+      .map((key) => "<li><code>" + esc(key) + "</code></li>")
+      .join("");
     actions.push(
-      `<p>Approved rotation keys, in priority order</p><ol>${summary.approvedRotationKeys.map((key) => `<li><code>${esc(key)}</code></li>`).join("")}</ol>`,
+      `<p>Approved rotation keys, in priority order</p><ol>${approvedKeys}</ol>`,
     );
     if (summary.mayReapproveSource)
       actions.push(

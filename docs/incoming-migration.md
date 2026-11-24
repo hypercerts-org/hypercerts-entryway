@@ -30,13 +30,13 @@ Set `stagedIncomingMigration` to `true` on the selected entry in the service con
 
 1. Verify the destination email and prepare the arrival at `/incoming`. A staged response contains `migrationMode: "staged"`, `expectedPlcHead`, `approvedRotationKeys`, the destination endpoint and the one-time arrival code. To remove source keys at cutover, supply their public DIDs as `retireRotationKeys` during preparation. The default preserves the original keys in order. Entryway includes its configured rotation key in the approved list.
 2. Call Entryway’s `com.atproto.server.createAccount` with the arrival code and the source’s service JWT for that method. Entryway creates the destination already deactivated. The returned migration credentials work against the selected PDS for repository and blob import. The DID and its rotation keys still belong to the source configuration.
-3. Transfer the repository and missing blobs. Compare the imported commit CID with the latest source commit and fetch any later changes. Coordinate the last source write before signing. A client that allows writes between its final comparison and cutover can miss them.
-4. Read `com.atproto.identity.getRecommendedDidCredentials` at the destination. Have the source sign the move from `expectedPlcHead`, using the staged repository key, destination endpoint and handle. Carry forward unrelated identity fields. Use the approved rotation list, with any recovery key supplied at creation first and duplicates removed. A key selected for retirement cannot serve as that recovery key. Submit to Entryway’s `com.atproto.identity.submitPlcOperation` with the arrival code and a fresh source service JWT for that method. Alternatively, submit the same signed operation at the destination PDS with the migration credentials. In that case Entryway verifies the published operation when activation is requested.
+3. Transfer the repository and missing blobs. Compare the imported commit CID with the latest source commit, fetch any later changes, and verify that all required blobs have been imported before signing. Coordinate the last source write before signing. A client that allows writes between its final comparison and cutover can miss them.
+4. Read `com.atproto.identity.getRecommendedDidCredentials` at the destination. Have the source sign the move from `expectedPlcHead`, using the staged repository key, destination endpoint and handle. Carry forward unrelated identity fields. After creation, open the saved arrival at `/incoming?operationId=…` and use its displayed approved rotation keys in order, including any recovery key supplied at creation. Replace the recommendation’s rotation keys with that list; the destination recommendation does not include the full approved list. A key selected for retirement cannot serve as that recovery key. Submit to Entryway’s `com.atproto.identity.submitPlcOperation` with the arrival code and a fresh source service JWT for that method. Alternatively, submit the same signed operation at the destination PDS with the migration credentials. The destination PDS checks that its server key is included, but does not enforce Entryway’s exact approved list before publication. The client must check that list before signing and submitting: Entryway verifies the published operation only when activation is requested, and will refuse activation if custody differs.
 5. Activate through the destination using the migration credentials, verify the transferred records and blobs, then deactivate the source. The DID update precedes activation. A transfer abandoned before publication leaves the public DID at the source.
 
 If the source handle or other metadata changes during the transfer, review the new PLC head and submit its CID at `/incoming/reapprove` with a fresh destination email code. The staged account and imported data are retained. Reapproval requires continuity of the source PDS, repository key and ordered rotation keys. The final operation still needs a source signature over the reviewed head. Keep the approved Entryway signing key available until activation.
 
-If Entryway has already accepted a signed move, it can replace that move before dispatch when the first intervening canonical update used an equal- or higher-priority key. A saved move signed by a higher-priority key stays on hold even after PLC’s 72-hour recovery window appears to have elapsed. Entryway uses signer priority as its proof of supersession. A move already sent or observed also requires reconciliation.
+If Entryway has already accepted a signed move, it can replace that move before dispatch when the first intervening canonical update used an equal- or higher-priority key. A saved move signed by a higher-priority key stays on hold even after PLC’s 72-hour recovery window appears to have elapsed. Entryway uses signer priority as its proof of supersession. If Entryway recorded a dispatch attempt, the operator must first isolate the dispatcher, drain the upstream request and authorize `retry-if-safe` for that exact attempt. The owner can then reapprove the new head with a fresh email code. Entryway checks the PLC history under the arrival claim and retains the superseded receipt. A move that appears anywhere in the observed history still requires reconciliation. See [operator recovery](shared-operations.md#supported-operator-recovery).
 
 ## Why Entryway migration differs from standalone PDS migration
 
@@ -800,14 +800,13 @@ Accepted decisions for this slice:
   challenge producer at its existing limits.
 - Refresh stays allowed while an external attempt is unresolved; issuance and
   recovery are refused.
-- A retry of `activateArrivalWithCredential` after activation completed returns the
-  committed `{state: "active", operationId, version}` with no backend write and no
-  journal change. It applies only to a bearer that verifies exactly as before (live,
-  unrevoked family tracked against that arrival, same DID, host and scope pins), so a
-  revoked or replaced family, another bearer or an ordinary unrelated session still
-  gets the earlier refusal and learns nothing about completion. A cancelled arrival
-  never qualifies. `authorizeArrivalAccess` itself still refuses a finished arrival
-  with `AccountUnavailable`. An expired access token needs an ordinary refresh first.
+- While the local account is active, an activation retry can return the committed
+  `{state: "active", operationId, version}` without a backend write or a journal
+  change. Staged completion revokes the migration families and records a digest
+  of the access token that requested activation. Only that exact, unexpired token
+  can retrieve confirmation after revocation. Browser activation creates no token
+  receipt. The default migration path requires a live tracked family for the same
+  arrival, DID and host.
 - Marking the local account `active` is part of the storage primitive:
   `completeArrivalActivation` moves the exact placed account (`provisioning`, same
   email, handle and placement) to `active` through the account authority in the same
@@ -905,11 +904,11 @@ credential that is expired, revoked, replayed or untracked always reaches the
 ordinary route, which alone decides its answer and any replay handling; the arrival
 path writes nothing for it. While its arrival is unfinished, a tracked family that
 is revoked or expired keeps the incoming `ExpiredToken` refusal, since the ordinary
-route does not serve a pending account. A finished arrival's family is an ordinary
-session: once it is expired or revoked, `activateAccount` falls through and the
-ordinary route refuses it. Its committed activation result is returned only while the local
-account is still `active`, and once the user deactivates it, `activateAccount`
-reaches the ordinary route. With the header present these never fall through to hosted or managed movement, so
+route does not serve a pending account. On the default migration path, an expired or revoked family falls through
+to ordinary activation. On the staged path, the exact access token that completed
+activation can retrieve confirmation until it expires. Both paths check that the
+local account is still active. After deactivation, ordinary activation handles the
+request. With the header present these never fall through to hosted or managed movement, so
 an invalid incoming credential is refused, not rerouted. Without it, and for any
 token that is not a tracked arrival credential, the ordinary route runs unchanged;
 a source service JWT is never offered to activation and cannot reach hosted

@@ -146,12 +146,21 @@ version 2. Authorization survives restart and never declares that an earlier
 request was unapplied by itself.
 
 An acknowledged receipt is final except for steps listed in
-`observedAcknowledgedSteps` (`incoming-activation`), whose acknowledgement does not
+`observedAcknowledgedSteps` (`incoming-activation` and `incoming-cutover`), whose acknowledgement does not
 show the remote state. For them, while the operation is pending and no worker holds
 its lease, the ownership store's `pendingExternal` reports the acknowledged receipt
 and `approveRecovery` takes the same authorizations; an observed result then
 completes or resends the step as above. The HTTP operator routes reach these receipts
 through the `arrival:<did>` resource.
+
+For a staged incoming cutover whose source head changed, the operator can authorize
+`retry-if-safe` for the exact cutover attempt after isolating the old dispatcher
+and draining its upstream request as above. The owner can then review the current
+source head and reapprove it with fresh email proof. Entryway independently checks
+the canonical PLC history, verifies that the old move is excluded and cannot win
+against the reviewed source update, and atomically records the supersession while
+retaining the original receipt and authorization. A new signed move requires fresh
+source authorization. An authorization alone does not supersede a receipt.
 
 Approval keeps the account pending. A fresh fenced execution observes the saved
 operation's remote state before acknowledging it or recording a new external

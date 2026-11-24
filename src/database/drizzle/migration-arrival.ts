@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { requestDigest } from "../../accounts/operation-ownership.js";
+import { recoveryHistoryFor } from "./operation-ownership.js";
 import * as plc from "@did-plc/lib";
 import { cidForCbor } from "@atproto/common";
 import {
@@ -39,6 +41,32 @@ import {
   assertRotationKeysPreserved,
 } from "../../plc/policy.js";
 
+// An operator attests isolation and upstream drain for this exact attempt.
+// The PLC history is independently verified before this authorization is consumed.
+function recoverableCutover(row: {
+  id: string;
+  operation_id: string;
+  execution_attempt_id: string;
+  target: string;
+  state: string;
+  recovery: string | null;
+}): boolean {
+  if (row.state !== "recovery-approved" || !row.recovery) return false;
+  try {
+    return recoveryHistoryFor(row).at(-1)?.action === "retry-if-safe";
+  } catch {
+    return false;
+  }
+}
+function supersededCutover(row: {
+  state: string;
+  result: string | null;
+}): boolean {
+  return (
+    row.state === "acknowledged" &&
+    row.result === JSON.stringify({ recovery: "superseded" })
+  );
+}
 const signingKeyPattern = /^did:key:z[1-9A-HJ-NP-Za-km-z]+$/;
 const digestPattern = /^[a-f0-9]{64}$/;
 const arrivalLifetimeMs = 86_400_000;
@@ -586,7 +614,25 @@ export function createArrivalStorage(
         const attempts = await db.read("arrival_attempts", {
           where: eq(db.tables.arrival_attempts.operation_id, operationId),
         });
+        const cutoverReceipts = saved.claim_operation_id
+          ? await db.read("external_operation_attempts", {
+              where: and(
+                eq(
+                  db.tables.external_operation_attempts.operation_id,
+                  saved.claim_operation_id,
+                ),
+                eq(
+                  db.tables.external_operation_attempts.step,
+                  "incoming-cutover",
+                ),
+              ),
+            })
+          : [];
         return {
+          hasCutoverReceipt: cutoverReceipts.some(
+            (receipt) =>
+              !supersededCutover(receipt) && !recoverableCutover(receipt),
+          ),
           arrival: arrivalRecord(saved, binding, await code(operationId)),
           signedOperations: signed.map((item) => ({
             operationId,
@@ -936,11 +982,19 @@ export function createArrivalStorage(
             signed.length !== Number(Boolean(stale)) ||
             Boolean(stale) !== Boolean(submission) ||
             (stale && input.observedCids.includes(stale.cid)) ||
-            receipts.some(
-              (item) =>
-                item.state !== "acknowledged" ||
-                item.step === "incoming-cutover",
-            )
+            receipts.some((item) => {
+              if (item.step !== "incoming-cutover")
+                return item.state !== "acknowledged";
+              if (supersededCutover(item)) return false;
+              const intent =
+                stale && requestDigest({ cid: stale.cid, did: saved.did });
+              return (
+                !stale ||
+                item.method !== submit ||
+                item.intent_digest !== intent ||
+                !recoverableCutover(item)
+              );
+            })
           )
             throw recoveryRequired();
           let update;
@@ -957,6 +1011,21 @@ export function createArrivalStorage(
               409,
               "The update must retain source authority and exclude any recoverable destination move",
             );
+          }
+          for (const receipt of receipts) {
+            if (
+              receipt.step === "incoming-cutover" &&
+              recoverableCutover(receipt)
+            )
+              await db.update(
+                "external_operation_attempts",
+                {
+                  state: "acknowledged",
+                  result: JSON.stringify({ recovery: "superseded" }),
+                  updated_at: await db.databaseTime(),
+                },
+                eq(db.tables.external_operation_attempts.id, receipt.id),
+              );
           }
           if (stale) {
             // Keep the unique (issuer, jti) occupied. Only the superseded
@@ -1872,6 +1941,7 @@ export function createArrivalStorage(
           await advance(saved, {
             activation_method: input.activation!.method,
             activation_at: input.activation!.observedAt,
+            activation_receipt_hash: input.receiptHash ?? null,
             completed_at: await db.databaseTime(),
             did_root: null,
             active: 0,
@@ -1882,6 +1952,16 @@ export function createArrivalStorage(
           return { kind: "applied" as const, version: saved.version + 1 };
         });
       });
+    },
+
+    async readActivationReceipt(operationId) {
+      const saved = (
+        await db.read("arrivals", {
+          where: eq(table.operation_id, operationId),
+          limit: 1,
+        })
+      )[0];
+      return saved?.completed_at != null ? saved.activation_receipt_hash : null;
     },
 
     async readArrivalAccess(did) {

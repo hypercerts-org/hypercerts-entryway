@@ -15,7 +15,7 @@ command=${1:-help}
 mkdir -p "$artifacts"
 # Phase identity comes from the controller, never from a command or request body.
 case "$command" in
-  fresh|fresh-group|prepare|up|contracts|database-contracts|database-dialects|resilience-profiles|database-profile|browser|incoming-late-cutover|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-public-failures|incoming-two-node|incoming-goat-journey|incoming-moover-journey|incoming-arrival-live|migration|migration-resume|resilience|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|all|down|status|help) ;;
+  fresh|fresh-group|prepare|up|_incoming-late-cutover-run|contracts|database-contracts|database-dialects|resilience-profiles|database-profile|browser|incoming-late-cutover|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-public-failures|incoming-two-node|incoming-goat-journey|incoming-moover-journey|incoming-arrival-live|migration|migration-resume|resilience|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|all|down|status|help) ;;
   *) echo 'code=UNKNOWN_PHASE'; exit 2 ;;
 esac
 printf 'phase=%s status=started\n' "$command"
@@ -172,7 +172,11 @@ case "$command" in
     "$root/tests/local.sh" up
     for step in "$@"; do
       echo "== $step"
-      "$root/tests/local.sh" "$step"
+      if [[ "$step" == incoming-late-cutover ]]; then
+        "$root/tests/local.sh" _incoming-late-cutover-run
+      else
+        "$root/tests/local.sh" "$step"
+      fi
     done
     ;;
   prepare)
@@ -200,9 +204,9 @@ case "$command" in
     node "$root/tests/atmosphere/validate-access.mjs" "$sandbox/access.json" "$project"
     ;;
   incoming-late-cutover)
-    if [[ "${ENTRYWAY_LATE_CUTOVER:-}" != 1 ]]; then
-      exec "$root/tests/local.sh" fresh-group incoming-late-cutover
-    fi
+    exec "$root/tests/local.sh" fresh-group incoming-late-cutover
+    ;;
+  _incoming-late-cutover-run)
     require_state
     prepare_incoming_access
     compose run --rm --no-deps --volume "$sandbox/incoming-access.json:/run/incoming-access.json:ro" \

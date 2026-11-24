@@ -187,7 +187,9 @@ export interface ArrivalTransactor {
     did: string;
     userId: string;
     activation: ArrivalActivationEvidence | null;
+    receiptHash?: string;
   }): Promise<ArrivalOutcome>;
+  readActivationReceipt(operationId: string): Promise<string | null>;
   /** Migration-pending projection derived from the current operation. */
   readArrivalAccess(did: string): Promise<ArrivalAccess | null>;
   /** Deletes an unclaimed preparation, which holds nothing remote. A claimed

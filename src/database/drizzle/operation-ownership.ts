@@ -16,91 +16,128 @@ import type {
   OperationOwnershipStore,
 } from "../operation-ownership.port.js";
 
+const corrupt = () =>
+  new DomainError(
+    "SchemaConflict",
+    503,
+    "The operation journal requires operator inspection",
+  );
+const parse = (value: string): unknown => {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    throw corrupt();
+  }
+};
+const validAuditReference = (value: string) =>
+  /^[A-Za-z0-9][A-Za-z0-9._:/-]{2,199}$/.test(value);
+const recoveryValue = (value: unknown): RecoveryAuthorization => {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    !("operationId" in value) ||
+    typeof value.operationId !== "string" ||
+    !("externalAttemptId" in value) ||
+    typeof value.externalAttemptId !== "string" ||
+    !("executionAttemptId" in value) ||
+    typeof value.executionAttemptId !== "string" ||
+    !("target" in value) ||
+    typeof value.target !== "string" ||
+    !("dispatcherIsolationReference" in value) ||
+    typeof value.dispatcherIsolationReference !== "string" ||
+    !("upstreamDrainReference" in value) ||
+    typeof value.upstreamDrainReference !== "string" ||
+    !validAuditReference(value.dispatcherIsolationReference) ||
+    !validAuditReference(value.upstreamDrainReference) ||
+    !("id" in value) ||
+    typeof value.id !== "string" ||
+    !value.id ||
+    !("version" in value) ||
+    typeof value.version !== "number" ||
+    !Number.isSafeInteger(value.version) ||
+    value.version < 1 ||
+    !("authorizedAt" in value) ||
+    typeof value.authorizedAt !== "number" ||
+    !Number.isSafeInteger(value.authorizedAt) ||
+    value.authorizedAt < 0 ||
+    !("action" in value) ||
+    (value.action !== "observe" && value.action !== "retry-if-safe")
+  )
+    throw corrupt();
+  let previousAuthorization: { id: string; version: number } | undefined;
+  if ("previousAuthorization" in value) {
+    const previous = value.previousAuthorization;
+    if (
+      !previous ||
+      typeof previous !== "object" ||
+      !("id" in previous) ||
+      typeof previous.id !== "string" ||
+      !previous.id ||
+      !("version" in previous) ||
+      typeof previous.version !== "number" ||
+      !Number.isSafeInteger(previous.version) ||
+      previous.version < 1
+    )
+      throw corrupt();
+    previousAuthorization = { id: previous.id, version: previous.version };
+  }
+  return {
+    id: value.id,
+    version: value.version,
+    authorizedAt: value.authorizedAt,
+    ...(previousAuthorization ? { previousAuthorization } : {}),
+    operationId: value.operationId,
+    externalAttemptId: value.externalAttemptId,
+    executionAttemptId: value.executionAttemptId,
+    target: value.target,
+    dispatcherIsolationReference: value.dispatcherIsolationReference,
+    upstreamDrainReference: value.upstreamDrainReference,
+    action: value.action === "observe" ? "observe" : "retry-if-safe",
+  };
+};
+
+export const recoveryHistoryFor = (row: {
+  recovery: string | null;
+  operation_id: string;
+  id: string;
+  execution_attempt_id: string;
+  target: string;
+}): RecoveryAuthorization[] => {
+  const rawHistory = row.recovery === null ? [] : parse(row.recovery);
+  if (!Array.isArray(rawHistory) || rawHistory.length > 2) throw corrupt();
+  const recoveryHistory = rawHistory.map(recoveryValue);
+  for (const [index, authorization] of recoveryHistory.entries()) {
+    const previous = recoveryHistory[index - 1];
+    if (
+      authorization.version !== index + 1 ||
+      authorization.operationId !== row.operation_id ||
+      authorization.externalAttemptId !== row.id ||
+      authorization.executionAttemptId !== row.execution_attempt_id ||
+      authorization.target !== row.target
+    )
+      throw corrupt();
+    if (index === 0) {
+      if (authorization.previousAuthorization !== undefined) throw corrupt();
+    } else if (
+      !previous ||
+      previous.action !== "observe" ||
+      authorization.action !== "retry-if-safe" ||
+      authorization.id === previous.id ||
+      authorization.authorizedAt < previous.authorizedAt ||
+      authorization.previousAuthorization?.id !== previous.id ||
+      authorization.previousAuthorization.version !== previous.version
+    )
+      throw corrupt();
+  }
+  return recoveryHistory;
+};
+
 export function createOperationOwnershipStore(
   db: DatabaseExecutor,
 ): OperationOwnershipStore {
   const operations = db.tables.authority_operations;
   const admissions = db.tables.operation_admissions;
   const external = db.tables.external_operation_attempts;
-  const corrupt = () =>
-    new DomainError(
-      "SchemaConflict",
-      503,
-      "The operation journal requires operator inspection",
-    );
-  const parse = (value: string): unknown => {
-    try {
-      return JSON.parse(value) as unknown;
-    } catch {
-      throw corrupt();
-    }
-  };
-  const validAuditReference = (value: string) =>
-    /^[A-Za-z0-9][A-Za-z0-9._:/-]{2,199}$/.test(value);
-  const recoveryValue = (value: unknown): RecoveryAuthorization => {
-    if (
-      !value ||
-      typeof value !== "object" ||
-      !("operationId" in value) ||
-      typeof value.operationId !== "string" ||
-      !("externalAttemptId" in value) ||
-      typeof value.externalAttemptId !== "string" ||
-      !("executionAttemptId" in value) ||
-      typeof value.executionAttemptId !== "string" ||
-      !("target" in value) ||
-      typeof value.target !== "string" ||
-      !("dispatcherIsolationReference" in value) ||
-      typeof value.dispatcherIsolationReference !== "string" ||
-      !("upstreamDrainReference" in value) ||
-      typeof value.upstreamDrainReference !== "string" ||
-      !validAuditReference(value.dispatcherIsolationReference) ||
-      !validAuditReference(value.upstreamDrainReference) ||
-      !("id" in value) ||
-      typeof value.id !== "string" ||
-      !value.id ||
-      !("version" in value) ||
-      typeof value.version !== "number" ||
-      !Number.isSafeInteger(value.version) ||
-      value.version < 1 ||
-      !("authorizedAt" in value) ||
-      typeof value.authorizedAt !== "number" ||
-      !Number.isSafeInteger(value.authorizedAt) ||
-      value.authorizedAt < 0 ||
-      !("action" in value) ||
-      (value.action !== "observe" && value.action !== "retry-if-safe")
-    )
-      throw corrupt();
-    let previousAuthorization: { id: string; version: number } | undefined;
-    if ("previousAuthorization" in value) {
-      const previous = value.previousAuthorization;
-      if (
-        !previous ||
-        typeof previous !== "object" ||
-        !("id" in previous) ||
-        typeof previous.id !== "string" ||
-        !previous.id ||
-        !("version" in previous) ||
-        typeof previous.version !== "number" ||
-        !Number.isSafeInteger(previous.version) ||
-        previous.version < 1
-      )
-        throw corrupt();
-      previousAuthorization = { id: previous.id, version: previous.version };
-    }
-    return {
-      id: value.id,
-      version: value.version,
-      authorizedAt: value.authorizedAt,
-      ...(previousAuthorization ? { previousAuthorization } : {}),
-      operationId: value.operationId,
-      externalAttemptId: value.externalAttemptId,
-      executionAttemptId: value.executionAttemptId,
-      target: value.target,
-      dispatcherIsolationReference: value.dispatcherIsolationReference,
-      upstreamDrainReference: value.upstreamDrainReference,
-      action: value.action === "observe" ? "observe" : "retry-if-safe",
-    };
-  };
   const rejectionValue = (value: unknown): PlcSubmissionRejection => {
     if (
       !value ||
@@ -133,37 +170,6 @@ export function createOperationOwnershipStore(
       default:
         throw corrupt();
     }
-  };
-  const recoveryHistoryFor = (
-    row: typeof external.$inferSelect,
-  ): RecoveryAuthorization[] => {
-    const rawHistory = row.recovery === null ? [] : parse(row.recovery);
-    if (!Array.isArray(rawHistory) || rawHistory.length > 2) throw corrupt();
-    const recoveryHistory = rawHistory.map(recoveryValue);
-    for (const [index, authorization] of recoveryHistory.entries()) {
-      const previous = recoveryHistory[index - 1];
-      if (
-        authorization.version !== index + 1 ||
-        authorization.operationId !== row.operation_id ||
-        authorization.externalAttemptId !== row.id ||
-        authorization.executionAttemptId !== row.execution_attempt_id ||
-        authorization.target !== row.target
-      )
-        throw corrupt();
-      if (index === 0) {
-        if (authorization.previousAuthorization !== undefined) throw corrupt();
-      } else if (
-        !previous ||
-        previous.action !== "observe" ||
-        authorization.action !== "retry-if-safe" ||
-        authorization.id === previous.id ||
-        authorization.authorizedAt < previous.authorizedAt ||
-        authorization.previousAuthorization?.id !== previous.id ||
-        authorization.previousAuthorization.version !== previous.version
-      )
-        throw corrupt();
-    }
-    return recoveryHistory;
   };
   const externalRow = (row: typeof external.$inferSelect): ExternalAttempt => {
     const state = externalState(row.state);
@@ -430,6 +436,13 @@ export function createOperationOwnershipStore(
       return db.transact(async () => {
         await assertActive(claim);
         const previous = await latestExternal(claim.operationId, input.step);
+        if (
+          previous?.step === "incoming-cutover" &&
+          previous.state === "acknowledged" &&
+          JSON.stringify(previous.result) ===
+            JSON.stringify({ recovery: "superseded" })
+        )
+          return null;
         if (previous && !matches(previous, input)) throw recoveryRequired();
         return previous;
       });

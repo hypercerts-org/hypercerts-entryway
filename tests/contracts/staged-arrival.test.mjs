@@ -26,6 +26,8 @@ for (const direct of [false, true]) {
     target.stagedIncomingMigration = true;
     let missing = true;
     let creates = 0;
+    let failAfterActivation = false;
+    const intercepted = [];
     const ordinaryFetch = globalThis.fetch;
     globalThis.fetch = async (url, options) => {
       const request = new URL(url);
@@ -37,6 +39,7 @@ for (const direct of [false, true]) {
           "com.atproto.server.reserveSigningKey",
         ].includes(method)
       ) {
+        intercepted.push(method);
         const jwt = await jwtVerify(
           options.headers.authorization.slice(7),
           await importJWK(f.config.jwtJwk, "ES256K"),
@@ -71,6 +74,10 @@ for (const direct of [false, true]) {
         });
       }
       if (method === "com.atproto.repo.listMissingBlobs") {
+        if (failAfterActivation && !f.backendState.deactivated) {
+          failAfterActivation = false;
+          throw new Error("destination unavailable");
+        }
         assert.equal(request.searchParams.get("limit"), "1");
         return Response.json({ blobs: missing ? [{ cid: "missing" }] : [] });
       }
@@ -130,7 +137,7 @@ for (const direct of [false, true]) {
       ).reservation,
       null,
     );
-    assert.deepEqual(f.backendState.calls, []);
+    assert.deepEqual(intercepted, []);
     target.stagedIncomingMigration = true;
     if (!direct) {
       const retiredKey = f.predecessor.rotationKeys[0];
@@ -174,6 +181,9 @@ for (const direct of [false, true]) {
     );
     const ready = () =>
       f.composed.activateArrivalWithCredential(session.accessJwt);
+    f.setDirectoryFault("unavailable");
+    await assert.rejects(ready, { code: "AccountUnavailable" });
+    f.setDirectoryFault("");
     await assert.rejects(ready, { code: "IdentityConflict" });
     const submission = {
       arrivalCode: prepared.arrivalCode,
@@ -225,26 +235,52 @@ for (const direct of [false, true]) {
         f.source,
       );
       const updatedHead = String(await cidForCbor(updated));
-      const recordSigned = f.arrivals.recordSignedOperation;
+      const dispatch = f.ownership.dispatch;
       const race = t.mock.method(
-        f.arrivals,
-        "recordSignedOperation",
-        async (...args) => {
-          const saved = await recordSigned(...args);
-          // The source advances after signed admission and before any PLC dispatch marker.
-          f.audit.push({
-            did: f.did,
-            operation: updated,
-            cid: updatedHead,
-            nullified: false,
-            createdAt: new Date().toISOString(),
+        f.ownership,
+        "dispatch",
+        async (input, callbacks) => {
+          if (input.step !== "incoming-cutover")
+            return dispatch(input, callbacks);
+          return dispatch(input, {
+            ...callbacks,
+            send: async () => {
+              // Change the source after the durable marker and before the send.
+              f.audit.push({
+                did: f.did,
+                operation: updated,
+                cid: updatedHead,
+                nullified: false,
+                createdAt: new Date().toISOString(),
+              });
+              race.mock.restore();
+              return callbacks.send();
+            },
           });
-          race.mock.restore();
-          return saved;
         },
       );
       await assert.rejects(f.composed.submitIncomingHandoff(submission), {
-        code: "IdentityConflict",
+        code: "OperationRecoveryRequired",
+      });
+      const receipt = await f.store.pendingExternal(`arrival:${f.did}`);
+      assert.equal(receipt.step, "incoming-cutover");
+      const blocked = await f.arrivals.readArrivalAccess(f.did);
+      await assert.rejects(
+        f.composed.reapproveArrival(f.request, "fresh-otp", {
+          operationId: prepared.operationId,
+          expectedVersion: blocked.version,
+          expectedPlcHead: updatedHead,
+        }),
+        { code: "OperationRecoveryRequired" },
+      );
+      await f.store.approveRecovery({
+        operationId: receipt.operationId,
+        externalAttemptId: receipt.id,
+        executionAttemptId: receipt.executionAttemptId,
+        target: receipt.target,
+        dispatcherIsolationReference: "case/isolation",
+        upstreamDrainReference: "case/drain",
+        action: "retry-if-safe",
       });
       assert.equal(
         (
@@ -277,6 +313,15 @@ for (const direct of [false, true]) {
         f.request,
         "fresh-otp",
         consent,
+      );
+      const retired = (await f.db.read("external_operation_attempts")).find(
+        (item) => item.id === receipt.id,
+      );
+      assert.equal(retired.state, "acknowledged");
+      assert.deepEqual(JSON.parse(retired.result), { recovery: "superseded" });
+      assert.equal(
+        JSON.parse(retired.recovery)[0].dispatcherIsolationReference,
+        "case/isolation",
       );
       assert.equal(approvedUpdate.expectedPlcHead, updatedHead);
       assert.deepEqual(approvedUpdate.approvedRotationKeys, [
@@ -314,7 +359,19 @@ for (const direct of [false, true]) {
       await f.composed.submitIncomingHandoff(submission);
       assert.equal(f.publicationAttempts.length, 1);
     }
-    await ready();
+    const another = await f.composed.refreshArrivalSession(session.refreshJwt);
+    failAfterActivation = true;
+    await assert.rejects(ready(), { code: "AccountUnavailable" });
+    assert.equal(f.backendState.activations, 1);
+    const activated = await ready();
+    assert.deepEqual(await ready(), activated);
+    await assert.rejects(
+      f.composed.activateArrivalWithCredential(session.refreshJwt),
+    );
+    await assert.rejects(
+      f.composed.activateArrivalWithCredential(another.accessJwt),
+    );
+    await assert.rejects(f.composed.authorizeArrivalAccess(session.accessJwt));
     assert.equal(f.audit.length, direct ? 2 : 3);
     assert.equal(f.backendState.activations, 1);
     assert.equal((await f.storage.getByDid(f.did)).status, "active");
@@ -324,6 +381,10 @@ for (const direct of [false, true]) {
       ),
     );
     await assert.rejects(f.composed.refreshArrivalSession(session.refreshJwt));
+    t.mock.timers.enable({ apis: ["Date"] });
+    t.mock.timers.tick(6 * 60 * 1000);
+    await assert.rejects(ready());
+    assert.equal(f.backendState.activations, 1);
   });
 }
 
@@ -351,7 +412,8 @@ test("staged custody retains non-ATProto services, methods and aliases and rejec
     endpoint: "https://other.example.test",
   };
   facts.verificationMethods.other = source.did();
-  facts.alsoKnownAs.push("https://example.test/profile");
+  facts.alsoKnownAs.unshift("https://example.test/profile");
+  facts.alsoKnownAs.push("at://secondary.example.test");
   const predecessor = await plc.signOperation(facts, source);
   for (const edit of [
     {
@@ -421,6 +483,11 @@ test("staged custody retains non-ATProto services, methods and aliases and rejec
       ...facts.verificationMethods,
       atproto: entryway.did(),
     },
+    alsoKnownAs: [
+      `at://${handle}`,
+      "https://example.test/profile",
+      "at://secondary.example.test",
+    ],
   };
   const validate = async (changes, signer = source) =>
     validateStagedMove({
@@ -432,6 +499,25 @@ test("staged custody retains non-ATProto services, methods and aliases and rejec
       rotationKeys,
     });
   await validate({});
+  const noHandle = await plc.signOperation(
+    { ...facts, alsoKnownAs: ["https://example.test/profile"] },
+    source,
+  );
+  await validateStagedMove({
+    operation: await plc.signOperation(
+      {
+        ...moved,
+        prev: String(await cidForCbor(noHandle)),
+        alsoKnownAs: [`at://${handle}`, "https://example.test/profile"],
+      },
+      source,
+    ),
+    predecessor: noHandle,
+    endpoint,
+    handle,
+    repositoryKey: entryway.did(),
+    rotationKeys,
+  });
   for (const mutation of [
     { rotationKeys: [entryway.did()] },
     { services: { atproto_pds: moved.services.atproto_pds } },

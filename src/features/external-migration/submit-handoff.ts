@@ -28,6 +28,30 @@ import {
   readIncomingObservation,
 } from "../../plc/incoming-observation.js";
 
+function acceptedReplay(
+  aggregate: ArrivalAggregate,
+  method: IncomingMethod,
+  digest: string,
+) {
+  const accepted = aggregate.admissions.find((item) => item.method === method);
+  if (
+    !accepted ||
+    accepted.requestDigest !== digest ||
+    accepted.userId !== aggregate.arrival.userId ||
+    accepted.did !== aggregate.arrival.did ||
+    !isRecordedAdmissionGeneration(
+      accepted.generation,
+      aggregate.arrival.generation,
+    )
+  )
+    throw new DomainError(
+      "OperationConflict",
+      409,
+      "This request is no longer the admitted request",
+    );
+  return accepted;
+}
+
 /** Internal composition consumes a trusted browser user separately from the
  * operation resource. No caller observation or digest can authorize publication. */
 export function createAuthenticatedArrival({
@@ -158,8 +182,9 @@ export function createAuthenticatedArrival({
       },
       {
         send: async () => {
-          if (before.canonical) return null;
-          if (before.diverged)
+          const current = saved.staged ? await observe() : before;
+          if (current.canonical) return null;
+          if (current.diverged)
             throw new DomainError(
               "OperationRecoveryRequired",
               409,
@@ -266,9 +291,27 @@ export function createAuthenticatedArrival({
       // again. Every new admission is fully verified below.
       if (recorded) {
         const ids = { operationId: input.operationId, userId: input.userId };
-        if (input.method === incomingCreationMethod)
-          return api.continueCreation(ids);
-        return api.continueHandoff(ids);
+        return underOwner(
+          ids.operationId,
+          ids.userId,
+          async (owner, locked) => {
+            const accepted = acceptedReplay(
+              locked,
+              input.method,
+              parsed.requestDigest,
+            );
+            if (input.method === incomingCreationMethod) {
+              if (provision) return provision(owner, locked);
+              return {
+                operationId: locked.arrival.operationId,
+                did: accepted.did,
+                requestDigest: accepted.requestDigest,
+                generation: accepted.generation,
+              };
+            }
+            return dispatchSaved(owner, locked);
+          },
+        );
       }
       const authorization = await verify({
         presentation: input.presentation,

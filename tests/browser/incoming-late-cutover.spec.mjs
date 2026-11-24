@@ -201,11 +201,34 @@ test("a public incoming migration keeps the source DID until the staged reposito
     await xrpc(endpoint, "identity.getRecommendedDidCredentials", { token }),
   );
   expect(recommended.services.atproto_pds.endpoint).toBe(endpoint);
-  const rotationKeys = [recoveryKey, ...prepared.approvedRotationKeys];
+  await arrivalSummary(page, config, prepared.operationId);
+  const rotationKeys = await page
+    .getByText("Approved rotation keys, in priority order", { exact: true })
+    .locator("+ ol li code")
+    .allTextContents();
+  expect(rotationKeys).toEqual([recoveryKey, ...prepared.approvedRotationKeys]);
+  const sourceIdentity = historyBeforeMove.at(-1).operation;
+  const primaryHandle = sourceIdentity.alsoKnownAs.findIndex((alias) =>
+    alias.startsWith("at://"),
+  );
   const operation = await signAtSource(access, {
     source,
     sourceEmail,
-    fields: { ...recommended, rotationKeys },
+    fields: {
+      ...recommended,
+      rotationKeys,
+      alsoKnownAs: [
+        `at://${handle}`,
+        ...sourceIdentity.alsoKnownAs.filter(
+          (_, index) => index !== primaryHandle,
+        ),
+      ],
+      verificationMethods: {
+        ...sourceIdentity.verificationMethods,
+        atproto: recommended.verificationMethods.atproto,
+      },
+      services: { ...sourceIdentity.services, ...recommended.services },
+    },
   });
   expect(operation.prev).toBe(predecessor);
   expect(await plcAudit(access, did)).toEqual(historyBeforeMove);
@@ -227,6 +250,8 @@ test("a public incoming migration keeps the source DID until the staged reposito
   expect(moved.verificationMethods.atproto).toBe(
     recommended.verificationMethods.atproto,
   );
+  await xrpc(endpoint, "server.activateAccount", { token });
+  // Retry the same request as if the first success response had been lost.
   await xrpc(endpoint, "server.activateAccount", { token });
   expect((await status()).activated).toBe(true);
   await expectDestinationServes(access, { did, endpoint, handle, inventory });

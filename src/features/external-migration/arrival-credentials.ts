@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { DomainError } from "../../accounts/errors.js";
 import type { OperationOwnership } from "../../accounts/operation-ownership.js";
 import type {
@@ -54,6 +55,9 @@ export interface ArrivalFamilyCredentials {
     kind: "access" | "refresh",
   ): Promise<{ familyId: string; did: string }>;
   readAccess(
+    input: unknown,
+  ): Promise<{ familyId: string; did: string; pdsDid: string }>;
+  readConfirmationAccess(
     input: unknown,
   ): Promise<{ familyId: string; did: string; pdsDid: string }>;
   assertLive(familyId: string): Promise<void>;
@@ -468,5 +472,30 @@ export function createArrivalCredentials({
      * tracked against this arrival, same DID, host and scope pins), so it reveals
      * nothing for any other bearer, and a cancelled arrival never qualifies. */
     identifyArrivalAccess: identify,
+    async identifyActivationConfirmation(
+      bearer: unknown,
+    ): Promise<AuthorizedArrivalAccess> {
+      const token = await signer.readConfirmationAccess(bearer);
+      const tracked = await arrivals.readArrivalFamily(token.familyId);
+      const projection = await arrivals.readArrivalAccess(token.did);
+      if (
+        typeof bearer !== "string" ||
+        !tracked ||
+        !projection ||
+        !projection.complete ||
+        tracked.operationId !== projection.operationId ||
+        tracked.pdsId !== projection.pdsId ||
+        placement(projection.pdsId)?.did !== token.pdsDid ||
+        (await arrivals.readActivationReceipt(projection.operationId)) !==
+          createHash("sha256").update(bearer).digest("hex")
+      )
+        throw invalidToken();
+      return {
+        operationId: projection.operationId,
+        did: projection.did,
+        userId: projection.userId,
+        familyId: tracked.familyId,
+      };
+    },
   };
 }

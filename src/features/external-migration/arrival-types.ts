@@ -185,6 +185,8 @@ export interface ArrivalAggregate {
     readonly completedAt: number | null;
     readonly canonicalHandoffCid: string | null;
   };
+  /** A durable cutover receipt prevents source reapproval. */
+  readonly hasCutoverReceipt?: boolean;
   readonly attempts: readonly {
     readonly ownershipOperationId: string;
     readonly attemptId: string;

@@ -310,6 +310,7 @@ export async function composeIncomingArrival({
     placement,
     backend: arrivalBackend,
     authorizeAccess: credentials.identifyArrivalAccess,
+    identifyConfirmation: credentials.identifyActivationConfirmation,
     revokeFamilies: (ids) =>
       legacy.arrivalSessions.revoke(ids, "arrival-completed"),
     assertCredentialLive: (familyId) =>

@@ -50,6 +50,7 @@ export function summarizeArrival(aggregate: ArrivalAggregate): ArrivalSummary {
                 (item) =>
                   item.method === "com.atproto.identity.submitPlcOperation",
               )) &&
+            !aggregate.hasCutoverReceipt &&
             !hasUnresolvedAttempt(aggregate),
           approvedRotationKeys: destinationRotationKeys(arrival),
         }

@@ -24,8 +24,12 @@ for app in ['hypercerts-entryway','entryway-fixtures','entryway-oauth-web-app','
             service = text[start:end]
             launcher = root / 'tests/support/start-pds.mjs'
             image = indent((source / 'stacks/late-cutover-pds.yaml').read_text().rstrip(), '    ')
-            service = service.replace('    command: node tests/support/start-pds.mjs', image)
-            service = service.replace('    volumes:\n', f'    volumes:\n      - {launcher}:/app/services/pds/start-pds.mjs:ro,z\n')
+            command_marker = '    command: node tests/support/start-pds.mjs'
+            volumes_marker = '    volumes:\n'
+            if service.count(command_marker) != 1 or service.count(volumes_marker) != 1:
+                raise SystemExit('Unexpected staged PDS template')
+            service = service.replace(command_marker, image)
+            service = service.replace(volumes_marker, f'    volumes:\n      - {launcher}:/app/services/pds/start-pds.mjs:ro,z\n')
             text = text[:start] + service + text[end:]
         profile_nodes = os.environ.get('ENTRYWAY_PROFILE_NODE_COUNT')
         if profile_nodes and app == 'hypercerts-entryway':

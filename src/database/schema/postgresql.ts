@@ -208,6 +208,7 @@ export const arrivals = table(
     bound_at: count("bound_at"),
     activation_method: text("activation_method"),
     activation_at: count("activation_at"),
+    activation_receipt_hash: text("activation_receipt_hash"),
     completed_at: count("completed_at"),
   },
   (t) => [
