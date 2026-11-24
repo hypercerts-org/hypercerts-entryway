@@ -532,3 +532,52 @@ test("runtime cycles include Svelte components", (t) => {
     ),
   );
 });
+
+test("exact and wildcard aliases resolve Svelte owners without matching near misses", (t) => {
+  const f = fixture(t, {
+    "src/features/account-settings/Private.svelte": "<p>private</p>",
+    "src/ui/Shared.svelte": "<p>shared</p>",
+  });
+  f.options.paths["@private"] = [
+    join(f.root, "src/features/account-settings/Private.svelte"),
+  ];
+  f.options.paths["@component/*/view"] = [
+    join(f.root, "src/features/*/Private.svelte"),
+  ];
+  f.options.paths["@shared"] = [join(f.root, "src/ui/Shared.svelte")];
+  for (const specifier of ["@private", "@component/account-settings/view"]) {
+    assert.ok(
+      f
+        .check(
+          "src/features/email-login/Alias.svelte",
+          `<script>import Target from "${specifier}";</script><Target/>`,
+        )
+        .some((issue) =>
+          issue.includes(
+            "feature email-login imports account-settings internals",
+          ),
+        ),
+    );
+  }
+  assert.deepEqual(
+    f.check(
+      "src/features/email-login/Alias.svelte",
+      `<script>import Shared from "@shared";</script><Shared/>`,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    f.check(
+      "src/features/email-login/Alias.svelte",
+      `<script>import Other from "@private-other";</script><Other/>`,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    f.check(
+      "src/features/email-login/Alias.svelte",
+      `<script>import Other from "@component/account-settings/views";</script><Other/>`,
+    ),
+    [],
+  );
+});

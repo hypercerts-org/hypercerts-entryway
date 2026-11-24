@@ -85,26 +85,32 @@ function resolveReference(specifier, filename, appRoot, options) {
     );
     return existsSync(candidate) ? candidate : undefined;
   }
-  if (specifier.endsWith(".svelte")) {
-    if (specifier.startsWith(".")) {
-      const candidate = resolve(dirname(filename), specifier);
-      return existsSync(candidate) ? candidate : undefined;
-    }
-    for (const [pattern, targets] of Object.entries(options.paths ?? {})) {
-      const [prefix, suffix = ""] = pattern.split("*");
-      if (!specifier.startsWith(prefix) || !specifier.endsWith(suffix))
-        continue;
-      const match = specifier.slice(
-        prefix.length,
-        specifier.length - suffix.length,
+  if (specifier.startsWith(".") && specifier.endsWith(".svelte")) {
+    const candidate = resolve(dirname(filename), specifier);
+    return existsSync(candidate) ? candidate : undefined;
+  }
+  for (const [pattern, targets] of Object.entries(options.paths ?? {})) {
+    const wildcard = pattern.indexOf("*");
+    const prefix = wildcard < 0 ? pattern : pattern.slice(0, wildcard);
+    const suffix = wildcard < 0 ? "" : pattern.slice(wildcard + 1);
+    const matches =
+      wildcard < 0
+        ? specifier === pattern
+        : specifier.length >= prefix.length + suffix.length &&
+          specifier.startsWith(prefix) &&
+          specifier.endsWith(suffix);
+    if (!matches) continue;
+    const match =
+      wildcard < 0
+        ? ""
+        : specifier.slice(prefix.length, specifier.length - suffix.length);
+    for (const target of targets) {
+      const candidate = resolve(
+        options.baseUrl ?? appRoot,
+        target.replace("*", match),
       );
-      for (const target of targets) {
-        const candidate = resolve(
-          options.baseUrl ?? appRoot,
-          target.replace("*", match),
-        );
-        if (existsSync(candidate)) return candidate;
-      }
+      if (candidate.endsWith(".svelte") && existsSync(candidate))
+        return candidate;
     }
   }
   return ts.resolveModuleName(specifier, filename, options, ts.sys)
@@ -179,7 +185,12 @@ export function moduleViolations(source, filename, appRoot, options) {
         specifier.startsWith(".") ||
         specifier.startsWith("#entryway-ssr/") ||
         Object.keys(options.paths ?? {}).some((alias) =>
-          specifier.startsWith(alias.split("*")[0]),
+          alias.includes("*")
+            ? specifier.length >=
+                alias.indexOf("*") + alias.length - alias.indexOf("*") - 1 &&
+              specifier.startsWith(alias.slice(0, alias.indexOf("*"))) &&
+              specifier.endsWith(alias.slice(alias.indexOf("*") + 1))
+            : specifier === alias,
         )
       )
         violations.push(`${specifier}: unresolved local import`);
