@@ -80,6 +80,47 @@ function matchingPath(specifier, paths) {
   return ts.matchPatternOrExact(ts.tryParsePatterns({ ...paths }), specifier);
 }
 
+function resolveAliasTarget(substitution, capture, filename, options, host) {
+  const expanded = capture
+    ? ts.replaceFirstStar(substitution, capture)
+    : substitution;
+  const candidate = resolve(ts.getPathsBasePath(options, host), expanded);
+  if (
+    (candidate.endsWith(".svelte") ||
+      ts.isAnySupportedFileExtension(substitution)) &&
+    ts.sys.fileExists(candidate)
+  )
+    return realpathSync(candidate);
+  const resolved = ts.resolveModuleName(
+    candidate,
+    filename,
+    { ...options, paths: undefined },
+    host,
+  ).resolvedModule?.resolvedFileName;
+  return resolved ? realpathSync(resolved) : undefined;
+}
+
+function resolveAlias(specifier, filename, options, host) {
+  if (!options.paths || ts.isExternalModuleNameRelative(specifier)) return;
+  const pattern = matchingPath(specifier, options.paths);
+  if (!pattern) return;
+  const key = typeof pattern === "string" ? pattern : ts.patternText(pattern);
+  const capture =
+    typeof pattern === "string"
+      ? undefined
+      : ts.matchedText(pattern, specifier);
+  for (const substitution of options.paths[key]) {
+    const target = resolveAliasTarget(
+      substitution,
+      capture,
+      filename,
+      options,
+      host,
+    );
+    if (target) return target;
+  }
+}
+
 function resolveReference(specifier, filename, appRoot, options) {
   if (specifier.startsWith("#entryway-ssr/")) {
     const owner = specifier.slice("#entryway-ssr/".length);
@@ -97,36 +138,8 @@ function resolveReference(specifier, filename, appRoot, options) {
     return ts.sys.fileExists(candidate) ? realpathSync(candidate) : undefined;
   }
   const host = { ...ts.sys, getCurrentDirectory: () => appRoot };
-  const pattern =
-    options.paths && !ts.isExternalModuleNameRelative(specifier)
-      ? matchingPath(specifier, options.paths)
-      : undefined;
-  if (pattern) {
-    const key = typeof pattern === "string" ? pattern : ts.patternText(pattern);
-    const capture =
-      typeof pattern === "string"
-        ? undefined
-        : ts.matchedText(pattern, specifier);
-    for (const substitution of options.paths[key]) {
-      const expanded = capture
-        ? ts.replaceFirstStar(substitution, capture)
-        : substitution;
-      const candidate = resolve(ts.getPathsBasePath(options, host), expanded);
-      if (
-        (candidate.endsWith(".svelte") ||
-          ts.isAnySupportedFileExtension(substitution)) &&
-        ts.sys.fileExists(candidate)
-      )
-        return realpathSync(candidate);
-      const resolved = ts.resolveModuleName(
-        candidate,
-        filename,
-        { ...options, paths: undefined },
-        host,
-      ).resolvedModule?.resolvedFileName;
-      if (resolved) return realpathSync(resolved);
-    }
-  }
+  const target = resolveAlias(specifier, filename, options, host);
+  if (target) return target;
   const resolved = ts.resolveModuleName(
     specifier,
     filename,
