@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button } from "@hypercerts-org/ui-svelte";
+  import { Button, ErrorMessage, Input } from "@hypercerts-org/ui-svelte";
 
   interface Props {
     flow: string;
@@ -20,7 +20,7 @@
 </script>
 
 {#if error}
-  <p id="otp-error" role="alert" aria-live="polite">{error}</p>
+  <ErrorMessage id="otp-error" aria-live="polite">{error}</ErrorMessage>
 {/if}
 <p id="otp-help" role="status" aria-live="polite">
   Enter the code sent to <strong>{shownEmail}</strong>. Codes expire after ten
@@ -49,7 +49,7 @@
       />
     </div>
   {:else}
-    <input
+    <Input
       id="otp"
       name="otp"
       inputmode="numeric"
@@ -78,7 +78,7 @@
     <input type="hidden" name="flow" value={flow} />
     <input type="hidden" name="csrf" value={csrf} />
     <label for="change-email">Use a different email address</label>
-    <input
+    <Input
       id="change-email"
       name="email"
       type="email"

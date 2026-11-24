@@ -3,6 +3,7 @@
   --hc-text-on-fill: var(--accent-text);
   --hc-surface-panel: var(--surface);
   --hc-fill-solid: var(--accent);
+  --hc-fill-solid-hover: color-mix(in oklab, var(--accent) 90%, transparent);
   --hc-focus-ring: var(--focus);
   --hc-line-hairline: var(--border);
 }
@@ -52,6 +53,8 @@ main[data-layout="standalone"] > small {
 main[data-layout="oauth"] > h1,
 main[data-layout="standalone"] > h1 {
   text-align: center;
+  font-family: var(--hc-font-display);
+  font-weight: var(--hc-weight-display);
 }
 main[data-layout="oauth"] > h1 {
   font-size: 32px;
@@ -93,13 +96,6 @@ main[data-layout="standalone"] > h1 {
 .primary-action {
   width: 100%;
   justify-content: center;
-  border-radius: 999px;
-  background: var(--hc-fill-solid);
-  color: var(--hc-text-on-fill);
-}
-.secondary-action {
-  color: var(--muted);
-  background: transparent;
 }
 main[data-layout]:not([data-layout="oauth"])
   input[autocomplete="one-time-code"] {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button } from "@hypercerts-org/ui-svelte";
+  import { Button, Input } from "@hypercerts-org/ui-svelte";
 
   interface Props {
     flow: string;
@@ -13,7 +13,7 @@
   <input type="hidden" name="flow" value={flow} />
   <input type="hidden" name="csrf" value={csrf} />
   <label for="email">Email address</label>
-  <input
+  <Input
     id="email"
     name="email"
     type="email"
