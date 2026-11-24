@@ -478,3 +478,96 @@ for (const prompt of ["none", "hint"]) {
     });
   }
 }
+
+test("one authorization attempt owns a request across replacement", async (t) => {
+  const f = await fixture(t);
+  const id = "pending-request";
+  const clientId = "https://client.example/metadata";
+  const deviceId = "browser";
+  await f.store.createRequest(id, {
+    clientId,
+    deviceId: null,
+    did: null,
+    code: null,
+    expiresAt: new Date(Date.now() + 60_000),
+    parameters: {},
+  });
+  const peek = async () => (await f.store.readRequest(id))?.clientId;
+  let release;
+  let entered;
+  const waiting = new Promise((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise((resolve) => {
+    entered = resolve;
+  });
+  const first = f.store.admitAuthorization(
+    clientId,
+    deviceId,
+    peek,
+    async (entry) => {
+      entered();
+      await waiting;
+      const flow = {
+        id: "first",
+        clientId,
+        deviceId,
+        requestRecordId: id,
+        requestOwner: entry.owner,
+      };
+      await f.db.transact(() => f.store.setAuthorizationFlow(flow));
+      return flow;
+    },
+  );
+  await started;
+  assert.deepEqual(
+    await f.store.admitAuthorization(clientId, deviceId, peek, () => {
+      throw new Error("competing operation ran");
+    }),
+    { flowId: undefined },
+  );
+  release();
+  const flow = await first;
+  assert.deepEqual(
+    await f.store.admitAuthorization(clientId, deviceId, peek, () => {
+      throw new Error("refresh reran authorization");
+    }),
+    { flowId: "first" },
+  );
+  const replacement = { ...flow, id: "replacement" };
+  await f.db.transact(() => f.store.setAuthorizationFlow(replacement, flow.id));
+  await assert.rejects(() => f.store.assertAuthorizationFlow(flow));
+  await f.store.assertAuthorizationFlow(replacement);
+  await assert.rejects(() =>
+    f.store.runAuthorizationFlow(flow, () =>
+      f.store.updateRequest(id, { code: "stale", did: "did:example:stale" }),
+    ),
+  );
+  await assert.rejects(() =>
+    f.store.runAuthorizationFlow(flow, () => f.store.deleteRequest(id)),
+  );
+  assert.equal((await f.store.readRequest(id)).entryFlowId, replacement.id);
+  await f.store.runAuthorizationFlow(replacement, () =>
+    f.store.deleteRequest(id),
+  );
+  assert.equal(await f.store.readRequest(id), null);
+});
+
+test("failed initial authorization releases its owned reservation", async (t) => {
+  const f = await fixture(t);
+  const id = "failed-request";
+  const clientId = "https://client.example/metadata";
+  await f.store.createRequest(id, {
+    clientId,
+    expiresAt: new Date(Date.now() + 60_000),
+  });
+  const peek = async () => (await f.store.readRequest(id))?.clientId;
+  await assert.rejects(
+    () =>
+      f.store.admitAuthorization(clientId, "browser", peek, async () => {
+        throw new Error("initial failure");
+      }),
+    /initial failure/,
+  );
+  assert.equal((await f.store.readRequest(id)).entryOwner, undefined);
+});

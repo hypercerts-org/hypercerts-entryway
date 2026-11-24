@@ -32,6 +32,7 @@ export async function createAuthentication({
     db,
     config,
     provider,
+    stores,
     redirectAuthorizationError: (res, error) =>
       authorizationRedirect(
         res,
@@ -95,6 +96,7 @@ export async function createAuthentication({
     config,
     provider,
     runAuthorization: stores.runAuthorization,
+    admitAuthorization: stores.admitAuthorization,
     flows,
     loginForm: forms.loginForm,
     consentForm,

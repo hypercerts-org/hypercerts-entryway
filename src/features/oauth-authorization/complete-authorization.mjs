@@ -46,6 +46,7 @@ export async function completeAuthorization({
   config,
   provider,
   refreshFlow,
+  runRequest,
   res,
   flow,
   browser,
@@ -86,12 +87,14 @@ export async function completeAuthorization({
       client,
       { authorizedScopes: [...granted] },
     );
-    return provider.requestManager.setAuthorized(
-      flow.requestUri,
-      client,
-      deviceAccount.account,
-      browser.deviceId,
-      browser.deviceMetadata,
+    return runRequest(current, () =>
+      provider.requestManager.setAuthorized(
+        flow.requestUri,
+        client,
+        deviceAccount.account,
+        browser.deviceId,
+        browser.deviceMetadata,
+      ),
     );
   });
   authorizationRedirect(res, config.issuer, request.parameters, { code });

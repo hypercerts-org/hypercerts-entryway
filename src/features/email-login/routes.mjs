@@ -378,6 +378,8 @@ export function mountEmailLogin({
         const next = await newFlow(browser, {
           createdAt: current.createdAt,
           requestUri: current.requestUri,
+          requestRecordId: current.requestRecordId,
+          requestOwner: current.requestOwner,
           clientId: current.clientId,
           clientName: current.clientName,
           parameters: current.parameters,
@@ -385,6 +387,7 @@ export function mountEmailLogin({
           otpRequestCount: current.otpRequestCount,
           lastOtpSentAt: current.lastOtpSentAt,
         });
+        await flows.bindFlow(next, current.id);
         await db.delete("auth-flows", current.id);
         return next;
       });

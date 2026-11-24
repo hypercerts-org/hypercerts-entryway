@@ -14,6 +14,7 @@ import {
 export function createOAuthStores(db, accounts, config) {
   const exchange = new AsyncLocalStorage();
   const authorization = new AsyncLocalStorage();
+  const admission = new AsyncLocalStorage();
   const get = (ns, key) => db.get(`oauth:${ns}`, key);
   const set = (ns, key, value) => db.set(`oauth:${ns}`, key, value);
   const del = (ns, key) => db.delete(`oauth:${ns}`, key);
@@ -100,6 +101,101 @@ export function createOAuthStores(db, accounts, config) {
     runExchange: (operation) => exchange.run({}, operation),
     runAuthorization: (clientId, operation) =>
       authorization.run({ clientId, memberships: new Map() }, operation),
+    async admitAuthorization(clientId, deviceId, peek, operation) {
+      const context = { clientId, deviceId, owner: crypto.randomUUID() };
+      return admission.run(context, async () => {
+        if ((await peek()) !== clientId || !context.requestId)
+          throw new InvalidRequestError("Unknown authorization request");
+        const existing = await transaction(async () => {
+          const row = await get("requests", context.requestId);
+          if (
+            !row ||
+            row.clientId !== clientId ||
+            (row.deviceId && row.deviceId !== deviceId) ||
+            row.did ||
+            row.code ||
+            new Date(row.expiresAt).getTime() <= Date.now()
+          )
+            throw new InvalidRequestError(
+              "Authorization request is unavailable",
+            );
+          if (row.entryOwner) {
+            if (row.entryDevice !== deviceId)
+              throw new InvalidRequestError(
+                "Authorization request belongs to another device",
+              );
+            return { flowId: row.entryFlowId };
+          }
+          await set("requests", context.requestId, {
+            ...row,
+            entryOwner: context.owner,
+            entryDevice: deviceId,
+          });
+          return null;
+        });
+        if (existing) return existing;
+        try {
+          return await operation({
+            requestId: context.requestId,
+            owner: context.owner,
+          });
+        } catch (error) {
+          await transaction(async () => {
+            const row = await get("requests", context.requestId);
+            if (
+              row?.entryOwner === context.owner &&
+              !row.entryFlowId &&
+              !row.code
+            ) {
+              const { entryOwner, entryDevice, ...remaining } = row;
+              await set("requests", context.requestId, remaining);
+            }
+          });
+          throw error;
+        }
+      });
+    },
+    runAuthorizationFlow(flow, operation) {
+      if (!flow.requestRecordId) return operation();
+      return admission.run(
+        {
+          requestId: flow.requestRecordId,
+          owner: flow.requestOwner,
+          flowId: flow.id,
+        },
+        operation,
+      );
+    },
+    async setAuthorizationFlow(flow, previousId) {
+      const row = await get("requests", flow.requestRecordId);
+      if (
+        !row ||
+        row.entryOwner !== flow.requestOwner ||
+        row.entryDevice !== flow.deviceId ||
+        row.clientId !== flow.clientId ||
+        (previousId ? row.entryFlowId !== previousId : row.entryFlowId)
+      )
+        throw new InvalidRequestError(
+          "Authorization attempt is no longer active",
+        );
+      await set("requests", flow.requestRecordId, {
+        ...row,
+        entryFlowId: flow.id,
+      });
+    },
+    async assertAuthorizationFlow(flow) {
+      const row = await get("requests", flow.requestRecordId);
+      if (
+        !row ||
+        row.entryOwner !== flow.requestOwner ||
+        row.entryFlowId !== flow.id ||
+        row.entryDevice !== flow.deviceId ||
+        row.clientId !== flow.clientId
+      )
+        throw new InvalidRequestError(
+          "Authorization attempt is no longer active",
+        );
+    },
     createAccount: unsupported,
     authenticateAccount: unsupported,
     async getAccount(did) {
@@ -208,12 +304,26 @@ export function createOAuthStores(db, accounts, config) {
     async createRequest(id, data) {
       await set("requests", id, data);
     },
-    readRequest: (id) => get("requests", id),
+    readRequest: (id) => {
+      const context = admission.getStore();
+      if (context && !context.requestId) context.requestId = id;
+      return get("requests", id);
+    },
     async updateRequest(id, data) {
       await transaction(async () => {
         const current = await get("requests", id);
         if (!current)
           throw new InvalidRequestError("Unknown authorization request");
+        const entry = admission.getStore();
+        if (
+          entry &&
+          (entry.requestId !== id ||
+            current.entryOwner !== entry.owner ||
+            (entry.flowId && current.entryFlowId !== entry.flowId))
+        )
+          throw new InvalidRequestError(
+            "Authorization attempt is no longer active",
+          );
         const context = authorization.getStore();
         let version = current.approvalVersion;
         if (data.code && data.did) {
@@ -251,7 +361,20 @@ export function createOAuthStores(db, accounts, config) {
     },
     async deleteRequest(id) {
       // Serialize with update and consume so a delayed update cannot recreate it.
-      await transaction(() => del("requests", id));
+      await transaction(async () => {
+        const entry = admission.getStore();
+        const current = await get("requests", id);
+        if (
+          entry &&
+          (entry.requestId !== id ||
+            current?.entryOwner !== entry.owner ||
+            (entry.flowId && current?.entryFlowId !== entry.flowId))
+        )
+          throw new InvalidRequestError(
+            "Authorization attempt is no longer active",
+          );
+        await del("requests", id);
+      });
     },
     async consumeRequestCode(code) {
       return transaction(async () => {

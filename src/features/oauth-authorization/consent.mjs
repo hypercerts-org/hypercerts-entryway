@@ -32,11 +32,7 @@ export function createConsent({
     try {
       const version = await approvalVersion(db, did, flow.clientId);
       const client = await provider.clientManager.getClient(flow.clientId);
-      const request = await provider.requestManager.get(
-        flow.requestUri,
-        browser.deviceId,
-        flow.clientId,
-      );
+      const request = await flows.request(flow, browser);
       const deviceAccount = await provider.accountManager.getDeviceAccount(
         browser.deviceId,
         did,
@@ -191,6 +187,7 @@ export function createConsent({
           config,
           provider,
           refreshFlow: flows.refreshFlow,
+          runRequest: flows.runRequest,
           res,
           flow: authorized.current,
           browser,

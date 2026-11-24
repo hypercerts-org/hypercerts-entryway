@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { OAuthProvider } from "@atproto/oauth-provider/provider";
 import { openTestDatabase } from "../../../tests/support/database-fixture.mjs";
+import { createOAuthStores } from "../../../dist/src/database/drizzle/oauth-stores.mjs";
 import { createBrowserFlow } from "../../../dist/src/http/browser-flow.mjs";
 import { mountAuthorizationRoutes } from "../../../dist/src/features/oauth-authorization/authorization-routes.mjs";
 import { createConsent } from "../../../dist/src/features/oauth-authorization/consent.mjs";
@@ -52,10 +53,22 @@ async function fixture(
     client = { isConfidential: true, isTrusted: false },
     approvedScopes,
     revokedBeforeCompletion = false,
+    realAdmission = false,
   } = {},
 ) {
   const db = await openTestDatabase();
   t.after(() => db.close());
+  const stores = realAdmission
+    ? createOAuthStores(db, { get: async () => null }, { pds: [] })
+    : null;
+  if (stores)
+    await stores.createRequest("request-id", {
+      clientId: "client-id",
+      deviceId: null,
+      did: null,
+      code: null,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
   const handlers = new Map();
   const approved = [];
   const csrf = "test-csrf";
@@ -108,6 +121,9 @@ async function fixture(
       },
     },
     requestManager: {
+      async peekClientId() {
+        return (await stores.readRequest("request-id"))?.clientId;
+      },
       async get() {
         return { parameters };
       },
@@ -175,7 +191,7 @@ async function fixture(
     issuer: "https://entryway.example.test",
     clientUrl: "https://client.example.test",
   };
-  const flows = createBrowserFlow({ db, config, provider });
+  const flows = createBrowserFlow({ db, config, provider, stores });
   const flow = await flows.newFlow(browser, {
     requestUri: "request-uri",
     clientId: "client-id",
@@ -203,6 +219,9 @@ async function fixture(
     db,
     config,
     provider,
+    admitAuthorization:
+      stores?.admitAuthorization ??
+      (async (_clientId, _deviceId, _peek, operation) => operation({})),
     runAuthorization(clientId, operation) {
       authorizationContexts.push(clientId);
       return operation();
@@ -237,6 +256,9 @@ async function fixture(
   return {
     db,
     flow,
+    flows,
+    browser,
+    stores,
     approved,
     upserts,
     emailCodes,
@@ -396,7 +418,6 @@ test("restart carries the OTP-selected DID as the account hint when the PAR has 
 
   const restartedPage = await f.restart();
   assert.equal(restartedPage.statusCode, 200);
-  assert.match(restartedPage.body, new RegExp(selectedDid));
   assert.doesNotMatch(restartedPage.body, new RegExp(otherDid));
   const restartedFlowId = restartedPage.body.match(
     /name="flow" value="([^"]+)"/,
@@ -413,7 +434,7 @@ test("restart carries the OTP-selected DID as the account hint when the PAR has 
   assert.deepEqual(f.upserts, []);
 });
 
-test("restart permits provider auto-SSO for a unique hint to the selected DID", async (t) => {
+test("restart requires renewed proof even for a remembered hinted DID", async (t) => {
   const selectedDid = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
   const f = await fixture(t, {
     authDid: selectedDid,
@@ -427,10 +448,9 @@ test("restart permits provider auto-SSO for a unique hint to the selected DID", 
 
   const restarted = await f.restart();
 
-  assert.equal(restarted.statusCode, 303);
-  assert.match(restarted.redirectUrl, /code=auto-code/);
-  assert.equal(f.authorizeCalls, 1);
-  assert.deepEqual(f.authorizationContexts, ["client-id"]);
+  assert.equal(restarted.statusCode, 200);
+  assert.equal(f.authorizeCalls, 0);
+  assert.match(restarted.body, /action="\/auth\/email"/);
 });
 
 test("initial authorization uses the stock authorization context", async (t) => {
@@ -897,4 +917,35 @@ test("a failed account lookup for an email login_hint sends the code and logs on
   assert.equal(logged.length, 1);
   assert.equal(JSON.parse(logged[0]).code, "RequestFailed");
   assert.doesNotMatch(logged[0], /storage-private-marker/);
+});
+
+test("authorization refresh resumes only the current request flow", async (t) => {
+  const f = await fixture(t, { realAdmission: true });
+  const first = await f.startAuthorization();
+  const firstId = first.body.match(/name="flow" value="([^"]+)"/)?.[1];
+  assert.ok(firstId);
+  const original = await f.db.get("auth-flows", firstId);
+  const replacement = await f.db.transact(async () => {
+    const next = await f.flows.newFlow(f.browser, {
+      ...original,
+      id: "replacement",
+      authDid: undefined,
+      authEmail: undefined,
+      authUserId: undefined,
+      otpRequestCount: 3,
+    });
+    await f.flows.bindFlow(next, original.id);
+    await f.db.delete("auth-flows", original.id);
+    return next;
+  });
+  const refresh = await f.startAuthorization();
+  assert.equal(refresh.statusCode, 200);
+  assert.match(refresh.body, /action="\/auth\/email"/);
+  assert.match(refresh.body, /name="flow" value="replacement"/);
+  assert.equal(f.authorizeCalls, 1);
+  assert.equal(
+    (await f.db.get("auth-flows", replacement.id)).otpRequestCount,
+    3,
+  );
+  await assert.rejects(() => f.flows.readFlow(original.id, f.browser));
 });

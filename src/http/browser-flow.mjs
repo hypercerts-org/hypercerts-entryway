@@ -67,6 +67,7 @@ export function createBrowserFlow({
   config,
   provider,
   redirectAuthorizationError,
+  stores,
 }) {
   const origin = new URL(config.issuer).origin;
   const brandClients = {
@@ -122,6 +123,7 @@ export function createBrowserFlow({
         "This sign-in has expired. Start again from your application.",
       );
     }
+    if (flow.requestRecordId) await stores.assertAuthorizationFlow(flow);
     const createdAt = new Date(flow.createdAt).getTime();
     if (
       !Number.isFinite(createdAt) ||
@@ -144,16 +146,23 @@ export function createBrowserFlow({
       throw new ChangedFlowIntentError(current, browser);
     return current;
   };
+  const runRequest = (flow, operation) =>
+    flow.requestRecordId
+      ? stores.runAuthorizationFlow(flow, operation)
+      : operation();
+  const request = (flow, browser) =>
+    runRequest(flow, () =>
+      provider.requestManager.get(
+        flow.requestUri,
+        browser.deviceId,
+        flow.clientId,
+      ),
+    );
   const getFlow = async (req, res) => {
     const browser = await loadBrowser(req, res);
     checkCsrf(req, browser);
     const flow = await readFlow(req.body?.flow, browser);
-    if (flow.requestUri)
-      await provider.requestManager.get(
-        flow.requestUri,
-        browser.deviceId,
-        flow.clientId,
-      );
+    if (flow.requestUri) await request(flow, browser);
     return { flow, browser };
   };
   const guarded = (fn) => async (req, res, next) => {
@@ -185,8 +194,15 @@ export function createBrowserFlow({
     fields,
     save,
     newFlow,
+    async bindFlow(flow, previousId) {
+      if (flow.requestRecordId)
+        await stores.setAuthorizationFlow(flow, previousId);
+    },
     getFlow,
     refreshFlow,
+    readFlow,
+    request,
+    runRequest,
     readCurrentIntent,
     pageForFlow,
     guarded,
