@@ -45,6 +45,11 @@ export function isObservedArrivalActivation(
 }
 
 export interface ArrivalPreparationAuthority {
+  readonly staged?: {
+    readonly entrywayKey: string;
+    readonly creationPlcHead?: string;
+    readonly retireRotationKeys: readonly string[];
+  };
   readonly sourcePredecessor: Record<string, unknown>;
   readonly source: IncomingSourceFacts;
   readonly approvedRotationKeys: readonly string[];
@@ -180,6 +185,8 @@ export interface ArrivalAggregate {
     readonly completedAt: number | null;
     readonly canonicalHandoffCid: string | null;
   };
+  /** A durable cutover receipt prevents source reapproval. */
+  readonly hasCutoverReceipt?: boolean;
   readonly attempts: readonly {
     readonly ownershipOperationId: string;
     readonly attemptId: string;

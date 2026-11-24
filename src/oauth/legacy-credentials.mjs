@@ -721,6 +721,13 @@ export async function createLegacy({ db, config, accounts }) {
         throw invalid();
       return { familyId: family.id, did: family.did, pdsDid: family.pdsDid };
     },
+    /** Verifies an unexpired access token without granting session access. */
+    async readConfirmationAccess(input) {
+      const payload = await parseToken(input, "access");
+      if (payload.exp <= now()) throw revoked();
+      if (payload.scope !== LEGACY_SCOPES.access) throw invalid();
+      return { familyId: payload.sid, did: payload.sub, pdsDid: payload.aud };
+    },
     /** Re-reads one family under the caller's fence: refuses unless it is still
      * live, which covers logout and expiry that tracking metadata cannot see. */
     async assertLive(familyId) {

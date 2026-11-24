@@ -16,6 +16,8 @@ retains the moderation and independent-migration limits.
 The clone and generated state live under ignored `tests/.runtime/`. No original
 sandbox state, secrets or prior reports were imported.
 
+The opt-in `incoming-late-cutover` profile builds the upstream `pds` Docker target at merge revision `9c31da3d73bbc35ca1b1e32d1fd488acfd754c61`, containing [atproto #5831](https://github.com/bluesky-social/atproto/pull/5831) on PDS 0.5.64. The first managed destination runs that image with the sandbox launcher. The source and remaining backend use the standard templates.
+
 ## Development: CI lifecycle provenance
 
 For contributors maintaining CI, `.github/workflows/ci.yml` owns the explicit

@@ -140,6 +140,10 @@ ownership proof. The incoming routes, tracked credentials and guarded activation
 mounted; full public runtime qualification is a separate gate that a passing unit
 suite does not establish.
 
+### Fresh staged migration
+
+Run `./tests/local.sh incoming-late-cutover` to create and remove a disposable project. Its first managed PDS is built from the pinned #5831 upstream source. The standalone source runs the normal sandbox image. The browser verifies the destination email and uses the public Entryway and PDS endpoints to migrate two new accounts. Both check the source DID and PLC history during import, a source write caught up by revision, the single final migration operation, destination sign-in and write, and source deactivation. One account changes its handle at the source, reapproves the new PLC head, and retires its source keys through Entryway. The other submits through the destination PDS and keeps its original keys. A separate signup checks ordinary registration on the same PDS. The phase log is under `tests/artifacts/`.
+
 ### Incoming migration targets
 
 Four `tests/local.sh` targets run incoming migration through Entryway's public

@@ -7,6 +7,8 @@ import { HttpError } from "../../http/http-error.mjs";
 import type { OperationOwnership } from "../../accounts/operation-ownership.js";
 import {
   isRecordedAdmissionGeneration,
+  destinationRotationKeys,
+  type ArrivalRecord,
   type ArrivalAggregate,
 } from "./arrival-types.js";
 import {
@@ -17,11 +19,37 @@ import {
 } from "./incoming-authorization.js";
 import { arrivalClaimInput, parseArrivalRequest } from "./arrival-request.js";
 import { arrivalCodeHash } from "./prepare-arrival.js";
-import { validateIncomingHandoff } from "../../plc/policy.js";
+import {
+  validateIncomingHandoff,
+  validateStagedMove,
+} from "../../plc/policy.js";
 import {
   observeIncomingHandoff,
   readIncomingObservation,
 } from "../../plc/incoming-observation.js";
+
+function acceptedReplay(
+  aggregate: ArrivalAggregate,
+  method: IncomingMethod,
+  digest: string,
+) {
+  const accepted = aggregate.admissions.find((item) => item.method === method);
+  if (
+    accepted?.requestDigest !== digest ||
+    accepted.userId !== aggregate.arrival.userId ||
+    accepted.did !== aggregate.arrival.did ||
+    !isRecordedAdmissionGeneration(
+      accepted.generation,
+      aggregate.arrival.generation,
+    )
+  )
+    throw new DomainError(
+      "OperationConflict",
+      409,
+      "This request is no longer the admitted request",
+    );
+  return accepted;
+}
 
 /** Internal composition consumes a trusted browser user separately from the
  * operation resource. No caller observation or digest can authorize publication. */
@@ -32,6 +60,8 @@ export function createAuthenticatedArrival({
   verify,
   client,
   admitCreation,
+  checkStagedReadiness,
+  assertStagingEnabled,
   provision,
   digestKey,
 }: {
@@ -42,6 +72,8 @@ export function createAuthenticatedArrival({
   transact: <T>(work: () => Promise<T>) => Promise<T>;
   verify: VerifyIncomingAuthorization;
   client: plc.Client;
+  assertStagingEnabled: (saved: ArrivalRecord) => void;
+  checkStagedReadiness: (saved: ArrivalRecord) => Promise<void>;
   provision?: (
     owner: OperationClaim,
     aggregate: ArrivalAggregate,
@@ -107,7 +139,7 @@ export function createAuthenticatedArrival({
       (item) => item.method === incomingHandoffMethod,
     );
     const handoff = aggregate.signedOperations.find(
-      (item) => item.kind === "handoff",
+      (item) => item.kind === (saved.staged ? "destination-move" : "handoff"),
     );
     if (
       !admission ||
@@ -131,17 +163,27 @@ export function createAuthenticatedArrival({
     // Observed before the dispatch marker is written: a directory outage or a
     // head race here leaves no marker, so the exact request is simply retried.
     const before = await observe();
+    if (saved.staged && !before.canonical) {
+      if (before.diverged)
+        throw new DomainError(
+          "IdentityConflict",
+          409,
+          "The prepared source identity has changed",
+        );
+      await checkStagedReadiness(saved);
+    }
     await ownership.dispatch(
       {
-        step: "incoming-handoff",
+        step: saved.staged ? "incoming-cutover" : "incoming-handoff",
         target: client.url,
         method: incomingHandoffMethod,
         intent: { did: saved.did, cid: handoff.cid },
       },
       {
         send: async () => {
-          if (before.canonical) return null;
-          if (before.diverged)
+          const current = saved.staged ? await observe() : before;
+          if (current.canonical) return null;
+          if (current.diverged)
             throw new DomainError(
               "OperationRecoveryRequired",
               409,
@@ -184,12 +226,67 @@ export function createAuthenticatedArrival({
         cid: handoff.cid,
       };
     const current = await read(saved.operationId, saved.userId);
-    await arrivals.recordCanonicalHandoff(owner, current.arrival.version, {
-      operationId: saved.operationId,
-      did: saved.did,
-      cid: handoff.cid,
-    });
+    if (!saved.staged)
+      await arrivals.recordCanonicalHandoff(owner, current.arrival.version, {
+        operationId: saved.operationId,
+        did: saved.did,
+        cid: handoff.cid,
+      });
     return { state: "published" as const, cid: handoff.cid };
+  };
+  const continueReplay = (
+    input: { operationId: string; userId: string; method: IncomingMethod },
+    digest: string,
+  ) => {
+    return underOwner(
+      input.operationId,
+      input.userId,
+      async (owner, locked) => {
+        const accepted = acceptedReplay(locked, input.method, digest);
+        if (input.method === incomingCreationMethod) {
+          if (provision) return provision(owner, locked);
+          return {
+            operationId: locked.arrival.operationId,
+            did: accepted.did,
+            requestDigest: accepted.requestDigest,
+            generation: accepted.generation,
+          };
+        }
+        return dispatchSaved(owner, locked);
+      },
+    );
+  };
+  const reconcileCreation = async (
+    input: { operationId: string; userId: string },
+    aggregate: ArrivalAggregate,
+  ) => {
+    const move = aggregate.signedOperations.find(
+      (item) => item.kind === "destination-move",
+    );
+    if (
+      !aggregate.arrival.staged &&
+      aggregate.progress.canonicalHandoffCid === null &&
+      !move
+    ) {
+      const directory = await readIncomingObservation(
+        client,
+        aggregate.arrival.did,
+      );
+      const handoff = aggregate.signedOperations.find(
+        (item) => item.kind === "handoff",
+      );
+      if (
+        handoff &&
+        [aggregate.arrival.sourcePlcHead, handoff.cid].includes(
+          directory.sourcePlcHead,
+        )
+      ) {
+        const result = await api.continueHandoff(input);
+        if (result.state !== "published")
+          return { state: "pending" as const, operationId: input.operationId };
+      }
+    }
+    return api.continueCreation(input);
   };
   const api = {
     async admit(input: {
@@ -245,12 +342,7 @@ export function createAuthenticatedArrival({
       // after the identity moves the source key no longer verifies. It resumes
       // the saved continuation under the recorded claim instead of admitting
       // again. Every new admission is fully verified below.
-      if (recorded) {
-        const ids = { operationId: input.operationId, userId: input.userId };
-        if (input.method === incomingCreationMethod)
-          return api.continueCreation(ids);
-        return api.continueHandoff(ids);
-      }
+      if (recorded) return continueReplay(input, parsed.requestDigest);
       const authorization = await verify({
         presentation: input.presentation,
         method: input.method,
@@ -262,8 +354,58 @@ export function createAuthenticatedArrival({
         codeHash: arrivalCodeHash(input.arrivalCode),
         codeGeneration: saved.codeGeneration,
       };
+      if (
+        saved.staged &&
+        input.method === incomingCreationMethod &&
+        saved.claimOperationId === null
+      ) {
+        assertStagingEnabled(saved);
+        const observed = await readIncomingObservation(client, saved.did);
+        if (observed.sourcePlcHead !== saved.sourcePlcHead)
+          throw new DomainError(
+            "IdentityConflict",
+            409,
+            "The prepared source identity has changed",
+          );
+        return ownership.run(
+          `arrival:${saved.did}`,
+          arrivalClaimInput(saved),
+          async () => {
+            const owner = ownership.currentClaim;
+            if (!owner)
+              throw new DomainError(
+                "OperationLeaseLost",
+                409,
+                "Arrival owner unavailable",
+              );
+            await transact(async () => {
+              await arrivals.claimArrival(owner, saved.version, {
+                operationId: saved.operationId,
+                did: saved.did,
+              });
+              const claimed = await read(saved.operationId, saved.userId);
+              await admitCreation(owner, claimed.arrival.version, {
+                ownerUserId: saved.userId,
+                facts: authorization.replayFacts,
+                proof,
+                inviteCode: parsed.inviteCode,
+                recoveryKey: parsed.recoveryKey,
+              });
+              await ownership.checkpoint("arrival-claimed", {
+                operationId: saved.operationId,
+                did: saved.did,
+                pdsId: saved.pdsId,
+              });
+            });
+            return {
+              state: "admitted" as const,
+              operationId: saved.operationId,
+            };
+          },
+        );
+      }
       if (input.method === incomingCreationMethod) {
-        // Creation never takes the claim: it needs an admitted handoff.
+        // Legacy creation never takes the claim: it needs an admitted handoff.
         if (saved.claimOperationId === null)
           throw new DomainError(
             "OperationRecoveryRequired",
@@ -287,6 +429,63 @@ export function createAuthenticatedArrival({
               state: "admitted" as const,
               operationId: saved.operationId,
             };
+          },
+        );
+      }
+      if (saved.staged) {
+        return underOwner(
+          saved.operationId,
+          saved.userId,
+          async (owner, locked) => {
+            if (!locked.arrival.signingKey || locked.progress.boundAt === null)
+              throw new DomainError(
+                "OperationConflict",
+                409,
+                "A bound, staged destination is required",
+              );
+            const signed = await validateStagedMove({
+              predecessor: saved.sourcePredecessor,
+              operation: parsed.operation,
+              endpoint: saved.endpoint,
+              handle: saved.handle,
+              repositoryKey: locked.arrival.signingKey,
+              rotationKeys: destinationRotationKeys(locked.arrival),
+            });
+            if (
+              (await readIncomingObservation(client, saved.did))
+                .sourcePlcHead !== saved.sourcePlcHead
+            )
+              throw new DomainError(
+                "IdentityConflict",
+                409,
+                "The prepared source identity has changed",
+              );
+            await checkStagedReadiness(locked.arrival);
+            const repositoryKey = locked.arrival.signingKey;
+            await transact(async () => {
+              await arrivals.recordArrivalReplay(
+                owner,
+                locked.arrival.version,
+                authorization.replayFacts,
+                proof,
+              );
+              await arrivals.recordSignedOperation(
+                owner,
+                (await read(saved.operationId, saved.userId)).arrival.version,
+                {
+                  kind: "destination-move",
+                  operationId: saved.operationId,
+                  did: saved.did,
+                  repositoryKey,
+                  operation: { ...signed },
+                  cid: String(await cidForCbor(signed)),
+                },
+              );
+            });
+            return dispatchSaved(
+              owner,
+              await read(saved.operationId, saved.userId),
+            );
           },
         );
       }
@@ -393,33 +592,18 @@ export function createAuthenticatedArrival({
       if (aggregate.arrival.claimOperationId === null)
         return { state: "pending" as const, operationId };
       if (
+        aggregate.arrival.staged &&
+        aggregate.admissions.some(
+          (item) => item.method === incomingHandoffMethod,
+        )
+      )
+        return api.continueHandoff(input);
+      if (
         aggregate.admissions.some(
           (item) => item.method === incomingCreationMethod,
         )
       ) {
-        const move = aggregate.signedOperations.find(
-          (item) => item.kind === "destination-move",
-        );
-        if (aggregate.progress.canonicalHandoffCid === null && !move) {
-          const directory = await readIncomingObservation(
-            client,
-            aggregate.arrival.did,
-          );
-          const handoff = aggregate.signedOperations.find(
-            (item) => item.kind === "handoff",
-          );
-          if (
-            handoff &&
-            [aggregate.arrival.sourcePlcHead, handoff.cid].includes(
-              directory.sourcePlcHead,
-            )
-          ) {
-            const result = await api.continueHandoff(input);
-            if (result.state !== "published")
-              return { state: "pending" as const, operationId };
-          }
-        }
-        return api.continueCreation(input);
+        return reconcileCreation(input, aggregate);
       }
       if (
         aggregate.admissions.some(

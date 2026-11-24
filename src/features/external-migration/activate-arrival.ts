@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type * as plc from "@did-plc/lib";
 import { DomainError } from "../../accounts/errors.js";
 import {
@@ -52,6 +53,7 @@ type Intent =
   | {
       readonly kind: "credential";
       readonly access: AuthorizedArrivalAccess;
+      readonly receiptHash: string;
       readonly expectedVersion: number | undefined;
     };
 
@@ -66,7 +68,9 @@ export function createArrivalActivation({
   placement,
   backend,
   authorizeAccess,
+  identifyConfirmation,
   assertCredentialLive,
+  revokeFamilies,
   authentication,
   checkCsrf,
   loadBrowser,
@@ -86,9 +90,12 @@ export function createArrivalActivation({
       deactivated: boolean;
     } | null>;
     activate(): Promise<void>;
+    checkStagedReadiness(afterCutover: boolean): Promise<void>;
   };
   authorizeAccess: (bearer: unknown) => Promise<AuthorizedArrivalAccess>;
+  identifyConfirmation: (bearer: unknown) => Promise<AuthorizedArrivalAccess>;
   assertCredentialLive: (familyId: string) => Promise<void>;
+  revokeFamilies: (familyIds: readonly string[]) => Promise<void>;
   authentication: BrowserAuthentication;
   checkCsrf: (request: BrowserRequest, browser: unknown) => void;
   loadBrowser: (request: BrowserRequest) => Promise<unknown>;
@@ -121,6 +128,46 @@ export function createArrivalActivation({
     if ((await accounts.getByDid(did))?.status !== "active") throw inactive();
   };
 
+  const assertCompletionIntent = async (
+    aggregate: ArrivalAggregate,
+    intent: Intent,
+  ) => {
+    if (
+      aggregate.arrival.staged &&
+      intent.kind === "credential" &&
+      (await arrivals.readActivationReceipt(aggregate.arrival.operationId)) !==
+        intent.receiptHash
+    )
+      throw new HttpError(
+        400,
+        "ExpiredToken",
+        "Session expired or was revoked",
+      );
+    await assertStillActive(aggregate.arrival.did);
+  };
+
+  /** Re-prove credential authorization after acquiring the arrival fence. */
+  const assertFencedCredential = async (
+    intent: Intent,
+    operationId: string,
+  ): Promise<void> => {
+    if (intent.kind !== "credential") return;
+    // Recovery may have replaced the family since the initial verification.
+    const tracked = await arrivals.readArrivalFamily(intent.access.familyId);
+    if (
+      !tracked ||
+      tracked.operationId !== operationId ||
+      tracked.revokedAt !== null
+    )
+      throw new HttpError(
+        400,
+        "ExpiredToken",
+        "Session expired or was revoked",
+      );
+    // Logout revokes the session family without touching arrival tracking rows.
+    await assertCredentialLive(intent.access.familyId);
+  };
+
   const run = async (
     claim: OperationClaim,
     initial: ArrivalAggregate,
@@ -130,7 +177,7 @@ export function createArrivalActivation({
     const read = async () => owner.read(saved.operationId, saved.userId);
     if (initial.progress.completedAt !== null) {
       // A lost response retries into the committed result; nothing is dispatched.
-      await assertStillActive(saved.did);
+      await assertCompletionIntent(initial, intent);
       await ownership.checkpoint("complete", null);
       return finished(initial);
     }
@@ -140,23 +187,7 @@ export function createArrivalActivation({
       saved.version !== intent.expectedVersion
     )
       throw versionConflict();
-    if (intent.kind === "credential") {
-      // Authorization is re-proved under the fence: recovery may have replaced
-      // the family between verification and acquiring ownership.
-      const tracked = await arrivals.readArrivalFamily(intent.access.familyId);
-      if (
-        !tracked ||
-        tracked.operationId !== saved.operationId ||
-        tracked.revokedAt !== null
-      )
-        throw new HttpError(
-          400,
-          "ExpiredToken",
-          "Session expired or was revoked",
-        );
-      // Logout revokes the credential family without touching tracking rows.
-      await assertCredentialLive(intent.access.familyId);
-    }
+    await assertFencedCredential(intent, saved.operationId);
     // Only this operation's own journaled activation may remain unresolved.
     if (
       initial.reservation?.uncertainReason ||
@@ -169,11 +200,26 @@ export function createArrivalActivation({
       throw recoveryRequired(
         "An unresolved external attempt must be recovered before activation",
       );
-    const move = initial.signedOperations.find(
+    const readDirectory = async () => {
+      try {
+        return await readIncomingObservation(plcClient, saved.did);
+      } catch (error) {
+        if (error instanceof PlcError)
+          throw new DomainError(
+            "IdentityConflict",
+            409,
+            "The canonical identity history is not valid",
+          );
+        throw new DomainError(
+          "AccountUnavailable",
+          502,
+          "The canonical identity cannot be observed",
+        );
+      }
+    };
+    let move = initial.signedOperations.find(
       (item) => item.kind === "destination-move",
     );
-    if (!move)
-      throw recoveryRequired("The saved destination move is not durable");
     // A host removed or moved since placement is the documented conflict, and
     // is decided before any backend client is built for it.
     if (placement(saved.pdsId)?.url !== saved.endpoint)
@@ -183,6 +229,48 @@ export function createArrivalActivation({
         "Arrival placement changed",
       );
     const target = backend(saved);
+    if (saved.staged && !move && saved.signingKey) {
+      // Standard clients may publish through the PDS. Record only a canonical
+      // source-signed operation extending the exact prepared predecessor. Storage
+      // verifies the signature, full ordered custody and all replacement facts.
+      const current = await readDirectory();
+      if (current.sourcePlcHead === saved.sourcePlcHead)
+        throw new DomainError(
+          "IdentityConflict",
+          409,
+          "The source still hosts this DID",
+        );
+      await arrivals.recordSignedOperation(claim, saved.version, {
+        kind: "destination-move",
+        operationId: saved.operationId,
+        did: saved.did,
+        repositoryKey: saved.signingKey,
+        operation: { ...current.sourcePredecessor },
+        cid: current.sourcePlcHead,
+      });
+      move = (await read()).signedOperations.find(
+        (item) => item.kind === "destination-move",
+      );
+    }
+    if (!move)
+      throw recoveryRequired("The saved destination move is not durable");
+    if (
+      saved.staged &&
+      initial.admissions.some(
+        (item) => item.method === "com.atproto.identity.submitPlcOperation",
+      )
+    ) {
+      const receipt = await receipts.readExternal(claim, {
+        step: "incoming-cutover",
+        target: plcClient.url,
+        method: "com.atproto.identity.submitPlcOperation",
+        intentDigest: requestDigest({ did: saved.did, cid: move.cid }),
+      });
+      if (receipt?.state !== "acknowledged")
+        throw recoveryRequired(
+          "Resume the saved presentation before activation",
+        );
+    }
     const intentFacts = { cid: move.cid, did: saved.did, step: activationStep };
     const descriptor = {
       step: activationStep,
@@ -209,23 +297,6 @@ export function createArrivalActivation({
         "The destination account cannot be observed",
       );
     const inspect = () => observe(() => target.inspect(), unobserved);
-    const readDirectory = async () => {
-      try {
-        return await readIncomingObservation(plcClient, saved.did);
-      } catch (error) {
-        if (error instanceof PlcError)
-          throw new DomainError(
-            "IdentityConflict",
-            409,
-            "The canonical identity history is not valid",
-          );
-        throw new DomainError(
-          "AccountUnavailable",
-          502,
-          "The canonical identity cannot be observed",
-        );
-      }
-    };
     const check = async () => {
       const [directory, account, binding, observed, journaled] =
         await Promise.all([
@@ -245,6 +316,8 @@ export function createArrivalActivation({
         backend: observed,
         activationJournaled: journaled !== null,
       });
+      if (saved.staged)
+        await observe(() => target.checkStagedReadiness(true), unobserved);
       return observed;
     };
     // Every precondition is checked before the activation attempt is journaled,
@@ -357,12 +430,33 @@ export function createArrivalActivation({
           throw recoveryRequired("Activation settlement requires recovery");
         settledVersion = outcome.version;
       }
+      if (saved.staged) {
+        const families = await arrivals.readArrivalFamilies(saved.operationId);
+        await revokeFamilies(
+          families
+            .filter((family) => family.revokedAt === null)
+            .map((family) => family.familyId),
+        );
+        const revoked = await arrivals.revokeArrivalCredentialFamilies({
+          owner: claim,
+          operationId: saved.operationId,
+          expectedVersion: settledVersion,
+        });
+        if (revoked.kind === "reconciliation-required")
+          throw recoveryRequired(
+            "Migration credential revocation requires recovery",
+          );
+        settledVersion = revoked.version;
+      }
       const completed = await arrivals.completeArrivalActivation({
         owner: claim,
         operationId: saved.operationId,
         expectedVersion: settledVersion,
         did: saved.did,
         userId: saved.userId,
+        ...(saved.staged && intent.kind === "credential"
+          ? { receiptHash: intent.receiptHash }
+          : {}),
         activation: {
           backendActiveObserved: true,
           method: activationMethod,
@@ -388,7 +482,7 @@ export function createArrivalActivation({
     // credential's own unrevoked tracked family), so a finished arrival returns
     // its committed result with no backend write and no journal change.
     if (initial.progress.completedAt !== null) {
-      await assertStillActive(initial.arrival.did);
+      await assertCompletionIntent(initial, intent);
       return finished(initial);
     }
     if (initial.arrival.cancelledAt !== null) throw inactive();
@@ -404,7 +498,7 @@ export function createArrivalActivation({
         // Another request completed activation and released the claim first.
         const current = await owner.read(operationId, userId);
         if (current.progress.completedAt !== null) {
-          await assertStillActive(current.arrival.did);
+          await assertCompletionIntent(current, intent);
           return finished(current);
         }
       }
@@ -439,9 +533,32 @@ export function createArrivalActivation({
     async activateArrivalWithCredential(
       bearer: unknown,
     ): Promise<ActivatedArrival> {
+      let access: AuthorizedArrivalAccess;
+      try {
+        access = await authorizeAccess(bearer);
+      } catch (error) {
+        if (!(error instanceof HttpError)) throw error;
+        // A completion receipt is confirmation-only and cannot enter the pending path.
+        let confirmed: AuthorizedArrivalAccess;
+        try {
+          confirmed = await identifyConfirmation(bearer);
+        } catch (confirmationError) {
+          if (confirmationError instanceof HttpError) throw error;
+          throw confirmationError;
+        }
+        const current = await owner.read(
+          confirmed.operationId,
+          confirmed.userId,
+        );
+        if (current.progress.completedAt === null) throw error;
+        await assertStillActive(current.arrival.did);
+        return finished(current);
+      }
+      if (typeof bearer !== "string") throw inactive();
       return activate({
         kind: "credential",
-        access: await authorizeAccess(bearer),
+        access,
+        receiptHash: createHash("sha256").update(bearer).digest("hex"),
         expectedVersion: undefined,
       });
     },

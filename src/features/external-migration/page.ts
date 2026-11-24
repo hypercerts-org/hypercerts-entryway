@@ -45,7 +45,7 @@ export function renderIncomingPage(
 ${post("/incoming/code", csrf, "", "Send me a fresh email code", true)}
 <h2>Prepare an arrival</h2>
 <p>Enter the new destination handle and the code from your email. You receive an arrival code once; give it to your migration tool.</p>
-<form method="post" action="/incoming/prepare">${hidden("csrf", csrf)}${input("did", "Your DID", 'type="text" maxlength="64" autocomplete="off"')}${input("handle", "Destination handle", 'type="text" maxlength="253" autocomplete="off"')}${otpField}<button>Prepare arrival</button></form>
+<form method="post" action="/incoming/prepare">${hidden("csrf", csrf)}${input("did", "Your DID", 'type="text" maxlength="64" autocomplete="off"')}${input("handle", "Destination handle", 'type="text" maxlength="253" autocomplete="off"')}<label>Source rotation keys to retire at cutover (optional, staged migration only)<textarea name="retireRotationKeys" maxlength="1000" aria-describedby="retirement-help"></textarea></label><p id="retirement-help">Leave this empty to keep every existing recovery key. To remove a key, enter its full did:key on a separate line. Review the approved list before authorizing the move at your source.</p>${otpField}<button>Prepare arrival</button></form>
 <h2>Open a saved arrival</h2>
 <form method="get" action="/incoming"><label>Operation ID<input name="operationId" maxlength="200" required></label><button class="secondary">Open</button></form>`;
   const actions: string[] = [];
@@ -66,17 +66,38 @@ ${post("/incoming/code", csrf, "", "Send me a fresh email code", true)}
       ),
       resume,
     );
+  if (summary.migrationMode === "staged" && summary.approvedRotationKeys) {
+    const approvedKeys = summary.approvedRotationKeys
+      .map((key) => "<li><code>" + esc(key) + "</code></li>")
+      .join("");
+    actions.push(
+      `<p>Approved rotation keys, in priority order</p><ol>${approvedKeys}</ol>`,
+    );
+    if (summary.mayReapproveSource)
+      actions.push(
+        `<p>If your source handle or metadata changed during transfer, review the updated public identity with your migration tool and confirm its PLC head. Changing the source host, signing key or rotation keys requires a new custody decision.</p>${post("/incoming/reapprove", csrf, operation(summary) + input("expectedPlcHead", "Reviewed source PLC head", 'maxlength="200"') + otpField, "Approve source update")}`,
+      );
+    if (summary.state === "paused-pending")
+      actions.push(
+        post(
+          "/incoming/renew",
+          csrf,
+          operation(summary) + otpField,
+          "Renew arrival code",
+        ),
+      );
+  }
   if (summary.state === "created") actions.push(resume);
   if (summary.state === "paused-pending")
     actions.push(
       `<p>Replace the migration credentials if you lost them. Earlier credentials stop working, except an access token already issued, which the data server accepts until it expires (about five minutes).</p>${post("/incoming/recover", csrf, operation(summary) + otpField, "Replace migration credentials")}`,
-      `<p><strong>Activate only after your migration tool has finished transferring and checking your data.</strong> This service does not check records or blobs, and later changes at the source may not be transferred.</p>${post("/incoming/activate", csrf, operation(summary) + otpField, "Activate this account")}`,
+      `<p><strong>Activate only after your migration tool has finished transferring and checking your data.</strong> ${summary.migrationMode === "staged" ? "Entryway checks for missing referenced blobs. Your tool must compare the transferred records and blobs with the source." : "This service does not check records or blobs, and later changes at the source may not be transferred."}</p>${post("/incoming/activate", csrf, operation(summary) + otpField, "Activate this account")}`,
       resume,
     );
   const warning = summary.unresolvedAttempt
     ? `<p role="alert">A saved server request is unresolved. Contact the service operator; retrying alone cannot settle it.</p>`
     : "";
-  return `<dl class="identity"><dt>Operation</dt><dd><code>${esc(summary.operationId)}</code></dd><dt>DID</dt><dd>${esc(summary.did)}</dd><dt>Handle</dt><dd>${esc(summary.handle)}</dd><dt>Version</dt><dd>${summary.version}</dd></dl><p role="status">${esc(stateText[summary.state])}</p>${warning}${actions.join("")}<p><a href="/incoming">Back</a></p>`;
+  return `<dl class="identity"><dt>Operation</dt><dd><code>${esc(summary.operationId)}</code></dd><dt>DID</dt><dd>${esc(summary.did)}</dd><dt>Handle</dt><dd>${esc(summary.handle)}</dd><dt>Version</dt><dd>${summary.version}</dd></dl><p role="status">${esc(summary.migrationMode === "staged" && summary.state === "prepared" ? "Prepared. Your migration tool can now request a paused destination account while your DID remains at the source." : stateText[summary.state])}</p>${warning}${actions.join("")}<p><a href="/incoming">Back</a></p>`;
 }
 
 export const renderFailure = (message: string, recovery: boolean): string =>

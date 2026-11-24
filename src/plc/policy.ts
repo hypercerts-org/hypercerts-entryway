@@ -126,6 +126,123 @@ export function incomingRotationKeys(
   return keys;
 }
 
+/** For staged moves the verified destination owner may explicitly retire source keys.
+ * An omitted selection preserves every source key in its original position. */
+export function stagedRotationKeys(
+  current: readonly string[],
+  entrywayKey: string,
+  retire: readonly string[],
+): string[] {
+  publicRotationKey(entrywayKey);
+  current.forEach(publicRotationKey);
+  if (
+    new Set(current).size !== current.length ||
+    new Set(retire).size !== retire.length ||
+    retire.some((key) => key === entrywayKey || !current.includes(key))
+  )
+    return invalid();
+  const keys = current.filter((key) => !retire.includes(key));
+  if (!keys.includes(entrywayKey)) keys.push(entrywayKey);
+  if (keys.length > 5) return invalid();
+  return keys;
+}
+
+/** Accept metadata edits on the same source authority. Every intervening
+ * operation must extend its predecessor under the same ordered rotation keys,
+ * repository key and hosting service, including when the last head restores an older value. */
+export async function reapprovedSource(
+  predecessor: unknown,
+  updates: readonly unknown[],
+  expectedHead: string,
+  supersededMove?: unknown,
+) {
+  let previous = plc.def.compatibleOp.parse(predecessor);
+  const authority = plc.normalizeOp(previous);
+  if (!updates.length) return invalid();
+  if (supersededMove !== undefined) {
+    const stale = plc.def.operation.parse(supersededMove);
+    const sibling = plc.def.operation.parse(updates[0]);
+    if (stale.prev !== sibling.prev) return invalid();
+    const keys = authority.rotationKeys;
+    const staleSigner = await plc.assureValidSig(keys, stale);
+    const currentSigner = await plc.assureValidSig(keys, sibling);
+    // PLC recovery can displace the first canonical child only with a
+    // strictly higher-priority key in their common predecessor.
+    if (keys.indexOf(staleSigner) < keys.indexOf(currentSigner))
+      return invalid();
+  }
+  // Process unbounded history sequentially to bound cryptographic work.
+  for (const update of updates) {
+    const candidate = plc.def.operation.parse(update);
+    if (
+      !sameSignedOperation(candidate, update) ||
+      candidate.prev !== String(await cidForCbor(previous)) ||
+      !sameSignedOperation(candidate.rotationKeys, authority.rotationKeys) ||
+      candidate.verificationMethods.atproto !==
+        authority.verificationMethods.atproto ||
+      !sameSignedOperation(
+        candidate.services.atproto_pds,
+        authority.services.atproto_pds,
+      )
+    )
+      return invalid();
+    await plc.assureValidSig(authority.rotationKeys, candidate);
+    previous = candidate;
+  }
+  if (String(await cidForCbor(previous)) !== expectedHead) return invalid();
+  const { services, verificationMethods, alsoKnownAs } =
+    plc.normalizeOp(previous);
+  return {
+    predecessor: previous,
+    source: { services, verificationMethods, alsoKnownAs },
+  };
+}
+
+/** Validate the source signature and every approved destination fact together. */
+export async function validateStagedMove(input: {
+  operation: unknown;
+  predecessor: unknown;
+  endpoint: string;
+  handle: string;
+  repositoryKey: string;
+  rotationKeys: readonly string[];
+}): Promise<plc.Operation> {
+  try {
+    const predecessor = plc.def.compatibleOp.parse(input.predecessor);
+    const facts = plc.normalizeOp(predecessor);
+    const candidate = plc.def.operation.parse(input.operation);
+    const primaryHandle = facts.alsoKnownAs.findIndex((alias) =>
+      alias.startsWith("at://"),
+    );
+    const expected = {
+      type: "plc_operation",
+      prev: String(await cidForCbor(predecessor)),
+      sig: candidate.sig,
+      rotationKeys: input.rotationKeys,
+      verificationMethods: {
+        ...facts.verificationMethods,
+        atproto: input.repositoryKey,
+      },
+      services: {
+        ...facts.services,
+        atproto_pds: {
+          type: "AtprotoPersonalDataServer",
+          endpoint: input.endpoint,
+        },
+      },
+      alsoKnownAs: [
+        `at://${input.handle}`,
+        ...facts.alsoKnownAs.filter((_, index) => index !== primaryHandle),
+      ],
+    };
+    if (!sameSignedOperation(input.operation, expected)) return invalid();
+    await plc.assureValidSig(facts.rotationKeys, candidate);
+    return candidate;
+  } catch {
+    return invalid();
+  }
+}
+
 /** An incoming handoff keeps every predecessor rotation key in its original
  * order and may append at most one key. Removing or reordering a key would
  * discard recovery authority the holder already has. */

@@ -12,6 +12,13 @@ export async function loadConfig() {
   if (process.env.BROWSER_CLIENT_METADATA_URL) {
     config.browserClientMetadataUrl = process.env.BROWSER_CLIENT_METADATA_URL;
   }
+  for (const pds of config.pds ?? []) {
+    if (
+      pds.stagedIncomingMigration !== undefined &&
+      typeof pds.stagedIncomingMigration !== "boolean"
+    )
+      throw new Error("stagedIncomingMigration must be a boolean");
+  }
   // Only a public reference enters runtime configuration. This says nothing
   // about independent private custody, backup or operational recoverability.
   publicRotationKey(config.plcRecoveryKeyDid);

@@ -1,0 +1,8 @@
+# Reference PDS 0.5.64 with upstream PR #5831 (immutable merge revision).
+image: ${SANDBOX_PROJECT}-late-cutover-pds:local
+build:
+  context: https://github.com/bluesky-social/atproto.git#9c31da3d73bbc35ca1b1e32d1fd488acfd754c61
+  target: pds
+# The sandbox configurator owns the mode-0600 service configuration.
+user: "0:0"
+command: node /app/services/pds/start-pds.mjs

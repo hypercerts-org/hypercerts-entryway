@@ -56,7 +56,9 @@ export function createDurableArrivalProvisioning({
       handle: string;
       deactivated: boolean;
     } | null>;
-    create(operation: Record<string, unknown>): Promise<unknown>;
+    create(operation?: Record<string, unknown>): Promise<unknown>;
+    assertStagingEnabled(): void;
+    installedSigningKey(): Promise<string>;
     pause(): Promise<void>;
     reserveSigningKey(): Promise<string>;
   };
@@ -96,22 +98,26 @@ export function createDurableArrivalProvisioning({
     const handoff = initial.signedOperations.find(
       (item) => item.kind === "handoff",
     );
-    if (!handoff || initial.reservation?.uncertainReason)
-      return pending("The saved handoff and resolved reservation are required");
-    await validateIncomingHandoff({
-      operation: handoff.operation,
-      expectedPredecessor: saved.sourcePredecessor,
-      approvedRotationKeys: saved.approvedRotationKeys,
-      source: saved.source,
-    });
-    if (String(await cidForCbor(handoff.operation)) !== handoff.cid)
-      return conflict("The saved handoff CID differs from its signed bytes");
+    if (initial.reservation?.uncertainReason)
+      return pending("The reserved key requires recovery");
+    if (!saved.staged) {
+      if (!handoff) return pending("The saved handoff is required");
+      await validateIncomingHandoff({
+        operation: handoff.operation,
+        expectedPredecessor: saved.sourcePredecessor,
+        approvedRotationKeys: saved.approvedRotationKeys,
+        source: saved.source,
+      });
+      if (String(await cidForCbor(handoff.operation)) !== handoff.cid)
+        return conflict("The saved handoff CID differs from its signed bytes");
+    }
+    const creationHead = saved.staged ? saved.sourcePlcHead : handoff!.cid;
     let move = initial.signedOperations.find(
       (item) => item.kind === "destination-move",
     );
     const directory = await readIncomingObservation(client, saved.did);
     if (
-      directory.sourcePlcHead !== handoff.cid &&
+      directory.sourcePlcHead !== creationHead &&
       directory.sourcePlcHead !== move?.cid
     )
       return pending(
@@ -119,9 +125,10 @@ export function createDurableArrivalProvisioning({
       );
     const target = backend(saved);
     if (!saved.signingKey) {
+      if (saved.staged) target.assertStagingEnabled();
       // The key is reserved only now, under the claim, once the handoff is
       // canonical: a lost response is an operator-recoverable dispatch.
-      if (move || directory.sourcePlcHead !== handoff.cid)
+      if (move || directory.sourcePlcHead !== creationHead)
         return pending("A reserved repository key is required");
       // The durable intent precedes the remote call and is recorded once: a
       // retry of an unresolved reservation changes nothing before recovery.
@@ -182,66 +189,7 @@ export function createDurableArrivalProvisioning({
       return account;
     };
     let account = await inspect();
-    if (account && directory.sourcePlcHead !== move?.cid)
-      return pending(
-        "Destination presence does not prove publication of the exact saved move",
-      );
-    if (!account && directory.sourcePlcHead === move?.cid)
-      return pending(
-        "The exact move is published without a backend; retain the reservation for recovery",
-      );
-    if (!move) {
-      if (directory.sourcePlcHead !== handoff.cid)
-        return pending("The canonical handoff is not current");
-      await signer.signArrivalMove(
-        {
-          handoffOperation: handoff.operation,
-          repositoryKey: saved.signingKey,
-          endpoint: saved.endpoint,
-          handle: saved.handle,
-          rotationKeys: destinationRotationKeys(saved),
-        },
-        async (operation, _facts, cid) => {
-          const current = await read();
-          await arrivals.recordSignedOperation(owner, current.arrival.version, {
-            kind: "destination-move",
-            operationId: saved.operationId,
-            did: saved.did,
-            repositoryKey: saved.signingKey!,
-            operation: operation as unknown as Record<string, unknown>,
-            cid,
-          });
-        },
-      );
-      move = (await read()).signedOperations.find(
-        (item) => item.kind === "destination-move",
-      );
-    }
-    if (!move) return pending("The exact signed move is not durable");
-    const parsedMove = Plc.def.operation.parse(move.operation);
-    if (
-      String(await cidForCbor(move.operation)) !== move.cid ||
-      parsedMove.prev !== handoff.cid ||
-      parsedMove.verificationMethods.atproto !== saved.signingKey ||
-      parsedMove.services.atproto_pds?.endpoint !== saved.endpoint ||
-      parsedMove.services.atproto_pds?.type !== "AtprotoPersonalDataServer" ||
-      !parsedMove.alsoKnownAs.includes(`at://${saved.handle}`) ||
-      JSON.stringify(parsedMove.rotationKeys) !==
-        JSON.stringify(destinationRotationKeys(saved))
-    )
-      return conflict(
-        "The saved destination move differs from the accepted arrival",
-      );
-    await Plc.assureValidSig([...saved.approvedRotationKeys], parsedMove);
-    const savedMove = move;
-    // Both independent public observations are required: actor presence alone
-    // cannot establish that stock creation published our durable signed move.
-    const creationApplied = async () => {
-      const observed = await readIncomingObservation(client, saved.did);
-      return (
-        observed.sourcePlcHead === savedMove.cid && Boolean(await inspect())
-      );
-    };
+    let effectCid = saved.staged?.creationPlcHead ?? creationHead;
     // dispatch owns isolation/drain approval. Association runs before the remote
     // send; after observed recovery the same generic acknowledged receipt settles.
     // `observe` must report "unapplied" only when the effect certainly did not
@@ -252,7 +200,7 @@ export function createDurableArrivalProvisioning({
       send: () => Promise<void>,
       observe: () => Promise<EffectState>,
     ) => {
-      const intent = { did: saved.did, cid: savedMove.cid, step };
+      const intent = { did: saved.did, cid: effectCid, step };
       const descriptor = {
         step,
         target: saved.endpoint,
@@ -323,66 +271,179 @@ export function createDurableArrivalProvisioning({
           },
         );
     };
-    // An unresolved generic write must be reconciled even if its remote effect is
-    // visible. Presence alone cannot bypass the operator isolation/drain gate.
-    const unresolvedCreation = initial.attempts.some(
-      (item) => item.reason === "external:incoming-creation",
-    );
-    if (
-      !account ||
-      unresolvedCreation ||
-      initial.progress.provisionedAt === null
-    ) {
+    if (saved.staged) {
+      if (!account) target.assertStagingEnabled();
+      // An existing actor can only be reconciled against our earlier dispatch.
+      const intent = {
+        did: saved.did,
+        cid: effectCid,
+        step: "incoming-creation",
+      };
+      if (
+        account &&
+        !(await receipts.readExternal(owner, {
+          step: "incoming-creation",
+          target: saved.endpoint,
+          method: incomingCreationMethod,
+          intentDigest: requestDigest(intent),
+        }))
+      )
+        return pending(
+          "A destination account already exists without a creation receipt",
+        );
+      const observeStage = async (): Promise<EffectState> => {
+        if (
+          (await readIncomingObservation(client, saved.did)).sourcePlcHead !==
+          creationHead
+        )
+          return "diverged";
+        const observed = await inspect();
+        if (!observed) return "unapplied";
+        return observed.deactivated &&
+          (await target.installedSigningKey()) === saved.signingKey
+          ? "applied"
+          : "diverged";
+      };
       await dispatch(
         "incoming-creation",
         incomingCreationMethod,
         async () => {
-          const before = await inspect();
-          if (before) {
-            if (!(await creationApplied()))
-              return pending("The exact saved move is not canonical");
-            return;
-          }
-          const head = await readIncomingObservation(client, saved.did);
-          if (head.sourcePlcHead !== handoff.cid)
-            return pending("Creation requires the exact canonical handoff");
-          await target.create(savedMove.operation);
+          if ((await observeStage()) !== "unapplied")
+            return pending(
+              "Staging requires the unchanged source and an absent destination",
+            );
+          await target.create();
+        },
+        observeStage,
+      );
+    } else {
+      if (account && directory.sourcePlcHead !== move?.cid)
+        return pending(
+          "Destination presence does not prove publication of the exact saved move",
+        );
+      if (!account && directory.sourcePlcHead === move?.cid)
+        return pending(
+          "The exact move is published without a backend; retain the reservation for recovery",
+        );
+      if (!move) {
+        if (!handoff) return pending("A saved handoff is required");
+        if (directory.sourcePlcHead !== creationHead)
+          return pending("The canonical handoff is not current");
+        await signer.signArrivalMove(
+          {
+            handoffOperation: handoff.operation,
+            repositoryKey: saved.signingKey,
+            endpoint: saved.endpoint,
+            handle: saved.handle,
+            rotationKeys: destinationRotationKeys(saved),
+          },
+          async (operation, _facts, cid) => {
+            const current = await read();
+            await arrivals.recordSignedOperation(
+              owner,
+              current.arrival.version,
+              {
+                kind: "destination-move",
+                operationId: saved.operationId,
+                did: saved.did,
+                repositoryKey: saved.signingKey!,
+                operation: operation as unknown as Record<string, unknown>,
+                cid,
+              },
+            );
+          },
+        );
+        move = (await read()).signedOperations.find(
+          (item) => item.kind === "destination-move",
+        );
+      }
+      if (!move) return pending("The exact signed move is not durable");
+      const parsedMove = Plc.def.operation.parse(move.operation);
+      if (
+        String(await cidForCbor(move.operation)) !== move.cid ||
+        parsedMove.prev !== creationHead ||
+        parsedMove.verificationMethods.atproto !== saved.signingKey ||
+        parsedMove.services.atproto_pds?.endpoint !== saved.endpoint ||
+        parsedMove.services.atproto_pds?.type !== "AtprotoPersonalDataServer" ||
+        !parsedMove.alsoKnownAs.includes(`at://${saved.handle}`) ||
+        JSON.stringify(parsedMove.rotationKeys) !==
+          JSON.stringify(destinationRotationKeys(saved))
+      )
+        return conflict(
+          "The saved destination move differs from the accepted arrival",
+        );
+      await Plc.assureValidSig([...saved.approvedRotationKeys], parsedMove);
+      const savedMove = move;
+      effectCid = move.cid;
+      // Both independent public observations are required: actor presence alone
+      // cannot establish that stock creation published our durable signed move.
+      const creationApplied = async () => {
+        const observed = await readIncomingObservation(client, saved.did);
+        return (
+          observed.sourcePlcHead === savedMove.cid && Boolean(await inspect())
+        );
+      };
+      // An unresolved generic write must be reconciled even if its remote effect is
+      // visible. Presence alone cannot bypass the operator isolation/drain gate.
+      const unresolvedCreation = initial.attempts.some(
+        (item) => item.reason === "external:incoming-creation",
+      );
+      if (
+        !account ||
+        unresolvedCreation ||
+        initial.progress.provisionedAt === null
+      ) {
+        await dispatch(
+          "incoming-creation",
+          incomingCreationMethod,
+          async () => {
+            const before = await inspect();
+            if (before) {
+              if (!(await creationApplied()))
+                return pending("The exact saved move is not canonical");
+              return;
+            }
+            const head = await readIncomingObservation(client, saved.did);
+            if (head.sourcePlcHead !== creationHead)
+              return pending("Creation requires the exact canonical handoff");
+            await target.create(savedMove.operation);
+          },
+          async () => {
+            if (await creationApplied()) return "applied";
+            // Only the saved handoff as head with no backend account proves that
+            // creation did not take effect; anything else needs investigation.
+            const head = await readIncomingObservation(client, saved.did);
+            return head.sourcePlcHead === creationHead && !(await inspect())
+              ? "unapplied"
+              : "diverged";
+          },
+        );
+        account = await inspect();
+      }
+      if (!account || !(await creationApplied()))
+        return pending("Destination creation is unobserved");
+      // Always visit the generic pause receipt, including a crash between its
+      // dispatch marker and association. An already-paused backend sends no write.
+      await dispatch(
+        "incoming-pause",
+        "com.atproto.admin.updateSubjectStatus",
+        async () => {
+          if (!(await creationApplied()))
+            return pending("The exact saved move is not canonical");
+          if (!(await inspect())?.deactivated) await target.pause();
         },
         async () => {
-          if (await creationApplied()) return "applied";
-          // Only the saved handoff as head with no backend account proves that
-          // creation did not take effect; anything else needs investigation.
-          const head = await readIncomingObservation(client, saved.did);
-          return head.sourcePlcHead === handoff.cid && !(await inspect())
-            ? "unapplied"
-            : "diverged";
+          if (!(await creationApplied())) return "diverged";
+          // Pausing is idempotent: an active destination means the pause did not
+          // take effect and may be sent again.
+          return (await inspect())?.deactivated === true
+            ? "applied"
+            : "unapplied";
         },
       );
-      account = await inspect();
+      if (!(await creationApplied()) || !(await inspect())?.deactivated)
+        return pending("Destination deactivation is unobserved");
     }
-    if (!account || !(await creationApplied()))
-      return pending("Destination creation is unobserved");
-    // Always visit the generic pause receipt, including a crash between its
-    // dispatch marker and association. An already-paused backend sends no write.
-    await dispatch(
-      "incoming-pause",
-      "com.atproto.admin.updateSubjectStatus",
-      async () => {
-        if (!(await creationApplied()))
-          return pending("The exact saved move is not canonical");
-        if (!(await inspect())?.deactivated) await target.pause();
-      },
-      async () => {
-        if (!(await creationApplied())) return "diverged";
-        // Pausing is idempotent: an active destination means the pause did not
-        // take effect and may be sent again.
-        return (await inspect())?.deactivated === true
-          ? "applied"
-          : "unapplied";
-      },
-    );
-    if (!(await creationApplied()) || !(await inspect())?.deactivated)
-      return pending("Destination deactivation is unobserved");
     const result = await bindPending({
       owner,
       expectedVersion: (await read()).arrival.version,

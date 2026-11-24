@@ -105,6 +105,17 @@ export interface ArrivalTransactor {
     did: string;
     method: string;
   }): Promise<ArrivalRecord | null>;
+  reapproveArrivalSource(
+    owner: OperationClaim,
+    input: {
+      operationId: string;
+      userId: string;
+      expectedVersion: number;
+      expectedPlcHead: string;
+      updates: readonly unknown[];
+      observedCids: readonly string[];
+    },
+  ): Promise<ArrivalRecord>;
   rotateArrivalCode(input: {
     operationId: string;
     expectedVersion: number;
@@ -176,7 +187,9 @@ export interface ArrivalTransactor {
     did: string;
     userId: string;
     activation: ArrivalActivationEvidence | null;
+    receiptHash?: string;
   }): Promise<ArrivalOutcome>;
+  readActivationReceipt(operationId: string): Promise<string | null>;
   /** Migration-pending projection derived from the current operation. */
   readArrivalAccess(did: string): Promise<ArrivalAccess | null>;
   /** Deletes an unclaimed preparation, which holds nothing remote. A claimed

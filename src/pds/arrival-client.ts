@@ -131,18 +131,20 @@ export class ArrivalPdsClient {
   /** The existing lifecycle hook with `applied: false`; stock `activateAccount`
    * delegates to Entryway, so this administrator call is the one backend effect
    * of guarded activation. */
-  public async activateAccount(authorization: () => string): Promise<void> {
+  public async activateAccount(
+    authorization: () => string | Promise<string>,
+  ): Promise<void> {
     await this.#setDeactivated(authorization, false);
   }
   async #setDeactivated(
-    authorization: () => string,
+    authorization: () => string | Promise<string>,
     applied: boolean,
   ): Promise<void> {
     const method = "com.atproto.admin.updateSubjectStatus";
     const response = await fetch(this.#url(method), {
       method: "POST",
       headers: {
-        authorization: authorization(),
+        authorization: await authorization(),
         "content-type": "application/json",
       },
       body: JSON.stringify({
@@ -162,28 +164,95 @@ export class ArrivalPdsClient {
   }
   /** Stock reservation is unauthenticated and echoes neither DID nor host: the
    * caller binds the result through its own durable intent, not this response. */
-  public async reserveSigningKey(did: string): Promise<string> {
+  public async reserveSigningKey(
+    did: string,
+    authorization?: string,
+  ): Promise<string> {
     const method = "com.atproto.server.reserveSigningKey";
     const response = await fetch(this.#url(method), {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        ...(authorization ? { authorization } : {}),
+      },
       body: JSON.stringify({ did }),
       redirect: "error",
       signal: AbortSignal.timeout(15_000),
     });
     return reservationSigningKey(await readPublicJson(response, method));
   }
+  async #query(
+    method: string,
+    authorization: string,
+    params?: URLSearchParams,
+  ): Promise<Record<string, unknown>> {
+    const url = this.#url(method);
+    if (params) url.search = params.toString();
+    const value = await readPublicJson(
+      await fetch(url, {
+        headers: { authorization },
+        redirect: "error",
+        signal: AbortSignal.timeout(15_000),
+      }),
+      method,
+    );
+    if (!isRecord(value)) throw invalidResponse(method);
+    return value;
+  }
+
+  public async installedSigningKey(authorization: string): Promise<string> {
+    const method = "com.atproto.identity.getRecommendedDidCredentials";
+    const { verificationMethods } = await this.#query(method, authorization);
+    if (
+      !isRecord(verificationMethods) ||
+      typeof verificationMethods.atproto !== "string"
+    )
+      throw invalidResponse(method);
+    return verificationMethods.atproto;
+  }
+
+  /** The destination checks its own repository and PLC resolution. The client
+   * independently compares the transferred data with its retained source. */
+  public async checkStagedReadiness(
+    authorization: string,
+    signingKey: string,
+    afterCutover: boolean,
+  ): Promise<void> {
+    const missing = "com.atproto.repo.listMissingBlobs";
+    const [status, key, { blobs }] = await Promise.all([
+      this.#query("com.atproto.server.checkAccountStatus", authorization),
+      this.installedSigningKey(authorization),
+      this.#query(missing, authorization, new URLSearchParams({ limit: "1" })),
+    ]);
+    if (!Array.isArray(blobs)) throw invalidResponse(missing);
+    if (
+      status.validDid !== afterCutover ||
+      (!afterCutover && status.activated !== false) ||
+      key !== signingKey ||
+      blobs.length > 0
+    )
+      throw new DomainError(
+        "OperationConflict",
+        409,
+        "The destination repository is not ready for this migration step",
+      );
+  }
+
   /** Stock creation consumes the PDS-local reservation, publishes the supplied
    * move and returns an active session. Only the public facts are retained. */
   public async createAccount(input: {
     did: string;
     handle: string;
-    operation: unknown;
+    operation?: unknown;
+    authorization?: string;
   }): Promise<{ did: string; handle: string }> {
     const method = "com.atproto.server.createAccount";
     const response = await fetch(this.#url(method), {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        ...(input.authorization ? { authorization: input.authorization } : {}),
+      },
       body: JSON.stringify({
         did: input.did,
         handle: input.handle,

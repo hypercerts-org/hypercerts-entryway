@@ -95,6 +95,9 @@ try {
         const plcKey = await Secp256k1Keypair.create({ exportable: true });
         return {
           id,
+          ...(id === "pds1" && process.env.ENTRYWAY_LATE_CUTOVER === "1"
+            ? { stagedIncomingMigration: true }
+            : {}),
           url: pdsUrls[i],
           internalUrl: `http://${id}:3000`,
           did: serviceDid(pdsUrls[i]),

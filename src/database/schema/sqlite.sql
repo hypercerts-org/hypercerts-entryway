@@ -131,6 +131,7 @@ CREATE TABLE `arrivals` (
 	`bound_at` integer,
 	`activation_method` text,
 	`activation_at` integer,
+	`activation_receipt_hash` text,
 	`completed_at` integer,
 	CONSTRAINT "arrival_active" CHECK("active" IN (0, 1)),
 	CONSTRAINT "arrival_tuple" CHECK(("active" = 1 AND "claim_operation_id" IS NOT NULL AND "did_root" IS NOT NULL AND "did_root" = "did") OR ("active" = 1 AND "claim_operation_id" IS NULL AND "did_root" IS NULL) OR ("active" = 0 AND "did_root" IS NULL)),
