@@ -1,10 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
-import {
-  bindAccountsToSharedEmail,
-  createRealAccount,
-} from "./support/email-chooser-fixture.mjs";
+import { createSharedEmailPair } from "./support/email-chooser-fixture.mjs";
 
 const config = JSON.parse(
   readFileSync(
@@ -12,9 +9,6 @@ const config = JSON.parse(
     "utf8",
   ),
 );
-const databasePath =
-  process.env.TEST_ACCOUNT_DATABASE_PATH ??
-  "/entryway-data/account-authority.sqlite";
 const runId = Date.now().toString(36);
 
 function selectionForm(page, did) {
@@ -77,31 +71,66 @@ async function chooseAccount(page, did, email) {
   expect(new URL(page.url()).searchParams.get("did")).toBe(did);
 }
 
+let shared;
+
+test.describe.configure({ mode: "serial" });
+
+test.beforeAll(async ({ browser }) => {
+  test.setTimeout(180_000);
+  shared = await createSharedEmailPair(browser, { prefix: "cm", runId });
+});
+
+for (const which of ["first", "second"]) {
+  test(`standalone shared-email sign-in selects the ${which} DID`, async ({
+    browser,
+  }) => {
+    const context = await browser.newContext({ ignoreHTTPSErrors: false });
+    try {
+      const page = await context.newPage();
+      await page.goto(new URL("/login", config.issuer).href);
+      for (const account of [shared.first, shared.second]) {
+        await expect(page.locator("body")).not.toContainText(account.did);
+        await expect(page.locator("body")).not.toContainText(account.handle);
+      }
+      const since = Date.now();
+      await page
+        .getByLabel("Email address", { exact: true })
+        .fill(shared.email);
+      await page.getByRole("button", { name: "Send sign-in code" }).click();
+      for (const account of [shared.first, shared.second]) {
+        await expect(page.locator("body")).not.toContainText(account.did);
+        await expect(page.locator("body")).not.toContainText(account.handle);
+      }
+      const message = await waitForMailpitCode({
+        recipient: shared.email,
+        since,
+      });
+      await page.getByLabel("Sign-in code", { exact: true }).fill(message.code);
+      await page.getByRole("button", { name: "Verify code" }).click();
+      const choices = page.locator('form[action="/auth/select"]');
+      await expect(choices).toHaveCount(2);
+      const selected = shared[which];
+      const form = choices.filter({
+        has: page.locator(`input[name="did"][value="${selected.did}"]`),
+      });
+      await expect(form).toHaveCount(1);
+      await form.getByRole("button").click();
+      expect(new URL(page.url()).pathname).toBe("/account");
+      expect(new URL(page.url()).searchParams.get("did")).toBe(selected.did);
+      await expect(page.getByTestId("account-did")).toHaveText(selected.did);
+      await page.reload();
+      await expect(page.getByTestId("account-did")).toHaveText(selected.did);
+    } finally {
+      await context.close();
+    }
+  });
+}
+
 test("shared verified email keeps each tab and account action bound to its selected DID", async ({
   browser,
 }) => {
   test.setTimeout(180_000);
-
-  const sharedEmail = `console-multi-${runId}@example.test`;
-  const first = {
-    email: sharedEmail,
-    handle: `cm-${runId}-on.entryway.atmosbox.test`,
-    pdsId: "pds1",
-  };
-  const second = {
-    email: `console-multi-${runId}-two@example.test`,
-    handle: `cm-${runId}-tw.entryway.atmosbox.test`,
-    pdsId: "pds2",
-  };
-  await createRealAccount(browser, first);
-  await createRealAccount(browser, second);
-  await bindAccountsToSharedEmail({
-    first,
-    second,
-    email: sharedEmail,
-    databasePath,
-  });
-
+  const { first, second, email: sharedEmail } = shared;
   const context = await browser.newContext({ ignoreHTTPSErrors: false });
   try {
     const firstTab = await context.newPage();
