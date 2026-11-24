@@ -43,12 +43,13 @@ import {
 
 type CutoverReceipt = StoredRow<"external_operation_attempts">;
 /** Superseded receipts are historical. A retry-retired receipt is safe only
- * when followed by the latest approved attempt for the same exact intent. */
+ * when followed by the latest approved attempt for the same exact intent.
+ * Returns that approved receipt, null when none is needed, or undefined if blocked. */
 function cutoversPermitReapproval(
   receipts: readonly CutoverReceipt[],
   did: string,
   cid: string | undefined,
-): boolean {
+): CutoverReceipt | null | undefined {
   const ordered = [...receipts].sort(
     (a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id),
   );
@@ -65,14 +66,14 @@ function cutoversPermitReapproval(
           later.target === row.target,
       );
   });
-  if (!active.length) return true;
+  if (!active.length) return null;
   const latest = active.at(-1)!;
   if (
     !cid ||
     latest.intent_digest !== requestDigest({ cid, did }) ||
     classifyCutoverReceipt(latest) !== "approved"
   )
-    return false;
+    return undefined;
   return active
     .slice(0, -1)
     .every(
@@ -80,7 +81,9 @@ function cutoversPermitReapproval(
         classifyCutoverReceipt(row) === "retry-retired" &&
         row.intent_digest === latest.intent_digest &&
         row.target === latest.target,
-    );
+    )
+    ? latest
+    : undefined;
 }
 const signingKeyPattern = /^did:key:z[1-9A-HJ-NP-Za-km-z]+$/;
 const digestPattern = /^[a-f0-9]{64}$/;
@@ -702,11 +705,12 @@ export function createArrivalStorage(
             })
           : [];
         return {
-          hasCutoverReceipt: !cutoversPermitReapproval(
-            cutoverReceipts,
-            saved.did,
-            signed.find((item) => item.kind === "destination-move")?.cid,
-          ),
+          hasCutoverReceipt:
+            cutoversPermitReapproval(
+              cutoverReceipts,
+              saved.did,
+              signed.find((item) => item.kind === "destination-move")?.cid,
+            ) === undefined,
           arrival: arrivalRecord(saved, binding, await code(operationId)),
           signedOperations: signed.map((item) => ({
             operationId,
@@ -996,6 +1000,11 @@ export function createArrivalStorage(
           const submit = "com.atproto.identity.submitPlcOperation";
           const stale = signed.find((item) => item.kind === "destination-move");
           const submission = admissions.some((item) => item.method === submit);
+          const approvedCutover = cutoversPermitReapproval(
+            receipts.filter((item) => item.step === "incoming-cutover"),
+            saved.did,
+            stale?.cid,
+          );
           if (
             key?.uncertain_reason ||
             signed.length !== Number(Boolean(stale)) ||
@@ -1006,11 +1015,7 @@ export function createArrivalStorage(
                 item.step !== "incoming-cutover" &&
                 item.state !== "acknowledged",
             ) ||
-            !cutoversPermitReapproval(
-              receipts.filter((item) => item.step === "incoming-cutover"),
-              saved.did,
-              stale?.cid,
-            )
+            approvedCutover === undefined
           )
             throw recoveryRequired();
           let update;
@@ -1028,24 +1033,19 @@ export function createArrivalStorage(
               "The update must retain source authority and exclude any recoverable destination move",
             );
           }
-          for (const receipt of receipts) {
-            if (
-              receipt.step === "incoming-cutover" &&
-              classifyCutoverReceipt(receipt) === "approved"
-            )
-              await db.update(
-                "external_operation_attempts",
-                {
-                  state: "acknowledged",
-                  result: JSON.stringify({
-                    recovery: "superseded",
-                    intentDigest: receipt.intent_digest,
-                  }),
-                  updated_at: await db.databaseTime(),
-                },
-                eq(db.tables.external_operation_attempts.id, receipt.id),
-              );
-          }
+          if (approvedCutover)
+            await db.update(
+              "external_operation_attempts",
+              {
+                state: "acknowledged",
+                result: JSON.stringify({
+                  recovery: "superseded",
+                  intentDigest: approvedCutover.intent_digest,
+                }),
+                updated_at: await db.databaseTime(),
+              },
+              eq(db.tables.external_operation_attempts.id, approvedCutover.id),
+            );
           if (stale) {
             // Keep the unique (issuer, jti) occupied. Only the superseded
             // admission leaves the active method slot; a new one needs fresh proof.

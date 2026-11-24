@@ -35,8 +35,7 @@ function acceptedReplay(
 ) {
   const accepted = aggregate.admissions.find((item) => item.method === method);
   if (
-    !accepted ||
-    accepted.requestDigest !== digest ||
+    accepted?.requestDigest !== digest ||
     accepted.userId !== aggregate.arrival.userId ||
     accepted.did !== aggregate.arrival.did ||
     !isRecordedAdmissionGeneration(
