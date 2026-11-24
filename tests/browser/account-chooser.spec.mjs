@@ -89,13 +89,16 @@ test("each linked account has its own button and status, and consent can return 
     const page = await context.newPage();
     await reachChooser(page);
     for (const account of [first, second]) {
-      const option = page
-        .locator("div.account")
-        .filter({ has: selectionForm(page, account.did) });
-      await expect(option).toContainText(account.handle);
-      await expect(option).toContainText(`${account.did} · active`);
       await expect(
-        option.getByRole("button", { name: "Continue with this account" }),
+        page.getByText(account.handle, { exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByText(`${account.did} · active`, { exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("button", {
+          name: `Continue with ${account.handle}, ${account.did}`,
+        }),
       ).toHaveCount(1);
     }
 

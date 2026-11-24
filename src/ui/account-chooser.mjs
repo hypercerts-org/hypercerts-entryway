@@ -13,7 +13,7 @@ const accountOption = ({ did, handle, status }, action, fields) => {
   const details = status
     ? `${escapeHtml(did)} · ${escapeHtml(status)}`
     : escapeHtml(did);
-  return `<div class="account"><strong>${escapeHtml(handle ?? did)}</strong><br><small>${details}</small><form method="post" action="${escapeHtml(action)}">${fields}${hidden("did", did)}<button>Continue with this account</button></form></div>`;
+  return `<div class="account"><strong>${escapeHtml(handle ?? did)}</strong><br><small>${details}</small><form method="post" action="${escapeHtml(action)}">${fields}${hidden("did", did)}<button aria-label="${escapeHtml(`Continue with ${handle ?? did}, ${did}`)}">Continue with this account</button></form></div>`;
 };
 
 export const accountChooser = ({ accounts, action, fields, prompt }) => {

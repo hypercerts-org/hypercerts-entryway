@@ -283,7 +283,7 @@ export function mountAccountSettingsPage({
       page(
         res,
         "Account settings",
-        `<p>Manage your sign-in, recovery options, and connected applications.</p><nav class="section-nav" aria-label="Account sections"><a href="#identity">Identity</a><a href="#recovery">Recovery</a><a href="#passwords">Passwords</a><a href="#sessions">Sessions</a><a href="#lifecycle">Lifecycle</a>${migration ? '<a href="#migration">Data server</a>' : ""}</nav>${identity}${backup}${passwords}${sessions}${lifecycle}${migrationPanel}${form("/auth/logout", csrf, "", "Sign out", accountContext, 'class="signout"')}<p><a href="${esc(config.clientUrl)}/client">Open test application</a></p>`,
+        `<p>Manage your sign-in, recovery options, and connected applications.</p><nav class="section-nav" aria-label="Account sections"><a href="#identity">Identity</a><a href="#recovery">Recovery</a><a href="#passwords">Passwords</a><a href="#sessions">Sessions</a><a href="#lifecycle">Lifecycle</a>${migration ? '<a href="#migration">Data server</a>' : ""}</nav>${identity}${backup}${passwords}${sessions}${lifecycle}${migrationPanel}${form("/auth/logout", csrf, "", "Sign out", accountContext, 'class="signout"')}`,
       );
     }),
   );
