@@ -31,6 +31,8 @@ export function createConsent({
     if (value === "transition:generic")
       return "Create, update, and delete any repository records, upload media, read and change preferences, and use most services except chat. This does not include account management.";
     if (value === "transition:email") return "Read your account email address.";
+    if (value === "transition:chat.bsky")
+      return "Call chat.bsky service methods.";
     const repo = RepoPermission.fromString(value);
     if (repo)
       return `Permitted record actions: ${repo.action.join(", ")} in ${repo.collection.join(", ")}.`;

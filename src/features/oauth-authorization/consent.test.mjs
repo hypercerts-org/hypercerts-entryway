@@ -156,3 +156,18 @@ test("consent identifies a nameless client and explains broad transitional acces
   assert.match(html, /does not include account management/);
   assert.doesNotMatch(html, /Your application/);
 });
+
+test("consent explains transitional chat access and retains its exact scope", () => {
+  const { consentForm } = createConsent({ flows: {} });
+  const html = consentForm(
+    {
+      id: "flow",
+      clientId: "https://client.example",
+      parameters: { scope: "atproto transition:chat.bsky" },
+    },
+    { csrf: "token" },
+    { did: "did:plc:example", handle: "owner.example" },
+  );
+  assert.match(html, /transition:chat\.bsky/);
+  assert.match(html, /Call chat\.bsky service methods\./);
+});
