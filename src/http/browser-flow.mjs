@@ -80,7 +80,10 @@ export function createBrowserFlow({
       title,
       body,
       status,
-      clientFormPolicy(flow),
+      {
+        ...clientFormPolicy(flow),
+        layout: flow?.requestUri ? "oauth" : "standalone",
+      },
       resolveBrand(flow?.clientId, brandClients),
     );
   const loadBrowser = async (req, res, rotate = false) => {

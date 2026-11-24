@@ -1,5 +1,5 @@
 import { escapeHtml } from "../../ui/html.mjs";
-import { accountChooser } from "../../ui/account-chooser.mjs";
+import { renderAccountChooser } from "#entryway-ssr/ui";
 // ePDS format: each dot-separated part of the local name and domain keeps only
 // its last character (karma.secret@zoepa.com -> ***a.***t@***a.***m), so the
 // owner can recognize the address without it being disclosed to someone else at
@@ -35,12 +35,15 @@ export function createLoginForms({ fields }) {
     return `${errorNotice}<p id="otp-help" role="status" aria-live="polite">Enter the code sent to <strong>${escapeHtml(shown)}</strong>. Codes expire after ten minutes.</p><form method="post" action="/auth/verify">${fields(flow, browser)}<label for="otp">Sign-in code</label><input id="otp" name="otp" inputmode="numeric" autocomplete="one-time-code" minlength="8" maxlength="8" aria-describedby="${error ? "otp-error " : ""}otp-help" required><button>Verify code</button></form><div class="account"><form method="post" action="/auth/resend">${fields(flow, browser)}<button class="secondary">Send a new code</button></form><p class="muted">Wait five seconds between code requests. Each email address has a ten-minute request limit.</p><form method="post" action="/auth/email">${fields(flow, browser)}<label for="change-email">Use a different email address</label><input id="change-email" name="email" type="email" autocomplete="email" value="${escapeHtml(changeValue)}" required><button class="secondary">Change email and send a new code</button></form></div>`;
   };
   const accountSelectionForm = (flow, browser, accounts) =>
-    accountChooser({
+    renderAccountChooser({
       accounts,
       action: "/auth/select",
-      fields: fields(flow, browser),
+      fields: [
+        { name: "flow", value: flow.id },
+        { name: "csrf", value: browser.csrf },
+      ],
       prompt: "Choose one account linked to your verified email.",
-    }) +
+    }).body +
     `<form method="post" action="/auth/another-account">${fields(flow, browser)}<button class="secondary">Use another email address</button></form>`;
   return { loginForm, otpForm, accountSelectionForm };
 }

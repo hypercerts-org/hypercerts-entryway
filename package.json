@@ -10,7 +10,7 @@
   "scripts": {
     "build": "node node_modules/typescript/bin/tsc -p tsconfig.json && node scripts/copy-database-schema.mjs && node scripts/build-svelte.mjs",
     "start": "node dist/src/main.mjs",
-    "typecheck": "node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
+    "typecheck": "node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit && node scripts/lint/node_modules/svelte-check/bin/svelte-check --tsconfig ./tsconfig.svelte.json --fail-on-warnings",
     "check": "node scripts/check.mjs",
     "lint": "node scripts/lint/node_modules/eslint/bin/eslint.js src scripts tests eslint.config.mjs --max-warnings=0",
     "check:architecture": "node scripts/check-architecture.mjs",
@@ -19,8 +19,8 @@
     "test:e2e": "playwright test --config tests/playwright.config.mjs",
     "hooks:install": "node scripts/install-hooks.mjs",
     "test:hooks": "node --test tests/support/hooks.test.mjs",
-    "format": "prettier --write src scripts tests eslint.config.mjs package.json lefthook.yml .github/workflows/ci.yml",
-    "format:check": "prettier --check src scripts tests eslint.config.mjs package.json lefthook.yml .github/workflows/ci.yml",
+    "format": "prettier --plugin prettier-plugin-svelte --write src scripts tests eslint.config.mjs package.json lefthook.yml .github/workflows/ci.yml",
+    "format:check": "prettier --plugin prettier-plugin-svelte --check src scripts tests eslint.config.mjs package.json lefthook.yml .github/workflows/ci.yml",
     "test:external": "playwright test --config tests/external.playwright.config.mjs",
     "test:unit": "node tests/support/run-contracts.mjs --unit",
     "test:external-workflow": "node --test tests/contracts/external-workflow.test.mjs tests/contracts/migration-domain.test.mjs tests/contracts/migration-custody.test.mjs tests/contracts/migration-payload.test.mjs tests/contracts/migration-target-token.test.mjs",
@@ -85,6 +85,7 @@
     "@opentelemetry/propagator-jaeger": "2.9.0"
   },
   "imports": {
-    "#entryway-ssr/*": "./dist/ssr/*.js"
+    "#entryway-ssr/*": "./dist/ssr/*.js",
+    "#entryway-css": "./dist/ssr/hypercerts-ui.css"
   }
 }

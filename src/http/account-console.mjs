@@ -1,8 +1,7 @@
 import express from "express";
 import { page, escapeHtml as esc } from "../ui/html.mjs";
-import { hidden } from "../ui/forms.mjs";
 import { accountUrl, manageUrl, settingsLink } from "../ui/account-forms.mjs";
-import { accountChooser } from "../ui/account-chooser.mjs";
+import { renderAccountChooser } from "#entryway-ssr/ui";
 import { HttpError } from "./http-error.mjs";
 import {
   createPendingArrivalGuard,
@@ -74,13 +73,13 @@ export function createAccountConsole({
     return null;
   };
   const selectionForm = (browser, accounts) =>
-    accountChooser({
+    renderAccountChooser({
       accounts,
       action: "/account/select",
-      fields: hidden("csrf", browser.csrf),
+      fields: [{ name: "csrf", value: browser.csrf }],
       prompt:
         "More than one account is linked to this verified identity. Choose the account to manage.",
-    });
+    }).body;
   const authenticated = async (req, res) => {
     const session = await oauth.requireSession(req);
     if (!session?.emailVerified) {
@@ -103,6 +102,8 @@ export function createAccountConsole({
           res,
           "Choose an account",
           selectionForm(browser, resolution.accounts),
+          200,
+          { layout: "standalone" },
         );
         return null;
       }

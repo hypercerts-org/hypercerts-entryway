@@ -1,4 +1,4 @@
-import { readFile, readdir } from "node:fs/promises";
+import { copyFile, readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { build } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
@@ -61,3 +61,8 @@ await build({
   },
   ssr: { noExternal: ["@hypercerts-org/ui-svelte"] },
 });
+
+await copyFile(
+  new URL(import.meta.resolve("@hypercerts-org/ui-svelte/styles.css")),
+  "dist/ssr/hypercerts-ui.css",
+);

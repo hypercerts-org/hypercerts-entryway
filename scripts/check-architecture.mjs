@@ -1,10 +1,44 @@
-import { readdirSync, readFileSync } from "node:fs";
-import { resolve, relative, sep } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, resolve, relative, sep } from "node:path";
 import ts from "typescript6";
+import { parse } from "svelte/compiler";
 import { pathToFileURL } from "node:url";
 
 const normalize = (value) => value.split(sep).join("/");
 function referencesIn(source, filename) {
+  if (filename.endsWith(".svelte")) {
+    const component = parse(source, { modern: true });
+    const references = [];
+    for (const script of [component.instance, component.module]) {
+      if (script)
+        references.push(
+          ...referencesIn(
+            source.slice(script.content.start, script.content.end),
+            `${filename}.ts`,
+          ),
+        );
+    }
+    const visitTemplate = (node) => {
+      if (!node || typeof node !== "object") return;
+      if (
+        node.type === "ImportExpression" ||
+        (node.type === "CallExpression" && node.callee?.name === "require")
+      ) {
+        references.push(
+          ...referencesIn(
+            `const expression = ${source.slice(node.start, node.end)}`,
+            `${filename}.ts`,
+          ),
+        );
+      }
+      for (const value of Object.values(node)) {
+        if (Array.isArray(value)) value.forEach(visitTemplate);
+        else if (value && typeof value === "object") visitTemplate(value);
+      }
+    };
+    visitTemplate(component.fragment);
+    return references;
+  }
   const file = ts.createSourceFile(
     filename,
     source,
@@ -40,6 +74,41 @@ function referencesIn(source, filename) {
 }
 export function importsIn(source, filename) {
   return referencesIn(source, filename).map(({ specifier }) => specifier);
+}
+
+function resolveReference(specifier, filename, appRoot, options) {
+  if (specifier.startsWith("#entryway-ssr/")) {
+    const owner = specifier.slice("#entryway-ssr/".length);
+    const candidate = resolve(
+      appRoot,
+      owner === "ui" ? "src/ui/ssr.ts" : `src/features/${owner}/ssr.ts`,
+    );
+    return existsSync(candidate) ? candidate : undefined;
+  }
+  if (specifier.endsWith(".svelte")) {
+    if (specifier.startsWith(".")) {
+      const candidate = resolve(dirname(filename), specifier);
+      return existsSync(candidate) ? candidate : undefined;
+    }
+    for (const [pattern, targets] of Object.entries(options.paths ?? {})) {
+      const [prefix, suffix = ""] = pattern.split("*");
+      if (!specifier.startsWith(prefix) || !specifier.endsWith(suffix))
+        continue;
+      const match = specifier.slice(
+        prefix.length,
+        specifier.length - suffix.length,
+      );
+      for (const target of targets) {
+        const candidate = resolve(
+          options.baseUrl ?? appRoot,
+          target.replace("*", match),
+        );
+        if (existsSync(candidate)) return candidate;
+      }
+    }
+  }
+  return ts.resolveModuleName(specifier, filename, options, ts.sys)
+    .resolvedModule?.resolvedFileName;
 }
 
 export function moduleViolations(source, filename, appRoot, options) {
@@ -104,11 +173,11 @@ export function moduleViolations(source, filename, appRoot, options) {
       )
     )
       violations.push(`${specifier}: pure rules cannot depend on HTTP or SQL`);
-    const resolved = ts.resolveModuleName(specifier, filename, options, ts.sys)
-      .resolvedModule?.resolvedFileName;
+    const resolved = resolveReference(specifier, filename, appRoot, options);
     if (!resolved) {
       if (
         specifier.startsWith(".") ||
+        specifier.startsWith("#entryway-ssr/") ||
         Object.keys(options.paths ?? {}).some((alias) =>
           specifier.startsWith(alias.split("*")[0]),
         )
@@ -226,7 +295,7 @@ export function checkArchitecture(appRoot) {
       const path = resolve(dir, entry.name);
       if (entry.isDirectory()) walk(path);
       else if (
-        /\.(?:ts|mjs)$/.test(entry.name) &&
+        /\.(?:ts|mjs|svelte)$/.test(entry.name) &&
         !entry.name.endsWith(".test.mjs")
       )
         files.push(path);
@@ -246,10 +315,8 @@ export function checkArchitecture(appRoot) {
       file,
       referencesIn(source, file)
         .filter((ref) => !ref.typeOnly)
-        .map(
-          ({ specifier }) =>
-            ts.resolveModuleName(specifier, file, parsed.options, ts.sys)
-              .resolvedModule?.resolvedFileName,
+        .map(({ specifier }) =>
+          resolveReference(specifier, file, appRoot, parsed.options),
         )
         .filter((target) => target && files.includes(resolve(target)))
         .map((target) => resolve(target)),

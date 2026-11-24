@@ -493,3 +493,42 @@ test("resolved Better Auth database adapter aliases cannot bypass database owner
     }
   }
 });
+
+test("Svelte components obey feature boundaries and may import shared components", (t) => {
+  const f = fixture(t, {
+    "src/features/account-settings/Private.svelte": "<p>private</p>",
+    "src/ui/Shared.svelte": "<p>shared</p>",
+  });
+  const violations = f.check(
+    "src/features/email-login/Chooser.svelte",
+    `<script lang="ts">import Private from "../account-settings/Private.svelte"; import Shared from "../../ui/Shared.svelte";</script><Private/><Shared/>`,
+  );
+  assert.ok(
+    violations.some((issue) =>
+      issue.includes("feature email-login imports account-settings internals"),
+    ),
+  );
+  assert.ok(!violations.some((issue) => issue.includes("Shared.svelte")));
+  const dynamic = f.check(
+    "src/features/email-login/Dynamic.svelte",
+    `{#await import("../account-settings/Private.svelte")}loading{/await}`,
+  );
+  assert.ok(
+    dynamic.some((issue) =>
+      issue.includes("feature email-login imports account-settings internals"),
+    ),
+  );
+});
+
+test("runtime cycles include Svelte components", (t) => {
+  const f = fixture(t, {
+    "src/ui/First.svelte": `<script>import { value } from "./second.js";</script><p>{value}</p>`,
+    "src/ui/second.ts": `import First from "./First.svelte"; export const value = First;`,
+  });
+  assert.ok(
+    checkArchitecture(f.root).violations.some(
+      (issue) =>
+        issue.includes("import cycle:") && issue.includes("First.svelte"),
+    ),
+  );
+});
