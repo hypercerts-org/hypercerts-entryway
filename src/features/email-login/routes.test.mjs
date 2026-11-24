@@ -750,6 +750,35 @@ test("verified multi-DID sign-in withholds bindings until OTP and continues only
   assert.match(consent.body, /action="\/auth\/choose"/);
 });
 
+test("another email starts a new flow while retaining the request and budgets", async (t) => {
+  const f = await verificationFixture(t, "multiple-accounts");
+  await f.request("/auth/verify", { otp: "valid-proof" });
+  await f.request("/auth/select", { did: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb" });
+  const old = await f.db.get("auth-flows", f.flow.id);
+  const response = await f.request("/auth/another-account", {});
+  assert.equal(response.statusCode, 200);
+  const replacementId = response.body.match(/name="flow" value="([^"]+)"/)?.[1];
+  assert.ok(replacementId);
+  assert.notEqual(replacementId, old.id);
+  assert.equal(await f.db.get("auth-flows", old.id), null);
+  const replacement = await f.db.get("auth-flows", replacementId);
+  for (const key of [
+    "requestUri",
+    "clientId",
+    "clientName",
+    "otpRequestCount",
+    "lastOtpSentAt",
+  ])
+    assert.equal(replacement[key], old[key]);
+  assert.deepEqual(replacement.parameters, old.parameters);
+  assert.equal(
+    new Date(replacement.createdAt).getTime(),
+    new Date(old.createdAt).getTime(),
+  );
+  for (const key of ["email", "authEmail", "authUserId", "authDid"])
+    assert.equal(replacement[key], undefined);
+});
+
 test("a verified chooser can change its account before consent is granted", async (t) => {
   const f = await verificationFixture(t, "multiple-accounts");
   await f.request("/auth/verify", { otp: "valid-proof" });

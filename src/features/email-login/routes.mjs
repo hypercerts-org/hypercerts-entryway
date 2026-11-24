@@ -363,6 +363,40 @@ export function mountEmailLogin({
     };
   };
   app.post(
+    "/auth/another-account",
+    form,
+    guarded(async (req, res) => {
+      const { flow, browser } = await getFlow(req, res);
+      const identity = await requireChooserIdentity(req, flow);
+      const replacement = await db.transact(async () => {
+        const current = await readCurrentIntent(flow, browser);
+        if (
+          current.authUserId !== identity.userId ||
+          current.authEmail !== identity.email
+        )
+          throw new InvalidRequestError("Verified sign-in session expired");
+        const next = await newFlow(browser, {
+          createdAt: current.createdAt,
+          requestUri: current.requestUri,
+          clientId: current.clientId,
+          clientName: current.clientName,
+          parameters: current.parameters,
+          accountHint: current.accountHint,
+          otpRequestCount: current.otpRequestCount,
+          lastOtpSentAt: current.lastOtpSentAt,
+        });
+        await db.delete("auth-flows", current.id);
+        return next;
+      });
+      return pageForFlow(
+        res,
+        "Sign in",
+        loginForm(replacement, browser),
+        replacement,
+      );
+    }),
+  );
+  app.post(
     "/auth/choose",
     form,
     guarded(async (req, res) => {

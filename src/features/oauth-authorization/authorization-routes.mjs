@@ -119,14 +119,25 @@ export function mountAuthorizationRoutes({
     { did, email },
     { automatic = false } = {},
   ) => {
-    const selectedFlow = await newFlow(browser, {
-      requestUri: flow.requestUri,
-      clientId: flow.clientId,
-      clientName: flow.clientName,
-      parameters,
-      accountHint: did,
+    const selectedFlow = await db.transact(async () => {
+      const current = await flows.refreshFlow(flow, browser);
+      if (current.authEmail || current.authDid || current.authUserId)
+        throw new InvalidRequestError(
+          "This sign-in choice has already been used",
+        );
+      const next = await newFlow(browser, {
+        requestUri: current.requestUri,
+        clientId: current.clientId,
+        clientName: current.clientName,
+        createdAt: current.createdAt,
+        otpRequestCount: current.otpRequestCount,
+        lastOtpSentAt: current.lastOtpSentAt,
+        parameters,
+        accountHint: did,
+      });
+      await db.delete("auth-flows", current.id);
+      return next;
     });
-    await db.delete("auth-flows", flow.id);
     if (!email)
       return pageForFlow(
         res,
@@ -485,8 +496,13 @@ export function mountAuthorizationRoutes({
         flow.clientId,
       );
       if (req.body.decision === "deny") {
-        await provider.requestManager.delete(flow.requestUri);
-        await db.delete("auth-flows", flow.id);
+        await db.transact(async () => {
+          const current = await flows.refreshFlow(flow, browser);
+          if (flowBindsAnotherAccount(current, did, request))
+            throw new InvalidRequestError("Sign in to this account first");
+          await provider.requestManager.delete(current.requestUri);
+          await db.delete("auth-flows", current.id);
+        });
         return authorizationRedirect(res, config.issuer, request.parameters, {
           error: "access_denied",
           error_description: "The user declined access",

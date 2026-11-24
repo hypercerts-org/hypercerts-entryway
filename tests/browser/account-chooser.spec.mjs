@@ -1,5 +1,8 @@
 import { test, expect } from "@playwright/test";
-import { createSharedEmailPair } from "./support/email-chooser-fixture.mjs";
+import {
+  createRealAccount,
+  createSharedEmailPair,
+} from "./support/email-chooser-fixture.mjs";
 import {
   assertOAuthSubjectAndWrite,
   beginAuthorization,
@@ -78,6 +81,37 @@ for (const which of ["first", "second"]) {
     }
   });
 }
+
+test("another email completes the original authorization as its own account", async ({
+  browser,
+}) => {
+  test.setTimeout(180_000);
+  const other = {
+    email: `ch-${runId}-other@example.test`,
+    handle: `ch-${runId}-n.entryway.atmosbox.test`,
+    pdsId: "pds1",
+  };
+  await createRealAccount(browser, other);
+  const context = await browser.newContext({ ignoreHTTPSErrors: false });
+  try {
+    const page = await context.newPage();
+    await reachChooser(page);
+    await page
+      .getByRole("button", { name: "Use another email address" })
+      .click();
+    // The retained flow keeps its five-second resend cooldown.
+    await page.waitForTimeout(5_000);
+    const code = await requestVisibleCode(page, other.email);
+    await verifyVisibleCode(page, code.code);
+    await expect(consentForm(page, other.did)).toBeVisible();
+    await finishConsent(page, other.did);
+    await assertOAuthSubjectAndWrite(page, other, {
+      text: `Another email ${runId}`,
+    });
+  } finally {
+    await context.close();
+  }
+});
 
 test("each linked account has its own button and status, and consent can return to the chooser", async ({
   browser,
