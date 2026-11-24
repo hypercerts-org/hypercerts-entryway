@@ -56,3 +56,21 @@ database. An already-issued access token can remain usable until its expiry.
 A code published before device-forget remains redeemable until it expires; the
 pinned provider sets its authorization inactivity timeout to five minutes. Grant
 revocation also fences redemption of an earlier code.
+
+## Account actions and recovery
+
+For people managing an account, each form shows or carries the selected DID and
+requires the browser's CSRF token. A rejected or stale binding returns to the
+account chooser; select an account that remains linked, or sign in to its current
+mailbox. A failed action must not be assumed to have completed.
+
+| Action                       | Proof and outcome                                                                                                                       | Common refusal and next step                                                                                                                         |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Handle                       | Current selected account and device proof; publishes the handle change.                                                                 | An unavailable or invalid handle leaves the old handle; choose another. An uncertain server outcome requires operator recovery.                      |
+| Primary email                | Verify the current mailbox, then the new mailbox; completion moves this DID's binding and requires signing in with the new address.     | An occupied address or invalid/expired code leaves the change incomplete; choose an unused address or start a new proof.                             |
+| Recovery email               | Recent browser proof and a separate code sent to the recovery mailbox; confirmation adds it, removal deletes its recovery claim.        | An unavailable address or invalid/expired code leaves no verified recovery address; retry with an eligible address and a new code.                   |
+| Account password             | Recent browser proof; setting or removing it ends sessions and removes app passwords for this DID.                                      | A stale session prompts for an email code; return to the password page and submit again.                                                             |
+| App passwords                | Recent browser proof; creation shows the secret once, and revocation removes the named credential.                                      | A stale session needs confirmation; a changed binding returns to account selection. Create a new credential after signing in to the current mailbox. |
+| Status                       | Recent browser proof; deactivation pauses writes and connected access, reactivation restores writes.                                    | A stale session needs confirmation; an unfinished migration or uncertain operation must be resolved before retrying.                                 |
+| Sessions, devices and apps   | The selected DID scopes legacy and OAuth sessions, device membership and grants; browser-session ending affects the signed-in identity. | A missing session, device or grant is reported as not found; refresh settings before choosing another.                                               |
+| Deletion and migration links | Open the selected account's lifecycle operation and follow its own proof and confirmation steps.                                        | Expired proof requires a new code. An uncertain external result requires operator recovery before continuing.                                        |
