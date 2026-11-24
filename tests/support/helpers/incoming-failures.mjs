@@ -354,7 +354,7 @@ export async function expectOrdinaryAccountUnchanged(
   await expect(page.getByTestId("account-did")).toHaveText(account.did);
   await expect(page.getByTestId("account-handle")).toHaveText(account.handle);
   await openAccountView(page, "Account");
-  await openAccountSection(page, "Identity and email");
+  await openAccountSection(page, "Email and identity");
   await expect(page.getByTestId("primary-email")).toHaveText(
     `${email} (verified)`,
   );

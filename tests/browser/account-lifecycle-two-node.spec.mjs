@@ -244,7 +244,7 @@ test("a form opened on one node cannot issue after a mailbox change on the other
           `${config.issuer}/account?did=${encodeURIComponent(pair.first.did)}`,
         );
         await openAccountView(change, "Account");
-        await openAccountSection(change, "Identity and email");
+        await openAccountSection(change, "Email and identity");
         const since = Date.now();
         await change
           .getByRole("button", { name: "Start email change" })

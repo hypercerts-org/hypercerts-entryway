@@ -35,7 +35,7 @@ async function createAccountInNewContext(browser, label, { withPassword }) {
     const account = await createAccount(page, label);
     if (withPassword) {
       await openAccountView(page, "Account");
-      await openAccountSection(page, "Password");
+      await openAccountSection(page, "Account password");
       await page.locator('a[href^="/account/manage/password?"]').click();
       await setAccountPassword(page, password);
     }

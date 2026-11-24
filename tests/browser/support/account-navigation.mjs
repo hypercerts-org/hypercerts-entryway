@@ -2,7 +2,14 @@ import { expect } from "@playwright/test";
 
 // Follow the visible navigation so tests exercise the same links as account owners.
 export async function openAccountView(page, name) {
-  const menu = page.locator(".account-mobile-header details");
+  let menu = page.locator(".account-mobile-header details");
+  const back = page
+    .locator(".account-mobile-header")
+    .getByRole("link", { name: "Home", exact: true });
+  if (await back.isVisible()) {
+    await back.click();
+    menu = page.locator(".account-mobile-header details");
+  }
   if (
     (await menu.isVisible()) &&
     !(await menu.evaluate((element) => element.open))

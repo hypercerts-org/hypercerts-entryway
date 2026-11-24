@@ -49,7 +49,7 @@ const openManage = async (p, name) => {
       p,
       {
         recovery: "Recovery email",
-        password: "Password",
+        password: "Account password",
         status: "Account status and deletion",
       }[name],
     );
@@ -305,7 +305,7 @@ test("optional password signs out existing sessions and enables actual PDS legac
   expect((await legacyLogin(alice, `${password}wrong`)).ok()).toBe(false);
   await page.reload();
   await openAccountView(page, "Account");
-  await openAccountSection(page, "Password");
+  await openAccountSection(page, "Account password");
   await expect(page.locator("#passwords")).toContainText(
     "Optional account password is enabled.",
   );
@@ -373,7 +373,7 @@ test("optional password removal keeps email login and disables password login", 
   });
   await signIn(page, alice);
   await openAccountView(page, "Account");
-  await openAccountSection(page, "Password");
+  await openAccountSection(page, "Account password");
   await expect(page.locator("#passwords")).toContainText(
     "This account has no account password.",
   );
@@ -394,6 +394,7 @@ test("individual browser-session revocation checks ownership and ends the select
     ).status(),
   ).toBe(404);
   await otherPage.reload();
+  await openAccountView(otherPage, "Home");
   await expect(otherPage.getByTestId("primary-email")).toContainText(bob.email);
   const extraContext = await browserRef.newContext({
     ignoreHTTPSErrors: false,
@@ -454,9 +455,9 @@ test("primary email change rejects occupied addresses and retries with visible m
   const nextEmail = `changed-${run}@example.com`;
 
   await openAccountView(otherPage, "Account");
-  await openAccountSection(otherPage, "Identity and email");
+  await openAccountSection(otherPage, "Email and identity");
   await openAccountView(page, "Account");
-  await openAccountSection(page, "Identity and email");
+  await openAccountSection(page, "Email and identity");
   await submit(otherPage, "email-request");
   const foreignChallengeId = await accountForm(otherPage, "email-update")
     .locator('input[name="challengeId"]')
@@ -546,7 +547,7 @@ test("primary email change rejects occupied addresses and retries with visible m
 
   await page.goto(`${config.issuer}/account`);
   await openAccountView(page, "Account");
-  await openAccountSection(page, "Identity and email");
+  await openAccountSection(page, "Email and identity");
   const restoredChallengeId = await accountForm(page, "email-confirm")
     .locator('input[name="challengeId"]')
     .inputValue();

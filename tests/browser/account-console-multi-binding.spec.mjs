@@ -239,25 +239,17 @@ for (const which of ["first", "second"]) {
         ["apps", "Apps"],
         ["about", "About"],
       ]) {
-        if (view !== "home") {
-          const mobileMenu = page.locator(".account-mobile-header details");
-          if (await mobileMenu.isVisible())
-            await mobileMenu.locator("summary").click();
-          await page
-            .getByRole("navigation", { name: "Account navigation" })
-            .getByRole("link", { name: heading, exact: true })
-            .click();
-        }
+        if (view !== "home") await openAccountView(page, heading);
         await expect(
           page.getByRole("heading", { name: heading, exact: true }),
         ).toBeVisible();
         expect(new URL(page.url()).searchParams.get("did")).toBe(selected.did);
         const active = page
-          .getByRole("navigation", { name: "Account navigation" })
-          .getByRole("link", { name: heading, exact: true });
-        if (await page.locator(".account-mobile-header details").isVisible())
-          await page.locator(".account-mobile-header summary").click();
-        await expect(active).toHaveAttribute("aria-current", "page");
+          .locator(
+            'nav[aria-label="Account navigation"] a[aria-current="page"]',
+          )
+          .first();
+        await expect(active).toHaveText(heading);
         if (which === "first")
           await captureGallery(page, {
             name: `settings-${view}`,
@@ -265,8 +257,6 @@ for (const which of ["first", "second"]) {
             heading,
             did: selected.did,
           });
-        if (await page.locator(".account-mobile-header details").isVisible())
-          await page.locator(".account-mobile-header summary").click();
       }
       const accountLink = new URL("/account", config.issuer);
       accountLink.searchParams.set("did", selected.did);
@@ -285,15 +275,20 @@ for (const which of ["first", "second"]) {
       ).toHaveAttribute("open", "");
       expect(new URL(page.url()).searchParams.get("did")).toBe(selected.did);
 
-      const mobileMenu = page.locator(".account-mobile-header details");
-      if (await mobileMenu.isVisible()) {
+      const mobileBack = page
+        .locator(".account-mobile-header")
+        .getByRole("link", { name: "Home", exact: true });
+      if (await mobileBack.isVisible()) {
+        await mobileBack.focus();
+        await page.keyboard.press("Enter");
+        const mobileMenu = page.locator(".account-mobile-header details");
         await mobileMenu.locator("summary").focus();
         await page.keyboard.press("Enter");
         await expect(mobileMenu).toHaveAttribute("open", "");
         await captureGallery(page, {
           name: "settings-mobile-menu",
           description: "Account navigation mobile menu open",
-          heading: "Account",
+          heading: "Home",
           did: selected.did,
         });
         await mobileMenu
@@ -301,10 +296,7 @@ for (const which of ["first", "second"]) {
           .focus();
         await page.keyboard.press("Enter");
       } else {
-        await page
-          .getByRole("navigation", { name: "Account navigation" })
-          .getByRole("link", { name: "Apps", exact: true })
-          .click();
+        await openAccountView(page, "Apps");
       }
       await page.getByRole("link", { name: "Create app password" }).click();
       const accountPosts = [];
@@ -490,7 +482,7 @@ test("an open app-password form stays bound to the account after a mailbox chang
     );
     const oldSince = Date.now();
     await openAccountView(change, "Account");
-    await openAccountSection(change, "Identity and email");
+    await openAccountSection(change, "Email and identity");
     await change.getByRole("button", { name: "Start email change" }).click();
     await captureGallery(change, {
       name: "email-change-current",

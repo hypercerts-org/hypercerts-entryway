@@ -414,7 +414,7 @@ test("console migrates its own DID, record and blob between enrolled PDSs with m
   await signIn(page);
   await expect(page.getByTestId("account-did")).toHaveText(did);
   await openAccountView(page, "Account");
-  await openAccountSection(page, "Identity and email");
+  await openAccountSection(page, "Email and identity");
   await expect(page.locator("#identity")).toContainText(target.url);
   const rkey = record.uri.split("/").at(-1);
   const copiedRecord = await page.request.get(

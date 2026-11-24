@@ -162,7 +162,7 @@ test("a session signed in more than ten minutes ago confirms it's you before a p
       page.getByRole("heading", { name: "Apps", exact: true }),
     ).toBeVisible();
     await openAccountView(page, "Account");
-    await openAccountSection(page, "Identity and email");
+    await openAccountSection(page, "Email and identity");
 
     // An email change already sends its own code to the primary email, so it
     // goes straight to that step without a separate confirmation.
@@ -377,7 +377,7 @@ test("five wrong codes lock a confirmation code until a new one is sent", async 
     await signIn(page, lockout, { create: true });
     ageSessions(lockout.email, 11);
     await openAccountView(page, "Account");
-    await openAccountSection(page, "Password");
+    await openAccountSection(page, "Account password");
     await page.getByRole("link", { name: "Set account password" }).click();
     await expect(
       page.getByRole("heading", { name: "Confirm it's you" }),
@@ -454,7 +454,7 @@ test("a session past the ten-minute window still revokes app passwords, changes 
     await expect(confirmHeading).toHaveCount(0);
 
     await openAccountView(page, "Account");
-    await openAccountSection(page, "Identity and email");
+    await openAccountSection(page, "Handle");
     await page.getByLabel("New handle").fill(handle);
     await page.getByRole("button", { name: "Update handle" }).click();
     await expect(page.locator("main")).toContainText(handle);
@@ -481,7 +481,7 @@ test("changing an existing password asks only for the new one", async ({
   try {
     await signIn(page, passwordChange, { create: true });
     await openAccountView(page, "Account");
-    await openAccountSection(page, "Password");
+    await openAccountSection(page, "Account password");
     await page.getByRole("link", { name: "Set account password" }).click();
     await setAccountPassword(page, `First password ${run}!`);
 
@@ -489,7 +489,7 @@ test("changing an existing password asks only for the new one", async ({
     // proof to change it, with no current password.
     await signIn(page, passwordChange);
     await openAccountView(page, "Account");
-    await openAccountSection(page, "Password");
+    await openAccountSection(page, "Account password");
     await page.getByRole("link", { name: "Change account password" }).click();
     await expect(
       accountForm(page, "password-set").getByLabel("New account password"),
