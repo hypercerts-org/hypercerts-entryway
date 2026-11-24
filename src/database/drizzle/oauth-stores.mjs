@@ -72,6 +72,29 @@ export function createOAuthStores(db, accounts, config) {
       return null;
     }
   };
+  const deleteToken = async (id) => {
+    await transaction(async () => {
+      // The provider can retain an ID across awaits before revoking it.
+      // Rotation removes that access ID but keeps a revocation-only link to
+      // its successor. Never follow these links from readToken.
+      let current = id;
+      const visited = new Set();
+      while (!visited.has(current)) {
+        visited.add(current);
+        const row = await get("tokens", current);
+        if (row) {
+          await del("tokens", current);
+          for (const previous of row.previousIds ?? [])
+            await del("token-successors", previous);
+          return;
+        }
+        const successor = await get("token-successors", current);
+        if (!successor) return;
+        current = successor;
+      }
+      throw new Error("InvalidTokenFamily");
+    });
+  };
   return {
     account,
     runExchange: (operation) => exchange.run({}, operation),
@@ -136,6 +159,8 @@ export function createOAuthStores(db, accounts, config) {
         }
         return result;
       };
+      // Pair the grant and membership reads with their generation under the lock.
+      // Otherwise an old grant could be recorded alongside a newer generation.
       return context ? transaction(read) : read();
     },
     resetPasswordRequest: unsupported,
@@ -225,6 +250,7 @@ export function createOAuthStores(db, accounts, config) {
       });
     },
     async deleteRequest(id) {
+      // Serialize with update and consume so a delayed update cannot recreate it.
       await transaction(() => del("requests", id));
     },
     async consumeRequestCode(code) {
@@ -266,29 +292,7 @@ export function createOAuthStores(db, accounts, config) {
       });
     },
     readToken: (id) => tokenInfo(id),
-    async deleteToken(id) {
-      await transaction(async () => {
-        // The provider can retain an ID across awaits before revoking it.
-        // Rotation removes that access ID but keeps a revocation-only link to
-        // its successor. Never follow these links from readToken.
-        let current = id;
-        const visited = new Set();
-        while (!visited.has(current)) {
-          visited.add(current);
-          const row = await get("tokens", current);
-          if (row) {
-            await del("tokens", current);
-            for (const previous of row.previousIds ?? [])
-              await del("token-successors", previous);
-            return;
-          }
-          const successor = await get("token-successors", current);
-          if (!successor) return;
-          current = successor;
-        }
-        throw new Error("InvalidTokenFamily");
-      });
-    },
+    deleteToken,
     async rotateToken(id, newId, refreshToken, newData) {
       await transaction(async () => {
         const old = await get("tokens", id);
@@ -327,7 +331,7 @@ export function createOAuthStores(db, accounts, config) {
         if (!grants.has(clientId)) return false;
         for (const { key, value } of await list("tokens")) {
           if (value.data.did === did && value.data.clientId === clientId)
-            await this.deleteToken(key);
+            await deleteToken(key);
         }
         await invalidateClientApproval(db, did, clientId);
         grants.delete(clientId);
@@ -338,7 +342,7 @@ export function createOAuthStores(db, accounts, config) {
     async revokeAllGrants(did) {
       await transaction(async () => {
         for (const { key, value } of await list("tokens")) {
-          if (value.data.did === did) await this.deleteToken(key);
+          if (value.data.did === did) await deleteToken(key);
         }
         await invalidateAccountApprovals(db, did);
         await del("grants", did);

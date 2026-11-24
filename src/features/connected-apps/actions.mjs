@@ -10,7 +10,7 @@ import {
 } from "./operations.js";
 
 export function createConnectedAppsActions({ db, oauth, legacy, console }) {
-  const revokeApps = (did) => revokeAppAccess({ db, oauth, legacy }, did);
+  const revokeApps = (did) => revokeAppAccess({ oauth, legacy }, did);
   const forgetDevices = (did) => forgetOAuthDevices(oauth, did);
   return {
     revoke: async ({ account }) => {

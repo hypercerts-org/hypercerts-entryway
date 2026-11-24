@@ -53,6 +53,7 @@ and requires no host dependency install:
 | `./tests/local.sh incoming-public-shapes`     | The same journey for empty, blob-free, blob-bearing and multi-collection repositories after up; run by hand, not in CI; see below                                                                          |
 | `./tests/local.sh incoming-public-failures`   | Public incoming failure cases after up, then a restart of Entryway between two admitted steps of a separate move; see below                                                                                |
 | `./tests/local.sh incoming-two-node`          | The public incoming journey on the two-node PostgreSQL profile, once per node order; run it as `fresh-group incoming-two-node`. One-off evidence, not a CI gate; see below                                 |
+| `./tests/local.sh account-lifecycle-two-node` | Cross-node grant revocation and access-token expiry on PostgreSQL; run `fresh-group account-lifecycle-two-node`. One-off evidence, not a CI gate; see below                                                |
 | `./tests/local.sh incoming-goat-journey`      | Second incoming client after up: the public goat CLI, patched to the Entryway incoming contract, migrates a fresh stock source account; see below                                                          |
 | `./tests/local.sh incoming-moover-journey`    | Third incoming client after up: a fork of the PDS MOOver web UI carrying the unmerged Entryway mode, driven in Chromium through the sandbox CORS ingress, migrates a fresh stock source account; see below |
 | `./tests/local.sh migration`                  | Fresh synthetic external-source migration, including two Entryway restarts                                                                                                                                 |
@@ -221,6 +222,15 @@ INCOMING_PUBLIC_SHAPES=1 npx playwright test --config tests/playwright.config.mj
 `fresh-group incoming-public-mechanisms incoming-public-journey contracts` runs the
 same steps in one disposable project. A skipped, synthetic or negative-control
 result is not a public qualification; report only an executed managed run.
+
+### Account lifecycle on two nodes
+
+Run `./tests/local.sh fresh-group account-lifecycle-two-node` in a fresh owned
+project. The phase uses the two-node PostgreSQL profile and checks revocation on
+one node, refresh refusal on the other, a surviving control, and the same
+DPoP-bound access token before and after its actual expiry. It is one-off
+evidence, not a CI gate. The phase log is `account-lifecycle-two-node.log` in
+the report directory; record the revision and result with the change.
 
 ### Public incoming journey on two nodes
 

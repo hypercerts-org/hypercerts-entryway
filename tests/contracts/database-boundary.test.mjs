@@ -1,3 +1,4 @@
+import { createApprovedOAuthToken } from "../support/approved-oauth-token.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
@@ -42,17 +43,6 @@ async function fixture(t, independent = false) {
     rmSync(directory, { recursive: true, force: true });
   });
   return { first, second, contenderName };
-}
-
-async function createApprovedToken(store, id, data, refreshToken) {
-  const code = `code-${id}`;
-  const clientId = data.clientId ?? "client-fixture";
-  await store.createRequest(`request-${id}`, { clientId });
-  await store.updateRequest(`request-${id}`, { did: data.did, code });
-  await store.runExchange(async () => {
-    await store.consumeRequestCode(code);
-    await store.createToken(id, { ...data, clientId, code }, refreshToken);
-  });
 }
 
 test("database profiles accept both single-node backends and only PostgreSQL multi-node", () => {
@@ -261,7 +251,12 @@ test("code, refresh, replay and grant races preserve exactly one consumer and al
     codes.filter((result) => result.status === "rejected").length,
     0,
   );
-  await createApprovedToken(stores[0], "original", { did }, "original-refresh");
+  await createApprovedOAuthToken(
+    stores[0],
+    "original",
+    { did, clientId: "client-fixture" },
+    "original-refresh",
+  );
   const refreshes = await runTogether((store, index) =>
     store.rotateToken(
       "original",
@@ -443,16 +438,16 @@ async function orderedAuthorityRace(
 for (const firstAction of ["revoke", "rotate"]) {
   test(`token family ${firstAction}-first race cannot leave a successor after revocation`, async (t) => {
     const f = await oauthRaceFixture(t);
-    await createApprovedToken(
+    await createApprovedOAuthToken(
       f.stores[0],
       "original",
-      { did: f.did },
+      { did: f.did, clientId: "client-fixture" },
       "refresh-original",
     );
-    await createApprovedToken(
+    await createApprovedOAuthToken(
       f.stores[0],
       "unrelated",
-      { did: f.did },
+      { did: f.did, clientId: "client-fixture" },
       "refresh-unrelated",
     );
     // This ID can already have been observed by upstream before its later await.
@@ -497,16 +492,16 @@ test("upstream old-refresh replay revokes a successor rotated after its lookup",
       import.meta.resolve("@atproto/oauth-provider/provider"),
     )
   );
-  await createApprovedToken(
+  await createApprovedOAuthToken(
     f.stores[0],
     "original",
-    { did: f.did },
+    { did: f.did, clientId: "client-fixture" },
     "refresh-original",
   );
-  await createApprovedToken(
+  await createApprovedOAuthToken(
     f.stores[0],
     "unrelated",
-    { did: f.did },
+    { did: f.did, clientId: "client-fixture" },
     "refresh-unrelated",
   );
   await f.stores[0].rotateToken("original", "middle", "refresh-middle", {});
@@ -557,10 +552,10 @@ test("connected-app session ownership lookup and deletion are atomic with rotati
       account: { did },
       value: () => "original",
     });
-  await createApprovedToken(
+  await createApprovedOAuthToken(
     f.stores[0],
     "original",
-    { did: f.did },
+    { did: f.did, clientId: "client-fixture" },
     "refresh-original",
   );
   await assert.rejects(revoke(0, "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb"), {
@@ -576,10 +571,10 @@ test("connected-app session ownership lookup and deletion are atomic with rotati
   assert.equal(revokeFirst[0].status, "fulfilled");
   assert.equal(revokeFirst[1].status, "rejected");
   assert.equal(await f.stores[0].readToken("successor"), null);
-  await createApprovedToken(
+  await createApprovedOAuthToken(
     f.stores[0],
     "original",
-    { did: f.did },
+    { did: f.did, clientId: "client-fixture" },
     "refresh-original",
   );
   const rotateFirst = await orderedAuthorityRace(
@@ -628,13 +623,13 @@ test("grant revocation fences consumed codes even after fresh approval and prese
     [otherDid, "client-a"],
   ])
     await a.setAuthorizedClient(did, client, { authorizedScopes: ["atproto"] });
-  await createApprovedToken(
+  await createApprovedOAuthToken(
     a,
     "other-client",
     { did: f.did, clientId: "client-b" },
     "other-client-refresh",
   );
-  await createApprovedToken(
+  await createApprovedOAuthToken(
     a,
     "other-did",
     { did: otherDid, clientId: "client-a" },
@@ -657,7 +652,7 @@ test("grant revocation fences consumed codes even after fresh approval and prese
       /Approval no longer exists/,
     );
   });
-  await createApprovedToken(
+  await createApprovedOAuthToken(
     b,
     "fresh",
     { did: f.did, clientId: "client-a" },
@@ -699,7 +694,7 @@ for (const firstAction of ["revoke", "rotate"]) {
     await f.stores[0].setAuthorizedClient(f.did, "client-a", {
       authorizedScopes: ["atproto"],
     });
-    await createApprovedToken(
+    await createApprovedOAuthToken(
       f.stores[0],
       "family",
       { did: f.did, clientId: "client-a" },
@@ -798,7 +793,7 @@ for (const kind of ["connected-apps", "account-authority"]) {
         /Approval no longer exists/,
       );
     });
-    await createApprovedToken(
+    await createApprovedOAuthToken(
       second,
       "fresh-bulk",
       { did: f.did, clientId },

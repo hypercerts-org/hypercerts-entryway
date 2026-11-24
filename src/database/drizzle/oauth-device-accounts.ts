@@ -1,10 +1,10 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import type { DatabaseExecutor } from "../executor.js";
-import type { DeviceAccountMembershipReader } from "../oauth-state.port.js";
+import type { DeviceAccountMemberships } from "../oauth-state.port.js";
 
-export function createDeviceAccountMembershipReader(
+export function createDeviceAccountMemberships(
   db: DatabaseExecutor,
-): DeviceAccountMembershipReader {
+): DeviceAccountMemberships {
   const table = db.tables.key_value_state;
   const did =
     db.backend === "sqlite"

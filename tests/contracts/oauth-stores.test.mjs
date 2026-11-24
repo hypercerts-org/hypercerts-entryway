@@ -1,3 +1,4 @@
+import { createApprovedOAuthToken } from "../support/approved-oauth-token.mjs";
 import { query } from "../support/database-fixture.mjs";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -49,16 +50,15 @@ async function fixture(t) {
 
 async function createApprovedToken(f, id, data, refreshToken) {
   const clientId = data.clientId ?? "https://client.example/metadata";
-  const code = data.code ?? `code-${id}`;
   await f.store.setAuthorizedClient(data.did, clientId, {
     authorizedScopes: ["atproto"],
   });
-  await f.store.createRequest(`request-${id}`, { clientId });
-  await f.store.updateRequest(`request-${id}`, { did: data.did, code });
-  await f.store.runExchange(async () => {
-    await f.store.consumeRequestCode(code);
-    await f.store.createToken(id, { ...data, clientId, code }, refreshToken);
-  });
+  await createApprovedOAuthToken(
+    f.store,
+    id,
+    { ...data, clientId },
+    refreshToken,
+  );
 }
 
 test("authorization codes are consumed once across concurrent callers and restart", async (t) => {
@@ -383,6 +383,8 @@ for (const prompt of ["none", "hint"]) {
       const f = await fixture(t);
       const { OAuthProvider } =
         await import("@atproto/oauth-provider/provider");
+      // Exercise the actual fast path; RequestManager is not exported and this
+      // deliberate internal import is pinned to oauth-provider 0.22.5.
       const { RequestManager } =
         await import("../../node_modules/@atproto/oauth-provider/dist/request/request-manager.js");
       const clientId = "https://client.example/metadata";

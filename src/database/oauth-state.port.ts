@@ -3,7 +3,7 @@ export interface DeviceAccountMembershipFilter {
   deviceId?: string;
 }
 
-export interface DeviceAccountMembershipReader {
+export interface DeviceAccountMemberships {
   findKeys(filter: DeviceAccountMembershipFilter): Promise<string[]>;
   remove(deviceId: string, did: string): Promise<boolean>;
 }

@@ -49,3 +49,7 @@ removes only the selected DID from that device. Revoking an application grant
 removes that client's grant and refresh families for the selected DID; other
 clients and DIDs remain. Changes are visible across nodes sharing the authority
 database. An already-issued access token can remain usable until its expiry.
+
+A code published before device-forget remains redeemable until it expires; the
+pinned provider sets its authorization inactivity timeout to five minutes. Grant
+revocation also fences redemption of an earlier code.
