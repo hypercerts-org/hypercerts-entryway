@@ -224,7 +224,7 @@ test("the pending account's console shows only the pending page and refuses its 
   await expect(owner.locator("h1")).toHaveText("Migration in progress");
   await expect(owner.getByText(pendingText)).toBeVisible();
   await expect(
-    owner.getByRole("heading", { name: "Account settings" }),
+    owner.getByRole("heading", { name: "Home", exact: true }),
   ).toHaveCount(0);
   for (const [action, fields] of [
     ["status", { status: "deactivated" }],

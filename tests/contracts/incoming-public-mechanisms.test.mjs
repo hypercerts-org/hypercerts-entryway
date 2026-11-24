@@ -937,7 +937,7 @@ test(
     const { openAccountSection, openAccountView } =
       await import("../browser/support/account-navigation.mjs");
     await openAccountView(page, "Account");
-    await openAccountSection(page, "Password");
+    await openAccountSection(page, "Account password");
     await page.locator('a[href^="/account/manage/password?"]').click();
     const form = page.locator('form[action="/account/password-set"]');
     await form.getByLabel("New account password").fill(password);

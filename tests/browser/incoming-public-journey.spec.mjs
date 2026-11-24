@@ -755,7 +755,14 @@ async function revokeBrowserSession(page, identity) {
     await expect(page.getByLabel("Handle", { exact: true })).toBeVisible();
 
     await account.reload();
-    await expect(account.getByTestId("account-did")).toHaveText(identity.did);
+    const accountUrl = new URL(account.url());
+    expect(accountUrl.searchParams.get("did")).toBe(identity.did);
+    expect(accountUrl.searchParams.get("view")).toBe("apps");
+    const visibleDid = account
+      .locator(".account-sidebar code, .mobile-identity code")
+      .filter({ visible: true });
+    await expect(visibleDid).toHaveCount(1);
+    await expect(visibleDid).toHaveText(identity.did);
     await expect(sessions).toContainText("No active OAuth refresh sessions.");
     await expect(sdkSession).toHaveCount(0);
     await account.close();
