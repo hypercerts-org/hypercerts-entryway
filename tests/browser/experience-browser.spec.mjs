@@ -144,8 +144,8 @@ test("trusted client branding falls back to Entryway for standalone sign-in", as
     await assertBrandAndCsp(
       page,
       response,
-      "rgb(25, 78, 59)",
-      "rgb(8, 122, 88)",
+      "rgb(26, 19, 15)",
+      "rgb(26, 19, 15)",
     );
     await captureGallery(page, {
       name: "branding-untrusted",
@@ -156,8 +156,8 @@ test("trusted client branding falls back to Entryway for standalone sign-in", as
     await assertBrandAndCsp(
       page,
       response,
-      "rgb(25, 78, 59)",
-      "rgb(8, 122, 88)",
+      "rgb(26, 19, 15)",
+      "rgb(26, 19, 15)",
     );
     await captureGallery(page, {
       name: "branding-neutral",
@@ -173,7 +173,7 @@ test("trusted client branding falls back to Entryway for standalone sign-in", as
         .evaluate((element) =>
           getComputedStyle(element).getPropertyValue("--accent").trim(),
         ),
-    ).toBe("#194e3b");
+    ).toBe("#1a130f");
   } finally {
     await context.close();
   }

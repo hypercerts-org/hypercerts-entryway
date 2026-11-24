@@ -163,9 +163,20 @@ for (const which of ["first", "second"]) {
       expect(bounds.x + bounds.width).toBeLessThanOrEqual(
         page.viewportSize().width,
       );
-      await expect(
-        page.getByText(selected.did, { exact: false }),
-      ).toBeVisible();
+      const didText = button.locator("small");
+      await expect(didText).toContainText(selected.did);
+      const didFits = await didText.evaluate((element) => {
+        const text = document.createRange();
+        text.selectNodeContents(element);
+        return (
+          [...text.getClientRects()].every(
+            (rect) =>
+              rect.left >= 0 &&
+              rect.right <= document.documentElement.clientWidth,
+          ) && element.scrollWidth <= element.clientWidth
+        );
+      });
+      expect(didFits).toBe(true);
       for (
         let tab = 0;
         tab < 20 &&
@@ -177,8 +188,9 @@ for (const which of ["first", "second"]) {
         await page.keyboard.press("Tab");
       await expect(button).toBeFocused();
       await assertChooserStyle(page, button, {
-        foreground: "rgb(24, 51, 44)",
-        focus: "rgb(8, 122, 88)",
+        foreground: "rgb(26, 19, 15)",
+        background: "rgb(247, 247, 247)",
+        focus: "rgb(26, 19, 15)",
       });
       await captureGallery(page, {
         name: `standalone-chooser-${which}`,

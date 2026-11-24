@@ -1,10 +1,14 @@
 import { expect } from "@playwright/test";
 
 /** Assert the server-selected colors and the keyboard focus of the SSR row. */
-export async function assertChooserStyle(page, button, { foreground, focus }) {
+export async function assertChooserStyle(
+  page,
+  button,
+  { foreground, focus, background = "rgb(255, 255, 255)" },
+) {
   await expect(page.locator('html[data-hc-theme="certified"]')).toHaveCount(1);
   await expect(button).toHaveClass(/\baccount-choice\b/);
-  await expect(button).toHaveCSS("background-color", "rgb(255, 255, 255)");
+  await expect(button).toHaveCSS("background-color", background);
   await expect(button).toHaveCSS("color", foreground);
   for (
     let tab = 0;

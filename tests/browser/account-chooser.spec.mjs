@@ -247,6 +247,37 @@ test("OAuth code fits and pastes at 320 pixels without JavaScript", async ({
         message.code,
       ),
     ).toBe(true);
+    await expect(input).toBeFocused();
+    const cells = page.locator(".otp-cells .otp-cell");
+    await expect(cells).toHaveCount(8);
+    const bounds = await cells.evaluateAll((elements) =>
+      elements.map((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return {
+          left: rect.left,
+          right: rect.right,
+          top: rect.top,
+          bottom: rect.bottom,
+          visible: style.visibility === "visible" && style.display !== "none",
+        };
+      }),
+    );
+    expect(
+      bounds.every(
+        (rect) =>
+          rect.visible &&
+          rect.left >= 0 &&
+          rect.right <= 320 &&
+          rect.right > rect.left &&
+          rect.bottom > rect.top,
+      ),
+    ).toBe(true);
+    expect(
+      bounds.every(
+        (rect, index) => index === 0 || rect.left >= bounds[index - 1].right,
+      ),
+    ).toBe(true);
     const fits = await input.evaluate((element) => {
       const style = getComputedStyle(element);
       const canvas = document.createElement("canvas");
@@ -313,8 +344,9 @@ test("untrusted OAuth client uses neutral chooser colors", async ({
     await verifyVisibleCode(page, message.code);
     const button = selectionForm(page, shared.second.did).getByRole("button");
     await assertChooserStyle(page, button, {
-      foreground: "rgb(24, 51, 44)",
-      focus: "rgb(8, 122, 88)",
+      foreground: "rgb(26, 19, 15)",
+      background: "rgb(247, 247, 247)",
+      focus: "rgb(26, 19, 15)",
     });
     await captureGallery(page, {
       name: "oauth-untrusted-chooser",
