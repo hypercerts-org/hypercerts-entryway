@@ -456,6 +456,7 @@ test("restart requires renewed proof even for a remembered hinted DID", async (t
   const restarted = await f.restart();
 
   assert.equal(restarted.statusCode, 200);
+  assert.match(restarted.body, /Sign in to authorize/);
   assert.equal(f.authorizeCalls, 0);
   assert.match(restarted.body, /action="\/auth\/email"/);
 });
@@ -1002,4 +1003,41 @@ test("retired consent cannot approve or deny after the same account is reverifie
   assert.equal((await f.approve(did, old.id, "deny")).statusCode, 400);
   assert.equal((await f.stores.readRequest("request-id")).entryFlowId, next.id);
   assert.equal((await f.approve(did, next.id)).statusCode, 303);
+});
+
+test("refresh restores remembered choices only on the initial entry", async (t) => {
+  const f = await fixture(t, { realAdmission: true });
+  const initial = await f.startAuthorization();
+  assert.match(initial.body, /did:plc:aaaaaaaaaaaaaaaaaaaaaaaa/);
+  const refresh = await f.startAuthorization();
+  assert.match(refresh.body, /did:plc:aaaaaaaaaaaaaaaaaaaaaaaa/);
+  assert.match(refresh.body, /did:plc:bbbbbbbbbbbbbbbbbbbbbbbb/);
+  assert.equal(f.authorizeCalls, 1);
+  const record = await f.stores.readRequest("request-id");
+  const original = await f.db.get("auth-flows", record.entryFlowId);
+  const reset = await f.db.transact(() =>
+    f.flows.replaceFlow(original, f.browser),
+  );
+  const resumed = await f.startAuthorization();
+  assert.match(resumed.body, /action="\/auth\/email"/);
+  assert.doesNotMatch(resumed.body, /did:plc:aaaaaaaaaaaaaaaaaaaaaaaa/);
+  assert.equal(
+    (await f.stores.readRequest("request-id")).entryFlowId,
+    reset.id,
+  );
+  assert.equal(f.authorizeCalls, 1);
+});
+
+test("initial refresh applies current session freshness and the request hint", async (t) => {
+  const f = await fixture(t, {
+    realAdmission: true,
+    loginHint: "account-1.example.test",
+    prompt: "login",
+  });
+  await f.startAuthorization();
+  const refreshed = await f.startAuthorization();
+  assert.match(refreshed.body, /action="\/auth\/remembered-login"/);
+  assert.match(refreshed.body, /did:plc:aaaaaaaaaaaaaaaaaaaaaaaa/);
+  assert.doesNotMatch(refreshed.body, /did:plc:bbbbbbbbbbbbbbbbbbbbbbbb/);
+  assert.equal(f.authorizeCalls, 1);
 });

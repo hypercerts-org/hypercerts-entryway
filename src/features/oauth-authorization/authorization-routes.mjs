@@ -313,6 +313,7 @@ export function mountAuthorizationRoutes({
               requestUri: result.requestUri,
               requestRecordId: requestId,
               requestOwner: owner,
+              initialEntry: true,
               clientId: result.client.id,
               clientName: result.client.metadata.client_name,
               parameters: result.parameters,
@@ -329,6 +330,26 @@ export function mountAuthorizationRoutes({
             "Sign-in is still starting. Try again.",
           );
         const flow = await flows.readFlow(admitted.flowId, browser);
+        if (
+          flow.initialEntry &&
+          !flow.email &&
+          !flow.authEmail &&
+          !flow.authDid &&
+          !flow.consentDid
+        ) {
+          const sessions = (
+            await provider.accountManager.listDeviceAccounts(browser.deviceId)
+          ).map((session) => ({
+            account: session.account,
+            loginRequired:
+              flow.parameters.prompt === "login" ||
+              provider.checkLoginRequired(session),
+          }));
+          return authorizationPage(res, browser, flow, {
+            parameters: flow.parameters,
+            sessions,
+          });
+        }
         return resumeFlow(req, res, flow, browser);
       }
       const { result, flow } = admitted;
@@ -423,7 +444,12 @@ export function mountAuthorizationRoutes({
           true,
         );
       });
-      return pageForFlow(res, "Sign in", loginForm(flow, browser), flow);
+      return pageForFlow(
+        res,
+        "Sign in to authorize",
+        loginForm(flow, browser),
+        flow,
+      );
     }),
   );
   app.post(
