@@ -171,7 +171,9 @@ export async function createOAuth({
     "/oauth/revoke",
   ]);
   app.use((req, res, next) =>
-    protocolPaths.has(req.path) ? protocol(req, res, next) : next(),
+    protocolPaths.has(req.path)
+      ? stores.runExchange(() => protocol(req, res, next))
+      : next(),
   );
   return { provider, stores, ...authentication };
 }

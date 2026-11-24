@@ -32,7 +32,7 @@ import type { PgTable } from "drizzle-orm/pg-core";
 import { serialize, deserialize } from "./serialization.js";
 import type { OperationClaim } from "./operation-ownership.port.js";
 import { DomainError } from "../accounts/errors.js";
-import { createDeviceAccountMembershipReader } from "./drizzle/oauth-device-accounts.js";
+import { createDeviceAccountMemberships } from "./drizzle/oauth-device-accounts.js";
 
 type Orm = BetterSQLite3Database | NodePgDatabase;
 type Context = {
@@ -624,7 +624,7 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
         clearTimeout(timer),
       );
     },
-    deviceAccountMemberships: createDeviceAccountMembershipReader(executor),
+    deviceAccountMemberships: createDeviceAccountMemberships(executor),
     get,
     list,
     async set(namespace: string, key: unknown, value: unknown) {

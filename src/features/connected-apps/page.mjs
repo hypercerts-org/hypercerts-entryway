@@ -9,21 +9,6 @@ import {
   rows,
 } from "../../ui/account-forms.mjs";
 
-export async function loadConnectedApps({ db, oauth, legacy }, req, did) {
-  const [baSessions, appPasswords, legacySessions] = await Promise.all([
-    oauth.listBrowserSessions(req),
-    legacy ? legacy.listAppPasswords(did) : { passwords: [] },
-    legacy ? legacy.listSessions(did) : [],
-  ]);
-  return {
-    baSessions,
-    appPasswords,
-    legacySessions,
-    tokens: await oauth.stores.listAccountTokens(did),
-    grants: (await db.get("oauth:grants", did)) ?? [],
-    devices: await oauth.stores.listDeviceAccounts({ did }),
-  };
-}
 export function renderAppPasswords({ appPasswords, csrf, accountContext }) {
   return `      <h3>App passwords</h3><p>Give each legacy application its own password. The generated password is shown once; removing it also ends its legacy sessions.</p>
       ${rows(appPasswords.passwords ?? [], (item) => `<strong>${esc(item.name)}</strong><span>Created ${esc(stamp(item.createdAt))}${item.privileged ? " · Direct-message access" : ""}</span>${form("app-password-revoke", csrf, hidden("name", item.name), "Revoke app password", accountContext)}`, "No app passwords.")}

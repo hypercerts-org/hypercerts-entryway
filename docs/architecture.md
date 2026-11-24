@@ -359,6 +359,30 @@ rewriting the stored prompt. The decision is repeated on the grant read inside
 the authorization transaction, so a grant revoked in connected apps meanwhile
 shows consent instead.
 
+For maintainers, remembered authorization runs in an AsyncLocalStorage
+`runAuthorization` context. Under the shared authority transaction (SQLite
+`BEGIN IMMEDIATE` or the PostgreSQL transaction advisory lock), it pairs the
+membership and grant reads with the account and client approval generations.
+That pairing prevents an older grant from being associated with a newer
+version. Before publishing a code, the store checks the same membership ID,
+generations and requested grant scopes. Request deletion uses the same lock as
+update and consumption, preventing a delayed update from recreating it.
+
+The separate `runExchange` context carries the consumed code's DID, client and
+approval generations across provider awaits. Token insertion checks those
+generations atomically: grant revocation invalidates a consumed or published
+code, including after fresh consent. Device-forget blocks a pending remembered
+authorization but does not invalidate an already-published code. Provider
+validation remains in place. Failed authorization inside the outer transaction
+also rolls back the provider's request deletion; an expired request is rejected
+and cleaned on its next access.
+
+For operators upgrading a fleet, old codes without an approval version fail
+closed and clients must restart authorization. Legacy memberships without an ID
+can match as null while still present; old nodes can reinsert such rows without
+the new membership identity guarantee. Complete the upgrade on all serving
+nodes. During a mixed rollout clients can see `invalid_request` at code publication or `invalid_grant` at redemption and need to restart authorization.
+
 | Setting                 | Values and behavior                                                                                                        |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `OAUTH_TRUSTED_CLIENTS` | Comma-separated https client metadata URLs; replaces the config-file list and the primary-client default; `""` trusts none |

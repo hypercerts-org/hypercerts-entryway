@@ -96,6 +96,7 @@ async function fixture(
   const upserts = [];
   const emailCodes = [];
   let authorizeCalls = 0;
+  const authorizationContexts = [];
   let lookup;
   const provider = {
     // The real stock policy: these tests decide what Entryway passes to it,
@@ -202,6 +203,10 @@ async function fixture(
     db,
     config,
     provider,
+    runAuthorization(clientId, operation) {
+      authorizationContexts.push(clientId);
+      return operation();
+    },
     flows,
     loginForm: (flow, browser) =>
       `<form method="post" action="/auth/email">${flows.fields(flow, browser)}<label>Email address</label><input type="email"></form>`,
@@ -235,6 +240,10 @@ async function fixture(
     approved,
     upserts,
     emailCodes,
+    authorizationContexts,
+    forget(did) {
+      sessions.delete(did);
+    },
     // Stops the next consent request at its client lookup until released.
     pauseNextConsentLookup() {
       let entered;
@@ -421,6 +430,14 @@ test("restart permits provider auto-SSO for a unique hint to the selected DID", 
   assert.equal(restarted.statusCode, 303);
   assert.match(restarted.redirectUrl, /code=auto-code/);
   assert.equal(f.authorizeCalls, 1);
+  assert.deepEqual(f.authorizationContexts, ["client-id"]);
+});
+
+test("initial authorization uses the stock authorization context", async (t) => {
+  const f = await fixture(t, { autoRedirect: true });
+  const response = await f.startAuthorization();
+  assert.equal(response.statusCode, 303);
+  assert.deepEqual(f.authorizationContexts, ["client-id"]);
 });
 
 test("stale remembered accounts start email OTP bound to the selected DID", async (t) => {
@@ -492,6 +509,36 @@ test("a consent whose flow expires while its lookups are pending issues no code"
   paused.release();
   const response = await pending.catch((error) => error);
 
+  assert.notEqual(response.statusCode, 303);
+  assert.deepEqual(f.approved, []);
+});
+
+test("revocation while consent is awaiting client lookup prevents code publication", async (t) => {
+  const did = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+  const f = await fixture(t, { authDid: did, authEmail: verifiedEmail });
+  const paused = f.pauseNextConsentLookup();
+  const pending = f.approve(did);
+  await paused.reached;
+  await f.db.set(
+    "oauth:client-generations",
+    JSON.stringify([did, "client-id"]),
+    "revoked",
+  );
+  paused.release();
+  const response = await pending.catch((error) => error);
+  assert.notEqual(response.statusCode, 303);
+  assert.deepEqual(f.approved, []);
+});
+
+test("forgetting a device while remembered consent awaits lookup prevents publication", async (t) => {
+  const did = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+  const f = await fixture(t, { authDid: did, authEmail: verifiedEmail });
+  const paused = f.pauseNextConsentLookup();
+  const pending = f.approve(did);
+  await paused.reached;
+  f.forget(did);
+  paused.release();
+  const response = await pending.catch((error) => error);
   assert.notEqual(response.statusCode, 303);
   assert.deepEqual(f.approved, []);
 });

@@ -1,10 +1,10 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import type { DatabaseExecutor } from "../executor.js";
-import type { DeviceAccountMembershipReader } from "../oauth-state.port.js";
+import type { DeviceAccountMemberships } from "../oauth-state.port.js";
 
-export function createDeviceAccountMembershipReader(
+export function createDeviceAccountMemberships(
   db: DatabaseExecutor,
-): DeviceAccountMembershipReader {
+): DeviceAccountMemberships {
   const table = db.tables.key_value_state;
   const did =
     db.backend === "sqlite"
@@ -15,6 +15,18 @@ export function createDeviceAccountMembershipReader(
       ? sql`json_extract(${table.value},'$.deviceId')`
       : sql`(${table.value}::jsonb ->> 'deviceId')`;
   return {
+    async remove(device, accountDid) {
+      const count = await db.remove(
+        "key_value_state",
+        and(
+          eq(table.namespace, "oauth:device-accounts"),
+          eq(table.key, `${device}/${accountDid}`),
+          eq(did, accountDid),
+          eq(deviceId, device),
+        )!,
+      );
+      return count === 1;
+    },
     async findKeys(filter) {
       const rows = await db.read("key_value_state", {
         where: and(

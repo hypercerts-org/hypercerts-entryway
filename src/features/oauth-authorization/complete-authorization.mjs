@@ -1,3 +1,7 @@
+import {
+  approvalVersion,
+  sameApprovalVersion,
+} from "../../database/oauth-approval.mjs";
 import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { authorizationRedirect } from "./redirect.mjs";
 
@@ -49,9 +53,17 @@ export async function completeAuthorization({
   request,
   deviceAccount,
   stillApproved,
+  version,
 }) {
-  await db.transact(async () => {
+  const code = await db.transact(async () => {
     const current = await refreshFlow(flow, browser);
+    if (
+      !sameApprovalVersion(
+        version,
+        await approvalVersion(db, deviceAccount.account.did, flow.clientId),
+      )
+    )
+      throw new GrantNoLongerApprovedError();
     if (flowBindsAnotherAccount(current, deviceAccount.account.did, request))
       throw new InvalidRequestError("Sign in to this account first");
     const { authorizedClients } = await provider.accountManager.getAccount(
@@ -60,6 +72,11 @@ export async function completeAuthorization({
     const grant = authorizedClients.get(flow.clientId);
     if (stillApproved && !stillApproved(grant))
       throw new GrantNoLongerApprovedError();
+    const membership = await provider.accountManager.getDeviceAccount(
+      browser.deviceId,
+      deviceAccount.account.did,
+    );
+    if (!membership) throw new InvalidRequestError("OAuth device not found");
     await db.delete("auth-flows", flow.id);
     const granted = new Set(grant?.authorizedScopes ?? []);
     for (const scope of request.parameters.scope?.split(" ") ?? [])
@@ -69,13 +86,13 @@ export async function completeAuthorization({
       client,
       { authorizedScopes: [...granted] },
     );
+    return provider.requestManager.setAuthorized(
+      flow.requestUri,
+      client,
+      deviceAccount.account,
+      browser.deviceId,
+      browser.deviceMetadata,
+    );
   });
-  const code = await provider.requestManager.setAuthorized(
-    flow.requestUri,
-    client,
-    deviceAccount.account,
-    browser.deviceId,
-    browser.deviceMetadata,
-  );
   authorizationRedirect(res, config.issuer, request.parameters, { code });
 }

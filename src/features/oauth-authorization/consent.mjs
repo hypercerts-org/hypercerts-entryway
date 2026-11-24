@@ -1,3 +1,4 @@
+import { approvalVersion } from "../../database/oauth-approval.mjs";
 import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { escapeHtml } from "../../ui/html.mjs";
 import { hidden } from "../../ui/forms.mjs";
@@ -29,6 +30,7 @@ export function createConsent({
   // that case is covered too.
   const consentSkip = async (flow, browser, did, mayConsentBeSkipped) => {
     try {
+      const version = await approvalVersion(db, did, flow.clientId);
       const client = await provider.clientManager.getClient(flow.clientId);
       const request = await provider.requestManager.get(
         flow.requestUri,
@@ -40,7 +42,7 @@ export function createConsent({
         did,
       );
       if (!deviceAccount) return null;
-      const skip = { client, request, deviceAccount };
+      const skip = { client, request, deviceAccount, version };
       return (await mayConsentBeSkipped(skip)) ? skip : null;
     } catch {
       return null;

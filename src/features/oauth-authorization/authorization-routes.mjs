@@ -1,3 +1,4 @@
+import { approvalVersion } from "../../database/oauth-approval.mjs";
 import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { FLOW_LIFETIME } from "../../http/browser-flow.mjs";
 import { escapeHtml } from "../../ui/html.mjs";
@@ -48,6 +49,7 @@ export function mountAuthorizationRoutes({
   db,
   config,
   provider,
+  runAuthorization,
   flows,
   loginForm,
   consentForm,
@@ -298,7 +300,9 @@ export function mountAuthorizationRoutes({
         request_uri: params.get("request_uri"),
       };
       const browser = await loadBrowser(req, res);
-      const result = await provider.authorize(query, browser);
+      const result = await runAuthorization(query.client_id, () =>
+        provider.authorize(query, browser),
+      );
       if ("redirect" in result)
         return authorizationRedirect(
           res,
@@ -387,9 +391,11 @@ export function mountAuthorizationRoutes({
             "This authorization request no longer matches the selected account",
           );
       }
-      const result = await provider.authorize(
-        { client_id: expired.clientId, request_uri: expired.requestUri },
-        browser,
+      const result = await runAuthorization(expired.clientId, () =>
+        provider.authorize(
+          { client_id: expired.clientId, request_uri: expired.requestUri },
+          browser,
+        ),
       );
       if ("redirect" in result) {
         // The fast-path result contains a code but not its DID. Verify the exact
@@ -471,6 +477,8 @@ export function mountAuthorizationRoutes({
       const { flow, browser } = await getFlow(req, res);
       if (!flow.requestUri)
         throw new InvalidRequestError("No pending authorization");
+      const did = String(req.body.did ?? "");
+      const version = await approvalVersion(db, did, flow.clientId);
       const request = await provider.requestManager.get(
         flow.requestUri,
         browser.deviceId,
@@ -486,7 +494,6 @@ export function mountAuthorizationRoutes({
       }
       if (req.body.decision !== "approve")
         throw new InvalidRequestError("Choose whether to allow access");
-      const did = String(req.body.did ?? "");
       const session = await provider.accountManager.getDeviceAccount(
         browser.deviceId,
         did,
@@ -514,6 +521,7 @@ export function mountAuthorizationRoutes({
         client,
         request,
         deviceAccount: session,
+        version,
       });
     }),
   );
