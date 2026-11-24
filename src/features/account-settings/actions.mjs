@@ -1,6 +1,8 @@
 import { page } from "../../ui/html.mjs";
-import { settingsLink } from "../../ui/account-forms.mjs";
-import { renderEmailStep } from "#entryway-ssr/account-settings";
+import {
+  renderEmailStep,
+  renderAccountResult,
+} from "#entryway-ssr/account-settings";
 
 export function createAccountSettingsActions({
   security,
@@ -92,7 +94,13 @@ export function createAccountSettingsActions({
         { layout: "standalone" },
       );
     },
-    "email-confirm": async ({ res, principal, value, token }) => {
+    "email-confirm": async ({
+      res,
+      principal,
+      accountContext,
+      value,
+      token,
+    }) => {
       console.needed();
 
       await security.confirmEmail(principal, {
@@ -102,7 +110,9 @@ export function createAccountSettingsActions({
       return page(
         res,
         "Primary email updated",
-        `<p>Your email was changed. Your browser sessions remain signed in for any other linked accounts, but no longer have access to this account.</p><a href="/login">Sign in with your new email</a>`,
+        renderAccountResult({ kind: "email", did: accountContext.did }).body,
+        200,
+        { layout: "settings" },
       );
     },
     "password-set": async ({ req, res, principal, accountContext }) => {
@@ -114,7 +124,10 @@ export function createAccountSettingsActions({
       return page(
         res,
         "Account password updated",
-        `<p>Your password was updated. Existing sessions and app passwords were revoked.</p><a href="/login">Sign in again</a><p>${settingsLink(accountContext?.did)}</p>`,
+        renderAccountResult({ kind: "password-set", did: accountContext.did })
+          .body,
+        200,
+        { layout: "settings" },
       );
     },
     "password-remove": async ({ res, principal, accountContext }) => {
@@ -124,7 +137,12 @@ export function createAccountSettingsActions({
       return page(
         res,
         "Account password removed",
-        `<p>Email sign-in remains available. Existing sessions and app passwords were revoked.</p><a href="/login">Sign in again</a><p>${settingsLink(accountContext?.did)}</p>`,
+        renderAccountResult({
+          kind: "password-remove",
+          did: accountContext.did,
+        }).body,
+        200,
+        { layout: "settings" },
       );
     },
     status: async ({ account, value }) => {

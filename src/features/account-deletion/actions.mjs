@@ -1,5 +1,8 @@
 import { page } from "../../ui/html.mjs";
-import { renderDeleteConfirmation } from "#entryway-ssr/account-deletion";
+import {
+  renderDeleteConfirmation,
+  renderDeleteResult,
+} from "#entryway-ssr/account-deletion";
 import { HttpError } from "../../http/http-error.mjs";
 
 export function createDeletionActions({ security, console }) {
@@ -50,11 +53,9 @@ export function createDeletionActions({ security, console }) {
         token: `${value("challengeId")}.${token()}`,
         password: String(req.body.password ?? "") || undefined,
       });
-      return page(
-        res,
-        "Test account deleted",
-        '<p>The PDS repository and account were deleted. The DID history remains available in the PLC directory.</p><a href="/login">Return to sign in</a>',
-      );
+      return page(res, "Test account deleted", renderDeleteResult().body, 200, {
+        layout: "settings",
+      });
     },
   };
 }

@@ -1,3 +1,4 @@
+import AccountResult from "./AccountResult.svelte";
 import { render } from "svelte/server";
 import type { ComponentProps } from "svelte";
 import Identity from "./Identity.svelte";
@@ -30,3 +31,7 @@ export const renderEmailStep = (props: ComponentProps<typeof EmailStep>) =>
 export const renderAccountError = (
   props: ComponentProps<typeof AccountError>,
 ) => render(AccountError, { props });
+
+export const renderAccountResult = (
+  props: ComponentProps<typeof AccountResult>,
+) => render(AccountResult, { props });

@@ -1,3 +1,4 @@
+import DeleteResult from "./DeleteResult.svelte";
 import DeleteConfirmation from "./DeleteConfirmation.svelte";
 import { render } from "svelte/server";
 import type { ComponentProps } from "svelte";
@@ -9,3 +10,5 @@ export const renderLifecyclePanel = (
 export const renderDeleteConfirmation = (
   props: ComponentProps<typeof DeleteConfirmation>,
 ) => render(DeleteConfirmation, { props });
+
+export const renderDeleteResult = () => render(DeleteResult);

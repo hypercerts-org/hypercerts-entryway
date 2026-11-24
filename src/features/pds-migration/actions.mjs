@@ -1,6 +1,8 @@
-import { renderMigrationConfirmation } from "#entryway-ssr/pds-migration";
-import { page, escapeHtml as esc } from "../../ui/html.mjs";
-import { form, hidden, settingsLink } from "../../ui/account-forms.mjs";
+import {
+  renderMigrationConfirmation,
+  renderMigrationResult,
+} from "#entryway-ssr/pds-migration";
+import { page } from "../../ui/html.mjs";
 import { HttpError } from "../../http/http-error.mjs";
 
 export function createMigrationActions({ config, migration, console }) {
@@ -62,26 +64,36 @@ export function createMigrationActions({ config, migration, console }) {
         );
         const recovery = await migration.pendingRecovery(account.did);
         const required = recovery?.state === "dispatched";
-        const nextAction = required
-          ? "<p>Waiting for operator recovery.</p>"
-          : form(
-              "migration-confirm",
-              browser.csrf,
-              hidden("pdsId", saved.targetPdsId),
-              "Continue saved migration",
-              accountContext,
-            );
         return page(
           res,
           "Data server migration is pending",
-          `<p role="alert">${required ? "An earlier server request has an uncertain outcome. Contact the service operator; retrying alone cannot resolve it." : "Your saved migration is unfinished. Continue it after the operator authorizes any required recovery."}</p><p>Your DID <code>${esc(account.did)}</code> and handle <strong>${esc(account.handle)}</strong> are retained. The saved destination is ${esc(savedTarget?.url ?? saved.targetPdsId)}.</p>${nextAction}<p>${settingsLink(account.did)}</p>`,
+          renderMigrationResult({
+            pending: true,
+            required,
+            did: account.did,
+            handle: account.handle,
+            target: savedTarget?.url ?? saved.targetPdsId,
+            pdsId: saved.targetPdsId,
+            csrf: browser.csrf,
+          }).body,
           409,
+          { layout: "settings" },
         );
       }
       return page(
         res,
         "Data server migration complete",
-        `<p>Your DID and handle are unchanged. Your repository is now on ${esc(target.url)}; the old server retains a deactivated copy. Existing sessions and app passwords were revoked.</p><a href="/login">Sign in again to your moved account</a>`,
+        renderMigrationResult({
+          pending: false,
+          required: false,
+          did: account.did,
+          handle: account.handle,
+          target: target.url,
+          pdsId: target.id,
+          csrf: browser.csrf,
+        }).body,
+        200,
+        { layout: "settings" },
       );
     };
   return {
