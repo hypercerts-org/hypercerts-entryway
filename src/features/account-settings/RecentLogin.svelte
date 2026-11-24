@@ -116,6 +116,8 @@
     <a href={cancelUrl}> Return to account settings </a>
   </p>
   {#if signIn}<p class="muted">
-      You can also <a href="/login">sign in again</a>.
+      You can also <a href={`/login?did=${encodeURIComponent(did)}`}>
+        sign in again
+      </a>.
     </p>{/if}
 {/if}

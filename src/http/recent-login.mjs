@@ -72,16 +72,27 @@ export function createRecentLoginPages(renderRecentLogin) {
       resent,
       error,
     });
-  const endedPage = (res, ctx, { title, message, status, signIn = false }) =>
-    render(res, ctx, title, status, { mode: "ended", message, signIn });
-  const expiredPage = (res, ctx) =>
+  const endedPage = (
+    res,
+    ctx,
+    { title, message, status, signIn = false, returnTo },
+  ) =>
+    render(res, ctx, title, status, {
+      mode: "ended",
+      message,
+      signIn,
+      returnTo,
+    });
+  const expiredPage = (res, ctx, returnTo) =>
     endedPage(res, ctx, {
+      returnTo,
       title: "Confirmation code expired",
       message: "This code has expired. Start the change again.",
       status: 400,
     });
-  const unusablePage = (res, ctx) =>
+  const unusablePage = (res, ctx, returnTo) =>
     endedPage(res, ctx, {
+      returnTo,
       title: "Confirmation code no longer valid",
       message: "This code can no longer be used. Start the change again.",
       status: 400,

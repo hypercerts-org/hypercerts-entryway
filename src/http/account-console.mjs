@@ -209,6 +209,7 @@ export function createAccountConsole({
           "Too many codes were requested for this email address. Try again in a few minutes.",
         status: 429,
         signIn: true,
+        returnTo,
       });
     }
     return confirmPage(res, ctx, { challengeId: begun.challengeId, returnTo });
@@ -269,7 +270,8 @@ export function createAccountConsole({
         `${challengeId}.${code}`,
       );
     } catch (error_) {
-      if (error_.error === "ExpiredToken") return expiredPage(res, ctx);
+      if (error_.error === "ExpiredToken")
+        return expiredPage(res, ctx, cancelReturn(req));
       if (!retryableCodeFailures.has(error_.error)) throw error_;
       return confirmPage(res, ctx, {
         challengeId,
@@ -290,8 +292,10 @@ export function createAccountConsole({
         resent: true,
       });
     } catch (error_) {
-      if (error_.error === "ExpiredToken") return expiredPage(res, ctx);
-      if (error_.error === "InvalidToken") return unusablePage(res, ctx);
+      if (error_.error === "ExpiredToken")
+        return expiredPage(res, ctx, cancelReturn(req));
+      if (error_.error === "InvalidToken")
+        return unusablePage(res, ctx, cancelReturn(req));
       // A refused new code leaves the earlier one usable.
       if (error_.error !== "RateLimitExceeded") throw error_;
       return confirmPage(res, ctx, {
