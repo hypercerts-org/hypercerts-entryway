@@ -5,6 +5,7 @@ import {
   rmSync,
   writeFileSync,
   readFileSync,
+  symlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -625,7 +626,11 @@ test("aliases use TypeScript precedence and ordered mixed targets", (t) => {
   f.options.paths["@literal/*"] = [
     join(f.root, "src/features/account-settings/*.svelte"),
   ];
-  assert.ok(crossesFeature("@literal/$&"));
+  assert.ok(
+    check("@literal/$&").some((issue) =>
+      issue.includes("unresolved local import"),
+    ),
+  );
   f.options.paths["@invalid/*/*"] = [privateSvelte];
   assert.deepEqual(check("@invalid/a/b"), []);
 });
@@ -692,4 +697,97 @@ test("empty wildcard capture leaves the target star literal before trying the ne
     f.check("src/features/email-login/alias.ts", "import '@empty/'"),
     [],
   );
+});
+
+test("relative imports cannot be intercepted by wildcard path aliases", (t) => {
+  const f = fixture(t, {
+    "src/features/account-settings/private.ts": "export const value = 1",
+    "src/ui/shared.ts": "export const value = 1",
+  });
+  f.options.paths["*"] = [join(f.root, "src/ui/shared.ts")];
+  const result = f.check(
+    "src/features/email-login/alias.ts",
+    "import '../account-settings/private.js'",
+  );
+  assert.ok(
+    result.some((issue) =>
+      issue.includes("feature email-login imports account-settings internals"),
+    ),
+  );
+});
+
+test("mixed alias targets use the pinned TypeScript dollar substitution", (t) => {
+  const f = fixture(t, {
+    "src/features/account-settings/$&.ts": "export const value = 1",
+    "src/ui/shared.ts": "export const value = 1",
+  });
+  f.options.paths["@choice/*"] = [
+    join(f.root, "src/features/account-settings/*.ts"),
+    join(f.root, "src/ui/shared.ts"),
+  ];
+  const source = f.write(
+    "src/features/email-login/alias.ts",
+    "import '@choice/$&'",
+  );
+  const reference = ts.resolveModuleName(
+    "@choice/$&",
+    source,
+    f.options,
+    ts.sys,
+  ).resolvedModule?.resolvedFileName;
+  assert.equal(reference, join(f.root, "src/ui/shared.ts"));
+  assert.deepEqual(
+    moduleViolations("import '@choice/$&'", source, f.root, f.options),
+    [],
+  );
+});
+
+test("Svelte runtime imports follow components with sibling declarations", (t) => {
+  for (const declaration of ["Panel.d.svelte.ts", "Panel.svelte.d.ts"]) {
+    const f = fixture(t, {
+      "src/ui/first.ts":
+        "import Panel from './Panel.svelte'; export const value = Panel;",
+      "src/ui/Panel.svelte":
+        "<script>import { value } from './first.js';</script><p>{value}</p>",
+      [`src/ui/${declaration}`]:
+        "declare const Panel: unknown; export default Panel;",
+    });
+    assert.ok(
+      checkArchitecture(f.root).violations.some((issue) =>
+        issue.includes("import cycle:"),
+      ),
+      declaration,
+    );
+  }
+});
+
+test("Svelte aliases classify the real owner behind symlinks", (t) => {
+  const f = fixture(t, {
+    "src/features/account-settings/Private.svelte": "<p>private</p>",
+  });
+  const link = join(f.root, "src/ui/Linked.svelte");
+  mkdirSync(dirname(link), { recursive: true });
+  symlinkSync(
+    join(f.root, "src/features/account-settings/Private.svelte"),
+    link,
+  );
+  f.options.paths["@linked"] = [link];
+  assert.ok(
+    f
+      .check("src/features/email-login/alias.ts", "import '@linked'")
+      .some((issue) =>
+        issue.includes(
+          "feature email-login imports account-settings internals",
+        ),
+      ),
+  );
+});
+
+test("explicit Svelte declaration imports do not become component imports", (t) => {
+  const f = fixture(t, {
+    "src/ui/first.ts": "import './Panel.d.svelte.ts';",
+    "src/ui/Panel.svelte": "<script>import './first.js';</script>",
+    "src/ui/Panel.d.svelte.ts": "export declare const value: unknown;",
+  });
+  assert.deepEqual(checkArchitecture(f.root).violations, []);
 });

@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, resolve, relative, sep } from "node:path";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { resolve, relative, sep } from "node:path";
 import ts from "typescript6";
 import { parse } from "svelte/compiler";
 import { pathToFileURL } from "node:url";
@@ -111,43 +111,37 @@ function resolveReference(specifier, filename, appRoot, options) {
     );
     return existsSync(candidate) ? candidate : undefined;
   }
-  if (specifier.startsWith(".") && specifier.endsWith(".svelte")) {
-    const candidate = resolve(dirname(filename), specifier);
-    return existsSync(candidate) ? candidate : undefined;
-  }
-  const matched = matchingPath(specifier, options.paths ?? {});
-  if (matched) {
-    const [pattern, capture] = matched;
-    for (const target of options.paths[pattern]) {
-      const wildcard = target.indexOf("*");
-      const expanded =
-        capture && wildcard >= 0
-          ? target.slice(0, wildcard) + capture + target.slice(wildcard + 1)
-          : target;
-      const candidate = resolve(
-        options.baseUrl ?? options.pathsBasePath ?? appRoot,
-        expanded,
-      );
-      if (
-        (candidate.endsWith(".svelte") ||
-          ts.isAnySupportedFileExtension(target)) &&
-        ts.sys.fileExists(candidate)
-      )
-        return candidate;
-      const resolved = ts.resolveModuleName(
-        candidate,
-        filename,
-        {
-          ...options,
-          paths: undefined,
-        },
-        ts.sys,
-      ).resolvedModule?.resolvedFileName;
-      if (resolved) return resolved;
-    }
-  }
-  return ts.resolveModuleName(specifier, filename, options, ts.sys)
-    .resolvedModule?.resolvedFileName;
+  const virtualComponent = (path) => {
+    if (path.endsWith(".d.svelte.ts"))
+      return `${path.slice(0, -".d.svelte.ts".length)}.svelte`;
+    if (path.endsWith(".svelte.d.ts")) return path.slice(0, -".d.ts".length);
+    return undefined;
+  };
+  const host = {
+    ...ts.sys,
+    getCurrentDirectory: () => appRoot,
+    fileExists(path) {
+      if (ts.sys.fileExists(path)) return true;
+      const component = virtualComponent(path);
+      return Boolean(component && ts.sys.fileExists(component));
+    },
+  };
+  const resolved = ts.resolveModuleName(
+    specifier,
+    filename,
+    { ...options, paths: options.paths && { ...options.paths } },
+    host,
+  ).resolvedModule?.resolvedFileName;
+  if (!resolved) return undefined;
+  const component = virtualComponent(resolved);
+  const target =
+    component &&
+    !specifier.endsWith(".d.svelte.ts") &&
+    !specifier.endsWith(".svelte.d.ts") &&
+    ts.sys.fileExists(component)
+      ? component
+      : resolved;
+  return ts.sys.fileExists(target) ? realpathSync(target) : target;
 }
 
 export function moduleViolations(source, filename, appRoot, options) {
@@ -217,7 +211,8 @@ export function moduleViolations(source, filename, appRoot, options) {
       if (
         specifier.startsWith(".") ||
         specifier.startsWith("#entryway-ssr/") ||
-        matchingPath(specifier, options.paths ?? {})
+        (!ts.isExternalModuleNameRelative(specifier) &&
+          matchingPath(specifier, options.paths ?? {}))
       )
         violations.push(`${specifier}: unresolved local import`);
       continue;
