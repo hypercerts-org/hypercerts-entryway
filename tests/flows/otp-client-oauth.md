@@ -17,7 +17,10 @@ metadata URL and requested scope. Google/GitHub are outside this flow.
    and pick another bound DID; the client then shows the last chosen account.
    Each linked account has its own "Continue with this account" button and
    status. This email chooser is distinct from the pre-existing device account
-   picker.
+   picker. To use a different mailbox, choose "Use another email address" and
+   verify it with a new code; the original client request, expiry, hints and
+   code limits remain in effect. Returning from consent to the linked-account
+   chooser uses the existing verified mailbox instead.
 4. Complete the existing consent flow when required and assert the returned
    identity equals the intended DID and the original OAuth request is retained.
    A stale remembered device (older than seven days) lists its account as "Sign
