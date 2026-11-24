@@ -229,6 +229,34 @@ for (const which of ["first", "second"]) {
       expect(new URL(page.url()).searchParams.get("did")).toBe(selected.did);
       await expect(page.getByTestId("account-did")).toHaveText(selected.did);
       await page.getByRole("link", { name: "Create app password" }).click();
+      const accountPosts = [];
+      page.on("request", (request) => {
+        if (
+          request.method() === "POST" &&
+          new URL(request.url()).pathname.startsWith("/account/")
+        )
+          accountPosts.push(new URL(request.url()).pathname);
+      });
+      const checkbox = page.getByRole("checkbox", {
+        name: "Allow direct-message access",
+      });
+      const checkboxSize = await checkbox.evaluate((element) => {
+        const { width, height } = element.getBoundingClientRect();
+        return { width, height };
+      });
+      expect(checkboxSize).toEqual({ width: 16, height: 16 });
+      await expect(checkbox).not.toBeChecked();
+      await page
+        .getByText("Allow direct-message access", { exact: true })
+        .click();
+      await expect(checkbox).toBeChecked();
+      await checkbox.focus();
+      await page.keyboard.press("Space");
+      await expect(checkbox).not.toBeChecked();
+      expect(accountPosts).toEqual([]);
+      await expect(
+        page.locator('form[action="/account/app-password-create"]'),
+      ).toBeVisible();
       await expect(page.getByText(selected.did, { exact: true })).toBeVisible();
       await expect(
         page.getByText(selected.handle, { exact: true }),

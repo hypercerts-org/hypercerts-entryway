@@ -17,6 +17,7 @@
     label="Allow direct-message access"
     name="privileged"
     value="true"
+    style="min-height: 0; padding: 0;"
   />
   <Button type="submit">Create app password</Button>
 </form>
