@@ -1,11 +1,6 @@
+import { renderMigrationConfirmation } from "#entryway-ssr/pds-migration";
 import { page, escapeHtml as esc } from "../../ui/html.mjs";
-import {
-  codeField,
-  form,
-  hidden,
-  nextStep,
-  settingsLink,
-} from "../../ui/account-forms.mjs";
+import { form, hidden, settingsLink } from "../../ui/account-forms.mjs";
 import { HttpError } from "../../http/http-error.mjs";
 
 export function createMigrationActions({ config, migration, console }) {
@@ -38,18 +33,20 @@ export function createMigrationActions({ config, migration, console }) {
         const issued = await migration.requestMigrationForBrowser(principal, {
           pdsId: target.id,
         });
-        return nextStep(res, {
-          title: "Confirm data server migration",
-          csrf: browser.csrf,
-          action: "migration-confirm",
-          contents:
-            hidden("pdsId", target.id) +
-            hidden("challengeId", issued.challengeId ?? "") +
-            codeField("Migration code"),
-          button: "Move to destination data server",
-          message: `A migration code was sent to your primary email. Confirm to move your repository and blobs to ${target.url}. Writes will pause and existing sessions and app passwords will end.`,
-          accountContext,
-        });
+        return page(
+          res,
+          "Confirm data server migration",
+          renderMigrationConfirmation({
+            csrf: browser.csrf,
+            did: accountContext.did,
+            handle: account.handle,
+            pdsId: target.id,
+            target: target.url,
+            challengeId: issued.challengeId ?? "",
+          }).body,
+          200,
+          { layout: "standalone" },
+        );
       }
       try {
         await migration.importAccount(principal, {
