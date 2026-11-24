@@ -1,6 +1,7 @@
 import { render } from "svelte/server";
 import type { ComponentProps } from "svelte";
 import Identity from "./Identity.svelte";
+import AccountError from "./AccountError.svelte";
 import EmailStep from "./EmailStep.svelte";
 import RecentLogin from "./RecentLogin.svelte";
 import ProtectedPage from "./ProtectedPage.svelte";
@@ -25,3 +26,7 @@ export const renderRecentLogin = (props: ComponentProps<typeof RecentLogin>) =>
 
 export const renderEmailStep = (props: ComponentProps<typeof EmailStep>) =>
   render(EmailStep, { props });
+
+export const renderAccountError = (
+  props: ComponentProps<typeof AccountError>,
+) => render(AccountError, { props });

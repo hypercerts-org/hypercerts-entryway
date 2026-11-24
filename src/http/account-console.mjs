@@ -1,6 +1,6 @@
 import express from "express";
 import { page, escapeHtml as esc } from "../ui/html.mjs";
-import { accountUrl, manageUrl, settingsLink } from "../ui/account-forms.mjs";
+import { accountUrl, manageUrl } from "../ui/account-forms.mjs";
 import { renderAccountChooser } from "#entryway-ssr/ui";
 import { HttpError } from "./http-error.mjs";
 import {
@@ -39,6 +39,7 @@ export function createAccountConsole({
   security,
   legacy,
   renderRecentLogin,
+  renderAccountError,
 }) {
   const { startPage, confirmPage, endedPage, expiredPage, unusablePage } =
     createRecentLoginPages(renderRecentLogin);
@@ -57,8 +58,13 @@ export function createAccountConsole({
         recovery
           ? "Account change waiting for recovery"
           : "Account operation could not be completed",
-        `<p role="alert">${esc(error.message)}</p>${recovery ? "<p>Your saved change is still pending. Contact the service operator. Retrying or signing in again alone cannot settle an uncertain server request; continue the saved change after recovery is authorized.</p>" : ""}<p><a href="${esc(res.locals?.accountUrl ?? "/account")}">Return to account settings</a> · <a href="/login">Sign in again</a></p>`,
+        renderAccountError({
+          message: String(error.message ?? ""),
+          accountUrl: res.locals?.accountUrl ?? "/account",
+          recovery,
+        }).body,
         status >= 400 && status < 600 ? status : 400,
+        { layout: "settings" },
       );
     }
   };
@@ -219,8 +225,18 @@ export function createAccountConsole({
       return page(
         res,
         "Account change waiting for recovery",
-        `<p role="alert">Your change has an uncertain server outcome. Contact the service operator; retrying alone cannot settle it.</p><p>The saved account is <strong>${esc(ctx.account.handle)}</strong> (<code>${esc(ctx.account.did)}</code>) on ${esc(pending.target)}. Keep this account and the original requested change when continuing after verified recovery.</p><p>${settingsLink(ctx.account.did)}</p>`,
+        renderAccountError({
+          message:
+            "Your change has an uncertain server outcome. Contact the service operator; retrying alone cannot settle it.",
+          accountUrl: accountUrl(ctx.account.did),
+          pending: {
+            handle: ctx.account.handle,
+            did: ctx.account.did,
+            target: pending.target,
+          },
+        }).body,
         409,
+        { layout: "settings" },
       );
     }
     if (!res.headersSent) res.redirect(303, accountUrl(ctx.account.did));

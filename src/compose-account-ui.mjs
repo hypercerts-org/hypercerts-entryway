@@ -1,5 +1,8 @@
 import express from "express";
-import { renderRecentLogin } from "#entryway-ssr/account-settings";
+import {
+  renderRecentLogin,
+  renderAccountError,
+} from "#entryway-ssr/account-settings";
 import { createAccountConsole } from "./http/account-console.mjs";
 import { HttpError } from "./http/http-error.mjs";
 import { mountAccountSettingsPage } from "./features/account-settings/page.mjs";
@@ -23,7 +26,11 @@ import { createHandleActions } from "./features/handle-change/actions.mjs";
 import { renderHandleForm } from "#entryway-ssr/handle-change";
 
 export function mountAccountUi(context) {
-  const console = createAccountConsole({ ...context, renderRecentLogin });
+  const console = createAccountConsole({
+    ...context,
+    renderRecentLogin,
+    renderAccountError,
+  });
   const dependencies = { ...context, console };
   mountAccountSettingsPage({
     ...dependencies,

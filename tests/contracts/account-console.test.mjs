@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { renderRecentLogin } from "#entryway-ssr/account-settings";
+import {
+  renderRecentLogin,
+  renderAccountError,
+} from "#entryway-ssr/account-settings";
 import { createAccountAccess } from "../../dist/src/accounts/account-access.mjs";
 import { mountAccountSettingsPage } from "../../dist/src/features/account-settings/page.mjs";
 import { createAccountConsole } from "../../dist/src/http/account-console.mjs";
@@ -219,6 +222,7 @@ function fixture({ authenticatedAt = new Date() } = {}) {
   };
   const console = createAccountConsole({
     renderRecentLogin,
+    renderAccountError,
     app,
     accounts: {
       ownership: {
