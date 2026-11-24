@@ -403,14 +403,18 @@ test("OAuth denial returns to the independent client", async ({ browser }) => {
     await consentForm(page, shared.first.did)
       .getByRole("button", { name: "Cancel" })
       .click();
+    expect(new URL(page.url()).origin).toBe(new URL(config.clientUrl).origin);
     await expect(
-      page.getByRole("heading", { name: "Hypercerts test client" }),
+      page.getByRole("heading", { name: "Application request failed" }),
     ).toBeVisible();
+    await expect(page.getByRole("alert")).toContainText(
+      /denied|declined|access_denied/i,
+    );
     await captureGallery(page, {
       name: "client-denial",
       description:
         "Independent client return after shared pair first account denied consent",
-      heading: "Hypercerts test client",
+      heading: "Application request failed",
     });
   } finally {
     await context.close();
