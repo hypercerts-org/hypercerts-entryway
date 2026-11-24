@@ -860,7 +860,16 @@ test("a DID hint selects the matching shared-email account", async (t) => {
     loginHint: did,
   });
   const verified = await f.request("/auth/verify", { otp: "valid-proof" });
+  assert.equal(verified.statusCode, 200);
   assert.match(verified.body, new RegExp(did));
+  assert.doesNotMatch(verified.body, /did:plc:aaaaaaaaaaaaaaaaaaaaaaaa/);
+  assert.doesNotMatch(verified.body, /owner\.example\.test/);
+  const sibling = await f.request("/auth/select", {
+    did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
+  });
+  assert.equal(sibling.statusCode, 400);
+  assert.equal((await f.db.get("auth-flows", f.flow.id)).authDid, undefined);
+  assert.equal(await f.db.get("fixture-device-accounts", "browser"), null);
   const selected = await f.request("/auth/select", { did });
   assert.equal(selected.statusCode, 200);
   assert.equal((await f.db.get("auth-flows", f.flow.id)).authDid, did);
