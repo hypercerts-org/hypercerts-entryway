@@ -95,7 +95,10 @@ export async function captureGallery(
   const codes = page.locator(
     'input[name="otp"], input[name="token"], input[autocomplete="one-time-code"]',
   );
-  for (const code of await codes.all()) await expect(code).toHaveValue("");
+  for (const code of await codes.all())
+    expect(await code.evaluate((element) => element.value.length === 0)).toBe(
+      true,
+    );
   await mkdir(directory, { recursive: true });
   const original = page.viewportSize();
   try {
