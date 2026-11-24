@@ -48,6 +48,7 @@ function renderPasswordPanelHtml({
   accountContext,
 }) {
   return (
+    `<section id="passwords" aria-labelledby="passwords-title">` +
     renderPasswordPanel({
       security: Boolean(security),
       legacy: Boolean(legacy),
@@ -56,7 +57,8 @@ function renderPasswordPanelHtml({
     }).body +
     (security && legacy
       ? renderAppPasswords({ appPasswords, csrf, accountContext })
-      : "")
+      : "") +
+    "</section>"
   );
 }
 

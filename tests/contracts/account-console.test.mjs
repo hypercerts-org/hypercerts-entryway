@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { renderAppPasswords } from "#entryway-ssr/connected-apps";
 import {
   renderRecentLogin,
   renderAccountError,
@@ -245,10 +246,19 @@ function fixture({ authenticatedAt = new Date() } = {}) {
     console,
     async loadConnections(_req, did) {
       loadedDids.push(did);
-      return { appPasswords: { passwords: [] } };
+      return {
+        appPasswords: {
+          passwords: [{ name: "test app", createdAt: "2026-01-01T00:00:00Z" }],
+        },
+      };
     },
     renderConnections: () => "<section>Connections</section>",
-    renderAppPasswords: () => "",
+    renderAppPasswords: ({ appPasswords, csrf, accountContext }) =>
+      renderAppPasswords({
+        passwords: appPasswords.passwords,
+        csrf,
+        did: accountContext.did,
+      }).body,
     renderAppPasswordForm: () => "<form>app password form</form>",
     renderHandle: () => "",
     renderLifecycle: () => "",
@@ -886,4 +896,17 @@ test("connected-app controls retain the selected DID and escape client names", a
   assert.match(body, /action="\/account\/grant-revoke"/);
   assert.match(body, new RegExp(`name="did" value="${didB}"`));
   assert.match(body, new RegExp(`name="csrf" value="${csrf}"`));
+});
+
+test("app password inventory and revoke control remain in the passwords section", async () => {
+  const response = await fixture().getPage(didA);
+  const section = response.body.match(
+    /<section id="passwords"[\s\S]*?<\/section>/,
+  )?.[0];
+  assert.ok(section);
+  assert.match(
+    section,
+    /<li>[\s\S]*?test app[\s\S]*?action="\/account\/app-password-revoke"/,
+  );
+  assert.match(section, new RegExp(`name="did" value="${didA}"`));
 });
