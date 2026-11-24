@@ -1,5 +1,7 @@
+import AccountShell from "./AccountShell.svelte";
 import AccountResult from "./AccountResult.svelte";
 import { render } from "svelte/server";
+import { createRawSnippet } from "svelte";
 import type { ComponentProps } from "svelte";
 import Identity from "./Identity.svelte";
 import AccountError from "./AccountError.svelte";
@@ -35,3 +37,14 @@ export const renderAccountError = (
 export const renderAccountResult = (
   props: ComponentProps<typeof AccountResult>,
 ) => render(AccountResult, { props });
+
+export const renderAccountShell = (
+  props: Omit<ComponentProps<typeof AccountShell>, "content"> & {
+    content: string;
+  },
+) => {
+  const content = createRawSnippet(() => ({
+    render: () => `<div>${props.content}</div>`,
+  }));
+  return render(AccountShell, { props: { ...props, content } });
+};

@@ -69,7 +69,7 @@ export function renderExperiencePage({
     : "";
   const contentSecurityPolicy = `default-src 'none'; style-src 'unsafe-inline'; form-action 'self'${formOrigin}; ${script}frame-ancestors 'none'; base-uri 'none'`;
   return {
-    html: `<!doctype html><html lang="en" data-hc-theme="certified" data-brand="${escapeHtml(brand.id)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="${brand.page}"><title>${escapeHtml(title)} · ${escapeHtml(brand.name)}</title><style>${style}${componentStyle}</style></head><body><main data-layout="${policy.layout ?? "legacy"}">${brandmark}<small>${brand.id === "entryway" ? "Entryway account service" : `${escapeHtml(brand.name)} · Entryway`}</small><h1>${escapeHtml(title)}</h1>${body}</main>${attribution}</body></html>`,
+    html: `<!doctype html><html lang="en" data-hc-theme="certified" data-brand="${escapeHtml(brand.id)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="${brand.page}"><title>${escapeHtml(title)} · ${escapeHtml(brand.name)}</title><style>${style}${componentStyle}</style></head><body><main data-layout="${policy.layout ?? "legacy"}">${brandmark}${policy.layout === "account" ? "" : `<small>${brand.id === "entryway" ? "Entryway account service" : `${escapeHtml(brand.name)} · Entryway`}</small><h1>${escapeHtml(title)}</h1>`}${body}</main>${attribution}</body></html>`,
     contentSecurityPolicy,
   };
 }

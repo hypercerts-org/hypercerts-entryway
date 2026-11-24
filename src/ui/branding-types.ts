@@ -21,5 +21,5 @@ export interface TrustedBrandClientIds {
 export interface PagePolicy {
   formOrigin?: string;
   scriptNonce?: string;
-  layout?: "oauth" | "standalone" | "settings";
+  layout?: "oauth" | "standalone" | "settings" | "account";
 }

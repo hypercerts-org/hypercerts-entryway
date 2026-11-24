@@ -40,15 +40,18 @@ export async function queryConnectedApps<Request>(
   { oauth, legacy }: ConnectedAppsDependencies<Request>,
   req: Request,
   did: string,
+  view?: "apps" | "devices",
 ) {
   const [sessions, passwords, legacySessions, tokens, grants, devices] =
     await Promise.all([
-      oauth.listBrowserSessions(req),
-      legacy ? legacy.listAppPasswords(did) : { passwords: [] },
-      legacy ? legacy.listSessions(did) : [],
-      oauth.stores.listAccountTokens(did),
-      oauth.stores.listAccountGrants(did),
-      oauth.stores.listDeviceAccounts({ did }),
+      view === "apps" ? [] : oauth.listBrowserSessions(req),
+      legacy && view !== "devices"
+        ? legacy.listAppPasswords(did)
+        : { passwords: [] },
+      legacy && view !== "devices" ? legacy.listSessions(did) : [],
+      view === "devices" ? [] : oauth.stores.listAccountTokens(did),
+      view === "devices" ? [] : oauth.stores.listAccountGrants(did),
+      view === "apps" ? [] : oauth.stores.listDeviceAccounts({ did }),
     ]);
   return {
     baSessions: sessions.map(({ id, userAgent, createdAt }) => ({

@@ -1,11 +1,12 @@
 import {
+  renderAccountShell,
   renderIdentity,
   renderRecoveryPanel,
   renderPasswordPanel,
   renderProtectedPage,
 } from "#entryway-ssr/account-settings";
 import { page, escapeHtml as esc } from "../../ui/html.mjs";
-import { form, settingsLink } from "../../ui/account-forms.mjs";
+import { settingsLink } from "../../ui/account-forms.mjs";
 
 function renderIdentityPanel({
   a,
@@ -38,15 +39,7 @@ function renderRecoveryPanelHtml({ security, state, accountContext }) {
 
 const passwordLabel = (state) =>
   state.passwordEnabled ? "Change account password" : "Set account password";
-function renderPasswordPanelHtml({
-  security,
-  legacy,
-  state,
-  csrf,
-  appPasswords,
-  renderAppPasswords,
-  accountContext,
-}) {
+function renderPasswordPanelHtml({ security, legacy, state, accountContext }) {
   return (
     `<section id="passwords" aria-labelledby="passwords-title">` +
     renderPasswordPanel({
@@ -55,9 +48,6 @@ function renderPasswordPanelHtml({
       passwordEnabled: state.passwordEnabled,
       did: accountContext.did,
     }).body +
-    (security && legacy
-      ? renderAppPasswords({ appPasswords, csrf, accountContext })
-      : "") +
     "</section>"
   );
 }
@@ -193,72 +183,88 @@ export function mountAccountSettingsPage({
         accountContext,
         canSwitchAccount,
       } = ctx;
-      const state = security
-        ? {
-            ...(await security.summary(principal)),
-            pendingEmailChallengeId:
-              await security.pendingEmailChallengeId(principal),
-          }
-        : { backupEmails: [], passwordEnabled: false };
-      const connected = await loadConnections(req, a.did);
-      const { appPasswords } = connected;
-      const migrationState = migration
-        ? await migration.status(principal, { did: a.did })
-        : null;
+      const view = ["account", "devices", "apps", "about"].includes(
+        req.query.view,
+      )
+        ? req.query.view
+        : "home";
       const csrf = b.csrf;
-      const identity = renderIdentityPanel({
-        a,
-        csrf,
-        security,
-        state,
-        renderHandle,
-        accountContext,
-        canSwitchAccount,
-      });
-      const backup = renderRecoveryPanelHtml({
-        security,
-        state,
-        accountContext,
-      });
-      const passwords = renderPasswordPanelHtml({
-        security,
-        legacy,
-        state,
-        csrf,
-        appPasswords,
-        renderAppPasswords,
-        accountContext,
-      });
-      const sessions = renderConnections({
-        ...connected,
-        csrf,
-        session,
-        b,
-        accountContext,
-      });
-      const lifecycle = renderLifecycle({
-        csrf,
-        a,
-        accountContext,
-      });
-      const migrationPanel = renderMigration({
-        config,
-        a,
-        csrf,
-        accountContext,
-        migrationState,
-        migrationRecovery:
-          migrationState && migrationState.phase !== "complete"
-            ? await migration.pendingRecovery(a.did)
-            : null,
-        migration,
-      });
+      let content = "";
+      if (view === "account") {
+        const state = security
+          ? {
+              ...(await security.summary(principal)),
+              pendingEmailChallengeId:
+                await security.pendingEmailChallengeId(principal),
+            }
+          : { backupEmails: [], passwordEnabled: false };
+        const migrationState = migration
+          ? await migration.status(principal, { did: a.did })
+          : null;
+        const identity = renderIdentityPanel({
+          a,
+          csrf,
+          security,
+          state,
+          renderHandle,
+          accountContext,
+          canSwitchAccount,
+        });
+        const backup = renderRecoveryPanelHtml({
+          security,
+          state,
+          accountContext,
+        });
+        const passwords = renderPasswordPanelHtml({
+          security,
+          legacy,
+          state,
+          accountContext,
+        });
+        const lifecycle = renderLifecycle({ csrf, a, accountContext });
+        const migrationPanel = renderMigration({
+          config,
+          a,
+          csrf,
+          accountContext,
+          migrationState,
+          migrationRecovery:
+            migrationState && migrationState.phase !== "complete"
+              ? await migration.pendingRecovery(a.did)
+              : null,
+          migration,
+        });
+        content = `<div class="account-operation-rows"><details><summary>Identity and email</summary>${identity}</details><details><summary>Recovery email</summary>${backup}</details><details><summary>Password</summary>${passwords}</details><details><summary>Account status and deletion</summary>${lifecycle}</details>${migrationPanel ? `<details><summary>Data server</summary>${migrationPanel}</details>` : ""}</div>`;
+      } else if (view === "devices" || view === "apps") {
+        const connected = await loadConnections(req, a.did, view);
+        const sessions = renderConnections({
+          ...connected,
+          csrf,
+          session,
+          b,
+          accountContext,
+          view,
+        });
+        content =
+          view === "apps"
+            ? `${sessions}<section id="app-passwords">${security && legacy ? renderAppPasswords({ appPasswords: connected.appPasswords, csrf, accountContext }) : "<p>App passwords are not available.</p>"}</section>`
+            : sessions;
+      }
       page(
         res,
-        "Account settings",
-        `${form("/auth/logout", csrf, "", "Sign out", accountContext, 'class="account-header-action"')}<p>Manage your sign-in, recovery options, and connected applications.</p><nav class="section-nav" aria-label="Account sections"><a href="#identity">Identity</a><a href="#recovery">Recovery</a><a href="#passwords">Passwords</a><a href="#sessions">Sessions</a><a href="#lifecycle">Lifecycle</a>${migration ? '<a href="#migration">Data server</a>' : ""}</nav>${identity}${backup}${passwords}${sessions}${lifecycle}${migrationPanel}`,
+        view === "home" ? "Home" : view[0].toUpperCase() + view.slice(1),
+        renderAccountShell({
+          did: a.did,
+          handle: a.handle,
+          email: a.email,
+          pdsUrl: a.pdsUrl,
+          view,
+          canSwitchAccount,
+          csrf,
+          content,
+        }).body,
         200,
-        { layout: "settings" },
+        { layout: "account" },
       );
     }),
   );

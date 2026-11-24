@@ -34,14 +34,23 @@ export function mountAccountUi(context) {
   const dependencies = { ...context, console };
   mountAccountSettingsPage({
     ...dependencies,
-    loadConnections: (req, did) => queryConnectedApps(context, req, did),
-    renderConnections: ({ csrf, accountContext, session, b, ...connected }) =>
+    loadConnections: (req, did, view) =>
+      queryConnectedApps(context, req, did, view),
+    renderConnections: ({
+      csrf,
+      accountContext,
+      session,
+      b,
+      view,
+      ...connected
+    }) =>
       renderConnectedApps({
         ...connected,
         csrf,
         did: accountContext.did,
         sessionId: session.sessionId,
         deviceId: b.deviceId,
+        view,
       }).body,
     renderAppPasswords: ({ appPasswords, csrf, accountContext }) =>
       renderAppPasswords({

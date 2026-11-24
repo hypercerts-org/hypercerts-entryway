@@ -333,3 +333,281 @@ main[data-layout="settings"]:has(> .account-header-action) > h1 {
 .code-actions label {
   margin-top: 10px;
 }
+
+/* Account console: persistent desktop navigation and a native mobile menu. */
+main[data-layout="settings"]:has(.account-shell) {
+  width: min(1100px, calc(100% - 32px));
+  padding: 0;
+  overflow: visible;
+}
+main[data-layout="settings"]:has(.account-shell) > small {
+  display: none;
+}
+main[data-layout="settings"]:has(.account-shell) > h1 {
+  margin: 0;
+  padding: 16px 24px 16px 264px;
+  border-bottom: 1px solid var(--border);
+  font:
+    600 20px/1.4 system-ui,
+    sans-serif;
+}
+.account-shell {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  min-height: 620px;
+}
+.account-sidebar {
+  display: flex;
+  flex-direction: column;
+  padding: 24px 16px;
+  border-right: 1px solid var(--border);
+}
+.account-brand {
+  display: block;
+  font-size: 20px;
+}
+.sidebar-account {
+  overflow-wrap: anywhere;
+  margin: 24px 0 6px;
+}
+.account-sidebar nav,
+.account-mobile-header nav {
+  display: grid;
+  gap: 4px;
+  margin: 24px 0;
+}
+.account-sidebar nav a,
+.account-mobile-header nav a {
+  padding: 10px;
+  border-radius: 8px;
+  text-decoration: none;
+}
+.account-sidebar nav a[aria-current="page"],
+.account-mobile-header nav a[aria-current="page"] {
+  background: var(--page);
+  font-weight: 700;
+}
+.account-sidebar nav a span,
+.account-mobile-header nav a span {
+  display: inline-block;
+  width: 28px;
+  font-size: 20px;
+  text-align: center;
+}
+.account-main {
+  min-width: 0;
+  padding: 32px;
+}
+.account-mobile-header {
+  display: none;
+}
+.account-summary {
+  text-align: center;
+  overflow-wrap: anywhere;
+  margin: 8px auto 32px;
+}
+.account-summary h2 {
+  margin: 12px 0 0;
+}
+.account-summary p {
+  margin: 4px 0;
+}
+.account-avatar,
+.destination-icon {
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--page);
+}
+.account-avatar {
+  width: 72px;
+  height: 72px;
+  margin: auto;
+  font-size: 32px;
+  font-weight: 700;
+}
+.account-destinations {
+  display: grid;
+  gap: 12px;
+}
+.account-destination {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  text-decoration: none;
+}
+.account-destination:hover {
+  background: var(--page);
+}
+.account-destination strong,
+.account-destination small {
+  display: block;
+}
+.account-destination strong {
+  font-size: 18px;
+}
+.account-destination small {
+  overflow-wrap: anywhere;
+}
+.destination-icon {
+  width: 48px;
+  height: 48px;
+  font-size: 24px;
+}
+.legacy-anchors a {
+  display: none;
+}
+.legacy-anchors a:target {
+  display: block;
+}
+.sidebar-footer {
+  margin-top: auto;
+}
+.account-sidebar nav a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.account-mobile-header summary,
+.account-mobile-header > a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+@media (max-width: 700px) {
+  main[data-layout="settings"]:has(.account-shell) {
+    width: 100%;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+  }
+  main[data-layout="settings"]:has(.account-shell) > h1 {
+    padding: 16px;
+  }
+  .account-shell {
+    display: block;
+  }
+  .account-sidebar {
+    display: flex;
+    flex-direction: column;
+    display: none;
+  }
+  .account-main {
+    padding: 16px;
+  }
+  .account-mobile-header {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .account-mobile-header > strong {
+    margin-left: auto;
+  }
+  .account-mobile-header details {
+    position: relative;
+  }
+  .account-mobile-header summary {
+    cursor: pointer;
+    padding: 8px;
+  }
+  .account-mobile-header details[open] {
+    flex: 1;
+  }
+}
+
+.mobile-identity {
+  display: none;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 700px) {
+  .mobile-identity {
+    display: block;
+    font-size: 14px;
+  }
+}
+
+main[data-layout="account"] {
+  width: 100%;
+  min-height: 100dvh;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--surface);
+}
+main[data-layout="account"] .account-shell {
+  min-height: 100dvh;
+  grid-template-columns: 256px minmax(0, 1fr);
+}
+main[data-layout="account"] .account-main {
+  padding: 0 32px 32px;
+}
+main[data-layout="account"] .account-mobile-header {
+  display: flex;
+  align-items: center;
+  min-height: 56px;
+  gap: 16px;
+  margin: 0 -32px 24px;
+  padding: 0 32px;
+  border-bottom: 1px solid var(--border);
+}
+main[data-layout="account"] .account-mobile-header h1 {
+  font:
+    600 18px/1.4 system-ui,
+    sans-serif;
+  margin: 0;
+}
+main[data-layout="account"] .account-mobile-header > a,
+main[data-layout="account"] .account-mobile-header details,
+main[data-layout="account"] .account-mobile-header > strong {
+  display: none;
+}
+main[data-layout="account"] .account-main > :not(header) {
+  max-width: 848px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.account-operation-rows {
+  display: grid;
+  gap: 12px;
+}
+.account-operation-rows details {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.account-operation-rows summary {
+  cursor: pointer;
+  padding: 22px 24px;
+  font-weight: 650;
+}
+.account-operation-rows details > section,
+.account-operation-rows details > form {
+  margin: 0 24px;
+}
+@media (max-width: 700px) {
+  main[data-layout="account"] .account-shell {
+    display: block;
+  }
+  main[data-layout="account"] .account-main {
+    padding: 0 16px 24px;
+  }
+  main[data-layout="account"] .account-mobile-header {
+    margin: 0 -16px 16px;
+    padding: 0 16px;
+  }
+  main[data-layout="account"] .account-mobile-header > a,
+  main[data-layout="account"] .account-mobile-header details,
+  main[data-layout="account"] .account-mobile-header > strong {
+    display: block;
+  }
+  main[data-layout="account"] .account-mobile-header > strong {
+    margin-left: auto;
+  }
+}

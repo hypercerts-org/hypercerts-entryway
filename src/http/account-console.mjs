@@ -213,7 +213,7 @@ export function createAccountConsole({
     }
     return confirmPage(res, ctx, { challengeId: begun.challengeId });
   };
-  const runAction = async ({ handler, ctx, req, res }) => {
+  const runAction = async ({ action, handler, ctx, req, res }) => {
     const value = (name) => String(req.body[name] ?? "").trim();
     try {
       await handler({ ...ctx, req, res, value, token: () => value("token") });
@@ -239,7 +239,24 @@ export function createAccountConsole({
         { layout: "settings" },
       );
     }
-    if (!res.headersSent) res.redirect(303, accountUrl(ctx.account.did));
+    if (!res.headersSent) {
+      const target = action.startsWith("backup-")
+        ? "account#recovery"
+        : action.startsWith("email-") || action === "handle"
+          ? "account#identity"
+          : action.startsWith("password-")
+            ? "account#passwords"
+            : action.startsWith("migration-")
+              ? "account#migration"
+              : action === "status" || action.startsWith("delete")
+                ? "account#lifecycle"
+                : action.startsWith("browser") || action === "device-revoke"
+                  ? "devices#sessions"
+                  : action.startsWith("app-password-")
+                    ? "apps#app-passwords"
+                    : "apps#applications";
+      res.redirect(303, `${accountUrl(ctx.account.did)}&view=${target}`);
+    }
   };
   /** Every console action runs through here. A gated action from a session that
    * is no longer recent is not made: the user confirms, returns to the page
@@ -254,7 +271,7 @@ export function createAccountConsole({
         notMade: true,
       });
     }
-    return await runAction({ handler, ctx, req, res });
+    return await runAction({ action, handler, ctx, req, res });
   };
   const confirmWithCode = async (ctx, req, res) => {
     const challengeId = String(req.body.challengeId ?? "");

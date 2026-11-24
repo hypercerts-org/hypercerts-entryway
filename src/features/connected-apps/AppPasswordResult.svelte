@@ -10,7 +10,7 @@
   <span data-testid="app-password">{password}</span>
 </code>
 <p>
-  <a href={`/account?did=${encodeURIComponent(did)}#passwords`}>
+  <a href={`/account?did=${encodeURIComponent(did)}&view=apps#app-passwords`}>
     Return to account settings
   </a>
 </p>
