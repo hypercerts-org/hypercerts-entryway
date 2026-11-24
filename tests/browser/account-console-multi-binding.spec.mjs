@@ -87,6 +87,7 @@ for (const which of ["first", "second"]) {
     const context = await browser.newContext({
       ignoreHTTPSErrors: false,
       javaScriptEnabled: false,
+      permissions: ["clipboard-read", "clipboard-write"],
       viewport:
         which === "first"
           ? { width: 1280, height: 800 }
@@ -99,7 +100,7 @@ for (const which of ["first", "second"]) {
         const path = new URL(response.url()).pathname;
         if (
           response.request().method() === "POST" &&
-          ["/auth/verify", "/auth/select"].includes(path)
+          ["/auth/email", "/auth/verify", "/auth/select"].includes(path)
         )
           submissions.push({ path, status: response.status() });
       });
@@ -121,16 +122,33 @@ for (const which of ["first", "second"]) {
         recipient: shared.email,
         since,
       });
-      await page.getByLabel("Sign-in code", { exact: true }).fill(message.code);
+      await page.evaluate(
+        (code) => navigator.clipboard.writeText(code),
+        message.code,
+      );
+      await page.getByLabel("Sign-in code", { exact: true }).focus();
+      await page.keyboard.press("Control+V");
       await page.getByRole("button", { name: "Verify code" }).click();
       const choices = page.locator('form[action="/auth/select"]');
       await expect(choices).toHaveCount(2);
       const selected = shared[which];
-      const form = choices.filter({
-        has: page.locator(`input[name="did"][value="${selected.did}"]`),
+      const button = page.getByRole("button", {
+        name: `Continue with this account: ${selected.handle}, ${selected.did}`,
       });
-      await expect(form).toHaveCount(1);
-      const button = form.getByRole("button");
+      await expect(button).toHaveCount(1);
+      expect(
+        await page.evaluate(
+          () =>
+            document.documentElement.scrollWidth <=
+            document.documentElement.clientWidth,
+        ),
+      ).toBe(true);
+      const bounds = await button.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds.x).toBeGreaterThanOrEqual(0);
+      expect(bounds.x + bounds.width).toBeLessThanOrEqual(
+        page.viewportSize().width,
+      );
       await expect(
         page.getByText(selected.did, { exact: false }),
       ).toBeVisible();
@@ -147,6 +165,7 @@ for (const which of ["first", "second"]) {
       await page.keyboard.press("Enter");
       await page.waitForURL((url) => url.pathname === "/account");
       expect(submissions).toEqual([
+        { path: "/auth/email", status: 200 },
         { path: "/auth/verify", status: 200 },
         { path: "/auth/select", status: 303 },
       ]);
