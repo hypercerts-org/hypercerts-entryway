@@ -51,10 +51,14 @@ main[data-layout="standalone"] > small {
   display: none;
 }
 main[data-layout="oauth"] > h1,
-main[data-layout="standalone"] > h1 {
-  text-align: center;
+main[data-layout="standalone"] > h1,
+main[data-layout="settings"] > h1 {
   font-family: var(--hc-font-display);
   font-weight: var(--hc-weight-display);
+}
+main[data-layout="oauth"] > h1,
+main[data-layout="standalone"] > h1 {
+  text-align: center;
 }
 main[data-layout="oauth"] > h1 {
   font-size: 32px;
@@ -302,6 +306,7 @@ main[data-layout="oauth"]:has(.consent-identity) > h1 {
 /* Keep the account sign-out reachable beside the heading on narrow screens. */
 main[data-layout="settings"]:has(> .account-header-action) > h1 {
   padding-right: 90px;
+  overflow-wrap: anywhere;
 }
 @media (max-width: 480px) {
   main[data-layout="settings"] > .account-header-action {
