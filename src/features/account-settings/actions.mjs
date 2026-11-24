@@ -1,12 +1,6 @@
 import { page } from "../../ui/html.mjs";
-import {
-  codeField,
-  field,
-  hidden,
-  nextStep,
-  settingsLink,
-} from "../../ui/account-forms.mjs";
-import { newEmailConfirmFields } from "./page.mjs";
+import { settingsLink } from "../../ui/account-forms.mjs";
+import { renderEmailStep } from "#entryway-ssr/account-settings";
 
 export function createAccountSettingsActions({
   security,
@@ -27,18 +21,19 @@ export function createAccountSettingsActions({
       const issued = await security.requestBackupEmailForBrowser(principal, {
         email: value("email"),
       });
-      return nextStep(res, {
-        title: "Verify recovery email",
-        csrf: browser.csrf,
-        action: "backup-confirm",
-        contents:
-          hidden("email", value("email")) +
-          hidden("challengeId", issued.challengeId ?? "") +
-          codeField("Recovery email verification code"),
-        button: "Verify recovery email",
-        message: "Enter the verification code sent to your recovery email.",
-        accountContext,
-      });
+      return page(
+        res,
+        "Verify recovery email",
+        renderEmailStep({
+          kind: "backup",
+          csrf: browser.csrf,
+          did: accountContext.did,
+          email: value("email"),
+          challengeId: issued.challengeId ?? "",
+        }).body,
+        200,
+        { layout: "standalone" },
+      );
     },
     "backup-confirm": async ({ principal, value, token }) => {
       console.needed();
@@ -55,18 +50,19 @@ export function createAccountSettingsActions({
       console.needed();
 
       const issued = await security.requestEmailUpdateForBrowser(principal);
-      return nextStep(res, {
-        title: "Verify current email",
-        csrf: browser.csrf,
-        action: "email-update",
-        contents:
-          hidden("challengeId", issued.challengeId ?? "") +
-          codeField("Current email verification code") +
-          field("email", "New primary email", "email", 'maxlength="320"'),
-        button: "Verify current email and continue",
-        message: "A verification code was sent to your current primary email.",
-        accountContext,
-      });
+      return page(
+        res,
+        "Verify current email",
+        renderEmailStep({
+          kind: "current",
+          csrf: browser.csrf,
+          did: accountContext.did,
+          email: "",
+          challengeId: issued.challengeId ?? "",
+        }).body,
+        200,
+        { layout: "standalone" },
+      );
     },
     "email-update": async ({
       res,
@@ -82,16 +78,19 @@ export function createAccountSettingsActions({
         email: value("email"),
         token: `${value("challengeId")}.${token()}`,
       });
-      return nextStep(res, {
-        title: "Verify new email",
-        csrf: browser.csrf,
-        action: "email-confirm",
-        contents: newEmailConfirmFields(issued.challengeId, value("email")),
-        button: "Confirm new email",
-        message:
-          "Verify the code sent to your new primary email to complete the change.",
-        accountContext,
-      });
+      return page(
+        res,
+        "Verify new email",
+        renderEmailStep({
+          kind: "new",
+          csrf: browser.csrf,
+          did: accountContext.did,
+          email: value("email"),
+          challengeId: issued.challengeId ?? "",
+        }).body,
+        200,
+        { layout: "standalone" },
+      );
     },
     "email-confirm": async ({ res, principal, value, token }) => {
       console.needed();

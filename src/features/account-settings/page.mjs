@@ -5,19 +5,7 @@ import {
   renderProtectedPage,
 } from "#entryway-ssr/account-settings";
 import { page, escapeHtml as esc } from "../../ui/html.mjs";
-import {
-  codeField,
-  hidden,
-  form,
-  manageLink,
-  settingsLink,
-} from "../../ui/account-forms.mjs";
-
-/** Fields for the second step of an email change: the code sent to the new address. */
-export const newEmailConfirmFields = (challengeId, email) =>
-  hidden("challengeId", challengeId ?? "") +
-  hidden("email", email) +
-  codeField("New email verification code");
+import { form, manageLink, settingsLink } from "../../ui/account-forms.mjs";
 
 function renderIdentityPanel({
   a,
