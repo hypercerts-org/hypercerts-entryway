@@ -120,7 +120,7 @@ requires PostgreSQL. Both must preserve the same identity, uniqueness and atomic
 dialect-specific indexes, JSON queries, timestamps and error translation stay
 inside the database adapter. Fresh schemas replace old layouts without a data
 conversion path. [Shared ownership and recovery](shared-operations.md) defines
-account/mail coordination and operator-verified recovery. [Deployment profiles](deployment-profiles.md)
+account/mail coordination and operator-verified recovery. Mail payloads are retained only while queued or claimed; terminal outcomes clear proof tokens and administrative content. [Deployment profiles](deployment-profiles.md)
 cover bounded node loss and shared-database refusal/recovery; they do not qualify
 general disaster recovery or change custody. See [database configuration](database.md).
 The existing ePDS deployment-conversion requirement is separate.

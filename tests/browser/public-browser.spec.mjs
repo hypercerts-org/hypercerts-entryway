@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { DatabaseSync } from "node:sqlite";
+import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 
 const config = JSON.parse(
@@ -43,14 +44,6 @@ for (const { identity, existing } of cases) {
     page,
   }) => {
     test.setTimeout(180_000);
-    const mail = () => {
-      const value = db
-        .prepare(
-          "SELECT value FROM key_value_state WHERE namespace=? AND key=?",
-        )
-        .get("outbox", identity.email);
-      return value ? JSON.parse(value.value) : null;
-    };
     const login = new URL("/client/login", config.clientUrl);
     login.searchParams.set("identifier", config.issuer);
     login.searchParams.set("prompt", existing ? "login" : "create");
@@ -64,10 +57,14 @@ for (const { identity, existing } of cases) {
     }
     await expect(page.getByLabel("Email address")).toBeVisible();
     await page.getByLabel("Email address").fill(identity.email);
+    const since = Date.now();
     await page.getByRole("button", { name: "Send sign-in code" }).click();
     await expect(page.getByLabel("Sign-in code")).toBeVisible();
-    await expect.poll(() => mail()?.otp).toMatch(/^\d{8}$/);
-    await page.getByLabel("Sign-in code").fill(mail().otp);
+    const { code } = await waitForMailpitCode({
+      recipient: identity.email,
+      since,
+    });
+    await page.getByLabel("Sign-in code").fill(code);
     await page.getByRole("button", { name: "Verify code" }).click();
     await expect(page.locator("h1")).toHaveText(
       /Create your account|Authorize application/,

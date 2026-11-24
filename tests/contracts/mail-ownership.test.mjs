@@ -2,14 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
-import {
-  openTestDatabase,
-  failureTrigger,
-  removeFailureTrigger,
-} from "../support/database-fixture.mjs";
+import { openTestDatabase } from "../support/database-fixture.mjs";
 import { createMailOutbox } from "../../dist/src/database/drizzle/mail-outbox.js";
 import { createMailFeature } from "../../dist/src/mail/delivery.js";
 import { MailTransportError } from "../../dist/src/mail/port.js";
+import { createAdminMessage } from "../../dist/src/mail/admin-message.mjs";
 const deferred = () => {
   let resolve;
   const promise = new Promise((done) => {
@@ -22,8 +19,7 @@ function entry(now = Date.now()) {
     id: randomUUID(),
     recipient: "proof@example.test",
     purpose: "sign-in",
-    code: "12345678",
-    projectionField: "otp",
+    payload: { kind: "otp", code: "12345678" },
     createdAt: now,
     expiresAt: now + 600_000,
     attemptCount: 0,
@@ -37,7 +33,7 @@ async function fixture(t) {
   return { db, first: createMailOutbox(db), second: createMailOutbox(db) };
 }
 
-test("independent delivery instances cannot share a live claim and late superseded SMTP cannot project its old code", async (t) => {
+test("independent delivery instances cannot share a live claim or complete a superseded attempt", async (t) => {
   const { db, first, second } = await fixture(t);
   const entered = deferred(),
     release = deferred();
@@ -84,7 +80,7 @@ test("independent delivery instances cannot share a live claim and late supersed
   assert.equal(newSends, 1);
   release.resolve();
   await rejected;
-  assert.equal((await db.get("outbox", "proof@example.test")).otp, "22222222");
+  assert.equal(await db.get("outbox", "proof@example.test"), null);
   const rows = await db.read("mail_outbox");
   assert.equal(rows.filter((row) => row.state === "delivered").length, 1);
   assert.equal(
@@ -137,7 +133,7 @@ test("expired mail claim can be taken over with uncertainty, while old completio
   assert.equal(row.code, null);
 });
 
-test("mail delivered state and captured projection roll back together on persistence failure", async (t) => {
+test("mail completion clears the private payload without capture projection", async (t) => {
   const { db, first } = await fixture(t),
     message = entry();
   await first.enqueue(message);
@@ -147,18 +143,11 @@ test("mail delivered state and captured projection roll back together on persist
     60_000,
     message.createdAt,
   );
-  await failureTrigger(
-    db,
-    "reject_projection",
-    "key_value_state",
-    "forced projection failure",
-  );
-  await assert.rejects(first.markDelivered(claim, message.createdAt));
-  assert.equal((await db.read("mail_outbox"))[0].state, "sending");
-  assert.equal(await db.get("outbox", message.recipient), null);
-  await removeFailureTrigger(db, "reject_projection", "key_value_state");
   assert.equal(await first.markDelivered(claim, message.createdAt), true);
-  assert.equal((await db.get("outbox", message.recipient)).otp, message.code);
+  const [row] = await db.read("mail_outbox");
+  assert.equal(row.state, "delivered");
+  assert.equal(row.code, null);
+  assert.equal(await db.get("outbox", message.recipient), null);
 });
 
 test("delivery persistence failure is not classified or retried as an SMTP rejection", async (t) => {
@@ -168,6 +157,9 @@ test("delivery persistence failure is not classified or retried as an SMTP rejec
   const mail = createMailFeature({
     outbox: {
       ...first,
+      async markDelivered() {
+        throw new Error("PersistenceFailure");
+      },
       async markFailure(...args) {
         transportFailures++;
         return first.markFailure(...args);
@@ -184,12 +176,6 @@ test("delivery persistence failure is not classified or retried as an SMTP rejec
     otp: "12345678",
     type: "sign-in",
   });
-  await failureTrigger(
-    db,
-    "reject_delivery_projection",
-    "key_value_state",
-    "forced projection failure",
-  );
   await assert.rejects(queued.deliver());
   assert.equal(sends, 1);
   assert.equal(transportFailures, 0);
@@ -197,16 +183,11 @@ test("delivery persistence failure is not classified or retried as an SMTP rejec
   assert.equal(row.state, "sending");
   assert.equal(row.attempt_count, 1);
   assert.equal(await db.get("outbox", "proof@example.test"), null);
-  await removeFailureTrigger(
-    db,
-    "reject_delivery_projection",
-    "key_value_state",
-  );
 });
 
 test("SMTP rejection and acknowledgement loss retain distinct bounded delivery evidence", async (t) => {
   const { db, first } = await fixture(t);
-  for (const outcome of ["rejected", "unknown"]) {
+  for (const outcome of ["rejected", "unknown", "permanent"]) {
     const message = entry();
     message.recipient = `${outcome}@example.test`;
     await first.enqueue(message);
@@ -230,18 +211,22 @@ test("SMTP rejection and acknowledgement loss retain distinct bounded delivery e
       failed: 1,
       expired: 0,
     });
-    assert.equal(sends, 3);
+    assert.equal(sends, outcome === "permanent" ? 1 : 3);
     const row = (
       await db.read("mail_outbox", {
         where: eq(db.tables.mail_outbox.id, message.id),
       })
     )[0];
     assert.equal(row.state, "failed");
-    assert.equal(row.attempt_count, 3);
+    assert.equal(row.attempt_count, outcome === "permanent" ? 1 : 3);
     assert.equal(row.delivery_uncertain, outcome === "unknown");
     assert.equal(
       row.last_error_code,
-      outcome === "unknown" ? "DeliveryUnknown" : "TransportUnavailable",
+      outcome === "unknown"
+        ? "DeliveryUnknown"
+        : outcome === "permanent"
+          ? "TransportRejected"
+          : "TransportUnavailable",
     );
     assert.equal(row.code, null);
     assert.equal(await db.get("outbox", message.recipient), null);
@@ -328,7 +313,11 @@ test(
       now: message.createdAt,
     });
     assert.equal(successor.version, old.version + 1);
-    const replacement = { ...message, id: randomUUID(), code: "87654321" };
+    const replacement = {
+      ...message,
+      id: randomUUID(),
+      payload: { kind: "otp", code: "87654321" },
+    };
     await outbox.enqueue(replacement);
     assert.equal(
       await first.command("mailComplete", {
@@ -358,9 +347,155 @@ test(
       }),
       true,
     );
-    assert.equal(
-      (await db.get("outbox", message.recipient)).otp,
-      replacement.code,
-    );
+    assert.equal(await db.get("outbox", message.recipient), null);
   },
 );
+
+test("administrative messages are independent and terminal payloads are redacted", async (t) => {
+  const { db, first } = await fixture(t);
+  const held = deferred();
+  const entered = deferred();
+  const sent = [];
+  const mail = createMailFeature({
+    outbox: first,
+    transport: {
+      async deliver(message) {
+        sent.push(message);
+        if (sent.length === 1) {
+          entered.resolve();
+          await held.promise;
+        }
+      },
+    },
+  });
+  const firstSend = mail.sendAdmin({
+    email: "admin-recipient@example.test",
+    subject: "First",
+    text: "First body",
+  });
+  await entered.promise;
+  assert.equal(
+    await mail.sendAdmin({
+      email: "admin-recipient@example.test",
+      subject: "Second",
+      text: "Second body",
+    }),
+    true,
+  );
+  held.resolve();
+  assert.equal(await firstSend, true);
+  assert.deepEqual(
+    sent.map(({ subject }) => subject),
+    ["First", "Second"],
+  );
+  for (const row of await db.read("mail_outbox")) {
+    assert.equal(row.state, "delivered");
+    assert.equal(row.subject, null);
+    assert.equal(row.text, null);
+    assert.equal(row.proof_token, null);
+  }
+});
+
+test("proof messages include a usable compound token", async (t) => {
+  const { first } = await fixture(t);
+  let text;
+  const mail = createMailFeature({
+    outbox: first,
+    transport: {
+      async deliver(message) {
+        text = message.text;
+      },
+    },
+  });
+  const token = `${"a".repeat(24)}.12345678`;
+  await mail.sendProof({
+    email: "proof@example.test",
+    token,
+    purpose: "password-reset",
+  });
+  assert.ok(text.includes(token));
+});
+
+test("admin delivery reports false for permanent failure or a competing claim and stable errors for persistence failure", async (t) => {
+  const { db, first } = await fixture(t);
+  const request = {
+    email: "admin@example.test",
+    subject: "Notice",
+    text: "Body",
+  };
+  const rejected = createMailFeature({
+    outbox: first,
+    transport: {
+      async deliver() {
+        throw new MailTransportError("permanent");
+      },
+    },
+  });
+  assert.equal(await rejected.sendAdmin(request), false);
+  const competing = createMailFeature({
+    outbox: {
+      ...first,
+      async claimAttempt() {
+        return null;
+      },
+    },
+    transport: {
+      async deliver() {
+        assert.fail("unclaimed message was sent");
+      },
+    },
+  });
+  assert.equal(await competing.sendAdmin(request), false);
+  const broken = createMailFeature({
+    outbox: {
+      ...first,
+      async enqueue() {
+        throw new Error("private database detail");
+      },
+    },
+    transport: { async deliver() {} },
+  });
+  await assert.rejects(broken.sendAdmin(request), {
+    code: "MailDeliveryFailed",
+    status: 503,
+  });
+  assert.equal(
+    (await db.read("mail_outbox")).filter((row) => row.state === "queued")
+      .length,
+    1,
+  );
+});
+
+test("admin operation preserves false and stable persistence failure", async (t) => {
+  const { first } = await fixture(t);
+  const input = {
+    content: "A message",
+    subject: "Notice",
+    senderDid: "did:plc:sender",
+  };
+  const row = { email: "admin@example.test", did: "did:plc:recipient" };
+  const rejected = createMailFeature({
+    outbox: first,
+    transport: {
+      async deliver() {
+        throw new MailTransportError("permanent");
+      },
+    },
+  });
+  const operation = await createAdminMessage({ mail: rejected });
+  assert.deepEqual(await operation.sendEmail(row, input), { sent: false });
+  const broken = createMailFeature({
+    outbox: {
+      ...first,
+      async enqueue() {
+        throw new Error("private database detail");
+      },
+    },
+    transport: { async deliver() {} },
+  });
+  const unavailable = await createAdminMessage({ mail: broken });
+  await assert.rejects(unavailable.sendEmail(row, input), {
+    code: "MailDeliveryFailed",
+    status: 503,
+  });
+});

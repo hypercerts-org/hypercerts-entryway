@@ -17,11 +17,21 @@ export function createAccountRecovery({
       // A reset token is DID-bound, so a shared email cannot choose an account
       // here (TECH-783). It gets the same reply as an unknown email (TECH-733).
       const row = rows.length === 1 ? rows[0] : null;
-      if (!row || ["deleted", "provisioning"].includes(row.status)) {
+      if (
+        !row ||
+        row.emailVerified !== true ||
+        ["deleted", "provisioning"].includes(row.status)
+      ) {
         await rate(email);
         return {};
       }
-      return await issue("password-reset", row, email);
+      return await issue(
+        "password-reset",
+        row,
+        email,
+        {},
+        { deferDelivery: true },
+      );
     },
     async resetPassword({ token, password }) {
       // Validate before consuming so a typo in password policy does not burn proof.
@@ -60,6 +70,7 @@ export function createAccountRecovery({
         {},
         {
           exposeChallengeId,
+          deferDelivery: true,
         },
       );
     },

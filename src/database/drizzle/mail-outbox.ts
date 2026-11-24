@@ -6,18 +6,23 @@ import type {
   MailOutboxEntry,
   MailOutboxTransactor,
   OutboxState,
-  ProjectionField,
+  MailPayload,
 } from "../mail-outbox.port.js";
 const OUTBOX_RETENTION_MS = 24 * 60 * 60_000;
-const FIXTURE_PROJECTION_RETENTION_MS = 10 * 60_000;
 function toEntry(row: StoredRow<"mail_outbox">): MailOutboxEntry {
+  let payload: MailPayload;
+  if (row.message_kind === "otp" && row.code)
+    payload = { kind: "otp", code: row.code };
+  else if (row.message_kind === "proof" && row.proof_token)
+    payload = { kind: "proof", token: row.proof_token };
+  else if (row.message_kind === "admin" && row.subject && row.text)
+    payload = { kind: "admin", subject: row.subject, text: row.text };
+  else throw new Error("InvalidMailPayload");
   return {
     id: row.id,
     recipient: row.recipient,
     purpose: row.purpose,
-    code: row.code ?? "",
-    projectionField: row.projection_field as ProjectionField,
-    ...(row.projection_token ? { projectionToken: row.projection_token } : {}),
+    payload,
     createdAt: row.created_at,
     expiresAt: row.expires_at,
     attemptCount: row.attempt_count,
@@ -26,8 +31,7 @@ function toEntry(row: StoredRow<"mail_outbox">): MailOutboxEntry {
   };
 }
 export function createMailOutbox(db: DatabaseExecutor): MailOutboxTransactor {
-  const t = db.tables.mail_outbox,
-    kv = db.tables.key_value_state;
+  const t = db.tables.mail_outbox;
   const active = () => or(eq(t.state, "queued"), eq(t.state, "sending"))!;
   const available = (clock: number) =>
     or(
@@ -43,8 +47,6 @@ export function createMailOutbox(db: DatabaseExecutor): MailOutboxTransactor {
       eq(t.claim_version, claim.version),
       gt(t.lease_expires_at, clock),
     )!;
-  const projected = (email: string) =>
-    and(eq(kv.namespace, "outbox"), eq(kv.key, email))!;
   const released = {
     claim_owner: null,
     claim_attempt: null,
@@ -57,37 +59,15 @@ export function createMailOutbox(db: DatabaseExecutor): MailOutboxTransactor {
         {
           state: "expired",
           code: null,
-          projection_token: null,
+          subject: null,
+          text: null,
+          proof_token: null,
           last_error_code: "Superseded",
           delivery_uncertain: sql`${t.delivery_uncertain} OR ${t.state}='sending'`,
           ...released,
         },
         and(eq(t.recipient, recipient), eq(t.purpose, purpose), active())!,
       );
-      const row = (
-        await db.read("key_value_state", {
-          where: projected(recipient),
-          limit: 1,
-        })
-      )[0];
-      if (row) {
-        let remove = false;
-        try {
-          const value: unknown = JSON.parse(row.value);
-          remove = Boolean(
-            value &&
-            typeof value === "object" &&
-            "type" in value &&
-            value.type === purpose,
-          );
-        } catch {
-          remove = true;
-        }
-        if (remove)
-          return (
-            changed + (await db.remove("key_value_state", projected(recipient)))
-          );
-      }
       return changed;
     });
   }
@@ -98,7 +78,9 @@ export function createMailOutbox(db: DatabaseExecutor): MailOutboxTransactor {
         {
           state: "expired",
           code: null,
-          projection_token: null,
+          subject: null,
+          text: null,
+          proof_token: null,
           last_error_code: sql`coalesce(${t.last_error_code},'Expired')`,
           delivery_uncertain: sql`${t.delivery_uncertain} OR ${t.state}='sending'`,
           ...released,
@@ -112,7 +94,9 @@ export function createMailOutbox(db: DatabaseExecutor): MailOutboxTransactor {
         {
           state: "failed",
           code: null,
-          projection_token: null,
+          subject: null,
+          text: null,
+          proof_token: null,
           last_error_code: "DeliveryUnknown",
           delivery_uncertain: true,
           ...released,
@@ -144,14 +128,19 @@ export function createMailOutbox(db: DatabaseExecutor): MailOutboxTransactor {
     async enqueue(entry) {
       await db.transact(async () => {
         await expire(entry.createdAt);
-        await supersede(entry.recipient, entry.purpose);
+        if (entry.payload.kind !== "admin")
+          await supersede(entry.recipient, entry.purpose);
         await db.insert("mail_outbox", {
           id: entry.id,
           recipient: entry.recipient,
           purpose: entry.purpose,
-          code: entry.code,
-          projection_field: entry.projectionField,
-          projection_token: entry.projectionToken ?? null,
+          code: entry.payload.kind === "otp" ? entry.payload.code : null,
+          subject:
+            entry.payload.kind === "admin" ? entry.payload.subject : null,
+          text: entry.payload.kind === "admin" ? entry.payload.text : null,
+          message_kind: entry.payload.kind,
+          proof_token:
+            entry.payload.kind === "proof" ? entry.payload.token : null,
           created_at: entry.createdAt,
           expires_at: entry.expiresAt,
           attempt_count: entry.attemptCount,
@@ -226,39 +215,14 @@ export function createMailOutbox(db: DatabaseExecutor): MailOutboxTransactor {
             state: "delivered",
             delivered_at: now,
             code: null,
-            projection_token: null,
+            subject: null,
+            text: null,
+            proof_token: null,
             last_error_code: null,
             ...released,
           },
           where,
         );
-        const entry = toEntry(row);
-        const value = {
-          email: entry.recipient,
-          type: entry.purpose,
-          [entry.projectionField]:
-            entry.projectionField === "token"
-              ? entry.projectionToken
-              : entry.code,
-          ...(entry.projectionField === "otp" && entry.projectionToken
-            ? { token: entry.projectionToken }
-            : {}),
-          createdAt: new Date(entry.createdAt),
-          deliveredAt: new Date(now),
-        };
-        const data = {
-          namespace: "outbox",
-          key: entry.recipient,
-          value: JSON.stringify(value),
-        };
-        if (
-          (await db.update(
-            "key_value_state",
-            data,
-            projected(entry.recipient),
-          )) === 0
-        )
-          await db.insert("key_value_state", data);
         return true;
       });
     },
@@ -268,6 +232,7 @@ export function createMailOutbox(db: DatabaseExecutor): MailOutboxTransactor {
         const row = (await db.read("mail_outbox", { where, limit: 1 }))[0];
         if (!row) return false;
         const retry =
+          outcome !== "permanent" &&
           retryAt !== null &&
           retryAt < row.expires_at &&
           now < row.expires_at &&
@@ -282,11 +247,13 @@ export function createMailOutbox(db: DatabaseExecutor): MailOutboxTransactor {
                 : "failed",
             ...(retry
               ? { next_attempt_at: retryAt }
-              : { code: null, projection_token: null }),
+              : { code: null, subject: null, text: null, proof_token: null }),
             last_error_code:
               outcome === "unknown"
                 ? "DeliveryUnknown"
-                : "TransportUnavailable",
+                : outcome === "permanent"
+                  ? "TransportRejected"
+                  : "TransportUnavailable",
             delivery_uncertain: row.delivery_uncertain || outcome === "unknown",
             ...released,
           },
@@ -308,37 +275,6 @@ export function createMailOutbox(db: DatabaseExecutor): MailOutboxTransactor {
           ),
         )!,
       );
-    },
-    async pruneCapturedProjection(now) {
-      let removed = 0;
-      for (const row of await db.read("key_value_state", {
-        where: eq(kv.namespace, "outbox"),
-      })) {
-        try {
-          const value: unknown = JSON.parse(row.value);
-          const record =
-            value && typeof value === "object"
-              ? (value as Record<string, unknown>)
-              : {};
-          const deliveredAt = Date.parse(
-            String(record.deliveredAt ?? record.createdAt),
-          );
-          if (
-            Number.isFinite(deliveredAt) &&
-            deliveredAt <= now - FIXTURE_PROJECTION_RETENTION_MS
-          )
-            removed += await db.remove(
-              "key_value_state",
-              and(projected(row.key), eq(kv.value, row.value))!,
-            );
-        } catch {
-          removed += await db.remove(
-            "key_value_state",
-            and(projected(row.key), eq(kv.value, row.value))!,
-          );
-        }
-      }
-      return removed;
     },
   };
 }

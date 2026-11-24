@@ -14,12 +14,6 @@ const mailbox = new DatabaseSync(
     "/entryway-data/account-authority.sqlite",
   { readOnly: true },
 );
-const readMail = (email) => {
-  const row = mailbox
-    .prepare("SELECT value FROM key_value_state WHERE namespace=? AND key=?")
-    .get("outbox", email);
-  return row ? JSON.parse(row.value) : null;
-};
 const run = Date.now().toString(36);
 const alice = {
   email: `console-${run}@example.com`,
@@ -54,9 +48,13 @@ async function visibleCode(recipient, since) {
 async function signIn(p, identity, create = false) {
   await p.goto(`${config.issuer}/login`);
   await p.getByLabel("Email address", { exact: true }).fill(identity.email);
+  const since = Date.now();
   await p.getByRole("button", { name: "Send sign-in code" }).click();
-  await expect.poll(() => readMail(identity.email)?.type).toBe("sign-in");
-  await p.getByLabel("Sign-in code").fill(readMail(identity.email).otp);
+  const { code } = await waitForMailpitCode({
+    recipient: identity.email,
+    since,
+  });
+  await p.getByLabel("Sign-in code").fill(code);
   await p.getByRole("button", { name: "Verify code" }).click();
   if (create) {
     await expect(
@@ -133,12 +131,19 @@ test("console binds verified email to one DID and shows no browser bearer creden
 
 test("backup email requires its visible code and rejects foreign selectors, wrong codes, CSRF, and supplied DIDs", async () => {
   await openManage(page, "recovery");
+  const noMailSince = Date.now();
   const forged = await post(page, "backup-request", {
     email: backup,
     csrf: "invalid",
   });
   expect(forged.status()).toBe(400);
-  expect(readMail(backup)).toBeNull();
+  await expect(
+    waitForMailpitCode({
+      recipient: backup,
+      since: noMailSince,
+      timeoutMs: 2_000,
+    }),
+  ).rejects.toThrow("Timed out");
 
   const foreignBackup = `other-backup-${run}@example.com`;
   await openManage(otherPage, "recovery");
@@ -168,7 +173,13 @@ test("backup email requires its visible code and rejects foreign selectors, wron
   await expect(page.getByRole("alert")).toContainText(
     "not linked to this verified identity",
   );
-  expect(readMail(backup)).toBeNull();
+  await expect(
+    waitForMailpitCode({
+      recipient: backup,
+      since: noMailSince,
+      timeoutMs: 2_000,
+    }),
+  ).rejects.toThrow("Timed out");
 
   await openManage(page, "recovery");
   await accountForm(page, "backup-request")
@@ -483,6 +494,7 @@ test("primary email change rejects occupied addresses and retries with visible m
 });
 
 test("backup recovery verifies visible codes with retained selectors for both mailboxes and restores the same DID", async () => {
+  test.setTimeout(150_000);
   const previousDid = alice.did;
   const nextEmail = `recovered-${run}@example.com`;
   await page
@@ -512,8 +524,9 @@ test("backup recovery verifies visible codes with retained selectors for both ma
     };
   };
   const unknownEmail = `unknown-${run}@example.com`;
+  const unknownSince = Date.now();
   const unknown = await requestRecovery(unknownEmail);
-  expect(readMail(unknownEmail)).toBeNull();
+  const ineligibleSince = Date.now();
   const ineligible = await requestRecovery(bob.email);
   const recoverySince = Date.now();
   const eligible = await requestRecovery(backup);
@@ -524,7 +537,22 @@ test("backup recovery verifies visible codes with retained selectors for both ma
   ).toBe(3);
   expect(ineligible.message).toBe(unknown.message);
   expect(eligible.message).toBe(unknown.message);
-  const backupCode = await visibleCode(backup, recoverySince);
+  const [backupMessage] = await Promise.all([
+    waitForMailpitCode({
+      recipient: backup,
+      since: recoverySince,
+      timeoutMs: 45_000,
+    }),
+    ...[
+      [unknownEmail, unknownSince],
+      [bob.email, ineligibleSince],
+    ].map(([recipient, since]) =>
+      expect(
+        waitForMailpitCode({ recipient, since, timeoutMs: 45_000 }),
+      ).rejects.toThrow("Timed out"),
+    ),
+  ]);
+  const backupCode = backupMessage.code;
   const occupiedMailSince = Date.now();
   const occupiedRecovery = await page.request.post(
     `${config.issuer}/recover/verify`,

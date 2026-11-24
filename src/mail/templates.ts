@@ -31,6 +31,7 @@ export function createOtpMessage(
   recipientValue: string,
   code: string,
   purpose: string,
+  token?: string,
 ): MailMessage {
   const recipient = validateMailAddress(recipientValue);
   if (!/^\d{8}$/.test(code))
@@ -40,9 +41,9 @@ export function createOtpMessage(
   const action =
     purposeLabels[purpose] ?? "continue with your Entryway account";
   const subject = "Your Entryway verification code";
-  const text = `Use ${code} to ${action}. This code expires in 10 minutes. If you did not request it, ignore this message.`;
-  const html = `<!doctype html><html lang="en"><meta charset="utf-8"><title>${subject}</title><p>Use this code to ${action}.</p><p><strong style="font:700 28px ui-monospace,monospace;letter-spacing:.12em">${code}</strong></p><p>This code expires in 10 minutes. If you did not request it, ignore this message.</p>`;
-  return { recipient, purpose, code, subject, text, html };
+  const text = `Use ${code} to ${action}.${token ? ` Your confirmation token is ${token}.` : ""} This code expires in 10 minutes. If you did not request it, ignore this message.`;
+  const html = `<!doctype html><html lang="en"><meta charset="utf-8"><title>${subject}</title><p>Use this code to ${action}.</p><p><strong style="font:700 28px ui-monospace,monospace;letter-spacing:.12em">${code}</strong></p>${token ? `<p>Your confirmation token is <strong>${token}</strong>.</p>` : ""}<p>This code expires in 10 minutes. If you did not request it, ignore this message.</p>`;
+  return { recipient, purpose, subject, text, html };
 }
 
 export function proofCode(token: string): string {

@@ -1,4 +1,7 @@
-export type ProjectionField = "otp" | "token";
+export type MailPayload =
+  | { kind: "otp"; code: string }
+  | { kind: "proof"; token: string }
+  | { kind: "admin"; subject: string; text: string };
 export type OutboxState =
   | "queued"
   | "sending"
@@ -10,9 +13,7 @@ export interface MailOutboxEntry {
   id: string;
   recipient: string;
   purpose: string;
-  code: string;
-  projectionField: ProjectionField;
-  projectionToken?: string;
+  payload: MailPayload;
   createdAt: number;
   expiresAt: number;
   attemptCount: number;
@@ -34,7 +35,7 @@ export interface MailOutboxReader {
 }
 
 export interface MailOutboxTransactor extends MailOutboxReader {
-  /** Enqueue and supersede older messages/projections in one transaction. */
+  /** Enqueue and supersede older messages in one transaction. */
   enqueue(entry: MailOutboxEntry): Promise<void>;
   claimAttempt(
     id: string,
@@ -42,16 +43,15 @@ export interface MailOutboxTransactor extends MailOutboxReader {
     leaseMs: number,
     now: number,
   ): Promise<MailAttemptClaim | null>;
-  /** Completion and captured projection share the claim's transaction. */
+  /** Complete only the current claim. */
   markDelivered(claim: MailAttemptClaim, now: number): Promise<boolean>;
   markFailure(
     claim: MailAttemptClaim,
     now: number,
     retryAt: number | null,
-    outcome: "rejected" | "unknown",
+    outcome: "rejected" | "permanent" | "unknown",
   ): Promise<boolean>;
   expire(now: number): Promise<number>;
   supersede(recipient: string, purpose: string, now: number): Promise<number>;
   pruneTerminal(now: number): Promise<number>;
-  pruneCapturedProjection(now: number): Promise<number>;
 }

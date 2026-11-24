@@ -1,14 +1,9 @@
 import { fail } from "../accounts/input.mjs";
 
-export async function createAdminMessage({ db }) {
+export async function createAdminMessage({ mail }) {
   const sendEmail = async (
     row,
-    {
-      content,
-      subject = "Message from your account service",
-      senderDid,
-      comment,
-    },
+    { content, subject = "Message from your account service", senderDid },
   ) => {
     if (
       typeof content !== "string" ||
@@ -17,16 +12,19 @@ export async function createAdminMessage({ db }) {
       typeof senderDid !== "string"
     )
       fail("InvalidRequest", "Provide bounded email content and senderDid");
-    await db.set("mail-outbox", crypto.randomUUID(), {
+    if (
+      typeof subject !== "string" ||
+      !subject ||
+      subject.length > 256 ||
+      /[\r\n\0]/.test(subject)
+    )
+      fail("InvalidRequest", "Provide a bounded email subject");
+    const sent = await mail.sendAdmin({
       email: row.email,
-      recipientDid: row.did,
-      content,
       subject,
-      senderDid,
-      comment,
-      createdAt: new Date(),
+      text: content,
     });
-    return { sent: true };
+    return { sent };
   };
   return { sendEmail };
 }

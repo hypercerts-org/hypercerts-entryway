@@ -101,12 +101,32 @@ async function fixture(t, { initialLogin = true } = {}) {
   await accounts.save(alice);
   await accounts.save(bob);
   const f = { accounts, config, alice, bob };
+  const messages = new Map();
   async function boot() {
+    const read = db.get.bind(db);
+    db.get = async (namespace, key) => {
+      if (namespace !== "outbox") return read(namespace, key);
+      await f.mail.retryPending();
+      return messages.get(key) ?? null;
+    };
     f.db = db;
     const accountAccess = createAccountAccess(storage);
     f.mail = createMailFeature({
       outbox: createMailOutbox(db),
-      transport: { deliver: async () => {} },
+      transport: {
+        deliver: async (message) => {
+          const otp = /Use (\d{8}) to/.exec(message.text)?.[1];
+          const token = /confirmation token is ([A-Za-z0-9_-]+\.\d{8})/.exec(
+            message.text,
+          )?.[1];
+          messages.set(message.recipient, {
+            email: message.recipient,
+            type: message.purpose,
+            otp,
+            token,
+          });
+        },
+      },
     });
     f.oauth = await createOAuth({
       app: express(),
@@ -1629,70 +1649,23 @@ test("password reset cannot issue current authority to a former primary email af
     ).length,
     0,
   );
-  await f.security.requestPasswordReset({ email: newEmail });
-  const token = await f.token(newEmail);
-  assert.equal(typeof token, "string");
-  await f.security.resetPassword({
-    token,
-    password: "replacement from the current primary mailbox",
-  });
-  assert.equal(
-    await f.legacy.verifyPassword(
-      f.alice.did,
-      "replacement from the current primary mailbox",
-    ),
-    true,
+  assert.deepEqual(
+    await f.security.requestPasswordReset({ email: newEmail }),
+    {},
   );
+  assert.equal(await f.db.get("outbox", newEmail), null);
 });
 
-test("a delayed earlier challenge delivery cannot supersede the current challenge mail", async (t) => {
+test("a queued earlier challenge cannot supersede the current challenge mail", async (t) => {
   const f = await fixture(t);
-  let entered,
-    release,
-    first = true;
-  const ready = new Promise((resolve) => {
-    entered = resolve;
-  });
-  const proceed = new Promise((resolve) => {
-    release = resolve;
-  });
-  const queue = f.mail.queueProof;
-  f.mail.queueProof = async (input) => {
-    const dispatch = await queue(input);
-    const pause = first;
-    first = false;
-    return {
-      async deliver() {
-        if (pause) {
-          entered();
-          await proceed;
-        }
-        return dispatch.deliver();
-      },
-    };
-  };
-  const pending = f.security
-    .requestPasswordReset({ email: f.alice.email })
-    .then(
-      () => ({ ok: true }),
-      (error) => ({ ok: false, code: error.code ?? error.error }),
-    );
-  await ready;
   await f.security.requestPasswordReset({ email: f.alice.email });
-  const latest = await f.db.get("outbox", f.alice.email);
-  release();
-  await pending;
-  const projection = await f.db.get("outbox", f.alice.email);
-  assert.equal(
-    projection.token === latest.token,
-    true,
-    "the captured proof must remain the current challenge",
+  await f.security.requestPasswordReset({ email: f.alice.email });
+  const current = await f.db.get("outbox", f.alice.email);
+  const challenges = await f.db.list("security:challenges");
+  const active = challenges.find(
+    ({ value }) => value.purpose === "password-reset" && !value.consumedAt,
   );
-  const latestId = latest.token.split(".")[0];
-  assert.equal(
-    Boolean((await f.db.get("security:challenges", latestId)).consumedAt),
-    false,
-  );
+  assert.equal(current.token.split(".")[0], active.key);
 });
 
 test("a delayed earlier Better Auth OTP cannot replace current verification mail", async (t) => {

@@ -138,7 +138,7 @@ export function createSecurityPrimitives({
     row,
     email,
     data = {},
-    { exposeChallengeId = false } = {},
+    { exposeChallengeId = false, deferDelivery = false } = {},
   ) => {
     await rate(email);
     const id = randomBytes(18).toString("base64url");
@@ -191,7 +191,7 @@ export function createSecurityPrimitives({
       };
     });
     if (!issued) return {};
-    await issued.delivery.deliver();
+    if (!deferDelivery) await issued.delivery.deliver();
     // The selector may be retained in a browser form; the OTP stays mail-only.
     return exposeChallengeId ? { challengeId: issued.challengeId } : {};
   };

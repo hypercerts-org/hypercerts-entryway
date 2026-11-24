@@ -84,20 +84,29 @@ test("password login with a shared email fails like an unknown email while handl
 });
 
 test("password reset for a shared email sends no mail, unlike a single-account email", async () => {
+  test.setTimeout(120_000);
   const reset = (email) =>
     api.post(xrpc("requestPasswordReset"), { data: { email } });
 
   const controlSince = Date.now();
   expect((await reset(single.email)).ok()).toBe(true);
-  await waitForMailpitCode({ recipient: single.email, since: controlSince });
+  await waitForMailpitCode({
+    recipient: single.email,
+    since: controlSince,
+    timeoutMs: 45_000,
+  });
 
   const since = Date.now();
   const shared = await reset(first.email);
   expect(shared.ok()).toBe(true);
   expect(await shared.json()).toEqual(await (await reset(unknownEmail)).json());
-  await expect(
-    waitForMailpitCode({ recipient: first.email, since, timeoutMs: 2_000 }),
-  ).rejects.toThrow("Timed out");
+  await Promise.all(
+    [first.email, unknownEmail].map((recipient) =>
+      expect(
+        waitForMailpitCode({ recipient, since, timeoutMs: 45_000 }),
+      ).rejects.toThrow("Timed out"),
+    ),
+  );
 });
 
 test("signup with a shared email returns AccountExists", async ({

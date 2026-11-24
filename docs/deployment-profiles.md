@@ -212,3 +212,40 @@ across every deployment combination, public-protocol migration and exhaustive
 fault/abuse qualification remain separate work. The existing moderation blocker
 and [credential-lifetime defect](implementation-assessment.md#known-limits) remain unresolved. Delivery criteria
 live in the [project document](https://linear.app/hypercerts/document/m1-acceptance-matrices-epds-parity-protocol-and-migration-196f21e01e71).
+
+## SMTP delivery configuration
+
+Operators configure authenticated SMTP with `MAIL_SMTP_MODE=tls`,
+`MAIL_SMTP_HOST`, `MAIL_SMTP_PORT`, `MAIL_SMTP_USER`, `MAIL_SMTP_PASSWORD`, and
+`MAIL_FROM`. The relay must accept implicit TLS; Entryway verifies its certificate
+and hostname using Node's trusted certificate authorities. For a private CA, inject
+its certificate through a protected file and set `NODE_EXTRA_CA_CERTS` to that
+file before starting Entryway. Do not disable TLS verification. Supply credentials
+through the deployment platform's secret injection rather than a committed file,
+and restart replicas with the new secret when rotating relay credentials.
+Incomplete settings fail startup without printing their values.
+
+The default private capture configuration uses `mail-capture:2525` and the
+sandbox sender. For another isolated, trusted plaintext capture relay, explicitly
+set `MAIL_SMTP_MODE=private` and its host and port; credentials are forbidden in
+this mode. Configure `MAIL_FROM` when a different sender is needed. Keep private
+capture relays isolated from untrusted networks.
+
+SMTP acceptance confirms that the relay accepted responsibility for a message;
+it does not confirm inbox receipt. A lost acknowledgement may cause a retry and
+duplicate delivery.
+
+### Development: synthetic TLS relay
+
+After preparing an owned AiaB sandbox and building the `test` image, contributors
+can exercise authenticated delivery, certificate rejection and credential rejection
+inside that container. The managed `contracts` phase runs it before the route contracts; to run it independently:
+
+```sh
+docker --context rootless compose --project-name "$SANDBOX_PROJECT" \
+  -f "$SANDBOX_CHECKOUT/compose.yaml" \
+  -f "$SOURCE_CHECKOUT/tests/atmosphere/stacks/incoming-source-mail.yaml" \
+  run --rm --no-deps test node tests/support/smtp-tls-relay.mjs
+```
+
+This synthetic relay does not establish delivery to a real provider or inbox.

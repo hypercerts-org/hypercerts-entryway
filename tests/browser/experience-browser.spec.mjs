@@ -4,7 +4,10 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { createAccountStorage } from "../../dist/src/database/drizzle/account-storage.js";
 import { openDatabase } from "../../dist/src/database/connection.js";
-import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
+import {
+  countMailpitMessages,
+  waitForMailpitCode,
+} from "../support/helpers/mailpit.mjs";
 
 test.use({ trace: "off", screenshot: "off", video: "off" });
 
@@ -17,15 +20,7 @@ const config = JSON.parse(
 const databasePath =
   process.env.TEST_ACCOUNT_DATABASE_PATH ??
   "/entryway-data/account-authority.sqlite";
-const mailbox = new DatabaseSync(databasePath, { readOnly: true });
 const fixtureDb = new DatabaseSync(databasePath);
-const readValue = mailbox.prepare(
-  "SELECT value FROM key_value_state WHERE namespace=? AND key=?",
-);
-const readMail = (email) => {
-  const row = readValue.get("outbox", email);
-  return row ? JSON.parse(row.value) : null;
-};
 const runId = Date.now().toString(36);
 
 function updateFlow(flowId, update) {
@@ -140,7 +135,6 @@ test("resend invalidates the previous OTP and email correction binds the same fl
       since: firstRequestedAt,
     });
     const firstCapture = firstMessage.code;
-    expect(readMail(originalEmail)?.otp === firstCapture).toBe(true);
 
     ageCooldown(flowId);
     const secondRequestedAt = Date.now();
@@ -157,7 +151,12 @@ test("resend invalidates the previous OTP and email correction binds the same fl
     });
     const secondCapture = secondMessage.code;
     expect(secondCapture !== firstCapture).toBe(true);
-    expect(readMail(originalEmail)?.otp === secondCapture).toBe(true);
+    expect(
+      await countMailpitMessages({
+        recipient: originalEmail,
+        since: firstRequestedAt,
+      }),
+    ).toBe(2);
 
     await page.getByLabel("Sign-in code").fill(firstCapture);
     await page.getByRole("button", { name: "Verify code" }).click();
@@ -181,8 +180,18 @@ test("resend invalidates the previous OTP and email correction binds the same fl
       since: replacementRequestedAt,
     });
     const replacementCapture = replacementMessage.code;
-    expect(readMail(replacementEmail)?.otp === replacementCapture).toBe(true);
-    expect(readMail(originalEmail)).toBeNull();
+    expect(
+      await countMailpitMessages({
+        recipient: replacementEmail,
+        since: firstRequestedAt,
+      }),
+    ).toBe(1);
+    expect(
+      await countMailpitMessages({
+        recipient: originalEmail,
+        since: firstRequestedAt,
+      }),
+    ).toBe(2);
     const savedFlow = JSON.parse(
       fixtureDb
         .prepare(
@@ -257,6 +266,52 @@ test("resend invalidates the previous OTP and email correction binds the same fl
   }
 });
 
+test("an expired sign-in code is rejected and resend issues one usable replacement", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({ ignoreHTTPSErrors: false });
+  const page = await context.newPage();
+  const email = `experience-expired-code-${runId}@example.test`;
+  try {
+    await page.goto(new URL("/login", config.issuer).href);
+    await page.getByLabel("Email address").fill(email);
+    const since = Date.now();
+    await page.getByRole("button", { name: "Send sign-in code" }).click();
+    const first = await waitForMailpitCode({ recipient: email, since });
+    const flowId = await page
+      .locator('form[action="/auth/verify"] input[name="flow"]')
+      .inputValue();
+    const expired = fixtureDb
+      .prepare('UPDATE verification SET "expiresAt"=? WHERE identifier=?')
+      .run(Date.now() - 1_000, `sign-in-otp-${email}`);
+    expect(expired.changes).toBe(1);
+    await page.getByLabel("Sign-in code").fill(first.code);
+    await page.getByRole("button", { name: "Verify code" }).click();
+    await expect(page.locator("#otp-error")).toContainText(
+      "Invalid or expired code",
+    );
+    expect(await countMailpitMessages({ recipient: email, since })).toBe(1);
+
+    ageCooldown(flowId);
+    await page
+      .getByRole("button", { name: "Send a new code", exact: true })
+      .click();
+    const second = await waitForMailpitCode({
+      recipient: email,
+      since,
+      excludeIds: [first.messageId],
+    });
+    expect(await countMailpitMessages({ recipient: email, since })).toBe(2);
+    await page.getByLabel("Sign-in code").fill(second.code);
+    await page.getByRole("button", { name: "Verify code" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Create your account" }),
+    ).toBeVisible();
+  } finally {
+    await context.close();
+  }
+});
+
 test("expired OAuth flow restarts from the stored PAR and preserves trusted request state", async ({
   browser,
 }) => {
@@ -266,10 +321,15 @@ test("expired OAuth flow restarts from the stored PAR and preserves trusted requ
   try {
     await openOauthLogin(page, "primary");
     await page.getByLabel("Email address").fill(email);
+    const requestedAt = Date.now();
     await page.getByRole("button", { name: "Send sign-in code" }).click();
     await expect(
       page.getByRole("heading", { name: "Check your email" }),
     ).toBeVisible();
+    const initialMessage = await waitForMailpitCode({
+      recipient: email,
+      since: requestedAt,
+    });
     const flowId = await page
       .locator('form[action="/auth/verify"] input[name="flow"]')
       .inputValue();
@@ -287,6 +347,14 @@ test("expired OAuth flow restarts from the stored PAR and preserves trusted requ
     await expect(
       page.getByRole("heading", { name: "Sign-in expired" }),
     ).toBeVisible();
+    await expect(
+      waitForMailpitCode({
+        recipient: email,
+        since: requestedAt,
+        excludeIds: [initialMessage.messageId],
+        timeoutMs: 2_000,
+      }),
+    ).rejects.toThrow("Timed out");
     await expect(
       page.getByText(
         "Restart it to continue the same verified application request.",
@@ -317,6 +385,21 @@ test("expired OAuth flow restarts from the stored PAR and preserves trusted requ
       before.parameters.redirect_uri,
     );
     expect(restarted.parameters.scope).toBe(before.parameters.scope);
+    await page.getByLabel("Email address").fill(email);
+    await page.getByRole("button", { name: "Send sign-in code" }).click();
+    const replacement = await waitForMailpitCode({
+      recipient: email,
+      since: requestedAt,
+      excludeIds: [initialMessage.messageId],
+    });
+    expect(
+      await countMailpitMessages({ recipient: email, since: requestedAt }),
+    ).toBe(2);
+    await page.getByLabel("Sign-in code").fill(replacement.code);
+    await page.getByRole("button", { name: "Verify code" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Create your account" }),
+    ).toBeVisible();
   } finally {
     await context.close();
   }
@@ -440,5 +523,4 @@ test("reserved external migration email remains usable by its verified owner", a
 
 test.afterAll(() => {
   fixtureDb.close();
-  mailbox.close();
 });

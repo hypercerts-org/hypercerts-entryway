@@ -31,8 +31,8 @@ function createEntry(
   recipientValue: string,
   code: string,
   purpose: string,
-  projectionField: "otp" | "token",
-  projectionToken: string | undefined,
+  proofKind: "otp" | "token",
+  proofToken: string | undefined,
   now: number,
 ): MailOutboxEntry {
   const message = createOtpMessage(recipientValue, code, purpose);
@@ -40,9 +40,10 @@ function createEntry(
     id: randomUUID(),
     recipient: message.recipient,
     purpose,
-    code,
-    projectionField,
-    ...(projectionToken ? { projectionToken } : {}),
+    payload:
+      proofKind === "token" && proofToken
+        ? { kind: "proof", token: proofToken }
+        : { kind: "otp", code },
     createdAt: now,
     expiresAt: now + CODE_LIFETIME_MS,
     attemptCount: 0,
@@ -77,18 +78,34 @@ export function createMailFeature({
     // SMTP, and the claim's version protects completion after supersession.
     try {
       await transport.deliver(
-        createOtpMessage(
-          claim.entry.recipient,
-          claim.entry.code,
-          claim.entry.purpose,
-        ),
+        claim.entry.payload.kind === "admin"
+          ? {
+              recipient: claim.entry.recipient,
+              purpose: claim.entry.purpose,
+              subject: claim.entry.payload.subject,
+              text: claim.entry.payload.text,
+              html: "",
+            }
+          : createOtpMessage(
+              claim.entry.recipient,
+              claim.entry.payload.kind === "proof"
+                ? proofCode(claim.entry.payload.token)
+                : claim.entry.payload.code,
+              claim.entry.purpose,
+              claim.entry.payload.kind === "proof"
+                ? claim.entry.payload.token
+                : undefined,
+            ),
       );
     } catch (error) {
       const failedAt = currentTime();
       const retryDelay = RETRY_DELAYS_MS[claim.entry.attemptCount];
-      const retryAt = retryDelay === undefined ? null : failedAt + retryDelay;
       const outcome =
         error instanceof MailTransportError ? error.outcome : "unknown";
+      const retryAt =
+        outcome === "permanent" || retryDelay === undefined
+          ? null
+          : failedAt + retryDelay;
       const changed = await outbox.markFailure(
         claim,
         failedAt,
@@ -137,8 +154,8 @@ export function createMailFeature({
     recipientValue: string,
     code: string,
     purpose: string,
-    projectionField: "otp" | "token",
-    projectionToken?: string,
+    proofKind: "otp" | "token",
+    proofToken?: string,
   ): Promise<{ deliver(): Promise<void> }> {
     const recipient = validateMailAddress(recipientValue);
     const now = currentTime();
@@ -146,8 +163,8 @@ export function createMailFeature({
       recipient,
       code,
       purpose,
-      projectionField,
-      projectionToken,
+      proofKind,
+      proofToken,
       now,
     );
     await outbox.enqueue(entry);
@@ -159,14 +176,38 @@ export function createMailFeature({
   }
 
   async function prune(now: number): Promise<number> {
-    return (
-      (await outbox.expire(now)) +
-      (await outbox.pruneTerminal(now)) +
-      (await outbox.pruneCapturedProjection(now))
-    );
+    return (await outbox.expire(now)) + (await outbox.pruneTerminal(now));
   }
 
   return {
+    async sendAdmin({
+      email,
+      subject,
+      text,
+    }: {
+      email: string;
+      subject: string;
+      text: string;
+    }) {
+      const now = currentTime();
+      const entry: MailOutboxEntry = {
+        id: randomUUID(),
+        recipient: validateMailAddress(email),
+        purpose: "admin",
+        payload: { kind: "admin", subject, text },
+        createdAt: now,
+        expiresAt: now + CODE_LIFETIME_MS,
+        attemptCount: 0,
+        nextAttemptAt: now,
+        state: "queued",
+      };
+      try {
+        await outbox.enqueue(entry);
+        return (await deliverEntry(entry)) === true;
+      } catch {
+        throw new MailDeliveryError();
+      }
+    },
     async sendOtp({ email, otp, type }: OtpMailRequest) {
       await (await queue(email, otp, type, "otp")).deliver();
     },
@@ -194,7 +235,6 @@ export function createMailFeature({
       const now = currentTime();
       const expired = await outbox.expire(now);
       await outbox.pruneTerminal(now);
-      await outbox.pruneCapturedProjection(now);
       const entries = await outbox.listRetryable(now, MAX_BATCH);
       let delivered = 0;
       let failed = 0;

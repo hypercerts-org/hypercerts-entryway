@@ -16,6 +16,7 @@ export async function loadConfig() {
   // about independent private custody, backup or operational recoverability.
   publicRotationKey(config.plcRecoveryKeyDid);
   Object.assign(config, loadOAuthClientPolicy(process.env));
+  config.mail = loadSmtpConfiguration(process.env);
   config.database = loadDatabaseConfiguration(process.env);
   config.lifecycle = loadLifecycleConfiguration(process.env);
   config.operationLease = loadOperationLeaseConfiguration(process.env);
@@ -119,4 +120,50 @@ export function loadDatabaseConfiguration(env) {
     invalid();
   }
   return { backend, url: env.DATABASE_URL };
+}
+
+/** SMTP credentials and addresses are never included in configuration errors. */
+export function loadSmtpConfiguration(env) {
+  const invalid = () => {
+    const error = new Error("Invalid SMTP configuration");
+    error.code = "InvalidSmtpConfiguration";
+    throw error;
+  };
+  const mode = env.MAIL_SMTP_MODE ?? "private";
+  const host = env.MAIL_SMTP_HOST ?? (mode === "private" ? "mail-capture" : "");
+  const portValue = env.MAIL_SMTP_PORT ?? (mode === "private" ? "2525" : "");
+  const port = Number(portValue);
+  const sender =
+    env.MAIL_FROM ??
+    (mode === "private" ? "Entryway sandbox <entryway@entryway.test>" : "");
+  if (
+    !["private", "tls"].includes(mode) ||
+    !host.trim() ||
+    /\s/.test(host) ||
+    !/^\d+$/.test(portValue) ||
+    !Number.isInteger(port) ||
+    port < 1 ||
+    port > 65535 ||
+    !sender.trim() ||
+    /[\r\n]/.test(sender)
+  )
+    invalid();
+  if (mode === "private") {
+    if (
+      (host !== "mail-capture" && env.MAIL_SMTP_MODE !== "private") ||
+      env.MAIL_SMTP_USER !== undefined ||
+      env.MAIL_SMTP_PASSWORD !== undefined
+    )
+      invalid();
+    return { mode, host, port, sender };
+  }
+  if (!env.MAIL_SMTP_USER?.trim() || !env.MAIL_SMTP_PASSWORD?.trim()) invalid();
+  return {
+    mode,
+    host,
+    port,
+    sender,
+    user: env.MAIL_SMTP_USER,
+    password: env.MAIL_SMTP_PASSWORD,
+  };
 }

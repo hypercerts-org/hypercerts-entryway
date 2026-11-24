@@ -329,7 +329,20 @@ process.on("message", async ({ id, command, args }) => {
           },
           mail: createMailFeature({
             outbox: mail,
-            transport: { async deliver() {} },
+            transport: {
+              async deliver(message) {
+                const otp = /Use (\d{8}) to/.exec(message.text)?.[1];
+                const token =
+                  /confirmation token is ([A-Za-z0-9_-]+\.\d{8})/.exec(
+                    message.text,
+                  )?.[1];
+                await db.set(
+                  "fixture:mail",
+                  token ? token.split(".")[0] : message.recipient,
+                  { otp, token },
+                );
+              },
+            },
           }),
         });
         break;
@@ -363,7 +376,20 @@ process.on("message", async ({ id, command, args }) => {
           authority: createAccountAuthority({ db, accounts }),
           mail: createMailFeature({
             outbox: mail,
-            transport: { async deliver() {} },
+            transport: {
+              async deliver(message) {
+                const otp = /Use (\d{8}) to/.exec(message.text)?.[1];
+                const token =
+                  /confirmation token is ([A-Za-z0-9_-]+\.\d{8})/.exec(
+                    message.text,
+                  )?.[1];
+                await db.set(
+                  "fixture:mail",
+                  token ? token.split(".")[0] : message.recipient,
+                  { otp, token },
+                );
+              },
+            },
           }),
         });
         break;

@@ -43,13 +43,8 @@ export async function createProtocolChallenges({
           ? { did, version: (await db.get("security:versions", did)) ?? 0 }
           : {}),
       });
-      if (
-        purpose === "plc-operation" &&
-        deliveryChannel === "email" &&
-        plcMail
-      ) {
-        // Only PLC confirmation uses this seam. Challenge and durable mail commit
-        // together; SMTP must not run inside the authority transaction.
+      if (deliveryChannel === "email") {
+        if (!plcMail) throw new Error("MailDeliveryUnavailable");
         dispatch = await plcMail.queueOtp({
           email: destination,
           otp,
@@ -57,16 +52,12 @@ export async function createProtocolChallenges({
         });
         return;
       }
-      await db.set(
-        deliveryChannel === "email" ? "outbox" : "sms-outbox",
-        destination,
-        {
-          [deliveryChannel === "email" ? "email" : "phoneNumber"]: destination,
-          otp,
-          type: purpose,
-          createdAt: new Date(),
-        },
-      );
+      await db.set("sms-outbox", destination, {
+        phoneNumber: destination,
+        otp,
+        type: purpose,
+        createdAt: new Date(),
+      });
       return {};
     });
     await dispatch?.deliver();

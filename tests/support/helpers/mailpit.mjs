@@ -27,6 +27,64 @@ async function readJson(url, signal) {
   return response.json();
 }
 
+export async function countMailpitMessages({
+  recipient,
+  since,
+  baseUrl = process.env.MAILPIT_URL,
+}) {
+  if (typeof recipient !== "string" || !recipient.includes("@"))
+    throw new TypeError("Mailpit lookup requires a recipient address");
+  const receivedAfter = timestamp(since);
+  const origin = new URL(baseUrl);
+  if (origin.protocol !== "https:" || origin.username || origin.password)
+    throw new Error("MAILPIT_URL must use managed HTTPS without credentials");
+  const endpoint = new URL("/api/v1/search", origin);
+  endpoint.searchParams.set("query", `to:${recipient}`);
+  endpoint.searchParams.set("limit", "50");
+  const result = await readJson(endpoint, AbortSignal.timeout(5_000));
+  return (result.messages ?? []).filter(
+    (message) =>
+      includesRecipient(message, recipient) &&
+      Date.parse(message.Created) >= receivedAfter,
+  ).length;
+}
+
+export async function waitForMailpitSubject({
+  recipient,
+  since,
+  subject,
+  timeoutMs = defaultTimeoutMs,
+}) {
+  const receivedAfter = timestamp(since);
+  const origin = new URL(process.env.MAILPIT_URL);
+  if (origin.protocol !== "https:" || origin.username || origin.password)
+    throw new Error("MAILPIT_URL must use managed HTTPS without credentials");
+  const endpoint = new URL("/api/v1/search", origin);
+  endpoint.searchParams.set("query", `to:${recipient}`);
+  endpoint.searchParams.set("limit", "50");
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await readJson(endpoint, AbortSignal.timeout(5_000));
+    const message = result.messages?.find(
+      (candidate) =>
+        includesRecipient(candidate, recipient) &&
+        Date.parse(candidate.Created) >= receivedAfter &&
+        candidate.Subject === subject,
+    );
+    if (message) {
+      const detail = await readJson(
+        new URL(`/api/v1/message/${encodeURIComponent(message.ID)}`, origin),
+        AbortSignal.timeout(5_000),
+      );
+      if (!includesRecipient(detail, recipient))
+        throw new Error("Mailpit message recipient did not match");
+      return detail;
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+  throw new Error("Timed out waiting for a Mailpit message");
+}
+
 export async function waitForMailpitCode({
   recipient,
   since,
@@ -92,10 +150,16 @@ export async function waitForMailpitCode({
       const detail = await readJson(detailUrl, requestSignal);
       if (!includesRecipient(detail, recipient))
         throw new Error("Mailpit message recipient did not match");
-      const code = /Use\s+(\d{8})\s+to/.exec(detail.Text ?? "")?.[1];
+      const token =
+        /(?:^|[^A-Za-z0-9_-])([A-Za-z0-9_-]{20,}\.\d{8})(?!\d)/.exec(
+          detail.Text ?? "",
+        )?.[1];
+      const code =
+        token?.slice(-8) ?? /(?<!\d)(\d{8})(?!\d)/.exec(detail.Text ?? "")?.[1];
       if (code)
         return {
           code,
+          token,
           messageId: message.ID,
           receivedAt: new Date(message.Created),
         };
