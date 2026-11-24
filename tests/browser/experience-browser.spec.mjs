@@ -6,6 +6,7 @@ import { createAccountStorage } from "../../dist/src/database/drizzle/account-st
 import { openDatabase } from "../../dist/src/database/connection.js";
 import {
   countMailpitMessages,
+  NoMailpitMessageError,
   waitForMailpitCode,
 } from "../support/helpers/mailpit.mjs";
 
@@ -354,7 +355,7 @@ test("expired OAuth flow restarts from the stored PAR and preserves trusted requ
         excludeIds: [initialMessage.messageId],
         timeoutMs: 2_000,
       }),
-    ).rejects.toThrow("Timed out");
+    ).rejects.toThrow(NoMailpitMessageError);
     await expect(
       page.getByText(
         "Restart it to continue the same verified application request.",

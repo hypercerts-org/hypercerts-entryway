@@ -85,6 +85,12 @@ export async function waitForMailpitSubject({
   throw new Error("Timed out waiting for a Mailpit message");
 }
 
+export class NoMailpitMessageError extends Error {
+  constructor() {
+    super("No matching Mailpit message arrived during the wait");
+  }
+}
+
 export async function waitForMailpitCode({
   recipient,
   since,
@@ -123,19 +129,12 @@ export async function waitForMailpitCode({
   const excluded = new Set(excludeIds);
   const deadline = Date.now() + timeoutMs;
 
-  while (Date.now() < deadline) {
-    const requestSignal = AbortSignal.timeout(
-      Math.max(1, Math.min(5_000, deadline - Date.now())),
-    );
-    let result;
-    try {
-      result = await readJson(endpoint, requestSignal);
-    } catch (error) {
-      // A poll cut off by the overall deadline is the same outcome as no message.
-      if (error?.name === "TimeoutError" && Date.now() >= deadline) break;
-      throw error;
-    }
-    const message = result.messages?.find(
+  let sawMessage = false;
+  for (;;) {
+    // Each search has its own request budget, including the final mailbox check.
+    const requestSignal = AbortSignal.timeout(Math.min(5_000, timeoutMs));
+    const result = await readJson(endpoint, requestSignal);
+    const message = result.messages.find(
       (candidate) =>
         typeof candidate.ID === "string" &&
         !excluded.has(candidate.ID) &&
@@ -143,6 +142,7 @@ export async function waitForMailpitCode({
         Date.parse(candidate.Created) >= receivedAfter,
     );
     if (message) {
+      sawMessage = true;
       const detailUrl = new URL(
         `/api/v1/message/${encodeURIComponent(message.ID)}`,
         origin,
@@ -165,10 +165,14 @@ export async function waitForMailpitCode({
         };
     }
     const remaining = deadline - Date.now();
-    if (remaining > 0)
-      await new Promise((resolve) =>
-        setTimeout(resolve, Math.min(pollIntervalMs, remaining)),
-      );
+    if (remaining <= 0) break;
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.min(pollIntervalMs, remaining)),
+    );
   }
-  throw new Error("Timed out waiting for a new Mailpit verification message");
+  if (sawMessage)
+    throw new Error(
+      "Mailpit received a matching message without a verification code",
+    );
+  throw new NoMailpitMessageError();
 }

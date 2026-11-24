@@ -1,5 +1,8 @@
 import { test, expect } from "@playwright/test";
-import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
+import {
+  NoMailpitMessageError,
+  waitForMailpitCode,
+} from "../support/helpers/mailpit.mjs";
 import { createAccount } from "../support/helpers/browser-oauth.mjs";
 import { setAccountPassword } from "./support/account-password.mjs";
 import { bindAccountsToSharedEmail } from "./support/email-chooser-fixture.mjs";
@@ -104,7 +107,7 @@ test("password reset for a shared email sends no mail, unlike a single-account e
     [first.email, unknownEmail].map((recipient) =>
       expect(
         waitForMailpitCode({ recipient, since, timeoutMs: 45_000 }),
-      ).rejects.toThrow("Timed out"),
+      ).rejects.toThrow(NoMailpitMessageError),
     ),
   );
 });

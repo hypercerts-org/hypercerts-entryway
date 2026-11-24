@@ -3,7 +3,10 @@ import { DatabaseSync } from "node:sqlite";
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { createPublicKey, randomUUID } from "node:crypto";
 import { SignJWT, importJWK, exportJWK } from "jose";
-import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
+import {
+  NoMailpitMessageError,
+  waitForMailpitCode,
+} from "../support/helpers/mailpit.mjs";
 
 const config = JSON.parse(
   readFileSync(
@@ -294,7 +297,7 @@ test("existing device session reuses login across two real OAuth clients", async
   expect((await session("secondary")).did).toBe(alice.did);
   await expect(
     waitForMailpitCode({ recipient: alice.email, since, timeoutMs: 2_000 }),
-  ).rejects.toThrow("Timed out");
+  ).rejects.toThrow(NoMailpitMessageError);
 });
 
 test("an email hint for a remembered account goes straight to consent for a new client without a code", async () => {
@@ -315,7 +318,7 @@ test("an email hint for a remembered account goes straight to consent for a new 
   expect((await session("untrusted")).did).toBe(bob.did);
   await expect(
     waitForMailpitCode({ recipient: bob.email, since, timeoutMs: 2_000 }),
-  ).rejects.toThrow("Timed out");
+  ).rejects.toThrow(NoMailpitMessageError);
 });
 
 test("a returning account that approved a client still sees consent after a code sign-in", async ({
@@ -416,7 +419,7 @@ test("CSRF, hostile Origin and unvalidated callback parameters are rejected", as
       since,
       timeoutMs: 2_000,
     }),
-  ).rejects.toThrow("Timed out");
+  ).rejects.toThrow(NoMailpitMessageError);
   const unpushed = await page.request.get(
     `${config.issuer}/oauth/authorize?client_id=https://attacker.example/client.json&redirect_uri=https://attacker.example/callback`,
     { maxRedirects: 0 },

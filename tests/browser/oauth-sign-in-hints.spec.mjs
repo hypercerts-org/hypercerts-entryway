@@ -1,5 +1,8 @@
 import { test, expect } from "@playwright/test";
-import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
+import {
+  NoMailpitMessageError,
+  waitForMailpitCode,
+} from "../support/helpers/mailpit.mjs";
 import { authorizeBrowserApp } from "../support/helpers/browser-oauth.mjs";
 import { signUpOnPage } from "./support/email-chooser-fixture.mjs";
 import {
@@ -84,7 +87,7 @@ test.describe("email login_hint on the authorize redirect", () => {
     );
     await expect(
       waitForMailpitCode({ recipient: victim, since, timeoutMs: 2_000 }),
-    ).rejects.toThrow("Timed out");
+    ).rejects.toThrow(NoMailpitMessageError);
   });
 
   test("a handle hint from the pushed request wins over an email on the redirect", async () => {
@@ -101,7 +104,7 @@ test.describe("email login_hint on the authorize redirect", () => {
     await waitForMailpitCode({ recipient: account.email, since });
     await expect(
       waitForMailpitCode({ recipient: ignored, since, timeoutMs: 2_000 }),
-    ).rejects.toThrow("Timed out");
+    ).rejects.toThrow(NoMailpitMessageError);
   });
 });
 

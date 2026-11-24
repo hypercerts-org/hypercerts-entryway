@@ -1,7 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, mkdirSync } from "node:fs";
-import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
+import {
+  NoMailpitMessageError,
+  waitForMailpitCode,
+} from "../support/helpers/mailpit.mjs";
 
 const config = JSON.parse(
   readFileSync(
@@ -143,7 +146,7 @@ test("backup email requires its visible code and rejects foreign selectors, wron
       since: noMailSince,
       timeoutMs: 2_000,
     }),
-  ).rejects.toThrow("Timed out");
+  ).rejects.toThrow(NoMailpitMessageError);
 
   const foreignBackup = `other-backup-${run}@example.com`;
   await openManage(otherPage, "recovery");
@@ -179,7 +182,7 @@ test("backup email requires its visible code and rejects foreign selectors, wron
       since: noMailSince,
       timeoutMs: 2_000,
     }),
-  ).rejects.toThrow("Timed out");
+  ).rejects.toThrow(NoMailpitMessageError);
 
   await openManage(page, "recovery");
   await accountForm(page, "backup-request")
@@ -446,7 +449,7 @@ test("primary email change rejects occupied addresses and retries with visible m
       since: occupiedMailSince,
       timeoutMs: 2_000,
     }),
-  ).rejects.toThrow("Timed out waiting for a new Mailpit verification message");
+  ).rejects.toThrow(NoMailpitMessageError);
 
   await page.getByLabel("Current email verification code").fill(currentCode);
   await page.getByLabel("New primary email", { exact: true }).fill(nextEmail);
@@ -549,7 +552,7 @@ test("backup recovery verifies visible codes with retained selectors for both ma
     ].map(([recipient, since]) =>
       expect(
         waitForMailpitCode({ recipient, since, timeoutMs: 45_000 }),
-      ).rejects.toThrow("Timed out"),
+      ).rejects.toThrow(NoMailpitMessageError),
     ),
   ]);
   const backupCode = backupMessage.code;
@@ -574,7 +577,7 @@ test("backup recovery verifies visible codes with retained selectors for both ma
       since: occupiedMailSince,
       timeoutMs: 2_000,
     }),
-  ).rejects.toThrow("Timed out waiting for a new Mailpit verification message");
+  ).rejects.toThrow(NoMailpitMessageError);
 
   for (const challengeId of [unknown.challengeId, ineligible.challengeId]) {
     const fakeSelector = await page.request.post(
