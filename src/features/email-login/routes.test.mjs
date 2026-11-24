@@ -854,6 +854,18 @@ test("shared-email account choice stays mandatory and is constrained to login_hi
   );
 });
 
+test("a DID hint selects the matching shared-email account", async (t) => {
+  const did = "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb";
+  const f = await verificationFixture(t, "multiple-accounts", {
+    loginHint: did,
+  });
+  const verified = await f.request("/auth/verify", { otp: "valid-proof" });
+  assert.match(verified.body, new RegExp(did));
+  const selected = await f.request("/auth/select", { did });
+  assert.equal(selected.statusCode, 200);
+  assert.equal((await f.db.get("auth-flows", f.flow.id)).authDid, did);
+});
+
 test("an inactive chooser choice preserves verified identity so an active sibling can continue", async (t) => {
   const f = await verificationFixture(t, "multiple-accounts", {
     inactiveSecond: true,

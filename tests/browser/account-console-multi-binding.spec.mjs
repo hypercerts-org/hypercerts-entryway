@@ -84,13 +84,29 @@ for (const which of ["first", "second"]) {
   test(`standalone shared-email sign-in selects the ${which} DID`, async ({
     browser,
   }) => {
-    const context = await browser.newContext({ ignoreHTTPSErrors: false });
+    const context = await browser.newContext({
+      ignoreHTTPSErrors: false,
+      javaScriptEnabled: false,
+      viewport:
+        which === "first"
+          ? { width: 1280, height: 800 }
+          : { width: 320, height: 800 },
+    });
     try {
       const page = await context.newPage();
+      const submissions = [];
+      page.on("response", (response) => {
+        const path = new URL(response.url()).pathname;
+        if (
+          response.request().method() === "POST" &&
+          ["/auth/verify", "/auth/select"].includes(path)
+        )
+          submissions.push({ path, status: response.status() });
+      });
       await page.goto(new URL("/login", config.issuer).href);
       for (const account of [shared.first, shared.second]) {
-        await expect(page.locator("body")).not.toContainText(account.did);
-        await expect(page.locator("body")).not.toContainText(account.handle);
+        expect(await page.content()).not.toContain(account.did);
+        expect(await page.content()).not.toContain(account.handle);
       }
       const since = Date.now();
       await page
@@ -98,8 +114,8 @@ for (const which of ["first", "second"]) {
         .fill(shared.email);
       await page.getByRole("button", { name: "Send sign-in code" }).click();
       for (const account of [shared.first, shared.second]) {
-        await expect(page.locator("body")).not.toContainText(account.did);
-        await expect(page.locator("body")).not.toContainText(account.handle);
+        expect(await page.content()).not.toContain(account.did);
+        expect(await page.content()).not.toContain(account.handle);
       }
       const message = await waitForMailpitCode({
         recipient: shared.email,
@@ -114,12 +130,37 @@ for (const which of ["first", "second"]) {
         has: page.locator(`input[name="did"][value="${selected.did}"]`),
       });
       await expect(form).toHaveCount(1);
-      await form.getByRole("button").click();
+      const button = form.getByRole("button");
+      await expect(
+        page.getByText(selected.did, { exact: false }),
+      ).toBeVisible();
+      for (
+        let tab = 0;
+        tab < 20 &&
+        !(await button.evaluate(
+          (element) => element === document.activeElement,
+        ));
+        tab++
+      )
+        await page.keyboard.press("Tab");
+      await expect(button).toBeFocused();
+      await page.keyboard.press("Enter");
+      await page.waitForURL((url) => url.pathname === "/account");
+      expect(submissions).toEqual([
+        { path: "/auth/verify", status: 200 },
+        { path: "/auth/select", status: 303 },
+      ]);
       expect(new URL(page.url()).pathname).toBe("/account");
       expect(new URL(page.url()).searchParams.get("did")).toBe(selected.did);
       await expect(page.getByTestId("account-did")).toHaveText(selected.did);
       await page.reload();
+      expect(new URL(page.url()).searchParams.get("did")).toBe(selected.did);
       await expect(page.getByTestId("account-did")).toHaveText(selected.did);
+      await page.getByRole("link", { name: "Create app password" }).click();
+      await expect(page.getByText(selected.did, { exact: true })).toBeVisible();
+      await expect(
+        page.getByText(selected.handle, { exact: true }),
+      ).toBeVisible();
     } finally {
       await context.close();
     }
@@ -130,7 +171,11 @@ test("shared verified email keeps each tab and account action bound to its selec
   browser,
 }) => {
   test.setTimeout(180_000);
-  const { first, second, email: sharedEmail } = shared;
+  const {
+    first,
+    second,
+    email: sharedEmail,
+  } = await createSharedEmailPair(browser, { prefix: "cs", runId });
   const context = await browser.newContext({ ignoreHTTPSErrors: false });
   try {
     const firstTab = await context.newPage();

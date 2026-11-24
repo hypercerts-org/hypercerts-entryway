@@ -131,7 +131,7 @@ test("each linked account has its own button and status, and consent can return 
       ).toBeVisible();
       await expect(
         page.getByRole("button", {
-          name: `Continue with ${account.handle}, ${account.did}`,
+          name: `Continue with this account: ${account.handle}, ${account.did}`,
         }),
       ).toHaveCount(1);
     }
