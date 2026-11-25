@@ -461,6 +461,31 @@ test("restart requires renewed proof even for a remembered hinted DID", async (t
   assert.match(restarted.body, /action="\/auth\/email"/);
 });
 
+test("restart gives a spent per-flow code budget a fresh count", async (t) => {
+  const selectedDid = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+  const f = await fixture(t, { authDid: selectedDid });
+  await f.db.set("auth-flows", f.flow.id, {
+    ...f.flow,
+    otpRequestCount: 5,
+    lastOtpSentAt: Date.now(),
+    createdAt: new Date(Date.now() - 16 * 60_000),
+  });
+
+  const restartedPage = await f.restart();
+
+  assert.equal(restartedPage.statusCode, 200);
+  const restartedId = restartedPage.body.match(
+    /name="flow" value="([^"]+)"/,
+  )?.[1];
+  assert.ok(restartedId);
+  const restartedFlow = await f.db.get("auth-flows", restartedId);
+  // The restarted attempt sends its own code with a fresh per-flow budget;
+  // a mailbox switch instead keeps the counters (see email-login tests).
+  assert.equal(restartedFlow.otpRequestCount, undefined);
+  assert.equal(restartedFlow.lastOtpSentAt, undefined);
+  assert.equal(restartedFlow.accountHint, selectedDid);
+});
+
 test("initial authorization uses the stock authorization context", async (t) => {
   const f = await fixture(t, { autoRedirect: true });
   const response = await f.startAuthorization();
