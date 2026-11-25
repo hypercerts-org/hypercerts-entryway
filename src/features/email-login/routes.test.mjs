@@ -972,7 +972,8 @@ test("a consent page offered after a binding is lost hides the account choice", 
     did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
   });
   assert.equal(selected.statusCode, 200);
-  assert.match(selected.body, /action="\/auth\/consent"/);
+  // The real consent form, not the fixture's stub, which omits the method.
+  assert.match(selected.body, /method="post" action="\/auth\/consent"/);
   assert.match(selected.body, /did:plc:aaaaaaaaaaaaaaaaaaaaaaaa/);
   assert.doesNotMatch(selected.body, /action="\/auth\/choose"/);
   assert.doesNotMatch(selected.body, /action="\/auth\/another-account"/);
@@ -1264,7 +1265,7 @@ test("refresh after single-account verification resumes at consent without a new
   assert.equal(verified.authDid, "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa");
   // The real consent page rendered after verification offers a single
   // binding neither way to reconsider.
-  assert.match(verifiedPage.body, /action="\/auth\/consent"/);
+  assert.match(verifiedPage.body, /method="post" action="\/auth\/consent"/);
   assert.doesNotMatch(verifiedPage.body, /action="\/auth\/choose"/);
   assert.doesNotMatch(verifiedPage.body, /action="\/auth\/another-account"/);
 
