@@ -502,8 +502,9 @@ adapted to unchanged reference PDS support:
    make it eligible under the separate placement policy. Failed or incomplete
    verification must not activate an association or admit new placements.
 
-This is the approved onboarding gate, not an implemented operator CLI or registry
-workflow. Current hosts are statically configured. Whole-PDS conversion additionally
+Protected registry staging, public trust export and outbound checks are available.
+Inbound pairing and association remain unavailable, and current host routing is
+statically configured. Whole-PDS conversion additionally
 needs its [account and custody import](data-custody.md#5-migration-and-whole-pds-joining);
 it does not waive this gate or permit early effective association.
 

@@ -24,8 +24,8 @@ separate work.
 ## Staging a PDS configuration
 
 For operators preparing a host, staging records its configuration and credentials
-without associating it, verifying its endpoints, or making it eligible for
-placement. Existing static host routing remains in effect. Host verification and
+without associating it or making it eligible for placement. Existing static host
+routing remains in effect. An outbound check is available; inbound pairing and
 association are not yet available.
 
 Mount a protected JSON keyring on every Entryway node and set
@@ -70,6 +70,30 @@ node scripts/pds-registry.mjs stage --url https://entryway.example.org --auth-fi
 node scripts/pds-registry.mjs status --url https://entryway.example.org --auth-file /secure/admin
 node scripts/pds-registry.mjs list --url https://entryway.example.org --auth-file /secure/admin
 ```
+
+To run an outbound check, mount a second protected JSON file on every node and
+set `PDS_REGISTRY_TARGETS_FILE` to its path. Map each exact HTTPS origin to a
+nonempty ordered list of approved IP addresses, for example
+`{"https://pds.example.org":["192.0.2.10"],"https://pds.internal.example.org":["192.0.2.11"]}`.
+The file has the same protection requirements as the keyring. The check dials
+the first approved address for each origin, verifies the URL hostname against the
+TLS certificate, and does not follow redirects or fall back to DNS. Configure
+trusted CA certificates for the service using the normal Node.js trust settings.
+
+Export the public Entryway trust settings for the PDS operator, then check the
+exact staged revision after the operator applies them and restarts the PDS:
+
+```sh
+node scripts/pds-registry.mjs trust --url https://entryway.example.org --auth-file /secure/admin
+node scripts/pds-registry.mjs check --url https://entryway.example.org --auth-file /secure/admin --host pds-new --revision 1
+```
+
+The check compares the service DID and protected-resource issuer at both public
+and internal URLs, then performs an authenticated PDS admin read only when those
+checks match. It records a bounded result for that revision and returns nonzero
+on failure. A new check invalidates the previous result; an incomplete attempt
+can be retried after its 30-second lease. A successful outbound check does not
+prove a PDS-originated callback or permit association.
 
 For a new host use revision `0`. A retry with the same request ID and identical
 input returns the original revision; changed input conflicts. To stage a new
