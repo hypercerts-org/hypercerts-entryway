@@ -20,7 +20,9 @@ metadata URL and requested scope. Google/GitHub are outside this flow.
    picker. To use a different mailbox, choose "Use another email address" and
    verify it with a new code; the original client request, expiry, hints and
    code limits remain in effect. Returning from consent to the linked-account
-   chooser uses the existing verified mailbox instead.
+   chooser uses the existing verified mailbox instead. Reopening the
+   authorization URL after verification resumes at the consent, account choice
+   or signup page without sending another code.
 4. Complete the existing consent flow when required and assert the returned
    identity equals the intended DID and the original OAuth request is retained.
    A stale remembered device (older than seven days) lists its account as "Sign
@@ -29,6 +31,9 @@ metadata URL and requested scope. Google/GitHub are outside this flow.
    address masked and neither the address nor its local part is in the HTML.
    With a shared email the chooser stays, limited to the selected DID. Both the
    OAuth `login_hint` and selected-account hint must still match after restart.
+   Restarting an expired authorization requires renewed proof: it shows the
+   sign-in page with a fresh per-flow code budget instead of auto-signing-in a
+   remembered hinted account.
    Client trust is the Entryway-wide `OAUTH_TRUSTED_CLIENTS` list. A newly
    created account skips consent only when a trusted client's metadata opts in
    (`epds_skip_consent_on_signup`): the sandbox trusts the primary and secondary

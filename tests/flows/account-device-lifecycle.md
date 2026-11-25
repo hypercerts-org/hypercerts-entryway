@@ -36,7 +36,7 @@ and five wrong guesses spend it until the user asks for a new code. Revoking an
 app password, changing the handle and starting account deletion never ask a
 stale session to confirm, and changing a password asks for no current password.
 Each protected page identifies the selected handle and DID. A stale or revoked
-binding returns to the account chooser; select a current identity or sign in
+binding returns to account selection; select a current identity or sign in
 again before retrying. OAuth session removal looks up and removes the selected
 DID's session atomically. Browser-session removal does not necessarily revoke OAuth refresh credentials, and existing access tokens can
 remain valid until expiration.
@@ -60,8 +60,8 @@ revocation also fences redemption of an earlier code.
 ## Account actions and recovery
 
 For people managing an account, each form shows or carries the selected DID and
-requires the browser's CSRF token. A rejected or stale binding returns to the
-account chooser; select an account that remains linked, or sign in to its current
+requires the browser's CSRF token. A rejected or stale binding returns to
+account selection; select an account that remains linked, or sign in to its current
 mailbox. A failed action must not be assumed to have completed.
 
 | Action                       | Proof and outcome                                                                                                                       | Common refusal and next step                                                                                                                         |
