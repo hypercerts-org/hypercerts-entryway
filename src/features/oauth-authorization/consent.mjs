@@ -102,8 +102,9 @@ export function createConsent({
       commitCookies = () => {},
       fromChooser = false,
       newAccount = false,
-      // How many linked accounts the chooser offered this identity, so the
-      // consent page knows whether another choice exists.
+      // How many accounts the verified identity is bound to (0 when the caller
+      // does not know), so the consent page knows whether another choice
+      // exists.
       bindingCount = 0,
     } = {},
   ) => {
