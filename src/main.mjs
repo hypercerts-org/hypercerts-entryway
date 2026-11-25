@@ -6,11 +6,18 @@ import { createMailFeature } from "./mail/create-mail.js";
 import { createMailOutbox } from "./database/drizzle/mail-outbox.js";
 import { createSmtpMailTransport } from "./mail/smtp.js";
 import { createLifecycle } from "./http/lifecycle.js";
+import { bootstrapPdsRegistryKeyring } from "./database/pds-registry-bootstrap.js";
 
 const config = await loadConfig();
 const dataDir = process.env.STATE_DIRECTORY ?? "/data";
 mkdirSync(dataDir, { recursive: true });
 const db = await openDatabase(config.database);
+try {
+  await bootstrapPdsRegistryKeyring(db, process.env.PDS_REGISTRY_KEYRING_FILE);
+} catch (error) {
+  await db.close();
+  throw error;
+}
 const lifecycle = createLifecycle({
   probe: db.probe,
   configuration: config.lifecycle,
