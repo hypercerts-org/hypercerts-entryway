@@ -139,6 +139,63 @@ export function createPdsPlacement(
           : undefined;
       });
     },
+    async resolveAssociated(hostId: string, version: number) {
+      return db.transact(async () => {
+        const host = await registry.readHost(hostId);
+        const revision = await registry.readHostRevision(hostId, version);
+        const [event] = await db.read("pds_host_enrollment_events", {
+          where: and(
+            eq(db.tables.pds_host_enrollment_events.host_id, hostId),
+            eq(db.tables.pds_host_enrollment_events.revision, version),
+            eq(db.tables.pds_host_enrollment_events.kind, "associate"),
+          ),
+        });
+        if (!host || host.association !== "associated" || !revision || !event)
+          return undefined;
+        return {
+          id: revision.hostId,
+          did: revision.serviceDid,
+          url: revision.publicUrl,
+          internalUrl: revision.internalUrl,
+          revision: revision.revision,
+        };
+      });
+    },
+    async resolveLiveAssociated(hostId: string, version: number) {
+      return db.transact(async () => {
+        const host = await registry.readHost(hostId);
+        if (!host || host.lifecycle === "retired") return undefined;
+        return this.resolveAssociated(hostId, version);
+      });
+    },
+    async associatedResources() {
+      return db.transact(async () => {
+        const result: {
+          id: string;
+          did: string;
+          url: string;
+          internalUrl: string;
+          revision: number;
+        }[] = [];
+        for (const host of await registry.listHosts()) {
+          if (host.association !== "associated" || host.lifecycle === "retired")
+            continue;
+          const events = await db.read("pds_host_enrollment_events", {
+            where: and(
+              eq(db.tables.pds_host_enrollment_events.host_id, host.hostId),
+              eq(db.tables.pds_host_enrollment_events.kind, "associate"),
+            ),
+          });
+          for (const version of [
+            ...new Set(events.map((event) => event.revision)),
+          ].sort((a, b) => a - b)) {
+            const resource = await this.resolveAssociated(host.hostId, version);
+            if (resource) result.push(resource);
+          }
+        }
+        return result;
+      });
+    },
     async resolveAuthenticated(
       hostId: string,
       version: number,
@@ -161,6 +218,7 @@ export function createPdsPlacement(
         if (
           !host ||
           host.association !== "associated" ||
+          host.lifecycle === "retired" ||
           !revision ||
           !policy ||
           policy.revision !== version ||

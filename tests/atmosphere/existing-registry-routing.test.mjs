@@ -113,6 +113,9 @@ test("saved account routes to its historical registry revision after drain and r
     ...shared,
     placement,
     registryVerifier: verifier,
+    resourceFor: (account) =>
+      placement.resolveAssociated(account.pdsId, account.pdsRevision),
+    associatedPds: () => placement.associatedResources(),
     plcClient: {},
     plcSigner: {},
   };
@@ -208,6 +211,10 @@ test("saved account routes to its historical registry revision after drain and r
   );
   await assert.rejects(
     shared.admin(row, "com.atproto.admin.updateSubjectStatus", {}),
+  );
+  assert.equal(
+    (await oauth.getAccount(row.did)).account.pds,
+    "did:web:destination.example.test",
   );
   assert.equal(calls.length, 3);
 });

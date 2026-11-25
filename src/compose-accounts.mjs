@@ -111,6 +111,18 @@ export async function createAccounts({
     ...operations,
     placement,
     registryVerifier,
+    associatedPds: () =>
+      placement ? placement.associatedResources() : Promise.resolve(config.pds),
+    resourceFor: async (row) => {
+      if (!placement) return config.pds.find((pds) => pds.id === row.pdsId);
+      if (!Number.isSafeInteger(row.pdsRevision) || row.pdsRevision < 1)
+        return undefined;
+      const resource = await placement.resolveLiveAssociated(
+        row.pdsId,
+        row.pdsRevision,
+      );
+      return resource && resource.url === row.pdsUrl ? resource : undefined;
+    },
     selectRegistrationPds: () =>
       placement ? placement.select() : Promise.resolve(config.pds[0]?.id),
     plcSigner,

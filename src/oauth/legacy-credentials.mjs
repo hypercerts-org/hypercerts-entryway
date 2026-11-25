@@ -71,7 +71,7 @@ export async function createLegacy({ db, config, accounts }) {
       )
     )
       throw new HttpError(403, "AccountUnavailable", "Account is unavailable");
-    if (!config.pds.some((pds) => pds.id === account.pdsId))
+    if (!(await resourceFor(account)))
       throw new HttpError(
         403,
         "AccountUnavailable",
@@ -79,8 +79,28 @@ export async function createLegacy({ db, config, accounts }) {
       );
     return account;
   };
-  const pdsDid = (account) =>
-    config.pds.find((pds) => pds.id === account.pdsId).did;
+  const resourceFor = async (account) =>
+    accounts.resourceFor
+      ? accounts.resourceFor(account)
+      : config.pds.find((pds) => pds.id === account.pdsId);
+  const pdsDid = async (account) => {
+    const pds = await resourceFor(account);
+    if (!pds)
+      throw new HttpError(
+        403,
+        "AccountUnavailable",
+        "Account PDS is unavailable",
+      );
+    return pds.did;
+  };
+  const audiences = async () => [
+    ...new Set(
+      (accounts.associatedPds
+        ? await accounts.associatedPds()
+        : config.pds
+      ).map((pds) => pds.did),
+    ),
+  ];
   const appsFor = async (did) =>
     (await list("apps")).filter(({ value }) => value.did === did);
   const familyActive = (family) =>
@@ -258,7 +278,7 @@ export async function createLegacy({ db, config, accounts }) {
   };
   const currentAccount = async (family) => {
     const account = await accountFor(family.did, { allowDeactivated: true });
-    if (family.pdsDid !== pdsDid(account)) throw revoked();
+    if (family.pdsDid !== (await pdsDid(account))) throw revoked();
     if (
       (await credentialScope(family.did, family.appPasswordId)) !== family.scope
     )
@@ -311,7 +331,7 @@ export async function createLegacy({ db, config, accounts }) {
     const family = {
       id: identifier(),
       did: initialAccount.did,
-      pdsDid: pdsDid(initialAccount),
+      pdsDid: await pdsDid(initialAccount),
       scope: await credentialScope(
         initialAccount.did,
         authenticated.appPasswordId,
@@ -385,10 +405,7 @@ export async function createLegacy({ db, config, accounts }) {
           algorithms: ["ES256K"],
           typ: kind === "refresh" ? "refresh+jwt" : "at+jwt",
           issuer: config.issuer,
-          audience:
-            kind === "refresh"
-              ? config.serviceDid
-              : config.pds.map((pds) => pds.did),
+          audience: kind === "refresh" ? config.serviceDid : await audiences(),
           requiredClaims: ["sub", "aud", "iat", "exp", "jti", "sid"],
           ...(allowExpired ? { clockTolerance: Infinity } : {}),
         },
@@ -658,7 +675,12 @@ export async function createLegacy({ db, config, accounts }) {
     /** Signs a first family for a bound-pending account. Persists nothing, so a
      * failed later step leaves no usable family and no token ever leaves. */
     async prepare({ did, pdsId }) {
-      const pds = config.pds.find((candidate) => candidate.id === pdsId);
+      const account = accounts.resourceFor
+        ? await accounts.get(did)
+        : undefined;
+      const pds = accounts.resourceFor
+        ? account?.pdsId === pdsId && (await resourceFor(account))
+        : config.pds.find((candidate) => candidate.id === pdsId);
       if (!pds)
         throw new HttpError(
           403,
