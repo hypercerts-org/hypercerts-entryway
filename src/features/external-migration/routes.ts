@@ -190,6 +190,15 @@ export function mountIncomingRoutes({
         status,
       );
     }
+    if (
+      request.is("application/json") &&
+      mapped?.code === "PdsLifecycleIneligible"
+    ) {
+      response.set("Cache-Control", "no-store");
+      return response
+        .status(status)
+        .json({ error: mapped.code, message: mapped.message });
+    }
     if (request.is("application/json")) return next(mapped);
     if (!(status >= 400 && status < 500)) return next(mapped);
     const recovery =

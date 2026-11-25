@@ -64,6 +64,8 @@ export interface ArrivalRecord extends ArrivalPreparationAuthority {
   readonly email: string;
   readonly handle: string;
   readonly pdsId: string;
+  readonly pdsRevision?: number;
+  readonly stagedIncomingMigration?: boolean;
   readonly endpoint: string;
   readonly sourcePlcHead: string;
   readonly version: number;

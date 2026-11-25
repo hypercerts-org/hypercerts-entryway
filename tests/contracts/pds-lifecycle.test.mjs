@@ -832,3 +832,81 @@ test("managed move target classification is anchored and excludes source steps",
     assert.equal(result.kind, expected);
   }
 });
+
+test("incoming offer pins revision and capability and refuses stale replacement atomically", async (t) => {
+  const { createPdsPlacement } =
+    await import("../../dist/src/database/drizzle/pds-placement.js");
+  const { createArrivalStorage } =
+    await import("../../dist/src/database/drizzle/migration-arrival.js");
+  const { verifiedUser } = await import("../support/database-fixture.mjs");
+  const { Secp256k1Keypair } = await import("@atproto/crypto");
+  const { cidForCbor } = await import("@atproto/common");
+  const plc = await import("@did-plc/lib");
+  const { db, first, second, trust } = await fixture(t);
+  await onboard(first, "host");
+  await sample(first, "host", true);
+  await sample(first, "host", true);
+  await first.lifecycle.transition("host", "enable", 1, 0, "enable");
+  const placement = createPdsPlacement(
+    db,
+    () => trust,
+    () => "policy",
+  );
+  const arrivals = createArrivalStorage(
+    db,
+    [],
+    { readAccount: async () => null, readBinding: async () => null },
+    (host, revision) => placement.offer(host, revision),
+  );
+  await verifiedUser(db, "owner", "owner@example.test");
+  const key = await Secp256k1Keypair.create();
+  const entrywayKey = await Secp256k1Keypair.create();
+  const predecessor = await plc.signOperation(
+    plc.formatAtprotoOp({
+      signingKey: key.did(),
+      handle: "owner.example",
+      pds: "https://source.example",
+      rotationKeys: [key.did()],
+      prev: null,
+    }),
+    key,
+  );
+  const source = {
+    verificationMethods: predecessor.verificationMethods,
+    services: predecessor.services,
+    alsoKnownAs: predecessor.alsoKnownAs,
+  };
+  const offer = await placement.offer();
+  const input = {
+    operationId: "offer-one",
+    did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
+    userId: "owner",
+    email: "owner@example.test",
+    handle: "owner.example",
+    pdsId: offer.id,
+    pdsRevision: offer.revision,
+    stagedIncomingMigration: offer.stagedIncomingMigration,
+    endpoint: offer.url,
+    sourcePredecessor: predecessor,
+    source,
+    sourcePlcHead: String(await cidForCbor(predecessor)),
+    approvedRotationKeys: [key.did(), entrywayKey.did()],
+    codeHash: "a".repeat(64),
+    codeLifetimeMs: 60000,
+  };
+  const saved = await arrivals.createArrival(input);
+  assert.equal(saved.pdsRevision, 1);
+  assert.equal(saved.stagedIncomingMigration, false);
+  await second.lifecycle.transition("host", "drain", 1, 1, "drain");
+  assert.deepEqual(await arrivals.createArrival(input), saved);
+  await assert.rejects(
+    arrivals.createArrival({
+      ...input,
+      operationId: "offer-two",
+      codeHash: "b".repeat(64),
+    }),
+    /PdsLifecycleIneligible/,
+  );
+  assert.equal((await db.read("arrivals")).length, 1);
+  assert.equal((await db.read("arrivals"))[0].operation_id, "offer-one");
+});

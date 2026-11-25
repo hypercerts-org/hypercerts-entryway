@@ -32,7 +32,12 @@ export interface ArrivalHandoffFacts {
   readonly alsoKnownAs: string[];
 }
 
-type Placement = { id: string; url: string; stagedIncomingMigration?: boolean };
+type Placement = {
+  id: string;
+  url: string;
+  revision?: number;
+  stagedIncomingMigration?: boolean;
+};
 export type PrepareArrivalInput = {
   did: string;
   handle: string;
@@ -58,7 +63,7 @@ export function createIncomingPreparation({
   checkCsrf: (request: BrowserRequest, browser: unknown) => void;
   loadBrowser: (request: BrowserRequest) => Promise<unknown>;
   rateLimit: (subject: string) => Promise<void>;
-  choosePds: () => Placement;
+  choosePds: () => Placement | Promise<Placement>;
   plcClient: plc.Client;
   entrywayKey: string;
   entrywayDid: string;
@@ -78,10 +83,30 @@ export function createIncomingPreparation({
     if (!/^did:plc:[a-z2-7]{24}$/.test(input.did))
       throw new HttpError(400, "InvalidRequest", "A PLC DID is required");
     ensureValidHandle(input.handle);
-    const pds = choosePds();
     try {
+      const pds = await choosePds();
       return await prepareOwned(identity, input, pds);
     } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message === "PdsLifecycleIneligible"
+      ) {
+        const existing = await ownClaimedArrival(identity.userId, input.did);
+        if (existing) {
+          const pending = new DomainError(
+            "OperationPending",
+            409,
+            "An incoming migration is already pending",
+          );
+          Object.assign(pending, { existing });
+          throw pending;
+        }
+        throw new DomainError(
+          "PdsLifecycleIneligible",
+          409,
+          "No data server is available for a new incoming migration. Try again later.",
+        );
+      }
       await attachExistingArrival(error, identity.userId, input.did);
       throw error;
     }
@@ -98,20 +123,24 @@ export function createIncomingPreparation({
   ) {
     if (!(error instanceof DomainError) || error.code !== "OperationPending")
       return;
+    const existing = await ownClaimedArrival(userId, did);
+    if (existing) Object.assign(error, { existing });
+  }
+  async function ownClaimedArrival(userId: string, did: string) {
     try {
       const found = await arrivals.readArrivalAccess(did);
       const saved =
         found?.userId === userId
           ? await arrivals.readArrival(found.operationId, userId)
           : null;
-      if (saved)
-        Object.assign(error, {
-          existing: { operationId: saved.operationId, version: saved.version },
-        });
+      return saved && saved.claimOperationId !== null
+        ? { operationId: saved.operationId, version: saved.version }
+        : null;
     } catch {
-      // The original refusal is what the caller sees.
+      return null;
     }
   }
+
   async function prepareOwned(
     identity: { userId: string; email: string },
     input: PrepareArrivalInput,
@@ -159,6 +188,12 @@ export function createIncomingPreparation({
       userId: identity.userId,
       email: identity.email,
       pdsId: pds.id,
+      ...(pds.revision === undefined
+        ? {}
+        : {
+            pdsRevision: pds.revision,
+            stagedIncomingMigration: pds.stagedIncomingMigration === true,
+          }),
       endpoint: pds.url,
       sourcePredecessor: observed.sourcePredecessor,
       sourcePlcHead: observed.sourcePlcHead,

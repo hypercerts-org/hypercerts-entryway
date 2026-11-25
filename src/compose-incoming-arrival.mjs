@@ -24,29 +24,36 @@ import { createArrivalStorage } from "./database/drizzle/migration-arrival.js";
  * transactions. */
 export function createIncomingArrivalStorage({ db, config, accounts }) {
   const storage = accounts.storage;
-  return createArrivalStorage(db, config.pds, {
-    readAccount: (did) => storage.getByDid(did),
-    readBinding: (did) => storage.getVerifiedBinding(did),
-    reserveEmailClaim: (...args) => storage.reserveEmail(...args),
-    reserveHandleClaim: (...args) => storage.reserveHandle(...args),
-    recordSavedUserBinding: (did, userId) =>
-      storage.bindPlacedAccount(did, userId),
-    activatePlacedAccount: (did) => storage.activatePlacedAccount(did),
-    insertPlacedAccount: (input) =>
-      storage.insertAccount(
-        {
-          did: input.did,
-          email: input.email,
-          emailVerified: true,
-          handle: input.handle,
-          pdsId: input.pdsId,
-          pdsUrl: input.pdsUrl,
-          status: "provisioning",
-          createdAt: new Date().toISOString(),
-        },
-        input.userId,
-      ),
-  });
+  return createArrivalStorage(
+    db,
+    config.pds,
+    {
+      readAccount: (did) => storage.getByDid(did),
+      readBinding: (did) => storage.getVerifiedBinding(did),
+      reserveEmailClaim: (...args) => storage.reserveEmail(...args),
+      reserveHandleClaim: (...args) => storage.reserveHandle(...args),
+      recordSavedUserBinding: (did, userId) =>
+        storage.bindPlacedAccount(did, userId),
+      activatePlacedAccount: (did) => storage.activatePlacedAccount(did),
+      insertPlacedAccount: (input) =>
+        storage.insertAccount(
+          {
+            did: input.did,
+            email: input.email,
+            emailVerified: true,
+            handle: input.handle,
+            pdsId: input.pdsId,
+            pdsUrl: input.pdsUrl,
+            status: "provisioning",
+            createdAt: new Date().toISOString(),
+          },
+          input.userId,
+        ),
+    },
+    accounts.placement
+      ? (hostId, revision) => accounts.placement.offer(hostId, revision)
+      : undefined,
+  );
 }
 
 /** The application's incoming-arrival feature: production storage, the real
@@ -180,7 +187,9 @@ export async function composeIncomingArrival({
     checkCsrf: browserFlow.checkCsrf,
     loadBrowser: browserFlow.loadBrowser,
     rateLimit,
-    choosePds,
+    choosePds: accounts.placement
+      ? () => accounts.placement.offer()
+      : choosePds,
     plcClient: accounts.plcClient,
     entrywayKey: accounts.plcSigner.publicKey(),
     entrywayDid: config.serviceDid,

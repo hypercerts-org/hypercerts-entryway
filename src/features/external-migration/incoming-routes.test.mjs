@@ -437,3 +437,71 @@ test("the existing ID is attached only to the OperationPending refusal of the us
   assert.equal(cancelled.status, 200);
   assert.notEqual(cancelled.json.operationId, first.operationId);
 });
+
+test("unavailable placement is recoverable and reveals a claimed arrival only to its verified owner", async (t) => {
+  let available = true;
+  const placement = {
+    async offer() {
+      if (!available) throw new Error("PdsLifecycleIneligible");
+      return {
+        id: "pds1",
+        url: "https://destination.example.test",
+        revision: 1,
+        stagedIncomingMigration: false,
+      };
+    },
+  };
+  const f = await fixture(t, "modern", "", "", placement);
+  const h = await incomingHttp(t, f);
+  available = false;
+  const empty = await h.browser("/incoming/prepare", prepareBody(f));
+  assert.equal(empty.status, 409);
+  assert.equal(empty.json.error, "PdsLifecycleIneligible");
+  assert.equal(empty.json.operationId, undefined);
+  available = true;
+  const first = await claim(f, h);
+  available = false;
+  const owner = await h.browser("/incoming/prepare", prepareBody(f));
+  assert.equal(owner.status, 409);
+  assert.equal(owner.json.error, "OperationPending");
+  assert.equal(owner.json.operationId, first.operationId);
+  const stale = await h.browser("/incoming/prepare", prepareBody(f), {
+    otp: "stale",
+  });
+  assert.equal(stale.json.operationId, undefined);
+  f.principal.userId = "someone-else";
+  const stranger = await h.browser("/incoming/prepare", prepareBody(f));
+  assert.equal(stranger.status, 409);
+  assert.equal(stranger.json.error, "PdsLifecycleIneligible");
+  assert.equal(stranger.json.operationId, undefined);
+});
+
+test("a placement race keeps the earlier unclaimed offer and returns a stable refusal", async (t) => {
+  const placement = {
+    async offer() {
+      return {
+        id: "pds1",
+        url: "https://destination.example.test",
+        revision: 1,
+        stagedIncomingMigration: false,
+      };
+    },
+  };
+  const f = await fixture(t, "modern", "", "", placement);
+  const h = await incomingHttp(t, f);
+  const first = await h.browser("/incoming/prepare", prepareBody(f));
+  assert.equal(first.status, 200);
+  const create = f.arrivals.createArrival;
+  f.arrivals.createArrival = async () => {
+    throw new Error("PdsLifecycleIneligible");
+  };
+  const refused = await h.browser("/incoming/prepare", prepareBody(f));
+  f.arrivals.createArrival = create;
+  assert.equal(refused.status, 409);
+  assert.equal(refused.json.error, "PdsLifecycleIneligible");
+  assert.equal(
+    (await f.arrivals.readArrival(first.json.operationId, f.principal.userId))
+      .operationId,
+    first.json.operationId,
+  );
+});

@@ -28,7 +28,13 @@ export const sourceEndpoint = "https://source.example.test";
 export const email = "destination@example.test";
 export const handle = "destination.example.test";
 
-export async function fixture(t, mode = "modern", mutation = "", fault = "") {
+export async function fixture(
+  t,
+  mode = "modern",
+  mutation = "",
+  fault = "",
+  placement,
+) {
   const directory = mkdtempSync(join(tmpdir(), "arrival-preparation-"));
   const path = join(directory, "authority.sqlite");
   let db = await openTestDatabase(path);
@@ -175,6 +181,7 @@ export async function fixture(t, mode = "modern", mutation = "", fault = "") {
   let credentialsIssued = 0;
   const publicationAttempts = [];
   const accounts = {
+    ...(placement ? { placement } : {}),
     ownership,
     storage,
     get: (value) => storage.getByDid(value),

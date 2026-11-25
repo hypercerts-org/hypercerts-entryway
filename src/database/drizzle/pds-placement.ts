@@ -98,6 +98,29 @@ export function createPdsPlacement(
     async select() {
       return (await lifecycle.candidates())[0]?.hostId;
     },
+    async offer(hostId?: string, expectedRevision?: number) {
+      return db.transact(async () => {
+        const host = (await lifecycle.candidates(hostId))[0];
+        if (
+          !host ||
+          host.activeRevision === null ||
+          (expectedRevision !== undefined &&
+            host.activeRevision !== expectedRevision)
+        )
+          throw new Error("PdsLifecycleIneligible");
+        const revision = await registry.readHostRevision(
+          host.hostId,
+          host.activeRevision,
+        );
+        if (!revision) throw new Error("PdsLifecycleIneligible");
+        return {
+          id: revision.hostId,
+          url: revision.publicUrl,
+          revision: revision.revision,
+          stagedIncomingMigration: revision.stagedIncomingMigration,
+        };
+      });
+    },
     async resolve(hostId: string, revision?: number) {
       return db.transact(async () => {
         const host = await registry.readHost(hostId);
