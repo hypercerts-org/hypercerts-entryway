@@ -387,12 +387,21 @@ export function mountEmailLogin({
           throw new InvalidRequestError("Verified sign-in session expired");
         return flows.replaceFlow(current, browser);
       });
-      return pageForFlow(
-        res,
-        "Sign in",
-        loginForm(replacement, browser),
-        replacement,
-      );
+      // Answer with a GET that resumes the replacement, so reloading the page
+      // cannot re-post this retired flow id. For OAuth the authorization entry
+      // is rebuilt from the flow's own request data; admitAuthorization
+      // resolves the active attempt to the replacement and keeps the original
+      // client request. Standalone sign-in starts a fresh /login, keeping any
+      // remembered-account hint.
+      if (replacement.requestUri)
+        return res.redirect(
+          303,
+          `/oauth/authorize?client_id=${encodeURIComponent(replacement.clientId)}&request_uri=${encodeURIComponent(replacement.requestUri)}`,
+        );
+      const hint = replacement.accountHint
+        ? `?did=${encodeURIComponent(replacement.accountHint)}`
+        : "";
+      return res.redirect(303, `/login${hint}`);
     }),
   );
   app.post(

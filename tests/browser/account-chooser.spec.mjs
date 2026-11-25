@@ -97,11 +97,14 @@ test("another email completes the original authorization as its own account", as
   const context = await browser.newContext({ ignoreHTTPSErrors: false });
   try {
     const page = await context.newPage();
-    const authorizeUrl = await reachChooser(page);
+    await reachChooser(page);
     await page
       .getByRole("button", { name: "Use another email address" })
       .click();
-    await page.goto(authorizeUrl);
+    // The mailbox switch answers 303 to the authorization entry, so this
+    // immediate reload resumes the replacement sign-in instead of re-posting
+    // the retired flow id.
+    await expect(page).toHaveURL(/\/oauth\/authorize\?/);
     await page.reload();
     await expect(page.getByLabel("Email address")).toBeVisible();
     await expect(page.locator('form[action="/auth/select"]')).toHaveCount(0);

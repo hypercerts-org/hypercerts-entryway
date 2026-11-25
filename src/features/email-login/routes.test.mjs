@@ -798,12 +798,19 @@ test("another email starts a new flow while retaining the request and budgets", 
   await f.request("/auth/select", { did: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb" });
   const old = await f.db.get("auth-flows", f.flow.id);
   const response = await f.request("/auth/another-account", {});
-  assert.equal(response.statusCode, 200);
-  const replacementId = response.body.match(/name="flow" value="([^"]+)"/)?.[1];
-  assert.ok(replacementId);
-  assert.notEqual(replacementId, old.id);
+  // The POST answers with a redirect to the authorization entry, so a reload
+  // resumes the replacement instead of re-posting the retired flow id.
+  assert.equal(response.statusCode, 303);
+  assert.equal(
+    response.redirectUrl,
+    `/oauth/authorize?client_id=${encodeURIComponent(old.clientId)}&request_uri=${encodeURIComponent(old.requestUri)}`,
+  );
+  const replacement = (await f.db.list("auth-flows")).find(
+    ({ value }) => value.id !== old.id,
+  )?.value;
+  assert.ok(replacement);
   assert.equal(await f.db.get("auth-flows", old.id), null);
-  const replacement = await f.db.get("auth-flows", replacementId);
+  assert.notEqual(replacement.id, old.id);
   for (const key of [
     "requestUri",
     "clientId",
@@ -819,6 +826,32 @@ test("another email starts a new flow while retaining the request and budgets", 
   );
   for (const key of ["email", "authEmail", "authUserId", "authDid"])
     assert.equal(replacement[key], undefined);
+});
+
+test("another email on a standalone sign-in redirects to a fresh login, keeping any account hint", async (t) => {
+  const hinted = await verificationFixture(t, "multiple-accounts", {
+    standalone: true,
+  });
+  const stored = await hinted.db.get("auth-flows", hinted.flow.id);
+  await hinted.db.set("auth-flows", hinted.flow.id, {
+    ...stored,
+    accountHint: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
+  });
+  await hinted.request("/auth/verify", { otp: "valid-proof" });
+  const hintedResponse = await hinted.request("/auth/another-account", {});
+  assert.equal(hintedResponse.statusCode, 303);
+  assert.equal(
+    hintedResponse.redirectUrl,
+    `/login?did=${encodeURIComponent("did:plc:aaaaaaaaaaaaaaaaaaaaaaaa")}`,
+  );
+
+  const plain = await verificationFixture(t, "multiple-accounts", {
+    standalone: true,
+  });
+  await plain.request("/auth/verify", { otp: "valid-proof" });
+  const plainResponse = await plain.request("/auth/another-account", {});
+  assert.equal(plainResponse.statusCode, 303);
+  assert.equal(plainResponse.redirectUrl, "/login");
 });
 
 test("a verified chooser can change its account before consent is granted", async (t) => {
@@ -1187,15 +1220,18 @@ test("same mailbox reproof does not restore the retired chooser", async (t) => {
   await f.request("/auth/verify", { otp: "valid-proof" });
   const old = f.flow.id;
   const response = await f.request("/auth/another-account", {});
-  const next = response.body.match(/name="flow" value="([^"]+)"/)?.[1];
-  assert.ok(next);
+  assert.equal(response.statusCode, 303);
+  const replacementId = (await f.db.list("auth-flows")).find(
+    ({ value }) => value.id !== old,
+  )?.value.id;
+  assert.ok(replacementId);
   const send = await f.request("/auth/email", {
-    flow: next,
+    flow: replacementId,
     email: "old@example.test",
   });
   assert.equal(send.statusCode, 200);
   const verified = await f.request("/auth/verify", {
-    flow: next,
+    flow: replacementId,
     otp: "valid-proof",
   });
   assert.equal(verified.statusCode, 200);
@@ -1204,9 +1240,12 @@ test("same mailbox reproof does not restore the retired chooser", async (t) => {
     did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
   });
   assert.equal(stale.statusCode, 400);
-  assert.equal((await f.db.get("auth-flows", next)).authDid, undefined);
+  assert.equal(
+    (await f.db.get("auth-flows", replacementId)).authDid,
+    undefined,
+  );
   const valid = await f.request("/auth/select", {
-    flow: next,
+    flow: replacementId,
     did: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
   });
   assert.equal(valid.statusCode, 200);
