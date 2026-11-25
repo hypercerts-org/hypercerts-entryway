@@ -464,6 +464,23 @@ CREATE TABLE "pds_hosts" (
 	"staged_revision" bigint
 );
 --> statement-breakpoint
+CREATE TABLE "pds_placement_reservations" (
+	"id" text PRIMARY KEY,
+	"operation_id" text NOT NULL,
+	"purpose" text NOT NULL,
+	"intent" text NOT NULL,
+	"requested_host_id" text,
+	"host_id" text NOT NULL,
+	"revision" bigint NOT NULL,
+	"target" text NOT NULL,
+	"public_target" text NOT NULL,
+	"target_steps" text NOT NULL,
+	"state" text NOT NULL,
+	"dispatch_input" text,
+	"first_attempt_id" text,
+	"created_at" bigint NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "session" (
 	"id" text PRIMARY KEY,
 	"expiresAt" bigint NOT NULL,
@@ -531,6 +548,7 @@ CREATE UNIQUE INDEX "pds_health_open_incident" ON "pds_health_incidents" ("host_
 CREATE UNIQUE INDEX "pds_health_notice_role" ON "pds_health_notices" ("incident_id","phase","role");--> statement-breakpoint
 CREATE UNIQUE INDEX "pds_host_enrollment_idempotency" ON "pds_host_enrollment_events" ("host_id","kind","idempotency_key");--> statement-breakpoint
 CREATE UNIQUE INDEX "pds_host_lifecycle_command" ON "pds_host_lifecycle_events" ("host_id","command_key");--> statement-breakpoint
+CREATE UNIQUE INDEX "pds_placement_operation" ON "pds_placement_reservations" ("operation_id");--> statement-breakpoint
 CREATE INDEX "session_user_id" ON "session" ("userId");--> statement-breakpoint
 CREATE UNIQUE INDEX "user_email_ci" ON "user" (lower("email"));--> statement-breakpoint
 CREATE INDEX "verification_identifier" ON "verification" ("identifier");--> statement-breakpoint
@@ -562,4 +580,5 @@ ALTER TABLE "pds_host_manifests" ADD CONSTRAINT "pds_host_manifests_host_id_pds_
 ALTER TABLE "pds_host_revisions" ADD CONSTRAINT "pds_host_revisions_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_stage_requests" ADD CONSTRAINT "pds_host_stage_requests_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_verifier_policies" ADD CONSTRAINT "pds_host_verifier_policies_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
+ALTER TABLE "pds_placement_reservations" ADD CONSTRAINT "pds_placement_reservations_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "session" ADD CONSTRAINT "session_userId_user_id_fkey" FOREIGN KEY ("userId") REFERENCES "user"("id") ON DELETE CASCADE;

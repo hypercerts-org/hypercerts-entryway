@@ -817,3 +817,26 @@ export const pds_host_lifecycle_events = table(
     uniqueIndex("pds_host_lifecycle_command").on(t.host_id, t.command_key),
   ],
 );
+
+export const pds_placement_reservations = table(
+  "pds_placement_reservations",
+  {
+    id: text("id").primaryKey(),
+    operation_id: text("operation_id").notNull(),
+    purpose: text("purpose").notNull(),
+    intent: text("intent").notNull(),
+    requested_host_id: text("requested_host_id"),
+    host_id: text("host_id")
+      .notNull()
+      .references(() => pds_hosts.id),
+    revision: count("revision").notNull(),
+    target: text("target").notNull(),
+    public_target: text("public_target").notNull(),
+    target_steps: text("target_steps").notNull(),
+    state: text("state").notNull(),
+    dispatch_input: text("dispatch_input"),
+    first_attempt_id: text("first_attempt_id"),
+    created_at: count("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("pds_placement_operation").on(t.operation_id)],
+);

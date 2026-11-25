@@ -34,6 +34,7 @@ const productTables: TableName[] = [
   "custody_operations",
   "custody_observations",
   "custody_history",
+  "pds_placement_reservations",
   "authority_operations",
   "operation_admissions",
   "external_operation_attempts",

@@ -65,9 +65,14 @@ async function fixture(t, mode = "registry-bootstrap") {
       ),
     };
   };
-  return { db, peer, first: node(db), second: node(peer) };
+  return { db, peer, trust, first: node(db), second: node(peer) };
 }
-async function onboard(node, id, order = 1) {
+async function onboard(
+  node,
+  id,
+  order = 1,
+  internalUrl = `https://${id}.example`,
+) {
   const { registry, checks, enrollment } = node;
   await registry.stageHostWithCredentials(
     {
@@ -75,7 +80,7 @@ async function onboard(node, id, order = 1) {
         hostId: id,
         serviceDid: `did:web:${id}.example`,
         publicUrl: `https://${id}.example`,
-        internalUrl: `https://${id}.example`,
+        internalUrl,
         order,
       },
       credentials: {
@@ -329,4 +334,293 @@ test("retirement fences discovery-to-claim and in-flight completion without late
   assert.equal((await db.read("pds_health_incidents")).length, 0);
   assert.equal((await db.read("mail_outbox")).length, 0);
   assert.equal((await health.status("second")).observedAt, null);
+});
+
+test("placement reserves once and commits refusal before dispatch when host drains", async (t) => {
+  const { createPdsPlacement } =
+    await import("../../dist/src/database/drizzle/pds-placement.js");
+  const { createOperationOwnershipStore } =
+    await import("../../dist/src/database/drizzle/operation-ownership.js");
+  const { db, peer, trust, first } = await fixture(t);
+  await onboard(first, "host");
+  await sample(first, "host", true);
+  await sample(first, "host", true);
+  await first.lifecycle.transition("host", "enable", 1, 0, "enable");
+  const ownership = createOperationOwnershipStore(db);
+  const claim = await ownership.acquire({
+    resource: "placement-test",
+    kind: "registration",
+    requestDigest: "a".repeat(64),
+    workerId: "worker",
+    leaseMs: 60000,
+  });
+  const placement = createPdsPlacement(
+    db,
+    () => trust,
+    () => "policy",
+  );
+  const otherPlacement = createPdsPlacement(
+    peer,
+    () => trust,
+    () => "policy",
+  );
+  const [reservation, replay] = await Promise.all([
+    placement.reserve(claim, "registration", "d".repeat(64), [
+      "reserve-key",
+      "key",
+      "create",
+    ]),
+    otherPlacement.reserve(claim, "registration", "d".repeat(64), [
+      "reserve-key",
+      "key",
+      "create",
+    ]),
+  ]);
+  assert.equal(reservation.id, replay.id);
+  await assert.rejects(
+    placement.reserve(claim, "registration", "e".repeat(64), [
+      "reserve-key",
+      "key",
+      "create",
+    ]),
+    /PdsPlacementConflict/,
+  );
+  const source = await ownership.beginExternal(claim, {
+    step: "source",
+    target: reservation.target,
+    method: "source",
+    intentDigest: "c".repeat(64),
+  });
+  await ownership.acknowledgeExternal(claim, source, {});
+  await first.lifecycle.transition("host", "drain", 1, 1, "drain");
+  await assert.rejects(
+    first.lifecycle.transition("host", "retire", 1, 2, "retire"),
+  );
+  const input = {
+    step: "reserve-key",
+    target: reservation.target,
+    method: "reserve",
+    intentDigest: "b".repeat(64),
+  };
+  assert.deepEqual(
+    await placement.beginFirstDispatch(claim, reservation.id, input),
+    { kind: "refused" },
+  );
+  assert.deepEqual(
+    await placement.beginFirstDispatch(claim, reservation.id, input),
+    { kind: "refused" },
+  );
+  assert.equal((await db.read("external_operation_attempts")).length, 1);
+  assert.equal(
+    (await db.read("authority_operations"))[0].phase,
+    "placement-refused",
+  );
+});
+
+test("first placement dispatch commits its reservation and external marker atomically", async (t) => {
+  const { createPdsPlacement } =
+    await import("../../dist/src/database/drizzle/pds-placement.js");
+  const { createOperationOwnershipStore } =
+    await import("../../dist/src/database/drizzle/operation-ownership.js");
+  const { db, peer, trust, first } = await fixture(t);
+  await onboard(first, "host");
+  await sample(first, "host", true);
+  await sample(first, "host", true);
+  await first.lifecycle.transition("host", "enable", 1, 0, "enable");
+  const ownership = createOperationOwnershipStore(db);
+  const claim = await ownership.acquire({
+    resource: "placement-test",
+    kind: "registration",
+    requestDigest: "a".repeat(64),
+    workerId: "worker",
+    leaseMs: 60000,
+  });
+  const placement = createPdsPlacement(
+    db,
+    () => trust,
+    () => "policy",
+  );
+  const reservation = await placement.reserve(
+    claim,
+    "registration",
+    "d".repeat(64),
+    ["reserve-key", "key", "create"],
+  );
+  const input = {
+    step: "reserve-key",
+    target: reservation.target,
+    method: "reserve",
+    intentDigest: "b".repeat(64),
+  };
+  await failureTrigger(
+    db,
+    "placement_failure",
+    "external_operation_attempts",
+    "Injected placement failure",
+  );
+  await assert.rejects(
+    placement.beginFirstDispatch(claim, reservation.id, input),
+    hasFailure("Injected placement failure"),
+  );
+  assert.equal(
+    (await db.read("pds_placement_reservations"))[0].state,
+    "reserved",
+  );
+  assert.equal((await db.read("external_operation_attempts")).length, 0);
+  await removeFailureTrigger(
+    db,
+    "placement_failure",
+    "external_operation_attempts",
+  );
+  const other = createPdsPlacement(
+    peer,
+    () => trust,
+    () => "policy",
+  );
+  const results = await Promise.all([
+    placement.beginFirstDispatch(claim, reservation.id, input),
+    other.beginFirstDispatch(claim, reservation.id, input),
+  ]);
+  assert.deepEqual(results.map((result) => result.kind).sort(), [
+    "dispatched",
+    "existing",
+  ]);
+  assert.equal(
+    (await db.read("pds_placement_reservations"))[0].state,
+    "dispatched",
+  );
+  assert.equal((await db.read("external_operation_attempts")).length, 1);
+  const replay = await placement.beginFirstDispatch(claim, reservation.id, {
+    step: "reserve-key",
+    target: reservation.target,
+    method: "reserve",
+    intentDigest: "b".repeat(64),
+  });
+  assert.equal(replay.kind, "existing");
+  await assert.rejects(
+    placement.beginFirstDispatch(claim, reservation.id, {
+      step: "reserve-key",
+      target: reservation.target,
+      method: "reserve",
+      intentDigest: "c".repeat(64),
+    }),
+    /PdsPlacementConflict/,
+  );
+  const original = results.find(
+    (result) => result.kind === "dispatched",
+  ).attempt;
+  await ownership.release(claim);
+  await ownership.approveRecovery({
+    operationId: claim.operationId,
+    externalAttemptId: original.id,
+    executionAttemptId: original.executionAttemptId,
+    target: original.target,
+    dispatcherIsolationReference: "fixture:dispatcher-isolated",
+    upstreamDrainReference: "fixture:upstream-drained",
+    action: "retry-if-safe",
+  });
+  const resumed = await ownership.acquire({
+    resource: claim.resource,
+    kind: claim.kind,
+    requestDigest: claim.requestDigest,
+    workerId: "resumed-worker",
+    leaseMs: 60000,
+  });
+  const replacement = await ownership.beginExternal(
+    resumed,
+    input,
+    "unapplied",
+  );
+  assert.notEqual(replacement.id, original.id);
+  const originalReplay = await placement.beginFirstDispatch(
+    resumed,
+    reservation.id,
+    input,
+  );
+  assert.equal(originalReplay.kind, "existing");
+  assert.equal(originalReplay.attempt.id, original.id);
+});
+
+test("an independent reservation blocks retirement even without an operation row", async (t) => {
+  const { db, first } = await fixture(t);
+  await onboard(first, "host");
+  await db.insert("pds_placement_reservations", {
+    id: "reservation",
+    operation_id: "independent",
+    purpose: "registration",
+    intent: "d".repeat(64),
+    requested_host_id: null,
+    host_id: "host",
+    revision: 1,
+    target: "https://host.example",
+    public_target: "https://host.example",
+    target_steps: "[]",
+    state: "reserved",
+    created_at: await db.databaseTime(),
+  });
+  await assert.rejects(
+    first.lifecycle.transition("host", "retire", 1, 0, "retire"),
+  );
+  assert.equal((await first.registry.readHost("host")).lifecycle, "disabled");
+});
+
+test("prior target dispatch prevents refusal while unrelated source evidence does not", async (t) => {
+  const { createPdsPlacement } =
+    await import("../../dist/src/database/drizzle/pds-placement.js");
+  const { createOperationOwnershipStore } =
+    await import("../../dist/src/database/drizzle/operation-ownership.js");
+  const { db, first, trust } = await fixture(t);
+  await onboard(first, "host", 1, "https://internal.host.example");
+  await sample(first, "host", true);
+  await sample(first, "host", true);
+  await first.lifecycle.transition("host", "enable", 1, 0, "enable");
+  const ownership = createOperationOwnershipStore(db);
+  const claim = await ownership.acquire({
+    resource: "prior-target",
+    kind: "registration",
+    requestDigest: "a".repeat(64),
+    workerId: "worker",
+    leaseMs: 60000,
+  });
+  const placement = createPdsPlacement(
+    db,
+    () => trust,
+    () => "policy",
+  );
+  const reservation = await placement.reserve(
+    claim,
+    "registration",
+    "d".repeat(64),
+    ["reserve-key", "key", "create"],
+  );
+  const source = await ownership.beginExternal(claim, {
+    step: "source",
+    target: reservation.target,
+    method: "source",
+    intentDigest: "b".repeat(64),
+  });
+  await ownership.acknowledgeExternal(claim, source, {});
+  const prior = await ownership.beginExternal(claim, {
+    step: "key",
+    target: reservation.public_target,
+    method: "reserve",
+    intentDigest: "c".repeat(64),
+  });
+  await ownership.acknowledgeExternal(claim, prior, {});
+  await first.lifecycle.transition("host", "drain", 1, 1, "drain");
+  const result = await placement.beginFirstDispatch(claim, reservation.id, {
+    step: "create",
+    target: reservation.target,
+    method: "create",
+    intentDigest: "e".repeat(64),
+  });
+  assert.equal(result.kind, "prior-dispatch");
+  assert.equal(
+    (await db.read("pds_placement_reservations"))[0].state,
+    "reserved",
+  );
+  assert.notEqual(
+    (await db.read("authority_operations"))[0].phase,
+    "placement-refused",
+  );
 });
