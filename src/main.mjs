@@ -36,17 +36,18 @@ const lifecycle = createLifecycle({
   probe: db.probe,
   configuration: config.lifecycle,
 });
-let app, reconcile, mail, sampleHealth, processHealthNotices;
+let app, reconcile, mail, sampleHealth, processHealthNotices, sweepHealth;
 if (config.authorityMode === "registry-bootstrap") {
-  ({ app, sampleHealth, processHealthNotices } = createRegistryBootstrap({
-    config,
-    db,
-    lifecycle,
-    registryKeyring,
-    registryTargets,
-    healthContacts,
-    workerId: lifecycle.instanceId,
-  }));
+  ({ app, sampleHealth, processHealthNotices, sweepHealth } =
+    createRegistryBootstrap({
+      config,
+      db,
+      lifecycle,
+      registryKeyring,
+      registryTargets,
+      healthContacts,
+      workerId: lifecycle.instanceId,
+    }));
 } else {
   mail = createMailFeature({
     workerId: lifecycle.instanceId,
@@ -85,7 +86,14 @@ const runWorker = (name, work) => {
 };
 // Shared durable claims protect independent processes. Local tracking coalesces
 // scheduling and lets shutdown wait for admitted work, including SMTP delivery.
-let repairTimer, mailTimer, healthTimer, healthNoticeTimer;
+let repairTimer, mailTimer, healthTimer, healthNoticeTimer, healthSweepTimer;
+if (sweepHealth) {
+  runWorker("pds-health-sweep", sweepHealth);
+  healthSweepTimer = setInterval(
+    () => runWorker("pds-health-sweep", sweepHealth),
+    config.pdsHealth.intervalMs,
+  ).unref();
+}
 if (processHealthNotices) {
   runWorker("pds-health-notices", processHealthNotices);
   healthNoticeTimer = setInterval(
@@ -121,7 +129,9 @@ for (const signal of ["SIGTERM", "SIGINT"])
     clearInterval(mailTimer);
     clearInterval(healthTimer);
     clearInterval(healthNoticeTimer);
+    clearInterval(healthSweepTimer);
     sampleHealth?.stop();
+    sweepHealth?.stop();
     void lifecycle
       .stop(server, () => db.close())
       .then((outcome) => {

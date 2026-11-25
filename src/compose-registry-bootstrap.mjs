@@ -3,6 +3,7 @@ import express from "express";
 import { HttpError } from "./http/http-error.mjs";
 import { canonicalBasic } from "./http/authorization-scheme.js";
 import { requestFailureEvent } from "./logging/request-event.js";
+import { createPdsHealthSweep } from "./database/drizzle/pds-health-sweep.js";
 import { createPdsHealthIncidents } from "./database/drizzle/pds-health-incidents.js";
 import { createMailOutbox } from "./database/drizzle/mail-outbox.js";
 import { createMailFeature } from "./mail/create-mail.js";
@@ -73,6 +74,9 @@ export function createRegistryBootstrap({
   const outbox = createMailOutbox(db);
   const incidents = createPdsHealthIncidents(db, outbox, healthContacts);
   const health = createPdsHealthStore(db, incidents);
+  const sweep = createPdsHealthSweep(db, incidents);
+  const sweepHealth = () => sweep.run();
+  sweepHealth.stop = () => sweep.stop();
   const mail = createMailFeature({
     outbox,
     workerId,
@@ -119,5 +123,5 @@ export function createRegistryBootstrap({
           : "The operation could not be completed. Retry or inspect service logs.",
     });
   });
-  return { app, sampleHealth, processHealthNotices };
+  return { app, sampleHealth, processHealthNotices, sweepHealth };
 }

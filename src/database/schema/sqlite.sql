@@ -317,6 +317,7 @@ CREATE TABLE `pds_health_incidents` (
 	`host_id` text NOT NULL,
 	`revision` integer NOT NULL,
 	`generation` integer NOT NULL,
+	`cause` text NOT NULL,
 	`opened_at` integer NOT NULL,
 	`closed_at` integer,
 	`state` text NOT NULL,
@@ -332,6 +333,15 @@ CREATE TABLE `pds_health_notices` (
 	`outbox_id` text,
 	`created_at` integer NOT NULL,
 	CONSTRAINT `fk_pds_health_notices_incident_id_pds_health_incidents_id_fk` FOREIGN KEY (`incident_id`) REFERENCES `pds_health_incidents`(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `pds_health_sweep` (
+	`id` integer PRIMARY KEY,
+	`generation` integer NOT NULL,
+	`claim_id` text,
+	`lease_expires_at` integer,
+	`last_clock` integer NOT NULL,
+	`cursor` text NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE `pds_host_checks` (
@@ -413,6 +423,7 @@ CREATE TABLE `pds_host_health` (
 	`policy_generation` integer NOT NULL,
 	`policy_fingerprint` text NOT NULL,
 	`observed_at` integer,
+	`monitor_observed_at` integer,
 	`completed_at` integer,
 	`public_ok` integer,
 	`internal_ok` integer,

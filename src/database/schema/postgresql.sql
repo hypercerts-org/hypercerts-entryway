@@ -301,6 +301,7 @@ CREATE TABLE "pds_health_incidents" (
 	"host_id" text NOT NULL,
 	"revision" bigint NOT NULL,
 	"generation" bigint NOT NULL,
+	"cause" text NOT NULL,
 	"opened_at" bigint NOT NULL,
 	"closed_at" bigint,
 	"state" text NOT NULL
@@ -314,6 +315,15 @@ CREATE TABLE "pds_health_notices" (
 	"recipient" text,
 	"outbox_id" text,
 	"created_at" bigint NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "pds_health_sweep" (
+	"id" integer PRIMARY KEY,
+	"generation" bigint NOT NULL,
+	"claim_id" text,
+	"lease_expires_at" bigint,
+	"last_clock" bigint NOT NULL,
+	"cursor" text NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "pds_host_checks" (
@@ -391,6 +401,7 @@ CREATE TABLE "pds_host_health" (
 	"policy_generation" bigint NOT NULL,
 	"policy_fingerprint" text NOT NULL,
 	"observed_at" bigint,
+	"monitor_observed_at" bigint,
 	"completed_at" bigint,
 	"public_ok" boolean,
 	"internal_ok" boolean,

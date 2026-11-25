@@ -117,6 +117,10 @@ export function createPdsHealthStore(
             };
         const value = {
           ...reset,
+          monitor_observed_at:
+            previous?.revision === revision
+              ? previous.monitor_observed_at
+              : null,
           revision,
           generation,
           claim_id: claimId,
@@ -140,6 +144,7 @@ export function createPdsHealthStore(
             policy_generation: policy.generation,
             policy_fingerprint: policy.fingerprint,
             observed_at: null,
+            monitor_observed_at: null,
             completed_at: null,
             public_ok: null,
             internal_ok: null,
@@ -212,6 +217,7 @@ export function createPdsHealthStore(
             claim_expires_at: null,
             claim_started_at: null,
             observed_at: claim.observedAt,
+            monitor_observed_at: claim.observedAt,
             completed_at: now,
             public_ok: observation.publicOk,
             internal_ok: observation.internalOk,
