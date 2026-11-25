@@ -61,7 +61,14 @@ export async function createAccounts({
       }),
   );
   const custody = createCustodyInventoryStorage(db);
-  const shared = createAccountPrimitives({ db, config, storage, ownership });
+  const shared = createAccountPrimitives({
+    db,
+    config,
+    storage,
+    ownership,
+    placement,
+    registryVerifier,
+  });
   const observeCustody = async (did) => {
     const observation = await readCustodyObservation(
       plcClient,

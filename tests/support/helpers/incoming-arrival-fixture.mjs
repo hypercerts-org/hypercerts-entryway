@@ -160,12 +160,9 @@ export async function fixture(
       jwtPublicKeyHex: "public",
       plcRotationKeyDid: "did:key:fixture",
     };
+    const policyFor = options.registryPolicy ?? (() => "policy");
     const registry = createPdsRegistry(db, keys, () => trust);
-    const checks = createPdsOutboundCheckStore(
-      db,
-      () => trust,
-      () => "policy",
-    );
+    const checks = createPdsOutboundCheckStore(db, () => trust, policyFor);
     const health = createPdsHealthStore(db);
     const enrollment = createPdsEnrollment(db, registry, checks);
     const lifecycle = createPdsLifecycle(
@@ -173,7 +170,7 @@ export async function fixture(
       registry,
       health,
       () => trust,
-      () => "policy",
+      policyFor,
     );
     await registry.stageHostWithCredentials(
       {
@@ -217,18 +214,22 @@ export async function fixture(
       idempotencyKey: "associate",
     });
     for (let index = 0; index < 2; index++)
-      await health.complete(await health.claim("pds1", 1, 30000, 0, "policy"), {
-        publicOk: true,
-        internalOk: true,
-      });
+      await health.complete(
+        await health.claim(
+          "pds1",
+          1,
+          30000,
+          0,
+          policyFor(await registry.readHostRevision("pds1", 1)),
+        ),
+        {
+          publicOk: true,
+          internalOk: true,
+        },
+      );
     await lifecycle.transition("pds1", "enable", 1, 0, "enable");
-    placement = createPdsPlacement(
-      db,
-      () => trust,
-      () => "policy",
-      keys,
-    );
-    options.onRegistry?.({ lifecycle, registry, placement });
+    placement = createPdsPlacement(db, () => trust, policyFor, keys);
+    options.onRegistry?.({ lifecycle, registry, placement, keys, trust });
   }
   const storage = createAccountStorage(db, hosts);
   // The application's own arrival persistence, never a fixture copy.
