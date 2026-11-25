@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { registryProtectedResource } from "../../pds/registry-resource.js";
 import { DomainError } from "../../accounts/errors.js";
 import { and, eq, or } from "drizzle-orm";
 import type { DatabaseExecutor } from "../executor.js";
@@ -193,6 +194,7 @@ export function createPdsPlacement(
           url: string;
           internalUrl: string;
           revision: number;
+          protectedResource: string;
         }[] = [];
         for (const host of await registry.listHosts()) {
           if (host.association !== "associated" || host.lifecycle === "retired")
@@ -207,7 +209,20 @@ export function createPdsPlacement(
             ...new Set(events.map((event) => event.revision)),
           ].sort((a, b) => a - b)) {
             const resource = await this.resolveAssociated(host.hostId, version);
-            if (resource) result.push(resource);
+            if (resource) {
+              const revision = await registry.readHostRevision(
+                host.hostId,
+                version,
+              );
+              if (!revision) throw new Error("PdsHostRevisionConflict");
+              result.push({
+                ...resource,
+                protectedResource: registryProtectedResource(
+                  revision.publicUrl,
+                  revision.stagedIncomingMigration,
+                ),
+              });
+            }
           }
         }
         return result;

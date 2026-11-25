@@ -16,6 +16,7 @@ restore() {
 }
 trap restore EXIT
 node "$root/tests/atmosphere/validate-access.mjs" "$SANDBOX_CHECKOUT/access.json" "$SANDBOX_PROJECT"
+export REGISTRY_TEST_DNS=$(node --input-type=module -e 'import {readFileSync} from "node:fs"; const access=JSON.parse(readFileSync(process.argv[1],"utf8")); console.log(access.network.dnsAddress)' "$SANDBOX_CHECKOUT/access.json")
 gateway=$(node --input-type=module -e 'import {readFileSync} from "node:fs"; const access=JSON.parse(readFileSync(process.argv[1],"utf8")); console.log(access.network.httpsGatewayAddress)' "$SANDBOX_CHECKOUT/access.json")
 compose up -d --wait entryway-postgres
 compose build test
@@ -49,5 +50,6 @@ serving_compose run --rm --no-deps -e "REGISTRY_TEST_DATABASE_URL=postgresql://a
 serving_compose stop bootstrap-a bootstrap-b
 serving_compose up -d --no-deps --wait bootstrap-a bootstrap-b
 serving_compose run --rm --no-deps test node tests/atmosphere/registry-serving.mjs verify
+serving_compose up -d --no-deps --wait entryway-browser-client
 serving_compose build browser
 serving_compose run --rm --no-deps browser node tests/atmosphere/registry-serving-browser.mjs

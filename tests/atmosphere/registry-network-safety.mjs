@@ -45,8 +45,12 @@ if (process.argv.includes("--client")) {
         hostId: "fixture",
         revision: 1,
         serviceDid: "did:web:fixture.test",
-        publicUrl: `${origin}/`,
+        publicUrl: process.env.PDS_TEST_MODE.startsWith("staged-")
+          ? `${origin}/staged/resource`
+          : `${origin}/`,
         internalUrl: `${origin}/`,
+        stagedIncomingMigration:
+          process.env.PDS_TEST_MODE.startsWith("staged-"),
         order: 1,
       },
       "https://issuer.example",
@@ -61,9 +65,14 @@ if (process.argv.includes("--client")) {
       oversized: "invalid-response",
       timeout: "network-error",
       hostname: "network-error",
+      "staged-valid": "ok",
+      "staged-mismatch": "metadata-mismatch",
     }[process.env.PDS_TEST_MODE];
     assert.equal(result.reason, expected);
-    assert.equal(result.adminAttempted, false);
+    assert.equal(
+      result.adminAttempted,
+      process.env.PDS_TEST_MODE === "staged-valid",
+    );
   }
 } else {
   const directory = mkdtempSync(join(tmpdir(), "entryway-tls-fixture-"));
@@ -127,6 +136,11 @@ if (process.argv.includes("--client")) {
           return;
         }
         if (req.url === "/xrpc/com.atproto.server.describeServer") {
+          if (mode.startsWith("staged-")) {
+            res.setHeader("content-type", "application/json");
+            res.end(JSON.stringify({ did: "did:web:fixture.test" }));
+            return;
+          }
           if (mode === "redirect") {
             res.writeHead(302, { location: "/redirect-target" });
             res.end();
@@ -141,7 +155,12 @@ if (process.argv.includes("--client")) {
         res.setHeader("content-type", "application/json");
         res.end(
           JSON.stringify({
-            resource: `${origin}/`,
+            resource:
+              mode === "staged-valid"
+                ? `${origin}/staged/resource`
+                : mode === "staged-mismatch"
+                  ? `${origin}/other`
+                  : origin,
             authorization_servers: ["https://issuer.example"],
           }),
         );
@@ -228,6 +247,8 @@ if (process.argv.includes("--client")) {
         "oversized",
         "timeout",
         "hostname",
+        "staged-valid",
+        "staged-mismatch",
         "transport-good",
         "transport-204",
         "transport-205",
@@ -260,7 +281,7 @@ if (process.argv.includes("--client")) {
         assert.equal(code, 0);
       }
       assert.equal(redirectHits, 0);
-      assert.equal(adminHits, 0);
+      assert.equal(adminHits, 1);
       assert.equal(transportHits, 4);
       console.log(
         "registry network: redirect, response bound and deadline controls passed",

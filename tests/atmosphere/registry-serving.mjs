@@ -158,7 +158,7 @@ try {
       );
       assert.equal(metadata.status, 200);
       assert.deepEqual(metadata.body.protected_resources, [
-        new URL(host.url).href,
+        new URL(host.url).origin,
       ]);
       assert.deepEqual(
         (await request(node, "/admin/pds-registry/phase")).body,

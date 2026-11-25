@@ -1,4 +1,12 @@
+x-browser-client: &browser-client
+  BROWSER_CLIENT_METADATA_URL: https://browser.atmosbox.internal/oauth-client-metadata.json
 services:
-  bootstrap-b:
+  bootstrap-a:
+    dns: ["${REGISTRY_TEST_DNS:?}"]
     environment:
+      <<: *browser-client
+  bootstrap-b:
+    dns: ["${REGISTRY_TEST_DNS:?}"]
+    environment:
+      <<: *browser-client
       PDS_REGISTRY_TARGETS_FILE: /config/registry-targets.json

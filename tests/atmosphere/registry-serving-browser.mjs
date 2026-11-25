@@ -73,8 +73,34 @@ try {
   await page.reload();
   await page.getByRole("heading", { name: "Account settings" }).waitFor();
   assert.equal(await page.getByTestId("account-did").textContent(), did);
+  // The node-selection header is an ingress test control, not an OAuth client header.
+  await context.setExtraHTTPHeaders({});
+  await page.goto("https://browser.atmosbox.internal");
+  await page.getByLabel("Handle", { exact: true }).fill(handle);
+  await page.getByRole("button", { name: "Continue" }).click();
+  const consent = page.locator('form[action="/auth/consent"]').filter({
+    has: page.locator(`input[name="did"][value="${did}"]`),
+  });
+  await consent.getByRole("button", { name: "Allow access" }).click();
+  await page
+    .locator("#verified-did")
+    .getByText(did)
+    .waitFor({ timeout: 30000 });
+  assert.equal(await page.locator("#issuer").textContent(), config.issuer);
+  const post = `registry-${randomUUID()}`;
+  await page.getByLabel("Post").fill(post);
+  await page.getByRole("button", { name: "Create post" }).click();
+  const recordLink = page.getByRole("link", {
+    name: "View the record on this PDS",
+  });
+  await recordLink.waitFor({ timeout: 15000 });
+  const recordUrl = new URL(await recordLink.getAttribute("href"));
+  assert.equal(recordUrl.searchParams.get("repo"), did);
+  const recordResponse = await page.request.get(recordUrl.href);
+  assert.equal(recordResponse.ok(), true);
+  assert.equal((await recordResponse.json()).value.text, post);
   console.log(
-    "registry browser: real OTP signup, explicit host and cross-node access after drain passed",
+    "registry browser: OTP signup, cross-node access and OAuth post after drain passed",
   );
 } finally {
   await context.close();

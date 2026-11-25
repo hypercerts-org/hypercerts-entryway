@@ -1640,7 +1640,7 @@ test("associated resource readers exclude staged hosts and preserve drained hist
     return body;
   };
   assert.deepEqual((await metadata(handlers[0])).protected_resources, [
-    "https://host.example/",
+    "https://host.example",
   ]);
   assert.deepEqual(
     (await nodeA.associatedResources()).map((host) => host.id),
@@ -1658,7 +1658,7 @@ test("associated resource readers exclude staged hosts and preserve drained hist
     ["host"],
   );
   assert.deepEqual((await metadata(handlers[1])).protected_resources, [
-    "https://host.example/",
+    "https://host.example",
   ]);
   const check = await first.checks.begin("staged", 1);
   const receipt = await first.checks.complete("staged", 1, check.attemptId, {
@@ -1686,8 +1686,8 @@ test("associated resource readers exclude staged hosts and preserve drained hist
   });
   for (const handler of handlers)
     assert.deepEqual((await metadata(handler)).protected_resources, [
-      "https://host.example/",
-      "https://staged.example/",
+      "https://host.example",
+      "https://staged.example",
     ]);
   const { createAccounts } =
     await import("../../dist/src/compose-accounts.mjs");
@@ -1717,7 +1717,7 @@ test("associated resource readers exclude staged hosts and preserve drained hist
   await first.lifecycle.transition("host", "retire", 1, 2, "retire");
   for (const handler of handlers)
     assert.deepEqual((await metadata(handler)).protected_resources, [
-      "https://staged.example/",
+      "https://staged.example",
     ]);
   assert.equal(
     (await nodeB.resolveAssociated("host", 1)).did,
