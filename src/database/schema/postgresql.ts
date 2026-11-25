@@ -21,6 +21,10 @@ const time = customType<{ data: Date; driverData: string }>({
   fromDriver: (value) => new Date(Number(value)),
 });
 const count = (name: string) => bigint(name, { mode: "number" });
+export const authority_mode = table("authority_mode", {
+  id: integer("id").primaryKey(),
+  mode: text("mode").notNull(),
+});
 // Explicit Better Auth 1.7.3 core schema; emailOTP persists proofs in verification.
 export const user = table(
   "user",

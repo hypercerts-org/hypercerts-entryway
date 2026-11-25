@@ -132,6 +132,11 @@ CREATE TABLE "arrivals" (
 	CONSTRAINT "arrival_complete" CHECK (("completed_at" IS NULL) OR ("completed_at" IS NOT NULL AND "bound_at" IS NOT NULL AND "activation_method" IS NOT NULL))
 );
 --> statement-breakpoint
+CREATE TABLE "authority_mode" (
+	"id" integer PRIMARY KEY,
+	"mode" text NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "authority_operations" (
 	"id" text PRIMARY KEY,
 	"kind" text NOT NULL,

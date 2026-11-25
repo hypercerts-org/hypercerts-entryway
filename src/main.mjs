@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { loadConfig } from "./config.mjs";
 import { createApp } from "./app.mjs";
+import { createRegistryBootstrap } from "./compose-registry-bootstrap.mjs";
 import { openDatabase } from "./database/connection.js";
 import { createMailFeature } from "./mail/create-mail.js";
 import { createMailOutbox } from "./database/drizzle/mail-outbox.js";
@@ -12,7 +13,7 @@ import { bootstrapPdsRegistryKeyring } from "./database/pds-registry-bootstrap.j
 const config = await loadConfig();
 const dataDir = process.env.STATE_DIRECTORY ?? "/data";
 mkdirSync(dataDir, { recursive: true });
-const db = await openDatabase(config.database);
+const db = await openDatabase(config.database, config.authorityMode);
 let registryKeyring, registryTargets;
 try {
   ({ keyring: registryKeyring } = await bootstrapPdsRegistryKeyring(
@@ -31,19 +32,30 @@ const lifecycle = createLifecycle({
   probe: db.probe,
   configuration: config.lifecycle,
 });
-const mail = createMailFeature({
-  workerId: lifecycle.instanceId,
-  outbox: createMailOutbox(db),
-  transport: createSmtpMailTransport(config.mail),
-});
-const { app, reconcile } = await createApp({
-  config,
-  db,
-  mail,
-  lifecycle,
-  registryKeyring,
-  registryTargets,
-});
+let app, reconcile, mail;
+if (config.authorityMode === "registry-bootstrap") {
+  app = createRegistryBootstrap({
+    config,
+    db,
+    lifecycle,
+    registryKeyring,
+    registryTargets,
+  });
+} else {
+  mail = createMailFeature({
+    workerId: lifecycle.instanceId,
+    outbox: createMailOutbox(db),
+    transport: createSmtpMailTransport(config.mail),
+  });
+  ({ app, reconcile } = await createApp({
+    config,
+    db,
+    mail,
+    lifecycle,
+    registryKeyring,
+    registryTargets,
+  }));
+}
 lifecycle.initialize();
 const server = app.listen(Number(process.env.PORT ?? 3000), "0.0.0.0", () =>
   console.log(
@@ -67,15 +79,18 @@ const runWorker = (name, work) => {
 };
 // Shared durable claims protect independent processes. Local tracking coalesces
 // scheduling and lets shutdown wait for admitted work, including SMTP delivery.
-runWorker("mail", () => mail.retryPending());
-const repairTimer = setInterval(
-  () => runWorker("reconciliation", reconcile),
-  30_000,
-).unref();
-const mailTimer = setInterval(
-  () => runWorker("mail", () => mail.retryPending()),
-  30_000,
-).unref();
+let repairTimer, mailTimer;
+if (mail) {
+  runWorker("mail", () => mail.retryPending());
+  repairTimer = setInterval(
+    () => runWorker("reconciliation", reconcile),
+    30_000,
+  ).unref();
+  mailTimer = setInterval(
+    () => runWorker("mail", () => mail.retryPending()),
+    30_000,
+  ).unref();
+}
 let stopping = false;
 for (const signal of ["SIGTERM", "SIGINT"])
   process.on(signal, () => {

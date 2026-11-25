@@ -10,8 +10,12 @@ mkdirSync(directory, { recursive: true });
 const domain = process.env.DATABASE_DOMAIN || undefined;
 const files = databaseFiles(domain);
 const reportName = `database-${domain ?? "all"}-${backend}`;
+const concurrency = process.env.DATABASE_CONTRACT_CONCURRENCY;
+if (concurrency !== undefined && !/^[1-9][0-9]*$/.test(concurrency))
+  throw Error("InvalidDatabaseContractConcurrency");
 const args = [
   "--test",
+  ...(concurrency ? [`--test-concurrency=${concurrency}`] : []),
   "--test-reporter=spec",
   "--test-reporter-destination=stdout",
   "--test-reporter=junit",

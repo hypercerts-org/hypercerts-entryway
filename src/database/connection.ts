@@ -73,9 +73,12 @@ const isFatalPostgresError = (error: unknown): boolean => {
   }
   return false;
 };
-export async function openDatabase(configuration: DatabaseConfiguration) {
+export async function openDatabase(
+  configuration: DatabaseConfiguration,
+  mode: "static" | "registry-bootstrap" = "static",
+) {
   if (configuration.backend !== "sqlite" || configuration.path === ":memory:")
-    return connectDatabase(configuration);
+    return connectDatabase(configuration, mode);
   const key = resolve(configuration.path),
     previous = sqliteStartup.get(key) ?? Promise.resolve();
   let release!: () => void;
@@ -85,13 +88,16 @@ export async function openDatabase(configuration: DatabaseConfiguration) {
   sqliteStartup.set(key, current);
   await previous;
   try {
-    return await connectDatabase(configuration);
+    return await connectDatabase(configuration, mode);
   } finally {
     release();
     if (sqliteStartup.get(key) === current) sqliteStartup.delete(key);
   }
 }
-async function connectDatabase(configuration: DatabaseConfiguration) {
+async function connectDatabase(
+  configuration: DatabaseConfiguration,
+  mode: "static" | "registry-bootstrap",
+) {
   const backend = configuration.backend;
   const context = new AsyncLocalStorage<Context>();
   const operationFence = new AsyncLocalStorage<OperationClaim>();
@@ -517,6 +523,15 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
             500,
             "Database schema does not match this application",
           );
+        const modes = (
+          await executor.execute(sql`SELECT id,mode FROM authority_mode`)
+        ).rows as { id: number; mode: string }[];
+        if (modes.length !== 1 || modes[0]?.id !== 1 || modes[0].mode !== mode)
+          throw new DomainError(
+            "SchemaConflict",
+            500,
+            "Database authority mode does not match this application",
+          );
         return;
       }
       for (const command of ddl
@@ -524,6 +539,10 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
         .map((part) => part.trim())
         .filter(Boolean))
         await connected((current) => current.execute(sql.raw(command), "run"));
+      await executor.execute(
+        sql`INSERT INTO authority_mode(id,mode) VALUES (1,${mode})`,
+        "run",
+      );
       await connected((current) =>
         current.execute(
           sql`INSERT INTO schema_identity(version,identity) VALUES (1,${identity})`,

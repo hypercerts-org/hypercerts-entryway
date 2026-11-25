@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 export const databaseDomains = {
   registry: ["pds-registry-targets", "pds-registry-routes", "pds-registry"],
   identity: [
+    "authority-mode",
     "custody-history",
     "plc-policy",
     "plc-signing",
