@@ -21,6 +21,62 @@ operator-verified recovery, mail attempts and authentication ordering.
 database probing, request/worker drain and replica checks. Fleet placement is
 separate work.
 
+## Staging a PDS configuration
+
+For operators preparing a host, staging records its configuration and credentials
+without associating it, verifying its endpoints, or making it eligible for
+placement. Existing static host routing remains in effect. Host verification and
+association are not yet available.
+
+Mount a protected JSON keyring on every Entryway node and set
+`PDS_REGISTRY_KEYRING_FILE` to its path before starting the nodes. The file must
+be a regular file, accessible to the service and unreadable and unwritable by
+group and others; symlinks to a protected mount are supported. Its format is
+`{"activeKeyId":"key-2026","keys":{"key-2026":"<base64-encoded-32-byte-key>"}}`.
+Supply keys through your secret manager. Retain every referenced encryption and
+request-replay key on every node, including after changing the active key;
+startup refuses to serve if a stored reference is unavailable. A key-rotation
+operator command is not yet available. Static deployments with no staged
+credentials can start without a keyring.
+
+Use the global Entryway administrator password in a protected file with mode
+`0600`. Prepare a second protected file containing the stage request as JSON:
+
+```json
+{
+  "host": {
+    "hostId": "pds-new",
+    "serviceDid": "did:web:pds.example.org",
+    "publicUrl": "https://pds.example.org",
+    "internalUrl": "https://pds.internal.example.org",
+    "order": 10
+  },
+  "credentials": {
+    "outboundPassword": "<PDS-admin-password>",
+    "inboundToken": "<32-random-bytes-as-unpadded-base64url>"
+  },
+  "expectedRevision": 0,
+  "idempotencyKey": "<unique-request-id>"
+}
+```
+
+Generate the inbound token securely and deliver it to the PDS operator through a
+protected channel. The global password, existing host administrator credentials,
+and the two new credential values must be distinct. Stage and inspect using a
+verified HTTPS origin; the CLI reads secrets from the files, never arguments:
+
+```sh
+node scripts/pds-registry.mjs stage --url https://entryway.example.org --auth-file /secure/admin --request-file /secure/stage.json
+node scripts/pds-registry.mjs status --url https://entryway.example.org --auth-file /secure/admin
+node scripts/pds-registry.mjs list --url https://entryway.example.org --auth-file /secure/admin
+```
+
+For a new host use revision `0`. A retry with the same request ID and identical
+input returns the original revision; changed input conflicts. To stage a new
+revision, use the current revision and a new request ID. Store these IDs with
+the operator's deployment records. The staged credential has no callback or
+global administrator authority.
+
 Schemas are fresh, explicit dialect assets in `src/database/schema/`. Startup
 serializes initialization, stores the schema asset hash in `schema_identity`, and
 rejects a mismatched identity. Better Auth never runs separate schema mutations.

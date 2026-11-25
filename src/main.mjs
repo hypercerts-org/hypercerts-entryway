@@ -12,8 +12,12 @@ const config = await loadConfig();
 const dataDir = process.env.STATE_DIRECTORY ?? "/data";
 mkdirSync(dataDir, { recursive: true });
 const db = await openDatabase(config.database);
+let registryKeyring;
 try {
-  await bootstrapPdsRegistryKeyring(db, process.env.PDS_REGISTRY_KEYRING_FILE);
+  ({ keyring: registryKeyring } = await bootstrapPdsRegistryKeyring(
+    db,
+    process.env.PDS_REGISTRY_KEYRING_FILE,
+  ));
 } catch (error) {
   await db.close();
   throw error;
@@ -27,7 +31,13 @@ const mail = createMailFeature({
   outbox: createMailOutbox(db),
   transport: createSmtpMailTransport(config.mail),
 });
-const { app, reconcile } = await createApp({ config, db, mail, lifecycle });
+const { app, reconcile } = await createApp({
+  config,
+  db,
+  mail,
+  lifecycle,
+  registryKeyring,
+});
 lifecycle.initialize();
 const server = app.listen(Number(process.env.PORT ?? 3000), "0.0.0.0", () =>
   console.log(

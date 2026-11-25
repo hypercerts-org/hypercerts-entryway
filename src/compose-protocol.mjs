@@ -30,5 +30,5 @@ export async function mountXrpc(services) {
   mountPlcXrpc({ ...services, ...routing });
   mountOauthAuthorizationXrpc({ ...services, ...routing });
   mountMailXrpc({ ...services, ...routing });
-  return { authenticate: routing.authenticate };
+  return { authenticate: routing.authenticate, admin: routing.admin };
 }
