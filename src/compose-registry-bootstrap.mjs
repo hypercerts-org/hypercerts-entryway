@@ -3,6 +3,10 @@ import express from "express";
 import { HttpError } from "./http/http-error.mjs";
 import { canonicalBasic } from "./http/authorization-scheme.js";
 import { requestFailureEvent } from "./logging/request-event.js";
+import { createPdsHealthIncidents } from "./database/drizzle/pds-health-incidents.js";
+import { createMailOutbox } from "./database/drizzle/mail-outbox.js";
+import { createMailFeature } from "./mail/create-mail.js";
+import { createSmtpMailTransport } from "./mail/smtp.js";
 import { createPdsHealthStore } from "./database/drizzle/pds-health.js";
 import { createPdsHealthSampler } from "./pds/registry-health-sampler.mjs";
 import { createPdsEnrollment } from "./database/drizzle/pds-registry-enrollment.js";
@@ -19,6 +23,8 @@ export function createRegistryBootstrap({
   lifecycle,
   registryKeyring,
   registryTargets,
+  healthContacts,
+  workerId,
 }) {
   const app = express();
   app.disable("x-powered-by");
@@ -64,7 +70,19 @@ export function createRegistryBootstrap({
     (revision) => registryTargets?.policyFor(revision),
   );
   const enrollment = createPdsEnrollment(db, registry, checks);
-  const health = createPdsHealthStore(db);
+  const outbox = createMailOutbox(db);
+  const incidents = createPdsHealthIncidents(db, outbox, healthContacts);
+  const health = createPdsHealthStore(db, incidents);
+  const mail = createMailFeature({
+    outbox,
+    workerId,
+    transport: createSmtpMailTransport(config.mail),
+  });
+  const processHealthNotices = async () => {
+    await incidents.reconcile();
+    await mail.retryHealthPending();
+    await incidents.reconcile();
+  };
   const sampleHealth = createPdsHealthSampler({
     registry,
     health,
@@ -79,6 +97,7 @@ export function createRegistryBootstrap({
     registry,
     enrollment,
     health,
+    incidents,
     keyStatus: () => pdsRegistryKeyStatus(db, registryKeyring),
     checks,
     outboundCheck: (revision, password) =>
@@ -100,5 +119,5 @@ export function createRegistryBootstrap({
           : "The operation could not be completed. Retry or inspect service logs.",
     });
   });
-  return { app, sampleHealth };
+  return { app, sampleHealth, processHealthNotices };
 }

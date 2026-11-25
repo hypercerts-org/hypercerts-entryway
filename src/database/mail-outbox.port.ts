@@ -31,8 +31,10 @@ export interface MailAttemptClaim {
 }
 
 export interface MailOutboxReader {
+  databaseTime(): Promise<number>;
   listRetryable(now: number, limit: number): Promise<MailOutboxEntry[]>;
   status(id: string): Promise<{ state: OutboxState; expiresAt: number } | null>;
+  listHealthRetryable(limit: number): Promise<MailOutboxEntry[]>;
 }
 
 export interface MailOutboxTransactor extends MailOutboxReader {

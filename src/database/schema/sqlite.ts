@@ -556,7 +556,10 @@ export const mail_outbox = table(
       "mail_message_kind",
       sql`${t.message_kind} IN ('otp','proof','admin')`,
     ),
-    check("mail_attempts", sql`${t.attempt_count} BETWEEN 0 AND 3`),
+    check(
+      "mail_attempts",
+      sql`${t.attempt_count} >= 0 AND ((${t.purpose} = 'pds-health' AND ${t.message_kind} = 'admin') OR ${t.attempt_count} <= 3)`,
+    ),
     check(
       "mail_state",
       sql`${t.state} IN ('queued','sending','delivered','failed','expired')`,
@@ -741,3 +744,41 @@ export const pds_host_health = table("pds_host_health", {
   successes: count("successes").notNull(),
   state: text("state").notNull(),
 });
+
+export const pds_health_incidents = table(
+  "pds_health_incidents",
+  {
+    id: text("id").primaryKey(),
+    host_id: text("host_id")
+      .notNull()
+      .references(() => pds_hosts.id),
+    revision: count("revision").notNull(),
+    generation: count("generation").notNull(),
+    opened_at: count("opened_at").notNull(),
+    closed_at: count("closed_at"),
+    state: text("state").notNull(),
+  },
+  (t) => [
+    uniqueIndex("pds_health_incident_generation").on(t.host_id, t.generation),
+    uniqueIndex("pds_health_open_incident")
+      .on(t.host_id)
+      .where(sql`${t.state} = 'open'`),
+  ],
+);
+export const pds_health_notices = table(
+  "pds_health_notices",
+  {
+    id: text("id").primaryKey(),
+    incident_id: text("incident_id")
+      .notNull()
+      .references(() => pds_health_incidents.id),
+    phase: text("phase").notNull(),
+    role: text("role").notNull(),
+    recipient: text("recipient"),
+    outbox_id: text("outbox_id"),
+    created_at: count("created_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("pds_health_notice_role").on(t.incident_id, t.phase, t.role),
+  ],
+);

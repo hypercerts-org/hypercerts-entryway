@@ -37,7 +37,7 @@ for (const node of ["bootstrap-a", "bootstrap-b"]) {
   ])
     assert.equal((await request(node, path)).status, 404);
 }
-const id = `two-node-${randomBytes(8).toString("hex")}`;
+const id = "pds-monitor";
 const base = `/admin/pds-registry/hosts/${id}`;
 const inboundToken = randomBytes(32).toString("base64url");
 const staged = await request("bootstrap-a", "/admin/pds-registry/hosts", {
@@ -230,6 +230,30 @@ try {
   const unhealthy = await awaitHealth("bootstrap-b", "unhealthy");
   assert.equal(unhealthy.publicOk, false);
   assert.equal(unhealthy.internalOk, false);
+  const contacts = JSON.parse(
+    await readFile("/config/health-contacts.json", "utf8"),
+  );
+  async function waitForMail(subject) {
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      const counts = [];
+      for (const recipient of [contacts.fleet, contacts.hosts[id]]) {
+        const search = new URL("/api/v1/search", process.env.MAILPIT_URL);
+        search.searchParams.set("query", `to:${recipient}`);
+        const response = await fetch(search);
+        const data = await response.json();
+        counts.push(
+          data.messages.filter((message) => message.Subject === subject).length,
+        );
+      }
+      if (counts.every((count) => count === 1)) return;
+      if (counts.some((count) => count > 1))
+        throw new Error("DuplicateHealthMail");
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    throw new Error("HealthMailMissing");
+  }
+  await waitForMail("Entryway PDS health incident");
   const afterPolicy = JSON.parse(cli("show").stdout);
   assert.equal(afterPolicy.host.lifecycle, "disabled");
   assert.deepEqual(
@@ -237,6 +261,22 @@ try {
     historicalReceipt,
   );
   assert.equal(final.inbound, "unproven");
+  const restored = await request("bootstrap-a", `${base}/policy`, {
+    revision: 1,
+    expectedGeneration: 4,
+    fingerprint: a.intended.fingerprint,
+  });
+  assert.equal(restored.body.policy.generation, 5);
+  await awaitHealth("bootstrap-a", "healthy");
+  await waitForMail("Entryway PDS health recovered");
+  const incidentStatus = (await request("bootstrap-a", base)).body.incident;
+  assert.equal(incidentStatus.state, "closed");
+  assert.ok(
+    incidentStatus.notices.every((notice) => notice.state === "delivered"),
+  );
+  console.log(
+    "health incident: both operators received one open and one recovery notice in Mailpit",
+  );
   console.log(
     "operator CLI: explicit attestation and disabled association through verified TLS passed",
   );

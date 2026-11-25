@@ -98,8 +98,19 @@ export function createMailFeature({
             ),
       );
     } catch (error) {
-      const failedAt = currentTime();
-      const retryDelay = RETRY_DELAYS_MS[claim.entry.attemptCount];
+      const failedAt =
+        claim.entry.purpose === "pds-health" &&
+        claim.entry.payload.kind === "admin"
+          ? await outbox.databaseTime()
+          : currentTime();
+      const retryDelay =
+        claim.entry.purpose === "pds-health" &&
+        claim.entry.payload.kind === "admin"
+          ? Math.min(
+              300_000,
+              1_000 * 2 ** Math.min(claim.entry.attemptCount - 1, 9),
+            )
+          : RETRY_DELAYS_MS[claim.entry.attemptCount];
       const outcome =
         error instanceof MailTransportError ? error.outcome : "unknown";
       const retryAt =
@@ -115,7 +126,11 @@ export function createMailFeature({
       if (!changed || retryAt === null || retryAt >= expiresAt) return "failed";
       return "retry";
     }
-    const deliveredAt = currentTime();
+    const deliveredAt =
+      claim.entry.purpose === "pds-health" &&
+      claim.entry.payload.kind === "admin"
+        ? await outbox.databaseTime()
+        : currentTime();
     if (!(await outbox.markDelivered(claim, deliveredAt))) {
       await outbox.expire(deliveredAt);
       return "failed";
@@ -123,6 +138,12 @@ export function createMailFeature({
     return "delivered";
   }
   async function deliverEntry(entry: MailOutboxEntry): Promise<boolean | null> {
+    if (entry.purpose === "pds-health" && entry.payload.kind === "admin") {
+      const now = await outbox.databaseTime();
+      const claim = await outbox.claimAttempt(entry.id, workerId, leaseMs, now);
+      if (!claim) return null;
+      return (await sendClaim(claim, entry.expiresAt)) === "delivered";
+    }
     for (let attempt = entry.attemptCount; attempt < MAX_ATTEMPTS; attempt++) {
       const now = currentTime();
       if (now >= entry.expiresAt) {
@@ -240,6 +261,10 @@ export function createMailFeature({
         type,
         currentTime(),
       );
+    },
+    async retryHealthPending() {
+      const entries = await outbox.listHealthRetryable(MAX_BATCH);
+      for (const entry of entries) await deliverEntry(entry);
     },
     async retryPending() {
       const now = currentTime();

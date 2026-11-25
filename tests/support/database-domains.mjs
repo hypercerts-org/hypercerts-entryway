@@ -2,7 +2,7 @@ import { pathToFileURL } from "node:url";
 
 // This inventory owns the database contract suite, including co-located tests.
 export const databaseDomains = {
-  registry: ["pds-health", "pds-registry-enrollment", "pds-registry-targets", "pds-registry-routes", "pds-registry"],
+  registry: ["pds-health-incidents", "pds-health", "pds-registry-enrollment", "pds-registry-targets", "pds-registry-routes", "pds-registry"],
   identity: [
     "authority-mode",
     "custody-history",

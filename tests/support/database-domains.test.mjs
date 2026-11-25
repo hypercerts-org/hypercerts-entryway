@@ -16,7 +16,7 @@ import { databaseDomains, databaseFiles } from "./database-domains.mjs";
 
 test("database domains partition the complete original contract suite", () => {
   const original =
-    `custody-history plc-policy plc-signing account-access account-schema account-security account-completion reconciliation-admission oauth-stores database-boundary lifecycle operation-ownership external-operation-ownership repository-verification migration migration-payload mail-ownership shared-authentication synthetic-client legacy service-auth experience entryway-extras plc-rejection xrpc-security external-workflow migration-boundary migration-custody incoming-arrival-storage pds-health pds-registry-enrollment authority-mode pds-registry-targets pds-registry-routes pds-registry`
+    `custody-history plc-policy plc-signing account-access account-schema account-security account-completion reconciliation-admission oauth-stores database-boundary lifecycle operation-ownership external-operation-ownership repository-verification migration migration-payload mail-ownership shared-authentication synthetic-client legacy service-auth experience entryway-extras plc-rejection xrpc-security external-workflow migration-boundary migration-custody incoming-arrival-storage pds-health-incidents pds-health pds-registry-enrollment authority-mode pds-registry-targets pds-registry-routes pds-registry`
       .split(" ")
       .map((name) => `tests/contracts/${name}.test.mjs`)
       .concat([
