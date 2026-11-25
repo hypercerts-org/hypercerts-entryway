@@ -338,3 +338,85 @@ test("malformed Unicode password is refused before creating a host", async (t) =
     undefined,
   );
 });
+
+test("bootstrap protects keyring files and checks all retained key references", async (t) => {
+  const { randomBytes } = await import("node:crypto");
+  const { writeFileSync, chmodSync, symlinkSync } = await import("node:fs");
+  const { bootstrapPdsRegistryKeyring, pdsRegistryKeyStatus } =
+    await import("../../dist/src/database/pds-registry-bootstrap.js");
+  const { parsePdsRegistryKeyring } =
+    await import("../../dist/src/database/pds-registry-crypto.js");
+  const { first } = await fixture(t);
+  const directory = mkdtempSync(join(tmpdir(), "entryway-registry-keys-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const keyA = randomBytes(32).toString("base64"),
+    keyB = randomBytes(32).toString("base64");
+  const file = join(directory, "protected.json"),
+    link = join(directory, "mount-link");
+  assert.deepEqual(
+    (await bootstrapPdsRegistryKeyring(first, undefined)).status,
+    { configured: false, ready: false, missingCount: 0 },
+  );
+  writeFileSync(file, JSON.stringify({ activeKeyId: "a", keys: { a: keyA } }), {
+    mode: 0o600,
+  });
+  symlinkSync(file, link);
+  const loaded = await bootstrapPdsRegistryKeyring(first, link);
+  assert.deepEqual(loaded.status, {
+    configured: true,
+    ready: true,
+    missingCount: 0,
+  });
+  chmodSync(file, 0o644);
+  await assert.rejects(
+    bootstrapPdsRegistryKeyring(first, link),
+    (error) => error.message === "InvalidPdsRegistryKeyring",
+  );
+  chmodSync(file, 0o600);
+  const registry = createPdsRegistry(first, loaded.keyring);
+  const request = {
+    host: input("bootstrap"),
+    credentials: {
+      outboundPassword: "fixture-password",
+      inboundToken: randomBytes(32).toString("base64url"),
+    },
+  };
+  await registry.stageHostWithCredentials(request, 0, "bootstrap");
+  await assert.rejects(
+    bootstrapPdsRegistryKeyring(first, undefined),
+    /PdsRegistryKeyUnavailable/,
+  );
+  const rotated = parsePdsRegistryKeyring({
+    activeKeyId: "b",
+    keys: { a: keyA, b: keyB },
+  });
+  await createPdsRegistry(first, rotated).rewrap("bootstrap", 1, "a");
+  const missingDigestKey = parsePdsRegistryKeyring({
+    activeKeyId: "b",
+    keys: { b: keyB },
+  });
+  assert.deepEqual(await pdsRegistryKeyStatus(first, missingDigestKey), {
+    configured: true,
+    ready: false,
+    missingCount: 1,
+  });
+  writeFileSync(file, JSON.stringify({ activeKeyId: "b", keys: { b: keyB } }));
+  await assert.rejects(
+    bootstrapPdsRegistryKeyring(first, link),
+    /PdsRegistryKeyUnavailable/,
+  );
+  writeFileSync(
+    file,
+    JSON.stringify({ activeKeyId: "b", keys: { a: keyA, b: keyB } }),
+  );
+  assert.deepEqual((await bootstrapPdsRegistryKeyring(first, link)).status, {
+    configured: true,
+    ready: true,
+    missingCount: 0,
+  });
+  writeFileSync(file, "x".repeat(16_385));
+  await assert.rejects(
+    bootstrapPdsRegistryKeyring(first, link),
+    (error) => error.message === "InvalidPdsRegistryKeyring",
+  );
+});
