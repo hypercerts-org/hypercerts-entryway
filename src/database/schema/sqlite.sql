@@ -307,6 +307,36 @@ CREATE TABLE `operation_admissions` (
 	CONSTRAINT `fk_operation_admissions_operation_id_authority_operations_id_fk` FOREIGN KEY (`operation_id`) REFERENCES `authority_operations`(`id`)
 );
 --> statement-breakpoint
+CREATE TABLE `pds_host_revisions` (
+	`host_id` text NOT NULL,
+	`revision` integer NOT NULL,
+	`service_did` text NOT NULL,
+	`public_url` text NOT NULL,
+	`internal_url` text NOT NULL,
+	`configured_order` integer NOT NULL,
+	CONSTRAINT `pds_host_revisions_pk` PRIMARY KEY(`host_id`, `revision`),
+	CONSTRAINT `fk_pds_host_revisions_host_id_pds_hosts_id_fk` FOREIGN KEY (`host_id`) REFERENCES `pds_hosts`(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `pds_host_stage_requests` (
+	`host_id` text NOT NULL,
+	`idempotency_key` text NOT NULL,
+	`request` text NOT NULL,
+	`revision` integer NOT NULL,
+	CONSTRAINT `pds_host_stage_requests_pk` PRIMARY KEY(`host_id`, `idempotency_key`),
+	CONSTRAINT `fk_pds_host_stage_requests_host_id_pds_hosts_id_fk` FOREIGN KEY (`host_id`) REFERENCES `pds_hosts`(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `pds_hosts` (
+	`id` text PRIMARY KEY,
+	`revision` integer NOT NULL,
+	`configured_order` integer NOT NULL,
+	`association` text NOT NULL,
+	`lifecycle` text NOT NULL,
+	`active_revision` integer,
+	`staged_revision` integer
+);
+--> statement-breakpoint
 CREATE TABLE `session` (
 	`id` text PRIMARY KEY,
 	`expiresAt` integer NOT NULL,
