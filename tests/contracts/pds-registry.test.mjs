@@ -122,3 +122,219 @@ test("failure writing history rolls back host update", async (t) => {
   assert.equal((await registry.readHost("rollback")).revision, 1);
   assert.equal(await registry.readHostRevision("rollback", 2), undefined);
 });
+
+test("credential revisions remain private, idempotent, host scoped and rewrappable", async (t) => {
+  const { randomBytes } = await import("node:crypto");
+  const { parsePdsRegistryKeyring } =
+    await import("../../dist/src/database/pds-registry-crypto.js");
+  const { first, second, configuration } = await fixture(t);
+  const keyA = randomBytes(32).toString("base64"),
+    keyB = randomBytes(32).toString("base64");
+  const originalKeys = parsePdsRegistryKeyring({
+    activeKeyId: "a",
+    keys: { a: keyA },
+  });
+  const rotatingKeys = parsePdsRegistryKeyring({
+    activeKeyId: "b",
+    keys: { a: keyA, b: keyB },
+  });
+  const registry = createPdsRegistry(first, originalKeys),
+    peer = createPdsRegistry(second, originalKeys);
+  const token = randomBytes(32).toString("base64url"),
+    otherToken = randomBytes(32).toString("base64url");
+  const request = {
+    host: input("credential"),
+    credentials: {
+      outboundPassword: "fixture-κλειδί-🔐",
+      inboundToken: token,
+    },
+  };
+  const [staged, replay] = await Promise.all([
+    registry.stageHostWithCredentials(request, 0, "credential-key"),
+    peer.stageHostWithCredentials(request, 0, "credential-key"),
+  ]);
+  assert.deepEqual(replay, staged);
+  assert.equal(
+    await registry.readOutbound("credential", 1),
+    request.credentials.outboundPassword,
+  );
+  assert.equal(await registry.verifyInbound("credential", 1, token), true);
+  assert.equal(
+    await registry.verifyInbound("credential", 1, otherToken),
+    false,
+  );
+  await assert.rejects(
+    registry.stageHostWithCredentials(
+      {
+        ...request,
+        credentials: { ...request.credentials, inboundToken: otherToken },
+      },
+      0,
+      "credential-key",
+    ),
+    /PdsHostIdempotencyConflict/,
+  );
+  const stored = JSON.stringify([
+    await first.read("pds_host_credentials"),
+    await first.read("pds_host_credential_requests"),
+    await registry.readHost("credential"),
+    await registry.readHostRevision("credential", 1),
+  ]);
+  assert.equal(stored.includes(token), false);
+  assert.equal(stored.includes(request.credentials.outboundPassword), false);
+  const rotating = createPdsRegistry(first, rotatingKeys);
+  const rewraps = await Promise.all([
+    rotating.rewrap("credential", 1, "a"),
+    createPdsRegistry(second, rotatingKeys).rewrap("credential", 1, "a"),
+  ]);
+  assert.deepEqual(rewraps.sort(), ["conflict", "rewrapped"]);
+  assert.equal(await rotating.rewrap("credential", 1, "b"), "already-current");
+  assert.equal(
+    await rotating.readOutbound("credential", 1),
+    request.credentials.outboundPassword,
+  );
+  const restarted = await openDatabase(configuration);
+  try {
+    assert.equal(
+      await createPdsRegistry(restarted, rotatingKeys).readOutbound(
+        "credential",
+        1,
+      ),
+      request.credentials.outboundPassword,
+    );
+  } finally {
+    await restarted.close();
+  }
+  const onlyNew = createPdsRegistry(
+    first,
+    parsePdsRegistryKeyring({ activeKeyId: "b", keys: { b: keyB } }),
+  );
+  await assert.rejects(
+    onlyNew.stageHostWithCredentials(request, 0, "credential-key"),
+    /PdsRegistryKeyUnavailable/,
+  );
+  assert.equal(
+    await onlyNew.readOutbound("credential", 1),
+    request.credentials.outboundPassword,
+  );
+});
+
+test("credential write failure rolls back host and revision", async (t) => {
+  const { randomBytes } = await import("node:crypto");
+  const { parsePdsRegistryKeyring } =
+    await import("../../dist/src/database/pds-registry-crypto.js");
+  const { first } = await fixture(t);
+  const keys = parsePdsRegistryKeyring({
+    activeKeyId: "a",
+    keys: { a: randomBytes(32).toString("base64") },
+  });
+  const registry = createPdsRegistry(first, keys);
+  await failureTrigger(
+    first,
+    "reject_pds_credential",
+    "pds_host_credentials",
+    "rejected credential",
+  );
+  await assert.rejects(
+    registry.stageHostWithCredentials(
+      {
+        host: input("failure"),
+        credentials: {
+          outboundPassword: "fixture-password",
+          inboundToken: randomBytes(32).toString("base64url"),
+        },
+      },
+      0,
+      "failure",
+    ),
+    hasFailure("rejected credential"),
+  );
+  await removeFailureTrigger(
+    first,
+    "reject_pds_credential",
+    "pds_host_credentials",
+  );
+  assert.equal(await registry.readHost("failure"), undefined);
+  assert.equal(await registry.readHostRevision("failure", 1), undefined);
+});
+
+test("credential encryption binds host, purpose, revision and key", async () => {
+  const { randomBytes } = await import("node:crypto");
+  const {
+    parsePdsRegistryKeyring,
+    encryptPdsCredential,
+    decryptPdsCredential,
+  } = await import("../../dist/src/database/pds-registry-crypto.js");
+  const keys = parsePdsRegistryKeyring({
+    activeKeyId: "key",
+    keys: { key: randomBytes(32).toString("base64") },
+  });
+  const encrypted = encryptPdsCredential(
+    keys,
+    "host",
+    "outbound-admin",
+    1,
+    "fixture-secret",
+  );
+  assert.equal(
+    decryptPdsCredential(keys, "host", "outbound-admin", 1, encrypted),
+    "fixture-secret",
+  );
+  for (const [hostId, purpose, revision] of [
+    ["other", "outbound-admin", 1],
+    ["host", "other", 1],
+    ["host", "outbound-admin", 2],
+  ]) {
+    assert.throws(
+      () => decryptPdsCredential(keys, hostId, purpose, revision, encrypted),
+      /InvalidPdsRegistryCredential/,
+    );
+  }
+  const tag = Buffer.from(encrypted.tag, "base64");
+  tag[0] ^= 1;
+  assert.throws(
+    () =>
+      decryptPdsCredential(keys, "host", "outbound-admin", 1, {
+        ...encrypted,
+        tag: tag.toString("base64"),
+      }),
+    /InvalidPdsRegistryCredential/,
+  );
+  assert.throws(
+    () => parsePdsRegistryKeyring({ activeKeyId: "absent", keys: {} }),
+    /InvalidPdsRegistryKeyring/,
+  );
+  assert.throws(
+    () =>
+      parsePdsRegistryKeyring({ activeKeyId: "key", keys: { key: "invalid" } }),
+    /InvalidPdsRegistryKeyring/,
+  );
+});
+
+test("malformed Unicode password is refused before creating a host", async (t) => {
+  const { randomBytes } = await import("node:crypto");
+  const { parsePdsRegistryKeyring } =
+    await import("../../dist/src/database/pds-registry-crypto.js");
+  const { first } = await fixture(t);
+  const keys = parsePdsRegistryKeyring({
+    activeKeyId: "key",
+    keys: { key: randomBytes(32).toString("base64") },
+  });
+  const registry = createPdsRegistry(first, keys);
+  const request = {
+    host: input("invalid-unicode"),
+    credentials: {
+      outboundPassword: "bad\ud800",
+      inboundToken: randomBytes(32).toString("base64url"),
+    },
+  };
+  await assert.rejects(
+    registry.stageHostWithCredentials(request, 0, "invalid"),
+    /InvalidPdsRegistryCredential/,
+  );
+  assert.equal(await registry.readHost("invalid-unicode"), undefined);
+  assert.equal(
+    await registry.readHostRevision("invalid-unicode", 1),
+    undefined,
+  );
+});

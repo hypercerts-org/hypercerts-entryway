@@ -604,3 +604,32 @@ export const pds_host_stage_requests = table(
   },
   (t) => [primaryKey({ columns: [t.host_id, t.idempotency_key] })],
 );
+
+export const pds_host_credentials = table(
+  "pds_host_credentials",
+  {
+    host_id: text("host_id")
+      .notNull()
+      .references(() => pds_hosts.id),
+    revision: count("revision").notNull(),
+    key_id: text("key_id").notNull(),
+    nonce: text("nonce").notNull(),
+    ciphertext: text("ciphertext").notNull(),
+    tag: text("tag").notNull(),
+    inbound_digest: text("inbound_digest").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.host_id, t.revision] })],
+);
+export const pds_host_credential_requests = table(
+  "pds_host_credential_requests",
+  {
+    host_id: text("host_id")
+      .notNull()
+      .references(() => pds_hosts.id),
+    idempotency_key: text("idempotency_key").notNull(),
+    key_id: text("key_id").notNull(),
+    digest: text("digest").notNull(),
+    revision: count("revision").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.host_id, t.idempotency_key] })],
+);
