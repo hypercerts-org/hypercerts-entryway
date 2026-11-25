@@ -14,6 +14,11 @@ import {
 import { xrpc } from "../../pds/client.mjs";
 import { createPendingArrivalGuard } from "../../accounts/pending-arrival.js";
 
+import type {
+  OperationClaim,
+  ExternalAttemptInput,
+  ExternalAttempt,
+} from "../../database/operation-ownership.port.js";
 import type { AuthorityDatabase } from "../../database/connection.js";
 import type { AccountRow } from "../../accounts/types.js";
 import type {
@@ -74,6 +79,44 @@ interface Context {
     registrationIdentity?: RegistrationIdentity;
   }): Promise<void>;
   ownership: ReturnType<typeof createOperationOwnership>;
+  placement?: {
+    select(): Promise<string | undefined>;
+    resolve(
+      hostId: string,
+      revision?: number,
+    ): Promise<{ id: string; url: string; internalUrl: string } | undefined>;
+    read(claim: OperationClaim): Promise<
+      | {
+          host_id: string;
+          target: string;
+          public_target: string;
+          revision: number;
+        }
+      | undefined
+    >;
+    reserve(
+      claim: OperationClaim,
+      purpose: string,
+      intent: string,
+      targetSteps: readonly string[],
+      requestedHostId?: string,
+    ): Promise<{
+      id: string;
+      host_id: string;
+      target: string;
+      public_target: string;
+    }>;
+    beginFirstDispatch(
+      claim: OperationClaim,
+      reservationId: string,
+      input: ExternalAttemptInput,
+    ): Promise<
+      | { kind: "dispatched"; attempt: ExternalAttempt }
+      | { kind: "existing"; attempt: ExternalAttempt }
+      | { kind: "refused" }
+      | { kind: "prior-dispatch" }
+    >;
+  };
 }
 function safeCode(error: unknown): string {
   if (typeof error === "object" && error !== null) {
@@ -134,6 +177,7 @@ export function createRegistration({
   validateHandle,
   journal,
   ownership,
+  placement,
 }: Context) {
   const pending = new Map<
     string,
@@ -141,6 +185,7 @@ export function createRegistration({
       promise: Promise<AccountRow>;
       handle: string;
       pdsId: string;
+      pdsSelection: RegistrationInput["pdsSelection"];
       recoveryKey: string | null;
       registrationIdentity: RegistrationIdentity | undefined;
     }
@@ -218,7 +263,8 @@ export function createRegistration({
                     ];
       throw new HttpError(400, code, message);
     }
-    const { email, handle, pdsId, recoveryKey, inviteCode } = input.data;
+    const { email, handle, pdsId, pdsSelection, recoveryKey, inviteCode } =
+      input.data;
     const registrationIdentity = await registrationIdentityFor(
       untrustedIdentity,
       email,
@@ -247,6 +293,7 @@ export function createRegistration({
       if (
         inFlight.handle !== handle ||
         inFlight.pdsId !== pdsId ||
+        inFlight.pdsSelection !== pdsSelection ||
         inFlight.recoveryKey !== (recoveryKey ?? null) ||
         !sameIdentity(inFlight.registrationIdentity, registrationIdentity)
       )
@@ -261,6 +308,7 @@ export function createRegistration({
       email,
       handle,
       pdsId,
+      pdsSelection,
       recoveryKey,
       inviteCode,
       ...(registrationIdentity ? { registrationIdentity } : {}),
@@ -269,6 +317,7 @@ export function createRegistration({
       promise: work,
       handle,
       pdsId,
+      pdsSelection,
       recoveryKey: recoveryKey ?? null,
       registrationIdentity,
     });
@@ -282,6 +331,7 @@ export function createRegistration({
     email,
     handle,
     pdsId,
+    pdsSelection,
     recoveryKey,
     registrationIdentity,
   }: ProvisionInput) => ({
@@ -290,22 +340,55 @@ export function createRegistration({
       email,
       handle,
       pdsId,
+      ...(pdsSelection ? { pdsSelection } : {}),
       recoveryKey: recoveryKey ?? null,
       ...(registrationIdentity ? { registrationIdentity } : {}),
     },
     completeOnReturn: true,
   });
   const allocateIdentity = async (
-    { email, handle, pdsId, recoveryKey, registrationIdentity }: ProvisionInput,
+    {
+      email,
+      handle,
+      pdsId,
+      pdsSelection,
+      recoveryKey,
+      inviteCode,
+      registrationIdentity,
+    }: ProvisionInput,
     pds: Context["config"]["pds"][number],
   ): Promise<AccountRow> => {
-    if (!ownership.currentClaim!.resumed)
-      await db.transact(async () => {
+    let reservation:
+      | Awaited<ReturnType<NonNullable<Context["placement"]>["reserve"]>>
+      | undefined;
+    const reserve = async () => {
+      if (!placement) return;
+      reservation = await placement.reserve(
+        ownership.currentClaim!,
+        "registration",
+        ownership.currentClaim!.requestDigest,
+        ["reserve-signing-key", "create-account"],
+        pdsId,
+      );
+      if (
+        reservation.host_id !== pdsId ||
+        reservation.public_target !== pds.url ||
+        reservation.target !== pds.internalUrl
+      )
+        throw new HttpError(
+          409,
+          "PdsLifecycleIneligible",
+          "The saved PDS configuration is unavailable",
+        );
+    };
+    if (!ownership.currentClaim!.resumed) {
+      const refused = await db.transact(async () => {
         await db.set("registration:intents", email, {
           authorityOperationId: ownership.currentClaim!.operationId,
           email,
           handle,
           pdsId,
+          ...(pdsSelection ? { pdsSelection } : {}),
           recoveryKey: recoveryKey ?? null,
           ...(registrationIdentity ? { registrationIdentity } : {}),
           rotationKeys: genesisRotationKeys({
@@ -320,12 +403,62 @@ export function createRegistration({
             email,
             handle,
             pdsId,
+            ...(pdsSelection ? { pdsSelection } : {}),
             recoveryKey: recoveryKey ?? null,
             ...(registrationIdentity ? { registrationIdentity } : {}),
           },
           false,
         );
+        try {
+          await reserve();
+          return false;
+        } catch (error) {
+          if (
+            !(error instanceof Error) ||
+            error.message !== "PdsLifecycleIneligible"
+          )
+            throw error;
+          const intent = (await db.get(
+            "registration:intents",
+            email,
+          )) as Record<string, unknown>;
+          await db.set("registration:intents", email, {
+            ...intent,
+            placementRefused: true,
+          });
+          await ownership.checkpoint(
+            "placement-refused",
+            {
+              email,
+              handle,
+              pdsId,
+              ...(pdsSelection ? { pdsSelection } : {}),
+              recoveryKey: recoveryKey ?? null,
+            },
+            true,
+          );
+          return true;
+        }
       });
+      if (refused)
+        throw new HttpError(
+          409,
+          "PdsLifecycleIneligible",
+          "The selected PDS cannot accept a new account",
+        );
+    }
+    if (ownership.currentClaim!.resumed) {
+      const previous = (await db.get("registration:intents", email)) as {
+        placementRefused?: boolean;
+      } | null;
+      if (previous?.placementRefused)
+        throw new HttpError(
+          409,
+          "PdsLifecycleIneligible",
+          "The selected PDS cannot accept a new account",
+        );
+      await reserve();
+    }
     // Recovery reuses custody selected before allocation, not deployment defaults.
     const savedIntent = (await db.get("registration:intents", email)) as
       | (RegistrationInput & { rotationKeys: string[] })
@@ -351,6 +484,24 @@ export function createRegistration({
         target: pds.url,
         method: "com.atproto.server.reserveSigningKey",
         intent: {},
+        ...(placement && reservation
+          ? {
+              authorizeFirst: (
+                claim: OperationClaim,
+                descriptor: ExternalAttemptInput,
+              ) =>
+                db.transact(async () => {
+                  const outcome = await placement.beginFirstDispatch(
+                    claim,
+                    reservation!.id,
+                    descriptor,
+                  );
+                  if (outcome.kind === "dispatched")
+                    await provisionPolicy?.reserve(inviteCode, email);
+                  return outcome;
+                }),
+            }
+          : {}),
       },
       {
         send: () =>
@@ -482,6 +633,7 @@ export function createRegistration({
     email,
     handle,
     pdsId,
+    pdsSelection,
     recoveryKey,
     inviteCode,
     registrationIdentity,
@@ -511,15 +663,35 @@ export function createRegistration({
     if (row && row.status !== "provisioning")
       throw new HttpError(409, "AccountUnavailable", "Account is unavailable");
     await validateHandle(handle, row?.did);
-    const pds = config.pds.find((p) => p.id === pdsId);
+    const saved = placement
+      ? await placement.read(ownership.currentClaim!)
+      : undefined;
+    const pds = placement
+      ? await placement.resolve(pdsId, saved?.revision)
+      : config.pds.find((p) => p.id === pdsId);
     if (!pds) throw new HttpError(400, "InvalidPds", "Unknown PDS");
-    await provisionPolicy?.reserve(inviteCode, email);
+    if (row && placement) {
+      if (
+        !saved ||
+        saved.host_id !== pdsId ||
+        saved.public_target !== pds.url ||
+        saved.target !== pds.internalUrl
+      )
+        throw new HttpError(
+          409,
+          "PdsLifecycleIneligible",
+          "The saved PDS configuration is unavailable",
+        );
+    }
+    if (!placement) await provisionPolicy?.reserve(inviteCode, email);
     row ??= await allocateIdentity(
       {
         email,
         handle,
         pdsId,
+        pdsSelection,
         recoveryKey,
+        inviteCode,
         ...(registrationIdentity ? { registrationIdentity } : {}),
       },
       pds,
@@ -672,6 +844,7 @@ export function createRegistration({
       email: record.email,
       handle: record.handle,
       pdsId: record.pdsId,
+      ...(record.pdsSelection ? { pdsSelection: record.pdsSelection } : {}),
       recoveryKey: record.recoveryKey ?? null,
       ...(registrationIdentity ? { registrationIdentity } : {}),
     };

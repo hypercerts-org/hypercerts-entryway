@@ -20,6 +20,7 @@ export async function createAccounts({
   db,
   config,
   workerId,
+  placement,
   ownership = createOperationOwnership({
     store: createOperationOwnershipStore(db),
     workerId,
@@ -42,7 +43,22 @@ export async function createAccounts({
       { code: "InvalidPlcConfiguration" },
     );
   const plcClient = new CustodyPlcClient(config.plcUrl);
-  const storage = createAccountStorage(db, config.pds);
+  const storage = createAccountStorage(
+    db,
+    config.pds,
+    placement &&
+      (async (row) => {
+        const claim = ownership.currentClaim;
+        if (!claim) return false;
+        const saved = await placement.read(claim);
+        return Boolean(
+          saved &&
+          saved.state === "dispatched" &&
+          saved.host_id === row.pdsId &&
+          saved.public_target === row.pdsUrl,
+        );
+      }),
+  );
   const custody = createCustodyInventoryStorage(db);
   const shared = createAccountPrimitives({ db, config, storage, ownership });
   const observeCustody = async (did) => {
@@ -64,6 +80,7 @@ export async function createAccounts({
     plcClient,
     observeCustody,
     custody,
+    placement,
     ...shared,
   };
   const registration = createRegistration(context);
@@ -81,6 +98,8 @@ export async function createAccounts({
   return {
     ...shared,
     ...operations,
+    selectRegistrationPds: () =>
+      placement ? placement.select() : Promise.resolve(config.pds[0]?.id),
     plcSigner,
     plcClient,
     observeCustody,

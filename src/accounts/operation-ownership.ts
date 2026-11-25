@@ -265,7 +265,18 @@ export function createOperationOwnership({
     }
   }
   async function dispatch<T>(
-    input: Omit<ExternalAttemptInput, "intentDigest"> & { intent: unknown },
+    input: Omit<ExternalAttemptInput, "intentDigest"> & {
+      intent: unknown;
+      authorizeFirst?: (
+        claim: OperationClaim,
+        descriptor: ExternalAttemptInput,
+      ) => Promise<
+        | { kind: "dispatched"; attempt: ExternalAttempt }
+        | { kind: "existing"; attempt: ExternalAttempt }
+        | { kind: "refused" }
+        | { kind: "prior-dispatch" }
+      >;
+    },
     callbacks: DispatchCallbacks<T>,
     classifyRejection?: (error: unknown) => PlcSubmissionRejection | null,
   ): Promise<T> {
@@ -308,11 +319,38 @@ export function createOperationOwnership({
         );
       recoveryDisposition = observed.state;
     }
-    const attempt = await store.beginExternal(
-      claim,
-      descriptor,
-      recoveryDisposition,
-    );
+    const authorization =
+      input.authorizeFirst && !previous
+        ? await input.authorizeFirst(claim, descriptor)
+        : {
+            kind: "dispatched" as const,
+            attempt: await store.beginExternal(
+              claim,
+              descriptor,
+              recoveryDisposition,
+            ),
+          };
+    if (authorization.kind === "refused")
+      throw new DomainError(
+        "PdsLifecycleIneligible",
+        409,
+        "The selected PDS cannot accept a new account.",
+      );
+    if (
+      authorization.kind === "existing" &&
+      authorization.attempt.state === "acknowledged"
+    )
+      return callbacks.resume(authorization.attempt.result);
+    if (
+      authorization.kind === "prior-dispatch" ||
+      authorization.kind === "existing"
+    )
+      throw new DomainError(
+        "OperationRecoveryRequired",
+        409,
+        "An external account change is pending. Retry after the operator verifies recovery.",
+      );
+    const attempt = authorization.attempt;
     await assertActive();
     // No local check can fence the remote PDS. Any interruption after the
     // marker, even before send(), requires dispatch-source isolation and drain.
@@ -410,7 +448,16 @@ export function createOperationOwnership({
     approveRecovery: store.approveRecovery,
     /** Generic external writes remain pending on every failed response. */
     dispatch: <T>(
-      input: Omit<ExternalAttemptInput, "intentDigest"> & { intent: unknown },
+      input: Omit<ExternalAttemptInput, "intentDigest"> & {
+        intent: unknown;
+        authorizeFirst?: (
+          claim: OperationClaim,
+          descriptor: ExternalAttemptInput,
+        ) => Promise<
+          | { kind: "dispatched" | "existing"; attempt: ExternalAttempt }
+          | { kind: "refused" | "prior-dispatch" }
+        >;
+      },
       callbacks: DispatchCallbacks<T>,
     ) => dispatch(input, callbacks),
     /** Only the complete one-shot PLC operation may settle an audited rejection. */

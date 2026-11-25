@@ -8,6 +8,7 @@ export type DomainErrorCode =
   | "HandleNotAvailable"
   | "InvalidAccount"
   | "SchemaConflict"
+  | "PdsLifecycleIneligible"
   | "OperationNoLongerEligible"
   | "OperationNoLongerPending"
   | "OperationPending"

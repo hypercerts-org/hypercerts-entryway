@@ -38,6 +38,30 @@ export function createPdsPlacement(
     )[0];
   }
   return {
+    async select() {
+      return (await lifecycle.candidates())[0]?.hostId;
+    },
+    async resolve(hostId: string, revision?: number) {
+      return db.transact(async () => {
+        const host = await registry.readHost(hostId);
+        const version = revision ?? host?.activeRevision;
+        if (!version) return undefined;
+        const saved = await registry.readHostRevision(hostId, version);
+        return saved
+          ? {
+              id: saved.hostId,
+              url: saved.publicUrl,
+              internalUrl: saved.internalUrl,
+            }
+          : undefined;
+      });
+    },
+    async read(claim: OperationClaim) {
+      return db.transact(async () => {
+        await db.assertOperationFence(claim);
+        return find(claim.operationId);
+      });
+    },
     async reserve(
       claim: OperationClaim,
       purpose: string,
@@ -106,7 +130,8 @@ export function createPdsPlacement(
         if (
           !reservation ||
           reservation.id !== reservationId ||
-          reservation.target !== input.target
+          (reservation.target !== input.target &&
+            reservation.public_target !== input.target)
         )
           throw new Error("PdsPlacementConflict");
         const targetSteps: unknown = JSON.parse(reservation.target_steps);

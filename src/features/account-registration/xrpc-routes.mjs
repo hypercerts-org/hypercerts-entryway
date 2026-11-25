@@ -80,13 +80,18 @@ export function mountAccountRegistrationXrpc({
     const {
       email,
       handle,
-      pdsId = config.pds[0].id,
+      pdsId: requestedPdsId,
       password,
       recoveryKey,
       inviteCode,
       verificationCode,
       verificationPhone,
     } = req.body;
+    if (
+      Object.hasOwn(req.body, "pdsId") &&
+      (typeof requestedPdsId !== "string" || !requestedPdsId.trim())
+    )
+      throw new HttpError(400, "InvalidPds", "Unknown PDS");
     if (req.body.plcOp)
       throw new HttpError(
         400,
@@ -139,7 +144,6 @@ export function mountAccountRegistrationXrpc({
       sessionMatches,
       emailProofVerified,
     });
-    await protocolOperations.reserveInvite(inviteCode, normalized);
     const userId =
       savedOwner?.userId ??
       (sessionMatches
@@ -150,10 +154,30 @@ export function mountAccountRegistrationXrpc({
       userId,
       email: normalized,
     };
+    const savedRegistration = await accounts.pendingRegistration(normalized);
+    const pdsSelection =
+      savedRegistration && savedRegistration.pdsSelection === undefined
+        ? undefined
+        : requestedPdsId === undefined
+          ? "implicit"
+          : "explicit";
+    const pdsId =
+      requestedPdsId ??
+      savedRegistration?.pdsId ??
+      (accounts.selectRegistrationPds
+        ? await accounts.selectRegistrationPds()
+        : config.pds[0]?.id);
+    if (!pdsId)
+      throw new HttpError(
+        409,
+        "PdsLifecycleIneligible",
+        "No PDS is available for a new account",
+      );
     const account = await accounts.create({
       email: normalized,
       handle,
       pdsId,
+      pdsSelection,
       recoveryKey,
       inviteCode,
       registrationIdentity,
