@@ -1,6 +1,6 @@
 import { HttpError } from "./http/http-error.mjs";
 import { mountOperationRecoveryRoutes } from "./features/account-settings/operation-recovery-routes.js";
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { createECDH, ECDH, randomUUID, timingSafeEqual } from "node:crypto";
 import express from "express";
 import { createAccounts } from "./compose-accounts.mjs";
 import { createAccountAccess } from "./accounts/account-access.mjs";
@@ -30,11 +30,75 @@ export async function createApp({
   lifecycle,
   registryKeyring,
   registryTargets,
+  registryRuntime,
+  testClient,
 }) {
+  if (registryRuntime && config.authorityMode !== "registry-bootstrap")
+    throw new Error("RegistryServingUnavailable");
+  if (config.authorityMode === "registry-bootstrap") {
+    if (
+      !registryRuntime ||
+      registryRuntime.db !== db ||
+      registryRuntime.config !== config ||
+      registryRuntime.registryKeyring !== registryKeyring ||
+      !Array.isArray(config.pds) ||
+      config.pds.length ||
+      (await registryRuntime.phase.read()).phase !== "registry-serving"
+    )
+      throw new Error("RegistryServingUnavailable");
+    try {
+      const privateKey = config.jwtJwk;
+      if (
+        privateKey?.kty !== "EC" ||
+        privateKey.crv !== "secp256k1" ||
+        typeof privateKey.d !== "string" ||
+        typeof privateKey.x !== "string" ||
+        typeof privateKey.y !== "string"
+      )
+        throw new Error();
+      const coordinates = [privateKey.d, privateKey.x, privateKey.y].map(
+        (value) => {
+          const bytes = Buffer.from(value, "base64url");
+          if (bytes.length !== 32 || bytes.toString("base64url") !== value)
+            throw new Error();
+          return bytes;
+        },
+      );
+      const signer = createECDH("secp256k1");
+      signer.setPrivateKey(coordinates[0]);
+      const actual = signer.getPublicKey(undefined, "compressed");
+      const advertised = ECDH.convertKey(
+        config.jwtPublicHex,
+        "secp256k1",
+        "hex",
+        undefined,
+        "compressed",
+      );
+      const declared = ECDH.convertKey(
+        Buffer.concat([Buffer.from([4]), coordinates[1], coordinates[2]]),
+        "secp256k1",
+        undefined,
+        undefined,
+        "compressed",
+      );
+      if (
+        actual.length !== advertised.length ||
+        actual.length !== declared.length ||
+        !timingSafeEqual(actual, advertised) ||
+        !timingSafeEqual(actual, declared)
+      )
+        throw new Error();
+    } catch {
+      throw new Error("RegistrySigningKeyConflict");
+    }
+    registryTargets = registryRuntime.registryTargets;
+  }
   const accounts = await createAccounts({
     db,
     config,
     workerId: lifecycle?.instanceId,
+    placement: registryRuntime?.placement,
+    registryVerifier: registryTargets,
   });
   const accountAccess = createAccountAccess(accounts.storage);
   const app = express();
@@ -82,9 +146,11 @@ export async function createApp({
   // Client origin is a separate application, hosted here only for the spike.
   // It must never expose entryway auth/account routes under its hostname.
   const clientRouter = express.Router();
-  const { mountClient } =
-    await import("../tests/fixtures/synthetic-client.mjs");
-  await mountClient({ app: clientRouter, db, config });
+  if (config.authorityMode !== "registry-bootstrap" || testClient) {
+    const { mountClient } =
+      await import("../tests/fixtures/synthetic-client.mjs");
+    await mountClient({ app: clientRouter, db, config, ...(testClient ?? {}) });
+  }
   app.use((req, res, next) => {
     if (req.hostname === new URL(config.clientUrl).hostname)
       return clientRouter(req, res, () => res.sendStatus(404));
@@ -226,15 +292,20 @@ export async function createApp({
     config,
     admin,
     keyring: registryKeyring,
-    registry: createPdsRegistry(db, registryKeyring, () =>
-      pdsPublicTrust(config),
-    ),
+    registry:
+      registryRuntime?.registry ??
+      createPdsRegistry(db, registryKeyring, () => pdsPublicTrust(config)),
+    enrollment: registryRuntime?.enrollment,
+    health: registryRuntime?.health,
+    incidents: registryRuntime?.incidents,
     keyStatus: () => pdsRegistryKeyStatus(db, registryKeyring),
-    checks: createPdsOutboundCheckStore(
-      db,
-      () => pdsPublicTrust(config),
-      (revision) => registryTargets?.policyFor(revision),
-    ),
+    checks:
+      registryRuntime?.checks ??
+      createPdsOutboundCheckStore(
+        db,
+        () => pdsPublicTrust(config),
+        (revision) => registryTargets?.policyFor(revision),
+      ),
     outboundCheck: (revision, password) =>
       checkPdsOutbound(revision, config.issuer, password, registryTargets),
   });
