@@ -4,7 +4,10 @@ import { cidForCbor } from "@atproto/common";
 import type * as plc from "@did-plc/lib";
 import { DomainError } from "../../accounts/errors.js";
 import { HttpError } from "../../http/http-error.mjs";
-import type { OperationOwnership } from "../../accounts/operation-ownership.js";
+import {
+  requestDigest,
+  type OperationOwnership,
+} from "../../accounts/operation-ownership.js";
 import {
   isRecordedAdmissionGeneration,
   destinationRotationKeys,
@@ -64,9 +67,48 @@ export function createAuthenticatedArrival({
   assertStagingEnabled,
   provision,
   digestKey,
+  placement,
+  validateDestination,
+  receipts,
 }: {
   /** Server secret that keys the password commitment inside the request digest. */
   digestKey: string | Buffer;
+  receipts: Pick<
+    import("../../database/operation-ownership.port.js").OperationOwnershipStore,
+    "readExternal"
+  >;
+  validateDestination?: (saved: ArrivalRecord) => Promise<void>;
+  placement?: {
+    reserve(
+      owner: OperationClaim,
+      purpose: string,
+      intent: string,
+      steps: readonly string[],
+      hostId: string,
+    ): Promise<{ revision: number; public_target: string }>;
+    read(owner: OperationClaim): Promise<{ id: string } | undefined>;
+    beginSourceHandoff(
+      owner: OperationClaim,
+      reservationId: string,
+      input: import("../../database/operation-ownership.port.js").ExternalAttemptInput,
+    ): Promise<
+      | {
+          kind: "dispatched";
+          attempt: import("../../database/operation-ownership.port.js").ExternalAttempt;
+        }
+      | { kind: "refused" }
+      | { kind: "prior-dispatch" }
+    >;
+    offer(
+      hostId: string,
+      revision: number,
+    ): Promise<{
+      id: string;
+      revision: number;
+      url: string;
+      stagedIncomingMigration: boolean;
+    }>;
+  };
   arrivals: ArrivalTransactor;
   ownership: OperationOwnership;
   transact: <T>(work: () => Promise<T>) => Promise<T>;
@@ -90,6 +132,56 @@ export function createAuthenticatedArrival({
     },
   ) => Promise<unknown>;
 }) {
+  const reserveOffer = async (owner: OperationClaim, saved: ArrivalRecord) => {
+    if (saved.pdsRevision === undefined) {
+      if (placement)
+        throw new DomainError(
+          "OperationRecoveryRequired",
+          409,
+          "The saved destination revision requires reconciliation",
+        );
+      return;
+    }
+    if (!placement)
+      throw new DomainError(
+        "PdsLifecycleIneligible",
+        409,
+        "The saved destination is unavailable",
+      );
+    try {
+      const reservation = await placement.reserve(
+        owner,
+        "incoming-arrival",
+        owner.requestDigest,
+        [
+          "incoming-reservation",
+          "incoming-creation",
+          "incoming-pause",
+          "incoming-activation",
+        ],
+        saved.pdsId,
+      );
+      const current = await placement.offer(saved.pdsId, saved.pdsRevision);
+      if (
+        reservation.revision !== saved.pdsRevision ||
+        reservation.public_target !== saved.endpoint ||
+        current.url !== saved.endpoint ||
+        current.stagedIncomingMigration !== saved.stagedIncomingMigration
+      )
+        throw new Error("PdsLifecycleIneligible");
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        error.message !== "PdsLifecycleIneligible"
+      )
+        throw error;
+      throw new DomainError(
+        "PdsLifecycleIneligible",
+        409,
+        "The saved destination cannot accept this arrival. Keep the original offer and try again later.",
+      );
+    }
+  };
   const read = async (
     operationId: string,
     userId: string,
@@ -163,6 +255,23 @@ export function createAuthenticatedArrival({
     // Observed before the dispatch marker is written: a directory outage or a
     // head race here leaves no marker, so the exact request is simply retried.
     const before = await observe();
+    if (!saved.staged && before.canonical) {
+      const existing = await receipts.readExternal(owner, {
+        step: "incoming-handoff",
+        target: client.url,
+        method: incomingHandoffMethod,
+        intentDigest: requestDigest({ did: saved.did, cid: handoff.cid }),
+      });
+      if (!existing) {
+        const current = await read(saved.operationId, saved.userId);
+        await arrivals.recordCanonicalHandoff(owner, current.arrival.version, {
+          operationId: saved.operationId,
+          did: saved.did,
+          cid: handoff.cid,
+        });
+        return { state: "published" as const, cid: handoff.cid };
+      }
+    }
     if (saved.staged && !before.canonical) {
       if (before.diverged)
         throw new DomainError(
@@ -172,12 +281,42 @@ export function createAuthenticatedArrival({
         );
       await checkStagedReadiness(saved);
     }
+    const registryReservation =
+      !saved.staged && saved.pdsRevision !== undefined
+        ? await placement?.read(owner)
+        : undefined;
+    if (
+      !saved.staged &&
+      saved.pdsRevision !== undefined &&
+      !registryReservation
+    )
+      throw new DomainError(
+        "OperationRecoveryRequired",
+        409,
+        "The saved destination reservation is unavailable",
+      );
     await ownership.dispatch(
       {
         step: saved.staged ? "incoming-cutover" : "incoming-handoff",
         target: client.url,
         method: incomingHandoffMethod,
         intent: { did: saved.did, cid: handoff.cid },
+        ...(validateDestination
+          ? { beforeFirst: () => validateDestination(saved) }
+          : {}),
+        ...(placement && registryReservation
+          ? {
+              authorizeFirst: (
+                claim: OperationClaim,
+                input: import("../../database/operation-ownership.port.js").ExternalAttemptInput,
+              ) =>
+                placement.beginSourceHandoff(
+                  claim,
+                  registryReservation.id,
+                  input,
+                ),
+            }
+          : {}),
       },
       {
         send: async () => {
@@ -379,6 +518,7 @@ export function createAuthenticatedArrival({
                 "Arrival owner unavailable",
               );
             await transact(async () => {
+              await reserveOffer(owner, saved);
               await arrivals.claimArrival(owner, saved.version, {
                 operationId: saved.operationId,
                 did: saved.did,
@@ -511,6 +651,7 @@ export function createAuthenticatedArrival({
           // checkpoint commit together: a failure leaves the DID unclaimed.
           await transact(async () => {
             const fresh = (await read(input.operationId, input.userId)).arrival;
+            await reserveOffer(owner, fresh);
             await arrivals.claimArrival(owner, fresh.version, {
               operationId: saved.operationId,
               did: saved.did,

@@ -86,6 +86,7 @@ export interface ArrivalAccess {
   readonly did: string;
   readonly userId: string;
   readonly pdsId: string;
+  readonly pdsRevision?: number;
   readonly provisioned: boolean;
   readonly deactivationObserved: boolean;
   readonly bound: boolean;

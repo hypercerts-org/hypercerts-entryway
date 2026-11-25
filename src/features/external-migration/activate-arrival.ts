@@ -82,7 +82,10 @@ export function createArrivalActivation({
   transact: <T>(work: () => Promise<T>) => Promise<T>;
   plcClient: plc.Client;
   accounts: Pick<AccountTransactor, "getByDid" | "getVerifiedBinding">;
-  placement: (pdsId: string) => { url: string } | undefined;
+  placement: (
+    pdsId: string,
+    revision?: number,
+  ) => { url: string } | undefined | Promise<{ url: string } | undefined>;
   backend: (saved: ArrivalAggregate["arrival"]) => {
     inspect(): Promise<{
       did: string;
@@ -222,7 +225,9 @@ export function createArrivalActivation({
     );
     // A host removed or moved since placement is the documented conflict, and
     // is decided before any backend client is built for it.
-    if (placement(saved.pdsId)?.url !== saved.endpoint)
+    if (
+      (await placement(saved.pdsId, saved.pdsRevision))?.url !== saved.endpoint
+    )
       throw new DomainError(
         "OperationConflict",
         409,
@@ -312,7 +317,8 @@ export function createArrivalActivation({
         directory,
         account,
         binding,
-        configuredEndpoint: placement(saved.pdsId)?.url,
+        configuredEndpoint: (await placement(saved.pdsId, saved.pdsRevision))
+          ?.url,
         backend: observed,
         activationJournaled: journaled !== null,
       });

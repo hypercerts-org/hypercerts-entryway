@@ -187,6 +187,7 @@ export interface ArrivalAuthority {
     handle: string;
     pdsId: string;
     pdsUrl: string;
+    pdsRevision?: number;
     userId: string;
   }): Promise<void>;
   recordSavedUserBinding(did: string, userId: string): Promise<void>;
@@ -1925,6 +1926,9 @@ export function createArrivalStorage(
             handle: input.handle,
             pdsId: input.pdsId,
             pdsUrl: saved.endpoint,
+            ...(saved.pds_revision === null
+              ? {}
+              : { pdsRevision: saved.pds_revision }),
             userId: input.userId,
           });
           await authority.reserveEmailClaim(
@@ -2045,6 +2049,9 @@ export function createArrivalStorage(
         did: saved.did,
         userId: saved.user_id,
         pdsId: saved.pds_id,
+        ...(saved.pds_revision === null
+          ? {}
+          : { pdsRevision: saved.pds_revision }),
         provisioned: saved.provisioned_at !== null,
         deactivationObserved: saved.deactivated_at !== null,
         bound: saved.bound_at !== null,
