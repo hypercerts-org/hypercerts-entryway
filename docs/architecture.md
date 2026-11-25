@@ -368,6 +368,14 @@ version. Before publishing a code, the store checks the same membership ID,
 generations and requested grant scopes. Request deletion uses the same lock as
 update and consumption, preventing a delayed update from recreating it.
 
+For maintainers, one authorization request keeps one active attempt: admission
+records the entry owner, device and flow id, and replacing the flow retires the
+previous one and rebinds the same request instead of starting a new attempt.
+Reopening the authorization URL resumes that bound flow — consent, account
+choice or signup — without sending another code. Choosing another mailbox
+answers with a redirect to the same entry and always requires fresh mailbox
+proof, so a reload cannot act on a retired flow id.
+
 The separate `runExchange` context carries the consumed code's DID, client and
 approval generations across provider awaits. Token insertion checks those
 generations atomically: grant revocation invalidates a consumed or published
@@ -402,7 +410,7 @@ is revalidated with `accountAccess.requireBoundAccount` on every selected page
 request. Every settings action carries the DID; duplicate or conflicting
 selectors are rejected. The DID does not persist selection authority: tabs
 remain independent, while a revoked session or unbound DID cannot reuse an old
-form or fall through to a sibling account. Settings and email proofs use only the selected DID. No account
+form or fall through to a sibling account. Settings and email proofs use only the selected DID. Browser app-password creation rechecks the selected DID's binding inside the credential transaction, so a mailbox change committed meanwhile cannot attach the new credential to a sibling account. No account
 schema or persistent selection state is added.
 
 The account console presents an overview and separate Account, Devices, Apps,

@@ -6,6 +6,7 @@ import {
   invalidateAccountApprovals,
 } from "../oauth-approval.mjs";
 import {
+  AccessDeniedError,
   InvalidGrantError,
   InvalidRequestError,
 } from "@atproto/oauth-provider/errors";
@@ -113,19 +114,25 @@ export function createOAuthStores(db, accounts, config) {
             row.clientId !== clientId ||
             (row.deviceId && row.deviceId !== deviceId) ||
             row.did ||
-            row.code ||
-            new Date(row.expiresAt).getTime() <= Date.now()
+            row.code
           )
             throw new InvalidRequestError(
               "Authorization request is unavailable",
             );
-          if (row.entryOwner) {
-            if (row.entryDevice !== deviceId)
+          if (row.entryOwner && row.entryDevice !== deviceId)
+            throw new InvalidRequestError(
+              "Authorization request belongs to another device",
+            );
+          if (new Date(row.expiresAt).getTime() <= Date.now()) {
+            if (row.deviceId !== deviceId && row.entryDevice !== deviceId)
               throw new InvalidRequestError(
-                "Authorization request belongs to another device",
+                "Authorization request is unavailable",
               );
-            if (row.entryFlowId) return { flowId: row.entryFlowId };
+            await del("requests", context.requestId);
+            return { expiredParameters: row.parameters };
           }
+          if (row.entryOwner && row.entryFlowId)
+            return { flowId: row.entryFlowId };
           await set("requests", context.requestId, {
             ...row,
             entryOwner: context.owner,
@@ -133,6 +140,12 @@ export function createOAuthStores(db, accounts, config) {
           });
           return null;
         });
+        // Redirect only after the expired request's deletion has committed.
+        if (existing && "expiredParameters" in existing)
+          throw new AccessDeniedError(
+            existing.expiredParameters,
+            "This request has expired",
+          );
         if (existing) return existing;
         try {
           return await operation({
@@ -364,6 +377,15 @@ export function createOAuthStores(db, accounts, config) {
       await transaction(async () => {
         const entry = admission.getStore();
         const current = await get("requests", id);
+        // A request that already carries a code or DID belongs to the attempt
+        // that completed consent. Owner and flow are unchanged after consent,
+        // so the provider's catch-block delete would otherwise remove the
+        // winner's issued code. Refuse by returning: callers run deletes from
+        // their own error paths and rethrow the original failure, and nobody
+        // may act on a completed request anyway. Pending requests keep the
+        // guarded cleanup path, and deletes outside an entry (consumption and
+        // expiry cleanup) are untouched.
+        if (entry && (current?.code || current?.did)) return;
         if (
           entry &&
           (entry.requestId !== id ||

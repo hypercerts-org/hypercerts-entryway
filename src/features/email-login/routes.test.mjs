@@ -447,8 +447,12 @@ async function verificationFixture(
   };
   let boundRows = stage === "multiple-accounts" ? [row, secondRow] : [row];
   let session = null;
+  let sent = 0;
   let cookies = 0;
   let loginEmailResolutions = 0;
+  // Overrides the signup-eligibility answer, modelling a mailbox whose
+  // bindings change after the code was verified.
+  let resolutionOverride = null;
   const checkedAccounts = [];
   const provider = {
     deviceManager: {
@@ -513,7 +517,14 @@ async function verificationFixture(
     stores: {
       async account(did) {
         if (stage === "consent") await gate.pause();
-        return boundRows.find((candidate) => candidate.did === did) ?? row;
+        // The unbound stage models one account, so an answer for another DID
+        // stays faithful to the requested DID.
+        return (
+          boundRows.find((candidate) => candidate.did === did) ?? {
+            ...row,
+            did,
+          }
+        );
       },
     },
   });
@@ -545,7 +556,11 @@ async function verificationFixture(
       `<form action="/auth/consent">${flow.id} ${account.did}</form>`,
     authentication: {
       async queueSignInCode() {
-        return { async deliver() {} };
+        return {
+          async deliver() {
+            sent++;
+          },
+        };
       },
       async verifySignInCode({ email, otp }) {
         if (stage === "verification") await gate.pause();
@@ -578,6 +593,7 @@ async function verificationFixture(
     getAccountSecurity: () => ({
       async assertLoginEmail(identity) {
         loginEmailResolutions++;
+        if (resolutionOverride) return resolutionOverride;
         if (stage === "signup" || stage === "unbound")
           return { kind: "unbound" };
         if (stage === "repair-required")
@@ -603,8 +619,19 @@ async function verificationFixture(
     get cookies() {
       return cookies;
     },
+    get sent() {
+      return sent;
+    },
     get loginEmailResolutions() {
       return loginEmailResolutions;
+    },
+    setResolution(kind) {
+      resolutionOverride =
+        kind === "repair-required"
+          ? { kind: "account-requires-repair" }
+          : kind === "multiple-accounts"
+            ? { kind: "selection-required", accounts: [row, secondRow] }
+            : { kind: "single", account: row };
     },
     get checkedAccounts() {
       return checkedAccounts;
@@ -771,12 +798,19 @@ test("another email starts a new flow while retaining the request and budgets", 
   await f.request("/auth/select", { did: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb" });
   const old = await f.db.get("auth-flows", f.flow.id);
   const response = await f.request("/auth/another-account", {});
-  assert.equal(response.statusCode, 200);
-  const replacementId = response.body.match(/name="flow" value="([^"]+)"/)?.[1];
-  assert.ok(replacementId);
-  assert.notEqual(replacementId, old.id);
+  // The POST answers with a redirect to the authorization entry, so a reload
+  // resumes the replacement instead of re-posting the retired flow id.
+  assert.equal(response.statusCode, 303);
+  assert.equal(
+    response.redirectUrl,
+    `/oauth/authorize?client_id=${encodeURIComponent(old.clientId)}&request_uri=${encodeURIComponent(old.requestUri)}`,
+  );
+  const replacement = (await f.db.list("auth-flows")).find(
+    ({ value }) => value.id !== old.id,
+  )?.value;
+  assert.ok(replacement);
   assert.equal(await f.db.get("auth-flows", old.id), null);
-  const replacement = await f.db.get("auth-flows", replacementId);
+  assert.notEqual(replacement.id, old.id);
   for (const key of [
     "requestUri",
     "clientId",
@@ -792,6 +826,32 @@ test("another email starts a new flow while retaining the request and budgets", 
   );
   for (const key of ["email", "authEmail", "authUserId", "authDid"])
     assert.equal(replacement[key], undefined);
+});
+
+test("another email on a standalone sign-in redirects to a fresh login, keeping any account hint", async (t) => {
+  const hinted = await verificationFixture(t, "multiple-accounts", {
+    standalone: true,
+  });
+  const stored = await hinted.db.get("auth-flows", hinted.flow.id);
+  await hinted.db.set("auth-flows", hinted.flow.id, {
+    ...stored,
+    accountHint: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
+  });
+  await hinted.request("/auth/verify", { otp: "valid-proof" });
+  const hintedResponse = await hinted.request("/auth/another-account", {});
+  assert.equal(hintedResponse.statusCode, 303);
+  assert.equal(
+    hintedResponse.redirectUrl,
+    `/login?did=${encodeURIComponent("did:plc:aaaaaaaaaaaaaaaaaaaaaaaa")}`,
+  );
+
+  const plain = await verificationFixture(t, "multiple-accounts", {
+    standalone: true,
+  });
+  await plain.request("/auth/verify", { otp: "valid-proof" });
+  const plainResponse = await plain.request("/auth/another-account", {});
+  assert.equal(plainResponse.statusCode, 303);
+  assert.equal(plainResponse.redirectUrl, "/login");
 });
 
 test("a verified chooser can change its account before consent is granted", async (t) => {
@@ -879,6 +939,9 @@ test("a DID hint selects the matching shared-email account", async (t) => {
   assert.match(verified.body, new RegExp(did));
   assert.doesNotMatch(verified.body, /did:plc:aaaaaaaaaaaaaaaaaaaaaaaa/);
   assert.doesNotMatch(verified.body, /owner\.example\.test/);
+  // The hint narrows the chooser, not the recorded choice set: the count is
+  // the verified identity's bindings, not the one offered account.
+  assert.equal((await f.db.get("auth-flows", f.flow.id)).authBindings, 2);
   const sibling = await f.request("/auth/select", {
     did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
   });
@@ -888,6 +951,46 @@ test("a DID hint selects the matching shared-email account", async (t) => {
   const selected = await f.request("/auth/select", { did });
   assert.equal(selected.statusCode, 200);
   assert.equal((await f.db.get("auth-flows", f.flow.id)).authDid, did);
+  // Remembered-device and login_hint sign-ins reach consent through this
+  // one-account chooser. The identity still has two bindings, so the consent
+  // page keeps both ways to reconsider the choice.
+  assert.match(selected.body, /action="\/auth\/choose"/);
+  assert.match(selected.body, /action="\/auth\/another-account"/);
+  assert.equal(f.sent, 0);
+});
+
+test("a consent page offered after a binding is lost hides the account choice", async (t) => {
+  const f = await verificationFixture(t, "multiple-accounts");
+  await f.request("/auth/verify", { otp: "valid-proof" });
+  assert.equal((await f.db.get("auth-flows", f.flow.id)).authBindings, 2);
+
+  // One binding goes away between the chooser and the selection. The recorded
+  // count follows the identity's live bindings, so the consent page offers no
+  // account choice that would only dead-end.
+  f.removeBoundAccount("did:plc:bbbbbbbbbbbbbbbbbbbbbbbb");
+  const selected = await f.request("/auth/select", {
+    did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
+  });
+  assert.equal(selected.statusCode, 200);
+  // The real consent form, not the fixture's stub, which omits the method.
+  assert.match(selected.body, /method="post" action="\/auth\/consent"/);
+  assert.match(selected.body, /did:plc:aaaaaaaaaaaaaaaaaaaaaaaa/);
+  assert.doesNotMatch(selected.body, /action="\/auth\/choose"/);
+  assert.doesNotMatch(selected.body, /action="\/auth\/another-account"/);
+  assert.equal((await f.db.get("auth-flows", f.flow.id)).authBindings, 1);
+
+  // A fresh code request on the same flow clears the recorded count together
+  // with the rest of the verified identity.
+  const resent = await verificationFixture(t, "multiple-accounts");
+  await resent.request("/auth/verify", { otp: "valid-proof" });
+  assert.equal(
+    (await resent.db.get("auth-flows", resent.flow.id)).authBindings,
+    2,
+  );
+  await resent.request("/auth/email", { email: "old@example.test" });
+  const reset = await resent.db.get("auth-flows", resent.flow.id);
+  assert.equal(reset.authBindings, undefined);
+  assert.equal(reset.authUserId, undefined);
 });
 
 test("an inactive chooser choice preserves verified identity so an active sibling can continue", async (t) => {
@@ -1109,6 +1212,8 @@ test("refresh restores OTP, verified chooser and selected consent without sendin
   const consent = await f.resume();
   assert.match(consent.body, /action="\/auth\/consent"/);
   assert.match(consent.body, new RegExp(did));
+  // No resume step queued or delivered a sign-in code.
+  assert.equal(f.sent, 0);
 });
 
 test("same mailbox reproof does not restore the retired chooser", async (t) => {
@@ -1116,15 +1221,18 @@ test("same mailbox reproof does not restore the retired chooser", async (t) => {
   await f.request("/auth/verify", { otp: "valid-proof" });
   const old = f.flow.id;
   const response = await f.request("/auth/another-account", {});
-  const next = response.body.match(/name="flow" value="([^"]+)"/)?.[1];
-  assert.ok(next);
+  assert.equal(response.statusCode, 303);
+  const replacementId = (await f.db.list("auth-flows")).find(
+    ({ value }) => value.id !== old,
+  )?.value.id;
+  assert.ok(replacementId);
   const send = await f.request("/auth/email", {
-    flow: next,
+    flow: replacementId,
     email: "old@example.test",
   });
   assert.equal(send.statusCode, 200);
   const verified = await f.request("/auth/verify", {
-    flow: next,
+    flow: replacementId,
     otp: "valid-proof",
   });
   assert.equal(verified.statusCode, 200);
@@ -1133,10 +1241,139 @@ test("same mailbox reproof does not restore the retired chooser", async (t) => {
     did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
   });
   assert.equal(stale.statusCode, 400);
-  assert.equal((await f.db.get("auth-flows", next)).authDid, undefined);
+  assert.equal(
+    (await f.db.get("auth-flows", replacementId)).authDid,
+    undefined,
+  );
   const valid = await f.request("/auth/select", {
-    flow: next,
+    flow: replacementId,
     did: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
   });
   assert.equal(valid.statusCode, 200);
+});
+
+test("refresh after single-account verification resumes at consent without a new code", async (t) => {
+  // A stage the fixture does not gate: eligibility resolves to the single
+  // binding without pausing any delivery or lookup.
+  const f = await verificationFixture(t, "single");
+  const verifiedPage = await f.request("/auth/verify", {
+    otp: "controlled-proof",
+  });
+  const verified = await f.db.get("auth-flows", f.flow.id);
+  assert.equal(verified.authEmail, "old@example.test");
+  assert.equal(verified.authUserId, "verified-user");
+  assert.equal(verified.authDid, "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa");
+  // The real consent page rendered after verification offers a single
+  // binding neither way to reconsider.
+  assert.match(verifiedPage.body, /method="post" action="\/auth\/consent"/);
+  assert.doesNotMatch(verifiedPage.body, /action="\/auth\/choose"/);
+  assert.doesNotMatch(verifiedPage.body, /action="\/auth\/another-account"/);
+
+  const consent = await f.resume();
+  assert.equal(consent.statusCode, 200);
+  assert.match(consent.body, /action="\/auth\/consent"/);
+  assert.match(consent.body, /did:plc:aaaaaaaaaaaaaaaaaaaaaaaa/);
+  // One binding offers no other choice, so the consent page keeps neither
+  // reconsider button (the pre-change single-binding page).
+  assert.doesNotMatch(consent.body, /action="\/auth\/choose"/);
+  assert.doesNotMatch(consent.body, /action="\/auth\/another-account"/);
+  assert.equal(f.sent, 0);
+  // The resume re-ran the eligibility resolution once (chooser identity
+  // re-check) and queued no code.
+  assert.equal(f.loginEmailResolutions, 2);
+});
+
+test("refresh after unbound verification resumes at the signup form without a new code", async (t) => {
+  const f = await verificationFixture(t, "unbound");
+  await f.request("/auth/verify", { otp: "controlled-proof" });
+  const verified = await f.db.get("auth-flows", f.flow.id);
+  assert.equal(verified.authEmail, "old@example.test");
+  assert.equal(verified.authUserId, undefined);
+
+  const signup = await f.resume();
+  assert.equal(signup.statusCode, 200);
+  assert.match(signup.body, /Signup form/);
+  assert.equal(f.sent, 0);
+  // The resume re-ran the eligibility resolution once.
+  assert.equal(f.loginEmailResolutions, 2);
+});
+
+test("a resumed signup resumes as chooser or consent once the mailbox gained a binding", async (t) => {
+  const f = await verificationFixture(t, "unbound");
+  await f.request("/auth/verify", { otp: "controlled-proof" });
+  assert.equal(f.loginEmailResolutions, 1);
+
+  // The mailbox now names one bound account.
+  f.setResolution("single");
+  const consent = await f.resume();
+  assert.equal(consent.statusCode, 200);
+  assert.match(consent.body, /action="\/auth\/consent"/);
+  assert.match(consent.body, /did:plc:aaaaaaaaaaaaaaaaaaaaaaaa/);
+  const resumed = await f.db.get("auth-flows", f.flow.id);
+  assert.equal(resumed.authEmail, "old@example.test");
+  assert.equal(resumed.authUserId, "verified-user");
+  assert.equal(resumed.authDid, "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa");
+  assert.equal(f.sent, 0);
+
+  // A mailbox bound to several accounts resumes at the chooser instead, and
+  // the rendered chooser can complete: the identity is persisted, so the
+  // selection passes the stored-user-id check and reaches consent without a
+  // new code.
+  const chooserFixture = await verificationFixture(t, "unbound");
+  await chooserFixture.request("/auth/verify", { otp: "controlled-proof" });
+  chooserFixture.setResolution("multiple-accounts");
+  const chooser = await chooserFixture.resume();
+  assert.equal(chooser.statusCode, 200);
+  assert.match(chooser.body, /action="\/auth\/select"/);
+  assert.match(chooser.body, /did:plc:aaaaaaaaaaaaaaaaaaaaaaaa/);
+  assert.match(chooser.body, /did:plc:bbbbbbbbbbbbbbbbbbbbbbbb/);
+  const selected = await chooserFixture.request("/auth/select", {
+    did: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb",
+  });
+  assert.equal(selected.statusCode, 200);
+  assert.match(selected.body, /action="\/auth\/consent"/);
+  assert.match(
+    selected.body,
+    new RegExp(`name="did" value="did:plc:bbbbbbbbbbbbbbbbbbbbbbbb"`),
+  );
+  const bound = await chooserFixture.db.get(
+    "auth-flows",
+    chooserFixture.flow.id,
+  );
+  assert.equal(bound.authUserId, "verified-user");
+  assert.equal(bound.authDid, "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb");
+  assert.equal(chooserFixture.sent, 0);
+
+  // A hint matching none of the new bindings refuses with the same page
+  // /auth/verify uses, never signup.
+  const hintedFixture = await verificationFixture(t, "unbound", {
+    loginHint: "third.example.test",
+  });
+  await hintedFixture.request("/auth/verify", { otp: "controlled-proof" });
+  hintedFixture.setResolution("multiple-accounts");
+  const before = await hintedFixture.db.get(
+    "auth-flows",
+    hintedFixture.flow.id,
+  );
+  const mismatch = await hintedFixture.resume();
+  assert.equal(mismatch.statusCode, 403);
+  assert.match(mismatch.body, /not linked to the requested account/);
+  assert.doesNotMatch(mismatch.body, /Signup form/);
+  assert.equal(hintedFixture.sent, 0);
+  // The refusal saved nothing: the record is exactly as verification left it.
+  assert.deepEqual(
+    await hintedFixture.db.get("auth-flows", hintedFixture.flow.id),
+    before,
+  );
+});
+
+test("a resumed signup still refuses a mailbox whose account needs repair", async (t) => {
+  const f = await verificationFixture(t, "unbound");
+  await f.request("/auth/verify", { otp: "controlled-proof" });
+  f.setResolution("repair-required");
+  const repair = await f.resume();
+  assert.equal(repair.statusCode, 409);
+  assert.match(repair.body, /Account requires repair/);
+  assert.doesNotMatch(repair.body, /Signup form/);
+  assert.equal(f.sent, 0);
 });

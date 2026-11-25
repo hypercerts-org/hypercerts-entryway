@@ -76,7 +76,7 @@ export function createConsent({
       handle: account.handle ?? account.did,
       clientName: flow.clientName?.trim() || flow.clientId,
       scopes: scopeGroups(flow.parameters?.scope),
-      canChoose: Boolean(flow.authUserId),
+      canChoose: Boolean(flow.authUserId && flow.authBindings > 1),
     }).body;
   // Loads what completeAuthorization needs, then lets the caller's policy decide
   // whether this sign-in may issue the code without showing consent. Every
@@ -148,6 +148,10 @@ export function createConsent({
       commitCookies = () => {},
       fromChooser = false,
       newAccount = false,
+      // How many accounts the verified identity is bound to (0 when the caller
+      // does not know), so the consent page knows whether another choice
+      // exists.
+      bindingCount = 0,
     } = {},
   ) => {
     const displayAccount =
@@ -177,6 +181,14 @@ export function createConsent({
           "Sign in to the account requested by this application",
         );
       current.authEmail = identity.email.toLowerCase();
+      // Record the verified identity with the binding, so reopening the
+      // authorization URL resumes at this consent form instead of asking for
+      // another code.
+      current.authUserId = identity.userId;
+      // The caller supplies the identity's current binding count whenever it
+      // knows it, so a binding lost between chooser and selection also
+      // lowers the recorded count here.
+      if (bindingCount) current.authBindings = bindingCount;
       // The latest choice wins. An unavailable account still replaces the
       // earlier selection, so that account's consent form no longer matches.
       current.authDid = account.status === "active" ? account.did : undefined;

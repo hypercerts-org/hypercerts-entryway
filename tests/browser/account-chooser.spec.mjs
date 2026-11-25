@@ -30,7 +30,6 @@ test.beforeAll(async ({ browser }) => {
 /** Open the client sign-in and verify the shared email, ending at the chooser. */
 async function reachChooser(page, pair = shared, { capture = false } = {}) {
   await beginAuthorization(page, { prompt: "consent" });
-  const authorizeUrl = page.url();
   await expect(page.getByLabel("Email address")).toBeVisible();
   if (capture)
     await captureGallery(page, {
@@ -54,7 +53,6 @@ async function reachChooser(page, pair = shared, { capture = false } = {}) {
   await expect(
     page.getByRole("heading", { name: "Choose an account" }),
   ).toBeVisible();
-  return authorizeUrl;
 }
 
 // Each DID completes its own journey in a fresh context, so a regression that
@@ -151,19 +149,21 @@ test("another email completes the original authorization as its own account", as
   const context = await browser.newContext({ ignoreHTTPSErrors: false });
   try {
     const page = await context.newPage();
-    const authorizeUrl = await reachChooser(page);
+    await reachChooser(page);
     await page
       .getByRole("button", { name: "Use another email address" })
       .click();
+    // Reload the redirected GET to verify the replacement sign-in opens
+    // without re-posting the retired flow id.
+    await expect(page).toHaveURL(/\/oauth\/authorize\?/);
+    await page.reload();
+    await expect(page.getByLabel("Email address")).toBeVisible();
     await captureGallery(page, {
       name: "oauth-another-email",
       description:
         "Shared pair primary client chooser restarted with another email",
       heading: "Sign in",
     });
-    await page.goto(authorizeUrl);
-    await page.reload();
-    await expect(page.getByLabel("Email address")).toBeVisible();
     await expect(page.locator('form[action="/auth/select"]')).toHaveCount(0);
     await expect(page.locator('form[action="/auth/consent"]')).toHaveCount(0);
     const resumed = await page.content();

@@ -131,8 +131,15 @@ export function createBrowserFlow({
       clientName: current.clientName,
       parameters: current.parameters,
       accountHint: current.accountHint,
-      otpRequestCount: current.otpRequestCount,
-      lastOtpSentAt: current.lastOtpSentAt,
+      // A restart earns a fresh per-flow code budget: the new attempt sends
+      // its own code. A mailbox switch keeps the counters, so the cooldown
+      // and the per-flow limit survive the replacement.
+      ...(restart
+        ? {}
+        : {
+            otpRequestCount: current.otpRequestCount,
+            lastOtpSentAt: current.lastOtpSentAt,
+          }),
       ...extra,
     });
     if (next.requestRecordId)

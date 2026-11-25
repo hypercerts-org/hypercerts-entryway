@@ -64,6 +64,11 @@ async function fixture(t, { initialLogin = true, independent = false } = {}) {
     ],
   };
   let db = await openTestDatabase(path);
+  // Registered before anything can throw, so the database never leaks.
+  t.after(async () => {
+    await db.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
   // Local account authority is real SQLite; external PDS deletion is the only
   // mocked boundary. Better Auth, password hashing, and token stores are real.
   let storage = createAccountStorage(db, config.pds);
@@ -207,10 +212,6 @@ async function fixture(t, { initialLogin = true, independent = false } = {}) {
     storage = createAccountStorage(db, config.pds);
     await boot();
   };
-  t.after(async () => {
-    await db.close();
-    rmSync(directory, { recursive: true, force: true });
-  });
   await boot();
   if (initialLogin) {
     f.login = await f.signIn(alice.email);
@@ -378,7 +379,7 @@ test(
 );
 
 test(
-  "binding change cannot commit between browser credential authorization and insertion",
+  "a concurrent binding change waits outside the browser credential transaction and commits after it",
   { timeout: 120_000 },
   async (t) => {
     const f = await fixture(t, { independent: true });
