@@ -44,11 +44,16 @@ export function createPdsHealthStore(
   const hosts = db.tables.pds_hosts,
     health = db.tables.pds_host_health,
     policies = db.tables.pds_host_verifier_policies;
-  async function active(hostId: string, revision: number) {
+  async function active(
+    hostId: string,
+    revision: number,
+    allowRetired = false,
+  ) {
     const [host] = await db.read("pds_hosts", { where: eq(hosts.id, hostId) });
     if (
       !host ||
       host.association !== "associated" ||
+      (!allowRetired && host.lifecycle === "retired") ||
       host.active_revision !== revision ||
       host.revision !== revision
     )
@@ -252,7 +257,7 @@ export function createPdsHealthStore(
           where: eq(health.host_id, hostId),
         });
         if (!row) return null;
-        await active(hostId, row.revision);
+        await active(hostId, row.revision, true);
         const result = project(row, await db.databaseTime());
         const [policy] = await db.read("pds_host_verifier_policies", {
           where: eq(policies.host_id, hostId),

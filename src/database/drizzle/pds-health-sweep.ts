@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, eq, gt } from "drizzle-orm";
+import { and, asc, eq, gt, ne } from "drizzle-orm";
 import type { DatabaseExecutor } from "../executor.js";
 import type { PdsHealthIncidents } from "./pds-health-incidents.js";
 
@@ -82,6 +82,7 @@ export function createPdsHealthSweep(
         const [host] = await db.read("pds_hosts", {
           where: and(
             eq(hosts.association, "associated"),
+            ne(hosts.lifecycle, "retired"),
             gt(hosts.id, row.cursor),
           ),
           orderBy: [asc(hosts.id)],

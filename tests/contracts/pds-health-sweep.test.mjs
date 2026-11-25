@@ -172,3 +172,19 @@ test("a verifier-policy change does not turn a recent observation into an old on
   await sweep.run();
   assert.equal((await incidents.status("host")).cause, "monitoring-stale");
 });
+
+test("retired hosts do not produce new stale-monitoring incidents", async (t) => {
+  const { db, incidents, sweep } = await fixture(t);
+  await db.update(
+    "pds_hosts",
+    { lifecycle: "retired" },
+    eq(db.tables.pds_hosts.id, "host"),
+  );
+  await db.update(
+    "pds_host_enrollment_events",
+    { created_at: (await db.databaseTime()) - 90_000 },
+    eq(db.tables.pds_host_enrollment_events.id, "association"),
+  );
+  await sweep.run();
+  assert.equal(await incidents.status("host"), null);
+});

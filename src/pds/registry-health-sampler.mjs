@@ -29,7 +29,9 @@ export function createPdsHealthSampler({
     if (!verifier || stopping) return;
     const hosts = (await registry.listHosts()).filter(
       (host) =>
-        host.association === "associated" && host.activeRevision !== null,
+        host.association === "associated" &&
+        host.activeRevision !== null &&
+        host.lifecycle !== "retired",
     );
     if (!hosts.length) return;
     const start = offset % hosts.length;

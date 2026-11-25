@@ -92,18 +92,10 @@ function canonicalEndpoint(value: string): string {
   }
 }
 
-/** Must be called within the transaction that records attestation or association. */
-export async function assertFreshPdsEnrollment(
+/** Conservative reference proof for fresh-only lifecycle operations. */
+export async function assertNoPdsAuthorityReferences(
   db: DatabaseExecutor,
-  candidate: PdsHostRevision,
 ): Promise<void> {
-  const modes = await db.read("authority_mode");
-  if (
-    modes.length !== 1 ||
-    modes[0]?.id !== 1 ||
-    modes[0].mode !== "registry-bootstrap"
-  )
-    throw new Error("PdsEnrollmentModeConflict");
   for (const table of productTables)
     if ((await db.read(table, { limit: 1 })).length)
       throw new Error("PdsEnrollmentReferencesExist");
@@ -119,6 +111,21 @@ export async function assertFreshPdsEnrollment(
     ).length
   )
     throw new Error("PdsEnrollmentReferencesExist");
+}
+
+/** Must be called within the transaction that records attestation or association. */
+export async function assertFreshPdsEnrollment(
+  db: DatabaseExecutor,
+  candidate: PdsHostRevision,
+): Promise<void> {
+  const modes = await db.read("authority_mode");
+  if (
+    modes.length !== 1 ||
+    modes[0]?.id !== 1 ||
+    modes[0].mode !== "registry-bootstrap"
+  )
+    throw new Error("PdsEnrollmentModeConflict");
+  await assertNoPdsAuthorityReferences(db);
   const did = canonicalDid(candidate.serviceDid);
   const endpoints = new Set([
     canonicalEndpoint(candidate.publicUrl),
