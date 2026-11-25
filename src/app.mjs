@@ -1,3 +1,4 @@
+import { HttpError } from "./http/http-error.mjs";
 import { mountOperationRecoveryRoutes } from "./features/account-settings/operation-recovery-routes.js";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import express from "express";
@@ -14,9 +15,18 @@ import { createAccountMigration } from "./features/pds-migration/move-between-pd
 import { requestFailureEvent } from "./logging/request-event.js";
 import { canonicalBasic } from "./http/authorization-scheme.js";
 import { createIncomingArrival } from "./compose-incoming-arrival.mjs";
+import { createPdsRegistry } from "./database/drizzle/pds-registry.js";
+import { pdsRegistryKeyStatus } from "./database/pds-registry-bootstrap.js";
+import { mountPdsRegistryRoutes } from "./features/pds-registry/routes.mjs";
 import { mountIncomingRoutes } from "./features/external-migration/routes.js";
 
-export async function createApp({ config, db, mail, lifecycle }) {
+export async function createApp({
+  config,
+  db,
+  mail,
+  lifecycle,
+  registryKeyring,
+}) {
   const accounts = await createAccounts({
     db,
     config,
@@ -169,6 +179,13 @@ export async function createApp({ config, db, mail, lifecycle }) {
     migration,
   });
   app.use(express.json({ limit: "64kb" }));
+  app.use("/admin/pds-registry", (error, _req, _res, next) => {
+    if (error.type === "entity.parse.failed")
+      return next(
+        new HttpError(400, "InvalidRequest", "Invalid registry request"),
+      );
+    return next(error);
+  });
   mountOperationRecoveryRoutes({ app, config, ownership: accounts.ownership });
   const incoming = await createIncomingArrival({
     db,
@@ -184,7 +201,7 @@ export async function createApp({ config, db, mail, lifecycle }) {
     oauth,
     rateLimit: protocolOperations.rateLimit,
   });
-  await mountXrpc({
+  const { admin } = await mountXrpc({
     app,
     incoming,
     db,
@@ -197,6 +214,14 @@ export async function createApp({ config, db, mail, lifecycle }) {
     protocolOperations,
     migration,
     reconcile,
+  });
+  mountPdsRegistryRoutes({
+    app,
+    config,
+    admin,
+    keyring: registryKeyring,
+    registry: createPdsRegistry(db, registryKeyring),
+    keyStatus: () => pdsRegistryKeyStatus(db, registryKeyring),
   });
   app.get("/", (_req, res) =>
     page(

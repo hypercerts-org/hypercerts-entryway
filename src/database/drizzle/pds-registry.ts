@@ -246,6 +246,42 @@ export function createPdsRegistry(
             throw new Error("PdsHostIdempotencyConflict");
         },
         async (result) => {
+          // The enclosing authority transaction serializes writers across nodes.
+          const existingCredentials = await db.read("pds_host_credentials");
+          for (const existing of existingCredentials) {
+            const existingInbound = Buffer.from(
+              existing.inbound_digest,
+              "base64",
+            );
+            const existingOutbound = decryptPdsCredential(
+              keys,
+              existing.host_id,
+              "outbound-admin",
+              existing.revision,
+              {
+                keyId: existing.key_id,
+                nonce: existing.nonce,
+                ciphertext: existing.ciphertext,
+                tag: existing.tag,
+              },
+            );
+            if (
+              (existing.host_id !== result.hostId &&
+                equalPdsDigest(
+                  existingInbound,
+                  pdsInboundDigest(existing.host_id, inboundToken),
+                )) ||
+              equalPdsDigest(
+                existingInbound,
+                pdsInboundDigest(existing.host_id, outboundPassword),
+              ) ||
+              equalPdsDigest(
+                pdsInboundDigest(existing.host_id, existingOutbound),
+                pdsInboundDigest(existing.host_id, inboundToken),
+              )
+            )
+              throw new Error("PdsInboundCredentialConflict");
+          }
           const encrypted = encryptPdsCredential(
             keys,
             result.hostId,

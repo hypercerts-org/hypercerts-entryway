@@ -420,3 +420,153 @@ test("bootstrap protects keyring files and checks all retained key references", 
     (error) => error.message === "InvalidPdsRegistryKeyring",
   );
 });
+
+test("different hosts cannot concurrently stage the same inbound token", async (t) => {
+  const { randomBytes } = await import("node:crypto");
+  const { parsePdsRegistryKeyring } =
+    await import("../../dist/src/database/pds-registry-crypto.js");
+  const { first, second } = await fixture(t);
+  const keys = parsePdsRegistryKeyring({
+    activeKeyId: "key",
+    keys: { key: randomBytes(32).toString("base64") },
+  });
+  const token = randomBytes(32).toString("base64url");
+  const credentials = {
+    outboundPassword: "fixture-password",
+    inboundToken: token,
+  };
+  const results = await Promise.allSettled([
+    createPdsRegistry(first, keys).stageHostWithCredentials(
+      { host: input("first"), credentials },
+      0,
+      "request",
+    ),
+    createPdsRegistry(second, keys).stageHostWithCredentials(
+      { host: input("second"), credentials },
+      0,
+      "request",
+    ),
+  ]);
+  assert.equal(
+    results.filter((result) => result.status === "fulfilled").length,
+    1,
+  );
+  assert.equal(
+    results.filter(
+      (result) =>
+        result.status === "rejected" &&
+        /PdsInboundCredentialConflict/.test(result.reason.message),
+    ).length,
+    1,
+  );
+  assert.equal((await createPdsRegistry(first).listHosts()).length, 1);
+});
+
+test("retained credential versions forbid cross-role reuse without partial host state", async (t) => {
+  const { randomBytes } = await import("node:crypto");
+  const { parsePdsRegistryKeyring } =
+    await import("../../dist/src/database/pds-registry-crypto.js");
+  const { first } = await fixture(t);
+  const keys = parsePdsRegistryKeyring({
+    activeKeyId: "key",
+    keys: { key: randomBytes(32).toString("base64") },
+  });
+  const registry = createPdsRegistry(first, keys);
+  const oldInbound = randomBytes(32).toString("base64url"),
+    oldOutbound = randomBytes(32).toString("base64url");
+  await registry.stageHostWithCredentials(
+    {
+      host: input("retained"),
+      credentials: { outboundPassword: oldOutbound, inboundToken: oldInbound },
+    },
+    0,
+    "first",
+  );
+  await registry.stageHostWithCredentials(
+    {
+      host: input("retained"),
+      credentials: {
+        outboundPassword: randomBytes(32).toString("base64url"),
+        inboundToken: randomBytes(32).toString("base64url"),
+      },
+    },
+    1,
+    "second",
+  );
+  for (const [hostId, credentials] of [
+    [
+      "reused-inbound",
+      {
+        outboundPassword: oldInbound,
+        inboundToken: randomBytes(32).toString("base64url"),
+      },
+    ],
+    [
+      "reused-outbound",
+      {
+        outboundPassword: randomBytes(32).toString("base64url"),
+        inboundToken: oldOutbound,
+      },
+    ],
+  ]) {
+    await assert.rejects(
+      registry.stageHostWithCredentials(
+        { host: input(hostId), credentials },
+        0,
+        "request",
+      ),
+      /PdsInboundCredentialConflict/,
+    );
+    assert.equal(await registry.readHost(hostId), undefined);
+    assert.equal(await registry.readHostRevision(hostId, 1), undefined);
+  }
+});
+
+test("concurrent hosts cannot reuse an inbound token as an outbound password", async (t) => {
+  const { randomBytes } = await import("node:crypto");
+  const { parsePdsRegistryKeyring } =
+    await import("../../dist/src/database/pds-registry-crypto.js");
+  const { first, second } = await fixture(t);
+  const keys = parsePdsRegistryKeyring({
+    activeKeyId: "key",
+    keys: { key: randomBytes(32).toString("base64") },
+  });
+  const shared = randomBytes(32).toString("base64url");
+  const results = await Promise.allSettled([
+    createPdsRegistry(first, keys).stageHostWithCredentials(
+      {
+        host: input("cross-a"),
+        credentials: {
+          outboundPassword: "fixture-password",
+          inboundToken: shared,
+        },
+      },
+      0,
+      "request",
+    ),
+    createPdsRegistry(second, keys).stageHostWithCredentials(
+      {
+        host: input("cross-b"),
+        credentials: {
+          outboundPassword: shared,
+          inboundToken: randomBytes(32).toString("base64url"),
+        },
+      },
+      0,
+      "request",
+    ),
+  ]);
+  assert.equal(
+    results.filter((result) => result.status === "fulfilled").length,
+    1,
+  );
+  assert.equal(
+    results.filter(
+      (result) =>
+        result.status === "rejected" &&
+        /PdsInboundCredentialConflict/.test(result.reason.message),
+    ).length,
+    1,
+  );
+  assert.equal((await createPdsRegistry(first).listHosts()).length, 1);
+});
