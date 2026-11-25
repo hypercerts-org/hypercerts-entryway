@@ -29,6 +29,7 @@ export const registrationInputSchema = z.strictObject({
   email: accountEmailSchema,
   handle: z.string(),
   pdsId: z.string(),
+  pdsSelection: z.enum(["implicit", "explicit"]).optional(),
   recoveryKey: z.string().nullable().optional(),
   inviteCode: z.string().optional(),
 });

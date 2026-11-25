@@ -70,6 +70,7 @@ export function translateConstraint(
 export function createAccountStorage(
   db: DatabaseExecutor,
   configuredPds: readonly ConfiguredPds[],
+  registryPds?: (row: AccountRow) => Promise<boolean>,
 ): AccountTransactor {
   const t = db.tables;
   const one = async <K extends keyof typeof t>(
@@ -310,7 +311,11 @@ export function createAccountStorage(
         }
       }
     });
-  const assertPds = (row: AccountRow) => {
+  const assertPds = async (row: AccountRow) => {
+    if (registryPds) {
+      if (await registryPds(row)) return;
+      throw new DomainError("InvalidAccount", 400, "Unknown account data host");
+    }
     const pds = configuredPds.find((item) => item.id === row.pdsId);
     if (!pds || (row.pdsUrl !== undefined && row.pdsUrl !== pds.url))
       throw new DomainError("InvalidAccount", 400, "Unknown account data host");
@@ -325,9 +330,9 @@ export function createAccountStorage(
   });
   const insertAccount = async (row: AccountRow, ownerUserId?: string) => {
     assertAccountShape(row);
-    assertPds(row);
     try {
       await db.transact(async () => {
+        await assertPds(row);
         await assertNoActiveArrival(row.email, row.did, row.handle);
         const previous = (
           await db.read("accounts", {
@@ -354,9 +359,9 @@ export function createAccountStorage(
     }: { allowSameOwnerActiveMigrationReservation?: boolean } = {},
   ) => {
     assertAccountShape(row);
-    assertPds(row);
     try {
       await db.transact(async () => {
+        await assertPds(row);
         await assertNoActiveArrival(row.email, row.did, row.handle);
         const previous = await getByDid(row.did);
         if (!previous)

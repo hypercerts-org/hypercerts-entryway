@@ -423,7 +423,7 @@ test("first placement dispatch commits its reservation and external marker atomi
   const { createOperationOwnershipStore } =
     await import("../../dist/src/database/drizzle/operation-ownership.js");
   const { db, peer, trust, first } = await fixture(t);
-  await onboard(first, "host");
+  await onboard(first, "host", 1, "https://internal.host.example");
   await sample(first, "host", true);
   await sample(first, "host", true);
   await first.lifecycle.transition("host", "enable", 1, 0, "enable");
@@ -448,7 +448,7 @@ test("first placement dispatch commits its reservation and external marker atomi
   );
   const input = {
     step: "reserve-key",
-    target: reservation.target,
+    target: reservation.public_target,
     method: "reserve",
     intentDigest: "b".repeat(64),
   };
@@ -492,7 +492,7 @@ test("first placement dispatch commits its reservation and external marker atomi
   assert.equal((await db.read("external_operation_attempts")).length, 1);
   const replay = await placement.beginFirstDispatch(claim, reservation.id, {
     step: "reserve-key",
-    target: reservation.target,
+    target: reservation.public_target,
     method: "reserve",
     intentDigest: "b".repeat(64),
   });
@@ -500,7 +500,7 @@ test("first placement dispatch commits its reservation and external marker atomi
   await assert.rejects(
     placement.beginFirstDispatch(claim, reservation.id, {
       step: "reserve-key",
-      target: reservation.target,
+      target: reservation.public_target,
       method: "reserve",
       intentDigest: "c".repeat(64),
     }),
@@ -622,5 +622,159 @@ test("prior target dispatch prevents refusal while unrelated source evidence doe
   assert.notEqual(
     (await db.read("authority_operations"))[0].phase,
     "placement-refused",
+  );
+});
+
+test("registration uses the real placement transaction before any target request", async (t) => {
+  const { createAccounts } =
+    await import("../../dist/src/compose-accounts.mjs");
+  const { createPdsPlacement } =
+    await import("../../dist/src/database/drizzle/pds-placement.js");
+  const { Secp256k1Keypair } = await import("@atproto/crypto");
+  const { db, first, trust } = await fixture(t);
+  await onboard(first, "host");
+  await sample(first, "host", true);
+  await sample(first, "host", true);
+  await first.lifecycle.transition("host", "enable", 1, 0, "enable");
+  const signer = await Secp256k1Keypair.create({ exportable: true });
+  const offline = await Secp256k1Keypair.create();
+  const config = {
+    plcRecoveryKeyDid: offline.did(),
+    plcRotationKeyHex: Buffer.from(await signer.export()).toString("hex"),
+    plcUrl: "https://plc.example",
+    handleDomains: [".example"],
+    pds: [
+      {
+        id: "host",
+        url: "https://host.example/",
+        internalUrl: "https://host.example/",
+        did: "did:web:host.example",
+        adminPassword: "fixture",
+      },
+    ],
+  };
+  const placement = createPdsPlacement(
+    db,
+    () => trust,
+    () => "policy",
+  );
+  const originalFetch = globalThis.fetch;
+  let targetCalls = 0;
+  globalThis.fetch = async () => {
+    targetCalls++;
+    throw new Error("Unexpected target request");
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const accounts = await createAccounts({ db, config, placement });
+  const { createInvites } =
+    await import("../../dist/src/features/account-registration/invites.mjs");
+  const invites = await createInvites({
+    db,
+    config: { inviteCodeRequired: true },
+    accounts,
+  });
+  const { code } = await invites.createInviteCode({ useCount: 1 });
+  accounts.setProvisionPolicy({
+    reserve: invites.reserveInvite,
+    complete: invites.completeInvite,
+  });
+  const originalReserve = placement.reserve;
+  placement.reserve = async (...args) => {
+    const reservation = await originalReserve(...args);
+    await first.lifecycle.transition("host", "drain", 1, 1, "drain-before-key");
+    return reservation;
+  };
+  await assert.rejects(
+    accounts.create({
+      email: "alice@example.test",
+      handle: "alice.example",
+      pdsId: "host",
+      pdsSelection: "implicit",
+      inviteCode: code,
+    }),
+    { code: "PdsLifecycleIneligible" },
+  );
+  assert.equal(targetCalls, 0);
+  assert.equal((await db.get("entryway:invites", code)).remaining, 1);
+  assert.equal(
+    await db.get("entryway:invite-reservations", "alice@example.test"),
+    null,
+  );
+  assert.equal(
+    (await db.read("pds_placement_reservations"))[0].state,
+    "refused",
+  );
+  assert.equal((await db.read("external_operation_attempts")).length, 0);
+  assert.equal(
+    (await db.get("registration:intents", "alice@example.test")).pdsId,
+    "host",
+  );
+});
+
+test("registration uses real registry reservation and pinned host for both target effects", async (t) => {
+  const { createAccounts } =
+    await import("../../dist/src/compose-accounts.mjs");
+  const { createPdsPlacement } =
+    await import("../../dist/src/database/drizzle/pds-placement.js");
+  const { Secp256k1Keypair } = await import("@atproto/crypto");
+  const { db, first, trust } = await fixture(t);
+  await onboard(first, "host");
+  await sample(first, "host", true);
+  await sample(first, "host", true);
+  await first.lifecycle.transition("host", "enable", 1, 0, "enable");
+  const signer = await Secp256k1Keypair.create({ exportable: true });
+  const offline = await Secp256k1Keypair.create();
+  const signingKey = await Secp256k1Keypair.create();
+  const config = {
+    plcRecoveryKeyDid: offline.did(),
+    plcRotationKeyHex: Buffer.from(await signer.export()).toString("hex"),
+    plcUrl: "https://plc.example",
+    handleDomains: [".example"],
+    pds: [],
+  };
+  const placement = createPdsPlacement(
+    db,
+    () => trust,
+    () => "policy",
+  );
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const parsed = new URL(url);
+    calls.push(parsed);
+    if (parsed.pathname.endsWith("reserveSigningKey"))
+      return Response.json({ signingKey: signingKey.did() });
+    if (parsed.pathname.endsWith("createAccount")) return Response.json({});
+    throw Error("Unexpected request");
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const accounts = await createAccounts({ db, config, placement });
+  accounts.plcClient.getAuditableLog = async () => {
+    throw Object.assign(new Error("offline"), { status: 503 });
+  };
+  const selected = await accounts.selectRegistrationPds();
+  const row = await accounts.create({
+    email: "alice@example.test",
+    handle: "alice.example",
+    pdsId: selected,
+    pdsSelection: "implicit",
+  });
+  assert.equal(row.status, "active");
+  assert.equal(row.pdsId, "host");
+  assert.deepEqual(
+    calls.map((url) => url.pathname),
+    [
+      "/xrpc/com.atproto.server.reserveSigningKey",
+      "/xrpc/com.atproto.server.createAccount",
+    ],
+  );
+  assert.ok(calls.every((url) => url.origin === "https://host.example"));
+  assert.equal(
+    (await db.read("pds_placement_reservations"))[0].state,
+    "dispatched",
   );
 });

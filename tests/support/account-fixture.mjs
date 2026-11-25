@@ -6,7 +6,7 @@ import { openTestDatabase } from "./database-fixture.mjs";
 export async function fixture(
   t,
   reply,
-  { path = ":memory:", ownershipFactory } = {},
+  { path = ":memory:", ownershipFactory, placement, placementFactory } = {},
 ) {
   const rotation = await Secp256k1Keypair.create({ exportable: true });
   const offline = await Secp256k1Keypair.create();
@@ -94,6 +94,11 @@ export async function fixture(
     accounts = await createAccounts({
       db,
       config,
+      ...(placementFactory
+        ? { placement: placementFactory(db) }
+        : placement
+          ? { placement }
+          : {}),
       ...(ownershipFactory ? { ownership: ownershipFactory(db) } : {}),
     });
     accounts.plcClient.getLastOp = async (did) => plcHeads.get(did);

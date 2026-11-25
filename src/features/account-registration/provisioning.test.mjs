@@ -1121,3 +1121,182 @@ test("crash after signed row commit reuses acknowledged repository key and saved
     1,
   );
 });
+
+const placementFixtureView = {
+  async select() {
+    return "pds1";
+  },
+  async resolve() {
+    return {
+      id: "pds1",
+      url: "https://pds1.entryway.atmosbox.test",
+      internalUrl: "http://pds1:3000",
+    };
+  },
+  async read() {
+    return undefined;
+  },
+};
+
+test("placement refusal stops before repository key allocation", async (t) => {
+  let steps;
+  const placement = {
+    ...placementFixtureView,
+    async reserve(_claim, _purpose, _intent, targetSteps) {
+      steps = targetSteps;
+      return {
+        id: "reservation",
+        host_id: "pds1",
+        public_target: "https://pds1.entryway.atmosbox.test",
+        target: "http://pds1:3000",
+      };
+    },
+    async beginFirstDispatch() {
+      return { kind: "refused" };
+    },
+  };
+  const f = await fixture(t, undefined, { placement });
+  await assert.rejects(
+    f.accounts.create({ ...alice, pdsSelection: "implicit" }),
+    { code: "PdsLifecycleIneligible" },
+  );
+  assert.deepEqual(steps, ["reserve-signing-key", "create-account"]);
+  assert.equal(
+    f.calls.filter(
+      (call) => call.method === "com.atproto.server.reserveSigningKey",
+    ).length,
+    0,
+  );
+  assertNothingPublished(f);
+});
+
+test("placement authorizes the first key allocation before target requests", async (t) => {
+  const { createOperationOwnershipStore } =
+    await import("../../../dist/src/database/drizzle/operation-ownership.js");
+  let authorizations = 0;
+  const f = await fixture(t, undefined, {
+    placementFactory: (db) => ({
+      ...placementFixtureView,
+      async read() {
+        return authorizations
+          ? {
+              host_id: "pds1",
+              public_target: "https://pds1.entryway.atmosbox.test",
+              target: "http://pds1:3000",
+              revision: 1,
+              state: "dispatched",
+            }
+          : undefined;
+      },
+      async reserve() {
+        return {
+          id: "reservation",
+          host_id: "pds1",
+          public_target: "https://pds1.entryway.atmosbox.test",
+          target: "http://pds1:3000",
+        };
+      },
+      async beginFirstDispatch(claim, _reservationId, input) {
+        authorizations++;
+        return {
+          kind: "dispatched",
+          attempt: await createOperationOwnershipStore(db).beginExternal(
+            claim,
+            input,
+          ),
+        };
+      },
+    }),
+  });
+  const row = await f.accounts.create({ ...alice, pdsSelection: "explicit" });
+  assert.equal(row.status, "active");
+  assert.equal(authorizations, 1);
+  assert.equal(
+    f.calls.filter(
+      (call) => call.method === "com.atproto.server.reserveSigningKey",
+    ).length,
+    1,
+  );
+  assert.equal(createAccountCalls(f.calls).length, 1);
+});
+
+test("a refused implicit registration retains its original intent and rejects an explicit retry", async (t) => {
+  const { eq } = await import("drizzle-orm");
+  const placementFactory = (db) => ({
+    ...placementFixtureView,
+    async reserve() {
+      return {
+        id: "reservation",
+        host_id: "pds1",
+        public_target: "https://pds1.entryway.atmosbox.test",
+        target: "http://pds1:3000",
+      };
+    },
+    async beginFirstDispatch(claim) {
+      await db.update(
+        "authority_operations",
+        { pending: true, phase: "placement-refused" },
+        eq(db.tables.authority_operations.id, claim.operationId),
+      );
+      return { kind: "refused" };
+    },
+  });
+  const f = await fixture(t, undefined, { placementFactory });
+  await assert.rejects(
+    f.accounts.create({ ...alice, pdsSelection: "implicit" }),
+    { code: "PdsLifecycleIneligible" },
+  );
+  const saved = await f.accounts.pendingRegistration(alice.email);
+  assert.equal(saved.pdsId, "pds1");
+  assert.equal(saved.pdsSelection, "implicit");
+  await assert.rejects(
+    f.accounts.create({ ...alice, pdsSelection: "explicit" }),
+  );
+  assert.equal(
+    f.calls.filter(
+      (call) => call.method === "com.atproto.server.reserveSigningKey",
+    ).length,
+    0,
+  );
+});
+
+test("reservation-time ineligibility keeps a stable pending refusal", async (t) => {
+  let eligible = false;
+  let reserveCalls = 0;
+  const placement = {
+    ...placementFixtureView,
+    async reserve() {
+      reserveCalls++;
+      if (!eligible) throw new Error("PdsLifecycleIneligible");
+      return {
+        id: "reservation",
+        host_id: "pds1",
+        public_target: "https://pds1.entryway.atmosbox.test",
+        target: "http://pds1:3000",
+      };
+    },
+    async beginFirstDispatch() {
+      throw Error("must not dispatch");
+    },
+  };
+  const f = await fixture(t, undefined, { placement });
+  const input = { ...alice, pdsSelection: "implicit" };
+  await assert.rejects(f.accounts.create(input), {
+    error: "PdsLifecycleIneligible",
+  });
+  assert.equal(
+    (await f.db.get("registration:intents", alice.email)).placementRefused,
+    true,
+  );
+  eligible = true;
+  await assert.rejects(f.accounts.create(input), {
+    error: "PdsLifecycleIneligible",
+  });
+  assert.equal(reserveCalls, 1);
+  assert.equal(
+    f.calls.filter(
+      (call) => call.method === "com.atproto.server.reserveSigningKey",
+    ).length,
+    0,
+  );
+});
