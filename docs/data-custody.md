@@ -64,10 +64,12 @@ by another DID. Existing migration/import adapters still permit sharing; the
 accepted design restricts that exception to whole-PDS association import, not
 individual incoming arrivals. After OTP verification, multiple established
 bindings render an explicit chooser. Its browser flow retains the verified user
-identity, and every resume, submission or mailbox switch re-reads current
-bindings before continuing only with the selected DID. The chooser does not
-create bindings; joining-PDS association import remains unimplemented. No DID
-is selected or bound from an email match alone.
+identity. Resuming or submitting an account choice rechecks current bindings
+before continuing with a selected DID. Switching mailboxes checks the verified
+session and current flow, then starts sign-in again without carrying forward the
+selected DID. The new mailbox requires fresh proof. The chooser does not create
+bindings; joining-PDS association import remains unimplemented. No DID is
+selected or bound from an email match alone.
 
 The account console follows the same authority rule. A single binding keeps the
 direct `/account` path; multiple bindings require an explicit choice before
