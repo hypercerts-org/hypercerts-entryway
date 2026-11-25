@@ -22,12 +22,18 @@ const revision = {
 const targets = new Map([
   [new URL(publicUrl).origin, [process.env.PDS_TEST_GATEWAY_IP]],
 ]);
+const ca = await readFile(
+  process.argv.includes("--untrusted")
+    ? "/etc/ssl/certs/ca-certificates.crt"
+    : "/ca/root.crt",
+);
+const verifier = { targets, ca };
 if (process.argv.includes("--untrusted")) {
   const result = await checkPdsOutbound(
     revision,
     config.issuer,
     pds.adminPassword,
-    targets,
+    verifier,
   );
   assert.equal(result.reason, "network-error");
   assert.equal(result.adminAttempted, false);
@@ -36,7 +42,7 @@ if (process.argv.includes("--untrusted")) {
     revision,
     config.issuer,
     pds.adminPassword,
-    targets,
+    verifier,
   );
   assert.deepEqual(valid, {
     publicDidOk: true,
@@ -51,7 +57,7 @@ if (process.argv.includes("--untrusted")) {
     { ...revision, serviceDid: "did:web:wrong.example" },
     config.issuer,
     pds.adminPassword,
-    targets,
+    verifier,
   );
   assert.equal(wrongDid.reason, "did-mismatch");
   assert.equal(wrongDid.adminAttempted, false);
@@ -59,7 +65,7 @@ if (process.argv.includes("--untrusted")) {
     revision,
     "https://wrong.example",
     pds.adminPassword,
-    targets,
+    verifier,
   );
   assert.equal(wrongIssuer.reason, "metadata-mismatch");
   assert.equal(wrongIssuer.adminAttempted, false);
@@ -67,7 +73,7 @@ if (process.argv.includes("--untrusted")) {
     revision,
     config.issuer,
     "wrong-password",
-    targets,
+    verifier,
   );
   assert.equal(wrongPassword.reason, "admin-rejected");
   assert.equal(wrongPassword.adminAttempted, true);
@@ -75,7 +81,7 @@ if (process.argv.includes("--untrusted")) {
     revision,
     config.issuer,
     pds.adminPassword,
-    new Map(),
+    { targets: new Map(), ca },
   );
   assert.equal(missingTarget.reason, "target-not-allowed");
   assert.equal(missingTarget.adminAttempted, false);
@@ -83,7 +89,7 @@ if (process.argv.includes("--untrusted")) {
     revision,
     config.issuer,
     pds.adminPassword,
-    new Map([[new URL(publicUrl).origin, ["127.0.0.1"]]]),
+    { targets: new Map([[new URL(publicUrl).origin, ["127.0.0.1"]]]), ca },
   );
   assert.equal(wrongAddress.reason, "network-error");
   assert.equal(wrongAddress.adminAttempted, false);

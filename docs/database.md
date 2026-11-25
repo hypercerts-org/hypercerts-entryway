@@ -49,7 +49,8 @@ Use the global Entryway administrator password in a protected file with mode
     "serviceDid": "did:web:pds.example.org",
     "publicUrl": "https://pds.example.org",
     "internalUrl": "https://pds.internal.example.org",
-    "order": 10
+    "order": 10,
+    "stagedIncomingMigration": false
   },
   "credentials": {
     "outboundPassword": "<PDS-admin-password>",
@@ -78,7 +79,21 @@ nonempty ordered list of approved IP addresses, for example
 The file has the same protection requirements as the keyring. The check dials
 the first approved address for each origin, verifies the URL hostname against the
 TLS certificate, and does not follow redirects or fall back to DNS. Configure
-trusted CA certificates for the service using the normal Node.js trust settings.
+an explicit PEM CA bundle and set `PDS_REGISTRY_CA_FILE` to its path. Entryway
+uses that bundle for these checks instead of ambient system roots. The target
+file, CA bundle and fixed verification settings form a fingerprint; changing
+that policy makes old receipts unusable. Before changing a host's verifier policy,
+inspect the database generation and this node's intended fingerprint, then
+explicitly transition it using the displayed values:
+
+```sh
+node scripts/pds-registry.mjs policy-status --url https://entryway.example.org --auth-file /secure/admin --host pds-new
+node scripts/pds-registry.mjs policy --url https://entryway.example.org --auth-file /secure/admin --host pds-new --revision 1 --expected-generation <current-generation> --fingerprint <intended-fingerprint>
+```
+
+The first check initializes generation 1. Later policy or candidate revision
+changes require an explicit transition. Each transition invalidates pending and
+previous checks, including when returning to an older fingerprint.
 
 Export the public Entryway trust settings for the PDS operator, then check the
 exact staged revision after the operator applies them and restarts the PDS:
@@ -88,10 +103,16 @@ node scripts/pds-registry.mjs trust --url https://entryway.example.org --auth-fi
 node scripts/pds-registry.mjs check --url https://entryway.example.org --auth-file /secure/admin --host pds-new --revision 1
 ```
 
+The staged revision binds a public manifest fingerprint to both endpoints, the
+trust settings, capability claim and credential versions. An absent
+`stagedIncomingMigration` defaults to false. A true value is only an untrusted
+candidate claim and does not establish staged-migration support.
+
 The check compares the service DID and protected-resource issuer at both public
 and internal URLs, then performs an authenticated PDS admin read only when those
-checks match. It records a bounded result for that revision and returns nonzero
-on failure. A new check invalidates the previous result; an incomplete attempt
+checks match. It records a generation, receipt ID, fingerprint and bounded
+result for that revision, and returns nonzero on failure. Receipts expire ten
+minutes after the check starts. A new check invalidates the previous result; an incomplete attempt
 can be retried after its 30-second lease. A successful outbound check does not
 prove a PDS-originated callback or permit association.
 

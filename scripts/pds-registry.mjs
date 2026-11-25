@@ -29,7 +29,15 @@ async function protectedFile(path) {
 function argumentsFor(argv) {
   const [command, ...rest] = argv;
   if (
-    !["stage", "status", "list", "check", "trust"].includes(command) ||
+    ![
+      "stage",
+      "status",
+      "list",
+      "check",
+      "trust",
+      "policy-status",
+      "policy",
+    ].includes(command) ||
     rest.length % 2
   )
     throw Error("InvalidArguments");
@@ -43,6 +51,8 @@ function argumentsFor(argv) {
         "--request-file",
         "--host",
         "--revision",
+        "--expected-generation",
+        "--fingerprint",
       ].includes(name) ||
       Object.hasOwn(options, name) ||
       !rest[i + 1]
@@ -50,17 +60,27 @@ function argumentsFor(argv) {
       throw Error("InvalidArguments");
     options[name] = rest[i + 1];
   }
+  const hostCommand = ["check", "policy-status", "policy"].includes(command);
   if (
     !options["--url"] ||
     !options["--auth-file"] ||
     (command === "stage") !== Boolean(options["--request-file"]) ||
-    (command === "check") !==
-      Boolean(options["--host"] && options["--revision"]) ||
-    (command !== "check" && (options["--host"] || options["--revision"])) ||
-    (command === "check" &&
-      (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(options["--host"]) ||
-        !/^[1-9][0-9]*$/.test(options["--revision"]) ||
-        !Number.isSafeInteger(Number(options["--revision"]))))
+    hostCommand !== Boolean(options["--host"]) ||
+    (command === "check" || command === "policy") !==
+      Boolean(options["--revision"]) ||
+    (command === "policy") !==
+      Boolean(options["--expected-generation"] && options["--fingerprint"]) ||
+    (command !== "policy" &&
+      (options["--expected-generation"] || options["--fingerprint"])) ||
+    (hostCommand &&
+      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(options["--host"])) ||
+    (options["--revision"] &&
+      (!/^[1-9][0-9]*$/.test(options["--revision"]) ||
+        !Number.isSafeInteger(Number(options["--revision"])))) ||
+    (command === "policy" &&
+      (!/^(0|[1-9][0-9]*)$/.test(options["--expected-generation"]) ||
+        !Number.isSafeInteger(Number(options["--expected-generation"])) ||
+        !/^[a-f0-9]{64}$/.test(options["--fingerprint"])))
   )
     throw Error("InvalidArguments");
   const base = new URL(options["--url"]);
@@ -87,7 +107,13 @@ try {
       ? JSON.parse(await protectedFile(options["--request-file"]))
       : command === "check"
         ? { expectedRevision: Number(options["--revision"]) }
-        : undefined;
+        : command === "policy"
+          ? {
+              revision: Number(options["--revision"]),
+              expectedGeneration: Number(options["--expected-generation"]),
+              fingerprint: options["--fingerprint"],
+            }
+          : undefined;
   const path =
     command === "status"
       ? "/admin/pds-registry/status"
@@ -95,9 +121,14 @@ try {
         ? "/admin/pds-registry/trust"
         : command === "check"
           ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}/check`
-          : "/admin/pds-registry/hosts";
+          : command === "policy" || command === "policy-status"
+            ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}/policy`
+            : "/admin/pds-registry/hosts";
   const response = await fetch(new URL(path, base), {
-    method: command === "stage" || command === "check" ? "POST" : "GET",
+    method:
+      command === "stage" || command === "check" || command === "policy"
+        ? "POST"
+        : "GET",
     headers: {
       authorization: `Basic ${Buffer.from(`admin:${password}`).toString("base64")}`,
       ...(body === undefined ? {} : { "content-type": "application/json" }),
@@ -131,6 +162,29 @@ try {
           plcRotationKeyDid,
         }),
       );
+    } else if (command === "policy-status") {
+      const project = (value) =>
+        value && {
+          revision: value.revision,
+          generation: value.generation,
+          fingerprint: value.fingerprint,
+        };
+      console.log(
+        JSON.stringify({
+          current: project(result.current),
+          intended: project(result.intended),
+        }),
+      );
+    } else if (command === "policy") {
+      const { revision, generation, fingerprint } = result.policy;
+      if (
+        revision !== Number(options["--revision"]) ||
+        fingerprint !== options["--fingerprint"]
+      )
+        throw Error("UnexpectedPolicyResult");
+      console.log(
+        JSON.stringify({ policy: { revision, generation, fingerprint } }),
+      );
     } else if (command === "check") {
       const last = result.outbound?.last;
       if (!last || last.revision !== Number(options["--revision"]))
@@ -141,7 +195,17 @@ try {
             pending: result.outbound?.pending === true,
             last: last && {
               revision: last.revision,
+              direction: last.direction,
+              receiptId: last.receiptId,
+              generation: last.generation,
+              manifestFingerprint: last.manifestFingerprint,
+              verifierVersion: last.verifierVersion,
+              verifierPolicyFingerprint: last.verifierPolicyFingerprint,
+              verifierPolicyGeneration: last.verifierPolicyGeneration,
               observedAt: last.observedAt,
+              completedAt: last.completedAt,
+              expiresAt: last.expiresAt,
+              expired: last.expired === true,
               publicDidOk: last.publicDidOk === true,
               internalDidOk: last.internalDidOk === true,
               publicMetadataOk: last.publicMetadataOk === true,
@@ -157,8 +221,15 @@ try {
       );
       if (!last || last.reason !== "ok") process.exitCode = 1;
     } else if (command === "stage") {
-      const { hostId, serviceDid, publicUrl, internalUrl, order, revision } =
-        result.staged;
+      const {
+        hostId,
+        serviceDid,
+        publicUrl,
+        internalUrl,
+        order,
+        revision,
+        stagedIncomingMigration,
+      } = result.staged;
       console.log(
         JSON.stringify({
           staged: {
@@ -168,6 +239,7 @@ try {
             internalUrl,
             order,
             revision,
+            stagedIncomingMigration,
           },
         }),
       );

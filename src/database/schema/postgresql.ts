@@ -594,6 +594,9 @@ export const pds_host_revisions = table(
     service_did: text("service_did").notNull(),
     public_url: text("public_url").notNull(),
     internal_url: text("internal_url").notNull(),
+    staged_incoming_migration: boolean("staged_incoming_migration")
+      .notNull()
+      .default(false),
     configured_order: count("configured_order").notNull(),
   },
   (t) => [primaryKey({ columns: [t.host_id, t.revision] })],
@@ -645,10 +648,18 @@ export const pds_host_checks = table("pds_host_checks", {
     .primaryKey()
     .references(() => pds_hosts.id),
   attempt_id: text("attempt_id"),
+  generation: count("generation").notNull(),
   attempt_revision: count("attempt_revision"),
   expires_at: count("expires_at"),
   started_at: count("started_at"),
   last_revision: count("last_revision"),
+  last_receipt_id: text("last_receipt_id"),
+  manifest_fingerprint: text("manifest_fingerprint"),
+  verifier_version: count("verifier_version"),
+  verifier_policy_fingerprint: text("verifier_policy_fingerprint"),
+  verifier_policy_generation: count("verifier_policy_generation"),
+  completed_at: count("completed_at"),
+  receipt_expires_at: count("receipt_expires_at"),
   observed_at: count("observed_at"),
   public_did_ok: boolean("public_did_ok"),
   internal_did_ok: boolean("internal_did_ok"),
@@ -657,4 +668,26 @@ export const pds_host_checks = table("pds_host_checks", {
   admin_attempted: boolean("admin_attempted"),
   admin_ok: boolean("admin_ok"),
   reason: text("reason"),
+});
+
+export const pds_host_manifests = table(
+  "pds_host_manifests",
+  {
+    host_id: text("host_id")
+      .notNull()
+      .references(() => pds_hosts.id),
+    revision: count("revision").notNull(),
+    manifest: text("manifest").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.host_id, t.revision] })],
+);
+
+export const pds_host_verifier_policies = table("pds_host_verifier_policies", {
+  host_id: text("host_id")
+    .primaryKey()
+    .references(() => pds_hosts.id),
+  revision: count("revision").notNull(),
+  generation: count("generation").notNull(),
+  fingerprint: text("fingerprint").notNull(),
 });

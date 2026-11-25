@@ -35,3 +35,72 @@ export async function loadPdsRegistryTargets(path) {
     throw new Error("InvalidPdsRegistryTargets");
   }
 }
+
+export async function loadPdsRegistryVerifier(targetsPath, caPath) {
+  if (targetsPath === undefined && caPath === undefined) return undefined;
+  if (!targetsPath || !caPath) throw new Error("InvalidPdsRegistryVerifier");
+  try {
+    const { constants } = await import("node:fs");
+    const { open } = await import("node:fs/promises");
+    const { createHash, X509Certificate } = await import("node:crypto");
+    const targets = await loadPdsRegistryTargets(targetsPath);
+    const file = await open(caPath, constants.O_RDONLY | constants.O_NONBLOCK);
+    let ca;
+    try {
+      const stat = await file.stat();
+      if (!stat.isFile() || stat.size > 1_048_576) throw new Error();
+      const buffer = Buffer.alloc(1_048_577);
+      let used = 0;
+      while (used < buffer.length) {
+        const { bytesRead } = await file.read(
+          buffer,
+          used,
+          buffer.length - used,
+          null,
+        );
+        if (!bytesRead) break;
+        used += bytesRead;
+      }
+      if (!used || used > 1_048_576) throw new Error();
+      ca = buffer.subarray(0, used);
+    } finally {
+      await file.close();
+    }
+    const text = ca.toString("utf8"),
+      expression =
+        /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
+    const certificates = text.match(expression);
+    if (!certificates?.length || text.replace(expression, "").trim())
+      throw new Error();
+    for (const certificate of certificates) new X509Certificate(certificate);
+    const caDigest = createHash("sha256").update(ca).digest("hex");
+    const policyFor = (revision) => {
+      const origins = [
+        ...new Set([
+          new URL(revision.publicUrl).origin,
+          new URL(revision.internalUrl).origin,
+        ]),
+      ].sort();
+      const entries = origins.map((origin) => [
+        origin,
+        targets.get(origin) ?? null,
+      ]);
+      return createHash("sha256")
+        .update(
+          JSON.stringify([
+            "pds-registry-verifier",
+            1,
+            entries,
+            caDigest,
+            3000,
+            65536,
+            "https-get-no-redirect-no-reuse",
+          ]),
+        )
+        .digest("hex");
+    };
+    return { targets, ca, policyFor };
+  } catch {
+    throw new Error("InvalidPdsRegistryVerifier");
+  }
+}

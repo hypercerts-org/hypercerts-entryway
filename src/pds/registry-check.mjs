@@ -3,9 +3,9 @@ import { isIP } from "node:net";
 
 const MAX_RESPONSE_BYTES = 65_536;
 const REQUEST_DEADLINE_MS = 3_000;
-function getJson(origin, path, targets, authorization) {
+function getJson(origin, path, verifier, authorization) {
   const url = new URL(path, origin),
-    approved = targets?.get(url.origin);
+    approved = verifier?.targets.get(url.origin);
   if (url.protocol !== "https:" || !approved?.length)
     return Promise.resolve({ reason: "target-not-allowed" });
   const hostname = url.hostname.replace(/^\[|\]$/g, "");
@@ -26,6 +26,7 @@ function getJson(origin, path, targets, authorization) {
       {
         method: "GET",
         rejectUnauthorized: true,
+        ca: verifier.ca,
         agent: false,
         autoSelectFamily: false,
         lookup: (_hostname, _options, callback) =>
@@ -77,7 +78,7 @@ export async function checkPdsOutbound(
   revision,
   issuer,
   outboundPassword,
-  targets,
+  verifier,
 ) {
   const result = {
     publicDidOk: false,
@@ -95,7 +96,7 @@ export async function checkPdsOutbound(
     const description = await getJson(
       origin,
       "/xrpc/com.atproto.server.describeServer",
-      targets,
+      verifier,
     );
     if (description.reason) {
       if (result.reason === "ok") result.reason = description.reason;
@@ -108,7 +109,7 @@ export async function checkPdsOutbound(
     const metadata = await getJson(
       origin,
       "/.well-known/oauth-protected-resource",
-      targets,
+      verifier,
     );
     if (metadata.reason) {
       if (result.reason === "ok") result.reason = metadata.reason;
@@ -141,7 +142,7 @@ export async function checkPdsOutbound(
   const admin = await getJson(
     revision.internalUrl,
     adminPath.pathname + adminPath.search,
-    targets,
+    verifier,
     authorization,
   );
   if (admin.reason)

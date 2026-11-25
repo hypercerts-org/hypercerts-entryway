@@ -294,10 +294,18 @@ CREATE TABLE "operation_admissions" (
 CREATE TABLE "pds_host_checks" (
 	"host_id" text PRIMARY KEY,
 	"attempt_id" text,
+	"generation" bigint NOT NULL,
 	"attempt_revision" bigint,
 	"expires_at" bigint,
 	"started_at" bigint,
 	"last_revision" bigint,
+	"last_receipt_id" text,
+	"manifest_fingerprint" text,
+	"verifier_version" bigint,
+	"verifier_policy_fingerprint" text,
+	"verifier_policy_generation" bigint,
+	"completed_at" bigint,
+	"receipt_expires_at" bigint,
 	"observed_at" bigint,
 	"public_did_ok" boolean,
 	"internal_did_ok" boolean,
@@ -328,12 +336,21 @@ CREATE TABLE "pds_host_credentials" (
 	CONSTRAINT "pds_host_credentials_pkey" PRIMARY KEY("host_id","revision")
 );
 --> statement-breakpoint
+CREATE TABLE "pds_host_manifests" (
+	"host_id" text,
+	"revision" bigint,
+	"manifest" text NOT NULL,
+	"fingerprint" text NOT NULL,
+	CONSTRAINT "pds_host_manifests_pkey" PRIMARY KEY("host_id","revision")
+);
+--> statement-breakpoint
 CREATE TABLE "pds_host_revisions" (
 	"host_id" text,
 	"revision" bigint,
 	"service_did" text NOT NULL,
 	"public_url" text NOT NULL,
 	"internal_url" text NOT NULL,
+	"staged_incoming_migration" boolean DEFAULT false NOT NULL,
 	"configured_order" bigint NOT NULL,
 	CONSTRAINT "pds_host_revisions_pkey" PRIMARY KEY("host_id","revision")
 );
@@ -344,6 +361,13 @@ CREATE TABLE "pds_host_stage_requests" (
 	"request" text NOT NULL,
 	"revision" bigint NOT NULL,
 	CONSTRAINT "pds_host_stage_requests_pkey" PRIMARY KEY("host_id","idempotency_key")
+);
+--> statement-breakpoint
+CREATE TABLE "pds_host_verifier_policies" (
+	"host_id" text PRIMARY KEY,
+	"revision" bigint NOT NULL,
+	"generation" bigint NOT NULL,
+	"fingerprint" text NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "pds_hosts" (
@@ -440,6 +464,8 @@ ALTER TABLE "operation_admissions" ADD CONSTRAINT "operation_admissions_operatio
 ALTER TABLE "pds_host_checks" ADD CONSTRAINT "pds_host_checks_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_credential_requests" ADD CONSTRAINT "pds_host_credential_requests_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_credentials" ADD CONSTRAINT "pds_host_credentials_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
+ALTER TABLE "pds_host_manifests" ADD CONSTRAINT "pds_host_manifests_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_revisions" ADD CONSTRAINT "pds_host_revisions_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_stage_requests" ADD CONSTRAINT "pds_host_stage_requests_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
+ALTER TABLE "pds_host_verifier_policies" ADD CONSTRAINT "pds_host_verifier_policies_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "session" ADD CONSTRAINT "session_userId_user_id_fkey" FOREIGN KEY ("userId") REFERENCES "user"("id") ON DELETE CASCADE;
