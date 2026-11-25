@@ -1,6 +1,7 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, ECDH, timingSafeEqual } from "node:crypto";
 import { isValidDid } from "@atproto/syntax";
 import { HttpError } from "../../http/http-error.mjs";
+import { publicRotationKey } from "../../plc/policy.js";
 
 const record = (value, keys) =>
   value !== null &&
@@ -22,6 +23,8 @@ export function mountPdsRegistryRoutes({
   registry,
   keyring,
   keyStatus,
+  checks,
+  outboundCheck,
   admin,
 }) {
   const guarded = (handler) => async (req, res, next) => {
@@ -29,6 +32,14 @@ export function mountPdsRegistryRoutes({
       await admin(req, undefined, true);
       await handler(req, res);
     } catch (error) {
+      if (error.message === "PdsCheckPending")
+        return next(
+          new HttpError(
+            409,
+            "OperationPending",
+            "A registry check is already running",
+          ),
+        );
       if (
         [
           "PdsHostRevisionConflict",
@@ -62,6 +73,91 @@ export function mountPdsRegistryRoutes({
     }),
   );
   app.get(
+    "/admin/pds-registry/trust",
+    guarded(async (_req, res) => {
+      if (
+        ![
+          config.issuer,
+          config.serviceDid,
+          config.jwtPublicHex,
+          config.plcRotationKeyDid,
+        ].every((value) => typeof value === "string" && value.length > 0)
+      )
+        throw new Error("PdsTrustConfigurationUnavailable");
+      try {
+        const issuer = new URL(config.issuer);
+        if (
+          issuer.protocol !== "https:" ||
+          issuer.username ||
+          issuer.password ||
+          issuer.search ||
+          issuer.hash ||
+          !isValidDid(config.serviceDid)
+        )
+          throw new Error();
+        publicRotationKey(config.plcRotationKeyDid);
+        if (
+          !/^(?:(?:02|03)[0-9a-f]{64}|04[0-9a-f]{128})$/i.test(
+            config.jwtPublicHex,
+          )
+        )
+          throw new Error();
+        ECDH.convertKey(
+          config.jwtPublicHex,
+          "secp256k1",
+          "hex",
+          "hex",
+          "compressed",
+        );
+      } catch {
+        throw new Error("PdsTrustConfigurationUnavailable");
+      }
+      res.json({
+        issuer: config.issuer,
+        serviceDid: config.serviceDid,
+        jwtPublicKeyHex: config.jwtPublicHex,
+        plcRotationKeyDid: config.plcRotationKeyDid,
+      });
+    }),
+  );
+  app.post(
+    "/admin/pds-registry/hosts/:hostId/check",
+    guarded(async (req, res) => {
+      if (!keyring || !checks || !outboundCheck)
+        throw new HttpError(
+          503,
+          "InvalidRequest",
+          "Registry checking is not configured",
+        );
+      if (
+        !record(req.body, ["expectedRevision"]) ||
+        !Number.isSafeInteger(req.body.expectedRevision) ||
+        req.body.expectedRevision < 1
+      )
+        throw invalid();
+      const { attemptId, revision } = await checks.begin(
+        req.params.hostId,
+        req.body.expectedRevision,
+      );
+      const password = await registry.readOutbound(
+        revision.hostId,
+        revision.revision,
+      );
+      const observation = await outboundCheck(revision, password);
+      const receipt = await checks.complete(
+        revision.hostId,
+        revision.revision,
+        attemptId,
+        observation,
+      );
+      res.json({
+        outbound: { pending: false, last: receipt },
+        inbound: "unproven",
+        association: "disabled",
+      });
+    }),
+  );
+  app.get(
     "/admin/pds-registry/hosts",
     guarded(async (_req, res) => {
       res.json({ hosts: await registry.listHosts() });
@@ -78,6 +174,10 @@ export function mountPdsRegistryRoutes({
           host.hostId,
           host.stagedRevision,
         ),
+        outbound: checks
+          ? await checks.status(host.hostId)
+          : { pending: false, last: null },
+        inbound: "unproven",
       });
     }),
   );

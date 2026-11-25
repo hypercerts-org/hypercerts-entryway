@@ -6,18 +6,22 @@ import { createMailFeature } from "./mail/create-mail.js";
 import { createMailOutbox } from "./database/drizzle/mail-outbox.js";
 import { createSmtpMailTransport } from "./mail/smtp.js";
 import { createLifecycle } from "./http/lifecycle.js";
+import { loadPdsRegistryTargets } from "./pds/registry-targets.mjs";
 import { bootstrapPdsRegistryKeyring } from "./database/pds-registry-bootstrap.js";
 
 const config = await loadConfig();
 const dataDir = process.env.STATE_DIRECTORY ?? "/data";
 mkdirSync(dataDir, { recursive: true });
 const db = await openDatabase(config.database);
-let registryKeyring;
+let registryKeyring, registryTargets;
 try {
   ({ keyring: registryKeyring } = await bootstrapPdsRegistryKeyring(
     db,
     process.env.PDS_REGISTRY_KEYRING_FILE,
   ));
+  registryTargets = await loadPdsRegistryTargets(
+    process.env.PDS_REGISTRY_TARGETS_FILE,
+  );
 } catch (error) {
   await db.close();
   throw error;
@@ -37,6 +41,7 @@ const { app, reconcile } = await createApp({
   mail,
   lifecycle,
   registryKeyring,
+  registryTargets,
 });
 lifecycle.initialize();
 const server = app.listen(Number(process.env.PORT ?? 3000), "0.0.0.0", () =>

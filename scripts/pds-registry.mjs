@@ -28,13 +28,22 @@ async function protectedFile(path) {
 }
 function argumentsFor(argv) {
   const [command, ...rest] = argv;
-  if (!["stage", "status", "list"].includes(command) || rest.length % 2)
+  if (
+    !["stage", "status", "list", "check", "trust"].includes(command) ||
+    rest.length % 2
+  )
     throw Error("InvalidArguments");
   const options = {};
   for (let i = 0; i < rest.length; i += 2) {
     const name = rest[i];
     if (
-      !["--url", "--auth-file", "--request-file"].includes(name) ||
+      ![
+        "--url",
+        "--auth-file",
+        "--request-file",
+        "--host",
+        "--revision",
+      ].includes(name) ||
       Object.hasOwn(options, name) ||
       !rest[i + 1]
     )
@@ -44,7 +53,14 @@ function argumentsFor(argv) {
   if (
     !options["--url"] ||
     !options["--auth-file"] ||
-    (command === "stage") !== Boolean(options["--request-file"])
+    (command === "stage") !== Boolean(options["--request-file"]) ||
+    (command === "check") !==
+      Boolean(options["--host"] && options["--revision"]) ||
+    (command !== "check" && (options["--host"] || options["--revision"])) ||
+    (command === "check" &&
+      (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(options["--host"]) ||
+        !/^[1-9][0-9]*$/.test(options["--revision"]) ||
+        !Number.isSafeInteger(Number(options["--revision"]))))
   )
     throw Error("InvalidArguments");
   const base = new URL(options["--url"]);
@@ -69,20 +85,26 @@ try {
   const body =
     command === "stage"
       ? JSON.parse(await protectedFile(options["--request-file"]))
-      : undefined;
+      : command === "check"
+        ? { expectedRevision: Number(options["--revision"]) }
+        : undefined;
   const path =
     command === "status"
       ? "/admin/pds-registry/status"
-      : "/admin/pds-registry/hosts";
+      : command === "trust"
+        ? "/admin/pds-registry/trust"
+        : command === "check"
+          ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}/check`
+          : "/admin/pds-registry/hosts";
   const response = await fetch(new URL(path, base), {
-    method: command === "stage" ? "POST" : "GET",
+    method: command === "stage" || command === "check" ? "POST" : "GET",
     headers: {
       authorization: `Basic ${Buffer.from(`admin:${password}`).toString("base64")}`,
       ...(body === undefined ? {} : { "content-type": "application/json" }),
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     redirect: "error",
-    signal: AbortSignal.timeout(10_000),
+    signal: AbortSignal.timeout(command === "check" ? 35_000 : 10_000),
   });
   if (!response.ok) {
     console.error(`Registry request failed (${response.status})`);
@@ -99,7 +121,42 @@ try {
             : null,
         }),
       );
-    else if (command === "stage") {
+    else if (command === "trust") {
+      const { issuer, serviceDid, jwtPublicKeyHex, plcRotationKeyDid } = result;
+      console.log(
+        JSON.stringify({
+          issuer,
+          serviceDid,
+          jwtPublicKeyHex,
+          plcRotationKeyDid,
+        }),
+      );
+    } else if (command === "check") {
+      const last = result.outbound?.last;
+      if (!last || last.revision !== Number(options["--revision"]))
+        throw Error("UnexpectedCheckRevision");
+      console.log(
+        JSON.stringify({
+          outbound: {
+            pending: result.outbound?.pending === true,
+            last: last && {
+              revision: last.revision,
+              observedAt: last.observedAt,
+              publicDidOk: last.publicDidOk === true,
+              internalDidOk: last.internalDidOk === true,
+              publicMetadataOk: last.publicMetadataOk === true,
+              internalMetadataOk: last.internalMetadataOk === true,
+              adminAttempted: last.adminAttempted === true,
+              adminOk: last.adminOk === true,
+              reason: last.reason,
+            },
+          },
+          inbound: "unproven",
+          association: "disabled",
+        }),
+      );
+      if (!last || last.reason !== "ok") process.exitCode = 1;
+    } else if (command === "stage") {
       const { hostId, serviceDid, publicUrl, internalUrl, order, revision } =
         result.staged;
       console.log(

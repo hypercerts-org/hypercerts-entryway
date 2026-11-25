@@ -570,3 +570,90 @@ test("concurrent hosts cannot reuse an inbound token as an outbound password", a
   );
   assert.equal((await createPdsRegistry(first).listHosts()).length, 1);
 });
+
+test("outbound checks fence stale revisions and expired attempts", async (t) => {
+  const { randomBytes } = await import("node:crypto");
+  const { eq } = await import("drizzle-orm");
+  const { parsePdsRegistryKeyring } =
+    await import("../../dist/src/database/pds-registry-crypto.js");
+  const { createPdsOutboundCheckStore } =
+    await import("../../dist/src/database/drizzle/pds-registry-checks.js");
+  const { first, second } = await fixture(t);
+  const keys = parsePdsRegistryKeyring({
+    activeKeyId: "key",
+    keys: { key: randomBytes(32).toString("base64") },
+  });
+  const registry = createPdsRegistry(first, keys),
+    checks = createPdsOutboundCheckStore(first),
+    peer = createPdsOutboundCheckStore(second);
+  const request = {
+    host: input("checked"),
+    credentials: {
+      outboundPassword: randomBytes(32).toString("base64url"),
+      inboundToken: randomBytes(32).toString("base64url"),
+    },
+  };
+  await registry.stageHostWithCredentials(request, 0, "first");
+  const attempt = await checks.begin("checked", 1);
+  await assert.rejects(peer.begin("checked", 1), /PdsCheckPending/);
+  await registry.stageHostWithCredentials(
+    {
+      ...request,
+      credentials: {
+        outboundPassword: randomBytes(32).toString("base64url"),
+        inboundToken: randomBytes(32).toString("base64url"),
+      },
+    },
+    1,
+    "second",
+  );
+  const observation = {
+    publicDidOk: true,
+    internalDidOk: true,
+    publicMetadataOk: true,
+    internalMetadataOk: true,
+    adminAttempted: true,
+    adminOk: true,
+    reason: "ok",
+  };
+  await assert.rejects(
+    checks.complete("checked", 1, attempt.attemptId, observation),
+    /PdsHostRevisionConflict/,
+  );
+  await first.update(
+    "pds_host_checks",
+    { expires_at: 0 },
+    eq(first.tables.pds_host_checks.host_id, "checked"),
+  );
+  const successor = await peer.begin("checked", 2);
+  await assert.rejects(
+    checks.complete("checked", 1, attempt.attemptId, observation),
+    /PdsHostRevisionConflict/,
+  );
+  await peer.complete("checked", 2, successor.attemptId, observation);
+  const status = await checks.status("checked");
+  assert.equal(status.pending, false);
+  assert.deepEqual(
+    { ...status.last, observedAt: 0 },
+    { ...observation, revision: 2, observedAt: 0 },
+  );
+  const stale = await checks.begin("checked", 2);
+  assert.equal((await checks.status("checked")).last, null);
+  await first.update(
+    "pds_host_checks",
+    { expires_at: 0 },
+    eq(first.tables.pds_host_checks.host_id, "checked"),
+  );
+  const takeover = await peer.begin("checked", 2);
+  await assert.rejects(
+    checks.complete("checked", 2, stale.attemptId, observation),
+    /PdsHostRevisionConflict/,
+  );
+  await first.update(
+    "pds_host_checks",
+    { started_at: 1 },
+    eq(first.tables.pds_host_checks.host_id, "checked"),
+  );
+  await peer.complete("checked", 2, takeover.attemptId, observation);
+  assert.equal((await checks.status("checked")).last.observedAt, 1);
+});

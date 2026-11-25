@@ -15,6 +15,8 @@ import { createAccountMigration } from "./features/pds-migration/move-between-pd
 import { requestFailureEvent } from "./logging/request-event.js";
 import { canonicalBasic } from "./http/authorization-scheme.js";
 import { createIncomingArrival } from "./compose-incoming-arrival.mjs";
+import { createPdsOutboundCheckStore } from "./database/drizzle/pds-registry-checks.js";
+import { checkPdsOutbound } from "./pds/registry-check.mjs";
 import { createPdsRegistry } from "./database/drizzle/pds-registry.js";
 import { pdsRegistryKeyStatus } from "./database/pds-registry-bootstrap.js";
 import { mountPdsRegistryRoutes } from "./features/pds-registry/routes.mjs";
@@ -26,6 +28,7 @@ export async function createApp({
   mail,
   lifecycle,
   registryKeyring,
+  registryTargets,
 }) {
   const accounts = await createAccounts({
     db,
@@ -222,6 +225,9 @@ export async function createApp({
     keyring: registryKeyring,
     registry: createPdsRegistry(db, registryKeyring),
     keyStatus: () => pdsRegistryKeyStatus(db, registryKeyring),
+    checks: createPdsOutboundCheckStore(db),
+    outboundCheck: (revision, password) =>
+      checkPdsOutbound(revision, config.issuer, password, registryTargets),
   });
   app.get("/", (_req, res) =>
     page(

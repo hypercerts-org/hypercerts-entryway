@@ -633,3 +633,22 @@ export const pds_host_credential_requests = table(
   },
   (t) => [primaryKey({ columns: [t.host_id, t.idempotency_key] })],
 );
+
+export const pds_host_checks = table("pds_host_checks", {
+  host_id: text("host_id")
+    .primaryKey()
+    .references(() => pds_hosts.id),
+  attempt_id: text("attempt_id"),
+  attempt_revision: count("attempt_revision"),
+  expires_at: count("expires_at"),
+  started_at: count("started_at"),
+  last_revision: count("last_revision"),
+  observed_at: count("observed_at"),
+  public_did_ok: boolean("public_did_ok"),
+  internal_did_ok: boolean("internal_did_ok"),
+  public_metadata_ok: boolean("public_metadata_ok"),
+  internal_metadata_ok: boolean("internal_metadata_ok"),
+  admin_attempted: boolean("admin_attempted"),
+  admin_ok: boolean("admin_ok"),
+  reason: text("reason"),
+});

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { randomBytes } from "node:crypto";
+import { createECDH, randomBytes } from "node:crypto";
+import { Secp256k1Keypair } from "@atproto/crypto";
 import express from "express";
 import { openTestDatabase } from "../support/database-fixture.mjs";
 import { parsePdsRegistryKeyring } from "../../dist/src/database/pds-registry-crypto.js";
@@ -12,7 +13,14 @@ import { mountPdsRegistryRoutes } from "../../dist/src/features/pds-registry/rou
 test("global admin alone can stage and staged credentials grant no normal authority", async (t) => {
   const db = await openTestDatabase();
   t.after(() => db.close());
+  const publicKey = createECDH("secp256k1");
+  publicKey.generateKeys();
+  const plcKey = await Secp256k1Keypair.create();
   const config = {
+    issuer: "https://entryway.example",
+    serviceDid: "did:web:entryway.example",
+    jwtPublicHex: publicKey.getPublicKey("hex", "compressed"),
+    plcRotationKeyDid: plcKey.did(),
     adminPassword: "global-fixture",
     pds: [{ id: "existing", adminPassword: "host-fixture" }],
   };
@@ -72,6 +80,22 @@ test("global admin alone can stage and staged credentials grant no normal author
     (await call("/admin/pds-registry/status", "host-fixture")).status,
     401,
   );
+  const trust = await call("/admin/pds-registry/trust", "global-fixture");
+  assert.deepEqual(await trust.json(), {
+    issuer: config.issuer,
+    serviceDid: config.serviceDid,
+    jwtPublicKeyHex: config.jwtPublicHex,
+    plcRotationKeyDid: config.plcRotationKeyDid,
+  });
+  const validPublicKey = config.jwtPublicHex;
+  config.jwtPublicHex = "fixture-private-value";
+  const badTrust = await call("/admin/pds-registry/trust", "global-fixture");
+  assert.equal(badTrust.status, 500);
+  assert.equal(
+    (await badTrust.text()).includes("fixture-private-value"),
+    false,
+  );
+  config.jwtPublicHex = validPublicKey;
   assert.equal(
     (await call("/admin/pds-registry/hosts", "host-fixture", request)).status,
     401,
@@ -190,4 +214,55 @@ test("static mode without a keyring reports status and refuses staging", async (
     body: "{}",
   });
   assert.equal(rejected.status, 503);
+});
+
+test("check response returns the committed attempt despite a later status", async (t) => {
+  const app = express();
+  app.use(express.json());
+  const observation = {
+    publicDidOk: true,
+    internalDidOk: true,
+    publicMetadataOk: true,
+    internalMetadataOk: true,
+    adminAttempted: true,
+    adminOk: true,
+    reason: "ok",
+  };
+  let statusReads = 0;
+  mountPdsRegistryRoutes({
+    app,
+    config: {},
+    keyring: {},
+    admin: async () => {},
+    registry: { readOutbound: async () => "fixture" },
+    checks: {
+      begin: async () => ({
+        attemptId: "first",
+        revision: { hostId: "host", revision: 1 },
+      }),
+      complete: async () => ({ ...observation, revision: 1, observedAt: 10 }),
+      status: async () => {
+        statusReads++;
+        return {
+          pending: false,
+          last: { ...observation, revision: 2, observedAt: 20 },
+        };
+      },
+    },
+    outboundCheck: async () => observation,
+  });
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise((resolve) => server.once("listening", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const response = await fetch(
+    `http://127.0.0.1:${server.address().port}/admin/pds-registry/hosts/host/check`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedRevision: 1 }),
+    },
+  );
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).outbound.last.revision, 1);
+  assert.equal(statusReads, 0);
 });

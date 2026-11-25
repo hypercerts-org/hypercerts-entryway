@@ -1,0 +1,136 @@
+import assert from "node:assert/strict";
+import { execFileSync, spawn } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import https from "node:https";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { checkPdsOutbound } from "../../dist/src/pds/registry-check.mjs";
+
+if (process.argv.includes("--client")) {
+  const origin = process.env.PDS_TEST_ORIGIN;
+  const result = await checkPdsOutbound(
+    {
+      hostId: "fixture",
+      revision: 1,
+      serviceDid: "did:web:fixture.test",
+      publicUrl: `${origin}/`,
+      internalUrl: `${origin}/`,
+      order: 1,
+    },
+    "https://issuer.example",
+    "fixture-password",
+    new Map([[origin, ["127.0.0.1"]]]),
+  );
+  const expected = {
+    redirect: "unexpected-status",
+    oversized: "invalid-response",
+    timeout: "network-error",
+    hostname: "network-error",
+  }[process.env.PDS_TEST_MODE];
+  assert.equal(result.reason, expected);
+  assert.equal(result.adminAttempted, false);
+} else {
+  const directory = mkdtempSync(join(tmpdir(), "entryway-tls-fixture-"));
+  try {
+    const key = join(directory, "key.pem"),
+      certificate = join(directory, "cert.pem");
+    execFileSync(
+      "openssl",
+      [
+        "req",
+        "-x509",
+        "-newkey",
+        "ec",
+        "-pkeyopt",
+        "ec_paramgen_curve:P-256",
+        "-nodes",
+        "-keyout",
+        key,
+        "-out",
+        certificate,
+        "-days",
+        "1",
+        "-subj",
+        "/CN=fixture.test",
+        "-addext",
+        "subjectAltName=DNS:fixture.test",
+      ],
+      { stdio: "ignore" },
+    );
+    let mode = "",
+      redirectHits = 0,
+      adminHits = 0;
+    const server = https.createServer(
+      { key: readFileSync(key), cert: readFileSync(certificate) },
+      (req, res) => {
+        if (req.url === "/redirect-target") {
+          redirectHits++;
+          res.end("{}");
+          return;
+        }
+        if (req.url.startsWith("/xrpc/com.atproto.admin.getAccountInfos")) {
+          adminHits++;
+          res.end('{"infos":[]}');
+          return;
+        }
+        if (req.url === "/xrpc/com.atproto.server.describeServer") {
+          if (mode === "redirect") {
+            res.writeHead(302, { location: "/redirect-target" });
+            res.end();
+            return;
+          }
+          if (mode === "oversized") {
+            res.end("x".repeat(65_537));
+            return;
+          }
+          if (mode === "timeout") return;
+        }
+        res.setHeader("content-type", "application/json");
+        res.end(
+          JSON.stringify({
+            resource: `${origin}/`,
+            authorization_servers: ["https://issuer.example"],
+          }),
+        );
+      },
+    );
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const origin = `https://fixture.test:${server.address().port}`;
+    try {
+      for (mode of ["redirect", "oversized", "timeout", "hostname"]) {
+        const child = spawn(
+          process.execPath,
+          ["tests/atmosphere/registry-network-safety.mjs", "--client"],
+          {
+            env: {
+              ...process.env,
+              NODE_EXTRA_CA_CERTS: certificate,
+              PDS_TEST_ORIGIN:
+                mode === "hostname"
+                  ? origin.replace("fixture.test", "other.test")
+                  : origin,
+              PDS_TEST_MODE: mode,
+            },
+            stdio: "ignore",
+          },
+        );
+        const timer = setTimeout(() => child.kill("SIGKILL"), 15_000);
+        const code = await new Promise((resolve) =>
+          child.once("exit", resolve),
+        );
+        clearTimeout(timer);
+        assert.equal(code, 0);
+      }
+      assert.equal(redirectHits, 0);
+      assert.equal(adminHits, 0);
+      console.log(
+        "registry network: redirect, response bound and deadline controls passed",
+      );
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
