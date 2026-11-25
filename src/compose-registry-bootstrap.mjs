@@ -10,6 +10,10 @@ import { createMailFeature } from "./mail/create-mail.js";
 import { createSmtpMailTransport } from "./mail/smtp.js";
 import { createPdsHealthStore } from "./database/drizzle/pds-health.js";
 import { createPdsHealthSampler } from "./pds/registry-health-sampler.mjs";
+import { createPdsPlacement } from "./database/drizzle/pds-placement.js";
+import { createPdsLifecycle } from "./database/drizzle/pds-lifecycle.js";
+import { createAuthorityPhase } from "./database/drizzle/authority-phase.js";
+import { snapshotPdsRegistryVerifier } from "./pds/registry-targets.mjs";
 import { createPdsEnrollment } from "./database/drizzle/pds-registry-enrollment.js";
 import { createPdsRegistry } from "./database/drizzle/pds-registry.js";
 import { createPdsOutboundCheckStore } from "./database/drizzle/pds-registry-checks.js";
@@ -27,6 +31,7 @@ export function createRegistryBootstrap({
   healthContacts,
   workerId,
 }) {
+  registryTargets = snapshotPdsRegistryVerifier(registryTargets);
   const app = express();
   app.disable("x-powered-by");
   app.use((_req, res, next) => {
@@ -71,9 +76,23 @@ export function createRegistryBootstrap({
     (revision) => registryTargets?.policyFor(revision),
   );
   const enrollment = createPdsEnrollment(db, registry, checks);
+  const placement = createPdsPlacement(
+    db,
+    () => pdsPublicTrust(config),
+    (revision) => registryTargets?.policyFor(revision),
+    registryKeyring,
+  );
   const outbox = createMailOutbox(db);
   const incidents = createPdsHealthIncidents(db, outbox, healthContacts);
   const health = createPdsHealthStore(db, incidents);
+  const pdsLifecycle = createPdsLifecycle(
+    db,
+    registry,
+    health,
+    () => pdsPublicTrust(config),
+    (revision) => registryTargets?.policyFor(revision),
+  );
+  const phase = createAuthorityPhase(db, pdsLifecycle);
   const sweep = createPdsHealthSweep(db, incidents);
   const sweepHealth = () => sweep.run();
   sweepHealth.stop = () => sweep.stop();
@@ -123,5 +142,22 @@ export function createRegistryBootstrap({
           : "The operation could not be completed. Retry or inspect service logs.",
     });
   });
-  return { app, sampleHealth, processHealthNotices, sweepHealth };
+  return {
+    app,
+    db,
+    config,
+    registryKeyring,
+    sampleHealth,
+    processHealthNotices,
+    sweepHealth,
+    registry,
+    checks,
+    enrollment,
+    health,
+    incidents,
+    placement,
+    phase,
+    pdsLifecycle,
+    registryTargets,
+  };
 }
