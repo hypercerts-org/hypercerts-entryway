@@ -1,4 +1,4 @@
-import { ne, or } from "drizzle-orm";
+import { eq, ne, or } from "drizzle-orm";
 import { isValidDid } from "@atproto/syntax";
 import type { DatabaseExecutor, TableName } from "../executor.js";
 import type {
@@ -98,7 +98,41 @@ export async function assertNoPdsAuthorityReferences(
   db: DatabaseExecutor,
   ignoreReleasedPlacements = false,
 ): Promise<void> {
-  for (const table of productTables)
+  for (const table of productTables) {
+    if (table === "authority_operations" && ignoreReleasedPlacements) {
+      for (const operation of await db.read("authority_operations")) {
+        if (
+          operation.kind !== "unbound-key" ||
+          operation.state !== "complete" ||
+          operation.pending ||
+          operation.phase !== "unbound-key-unused"
+        )
+          throw new Error("PdsEnrollmentReferencesExist");
+        const attempts = await db.read("external_operation_attempts", {
+          where: eq(
+            db.tables.external_operation_attempts.operation_id,
+            operation.id,
+          ),
+          limit: 1,
+        });
+        const placements = await db.read("pds_placement_reservations", {
+          where: eq(
+            db.tables.pds_placement_reservations.operation_id,
+            operation.id,
+          ),
+        });
+        if (
+          attempts.length ||
+          placements.some(
+            (placement) =>
+              placement.purpose !== "unbound-key" ||
+              placement.state !== "released",
+          )
+        )
+          throw new Error("PdsEnrollmentReferencesExist");
+      }
+      continue;
+    }
     if (
       (
         await db.read(
@@ -116,6 +150,7 @@ export async function assertNoPdsAuthorityReferences(
       ).length
     )
       throw new Error("PdsEnrollmentReferencesExist");
+  }
   if (
     (
       await db.read("mail_outbox", {

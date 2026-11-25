@@ -1138,3 +1138,104 @@ test("release rejects source-labelled attempts to either destination alias", asy
     assert.equal((await placement.read(claim)).state, "reserved");
   }
 });
+
+test("standalone signing key refuses a drained registry target before dispatch", async (t) => {
+  const { createAccounts } =
+    await import("../../dist/src/compose-accounts.mjs");
+  const { createPdsPlacement } =
+    await import("../../dist/src/database/drizzle/pds-placement.js");
+  const { createPlcOperations } =
+    await import("../../dist/src/plc/operations.js");
+  const { mountPlcXrpc } = await import("../../dist/src/plc/xrpc-routes.mjs");
+  const { Secp256k1Keypair } = await import("@atproto/crypto");
+  const { db, first, trust } = await fixture(t);
+  await onboard(first, "host");
+  await sample(first, "host", true);
+  await sample(first, "host", true);
+  await first.lifecycle.transition("host", "enable", 1, 0, "enable");
+  const signer = await Secp256k1Keypair.create({ exportable: true });
+  const offline = await Secp256k1Keypair.create();
+  const config = {
+    plcRecoveryKeyDid: offline.did(),
+    plcRotationKeyHex: Buffer.from(await signer.export()).toString("hex"),
+    plcUrl: "https://plc.example",
+    handleDomains: [".example"],
+    pds: [],
+  };
+  const placement = createPdsPlacement(
+    db,
+    () => trust,
+    () => "policy",
+  );
+  const accounts = await createAccounts({
+    db,
+    config,
+    placement,
+    registryVerifier: {
+      targets: new Map([["https://host.example", ["127.0.0.1"]]]),
+      ca: "fixture",
+    },
+  });
+  const originalReserve = placement.reserve;
+  placement.reserve = async (...args) => {
+    const saved = await originalReserve(...args);
+    await first.lifecycle.transition(
+      "host",
+      "drain",
+      1,
+      1,
+      "drain-unbound-key",
+    );
+    return saved;
+  };
+  const operations = createPlcOperations({
+    db,
+    accounts,
+    custody: accounts.custody,
+    choosePds: () => {
+      throw new Error("Unexpected static selection");
+    },
+  });
+  let handler;
+  mountPlcXrpc({
+    protocolOperations: { ...operations, rateLimit: async () => {} },
+    route: (_method, name, callback) => {
+      if (name === "server.reserveSigningKey") handler = callback;
+    },
+    authenticatedRoute: () => {},
+  });
+  await assert.rejects(handler({ ip: "127.0.0.1", body: {} }), {
+    code: "AccountUnavailable",
+  });
+  assert.equal(
+    (await db.read("pds_placement_reservations"))[0].state,
+    "released",
+  );
+  assert.equal((await db.read("external_operation_attempts")).length, 0);
+  await assert.rejects(handler({ ip: "127.0.0.1", body: {} }), {
+    code: "AccountUnavailable",
+  });
+  const operationsAfterRefusal = await db.read("authority_operations");
+  assert.equal(operationsAfterRefusal.length, 2);
+  assert.ok(
+    operationsAfterRefusal.every(
+      (operation) =>
+        operation.state === "complete" &&
+        operation.phase === "unbound-key-unused" &&
+        !operation.pending,
+    ),
+  );
+  assert.equal((await db.read("operation_admissions")).length, 0);
+  assert.equal(
+    (
+      await first.lifecycle.transition(
+        "host",
+        "retire",
+        1,
+        2,
+        "retire-after-unused",
+      )
+    ).lifecycle,
+    "retired",
+  );
+});

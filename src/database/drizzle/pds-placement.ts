@@ -235,6 +235,45 @@ export function createPdsPlacement(
         return reservation;
       });
     },
+    async finishUnusedUnboundKey(claim: OperationClaim) {
+      return db.transact(async () => {
+        await db.assertOperationFence(claim);
+        const [operation] = await db.read("authority_operations", {
+          where: eq(db.tables.authority_operations.id, claim.operationId),
+        });
+        const saved = await find(claim.operationId);
+        const attempts = await db.read("external_operation_attempts", {
+          where: eq(
+            db.tables.external_operation_attempts.operation_id,
+            claim.operationId,
+          ),
+          limit: 1,
+        });
+        if (
+          operation?.kind !== "unbound-key" ||
+          attempts.length ||
+          (saved &&
+            (saved.purpose !== "unbound-key" ||
+              !["reserved", "refused", "released"].includes(saved.state)))
+        )
+          throw new Error("PdsPlacementConflict");
+        if (saved && saved.state !== "released")
+          await db.update(
+            "pds_placement_reservations",
+            { state: "released" },
+            eq(reservations.id, saved.id),
+          );
+        await db.update(
+          "authority_operations",
+          {
+            pending: false,
+            phase: "unbound-key-unused",
+            updated_at: await db.databaseTime(),
+          },
+          eq(db.tables.authority_operations.id, claim.operationId),
+        );
+      });
+    },
     async releaseUnused(claim: OperationClaim, reservationId: string) {
       return db.transact(async () => {
         await db.assertOperationFence(claim);
