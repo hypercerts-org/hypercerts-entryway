@@ -8,6 +8,7 @@ import { createInvites } from "./features/account-registration/invites.mjs";
 import { createIncomingPreparation } from "./features/external-migration/prepare-arrival.js";
 import { createProtocolChallenges } from "./accounts/challenges.mjs";
 import { createPdsAccountClient } from "./pds/account-client.mjs";
+import { registryPdsFetch } from "./pds/registry-transport.mjs";
 import { ArrivalPdsClient } from "./pds/arrival-client.js";
 import { createIncomingAuthorization } from "./features/external-migration/incoming-authorization.js";
 import { createArrivalLifecycle } from "./features/external-migration/manage-arrival.js";
@@ -44,6 +45,9 @@ export function createIncomingArrivalStorage({ db, config, accounts }) {
             handle: input.handle,
             pdsId: input.pdsId,
             pdsUrl: input.pdsUrl,
+            ...(input.pdsRevision === undefined
+              ? {}
+              : { pdsRevision: input.pdsRevision }),
             status: "provisioning",
             createdAt: new Date().toISOString(),
           },
@@ -98,15 +102,11 @@ export async function composeIncomingArrival({
     config,
     accounts,
   });
-  const placement = (pdsId) => config.pds.find((pds) => pds.id === pdsId);
+  const placement = async (pdsId, revision) =>
+    revision === undefined
+      ? config.pds.find((pds) => pds.id === pdsId)
+      : accounts.placement?.resolve(pdsId, revision);
   const arrivalBackend = (saved) => {
-    const pds = choosePds(saved.pdsId);
-    if (pds.url !== saved.endpoint)
-      throw new DomainError(
-        "OperationConflict",
-        409,
-        "Arrival placement changed",
-      );
     if (
       saved.staged &&
       saved.staged.entrywayKey !== accounts.plcSigner.publicKey()
@@ -116,68 +116,129 @@ export async function composeIncomingArrival({
         409,
         "Restore the approved Entryway rotation key to continue this arrival",
       );
-    const transport = new ArrivalPdsClient({
-      endpoint: saved.endpoint,
-      did: saved.did,
-    });
-    const authorization = () =>
-      `Basic ${Buffer.from(`admin:${pds.adminPassword}`).toString("base64")}`;
-    const serviceAuthorization = async (method) =>
-      `Bearer ${await createServiceJwt({
-        iss: config.serviceDid,
-        aud: pds.did,
-        lxm: method,
-        keypair: await Secp256k1Keypair.import(
-          Buffer.from(config.jwtJwk.d, "base64url"),
-        ),
-      })}`;
-    const bearer = async () => `Bearer ${await internalAccess(saved, pds.did)}`;
+    const host = async () => {
+      const pds =
+        saved.pdsRevision === undefined
+          ? choosePds(saved.pdsId)
+          : await accounts.placement?.resolveMigration(
+              saved.pdsId,
+              saved.pdsRevision,
+            );
+      if (
+        !pds ||
+        pds.url !== saved.endpoint ||
+        (saved.pdsRevision !== undefined &&
+          pds.stagedIncomingMigration !== saved.stagedIncomingMigration)
+      )
+        throw new DomainError(
+          "OperationConflict",
+          409,
+          "Arrival placement changed",
+        );
+      return pds;
+    };
+    const withClient = async (work) => {
+      const pds = await host();
+      const transport = new ArrivalPdsClient({
+        endpoint:
+          saved.pdsRevision === undefined ? saved.endpoint : pds.internalUrl,
+        did: saved.did,
+        ...(saved.pdsRevision === undefined
+          ? {}
+          : {
+              fetch: (url, options) =>
+                registryPdsFetch(
+                  url,
+                  options,
+                  accounts.registryVerifier,
+                  1_000_000,
+                ),
+            }),
+      });
+      const authorization = () =>
+        `Basic ${Buffer.from(`admin:${pds.adminPassword}`).toString("base64")}`;
+      const serviceAuthorization = async (method) =>
+        `Bearer ${await createServiceJwt({ iss: config.serviceDid, aud: pds.did, lxm: method, keypair: await Secp256k1Keypair.import(Buffer.from(config.jwtJwk.d, "base64url")) })}`;
+      const bearer = async () =>
+        `Bearer ${await internalAccess(saved, pds.did)}`;
+      return work({
+        pds,
+        transport,
+        authorization,
+        serviceAuthorization,
+        bearer,
+      });
+    };
     return {
+      validate: async () => {
+        await host();
+      },
       assertStagingEnabled: () => {
-        if (pds.stagedIncomingMigration !== true)
+        const enabled =
+          saved.pdsRevision === undefined
+            ? choosePds(saved.pdsId).stagedIncomingMigration
+            : saved.stagedIncomingMigration;
+        if (enabled !== true)
           throw new DomainError(
             "OperationConflict",
             409,
-            "The saved destination is no longer configured for staged creation",
+            "The saved destination is not configured for staged creation",
           );
       },
-      installedSigningKey: async () =>
-        transport.installedSigningKey(await bearer()),
-      checkStagedReadiness: async (afterCutover) =>
-        transport.checkStagedReadiness(
-          await bearer(),
-          saved.signingKey,
-          afterCutover,
+      installedSigningKey: () =>
+        withClient(async ({ transport, bearer }) =>
+          transport.installedSigningKey(await bearer()),
         ),
-      inspect: () => transport.getAccountInfo(authorization),
-      create: async (operation) => {
-        return transport.createAccount({
-          did: saved.did,
-          handle: saved.handle,
-          operation,
-          ...(saved.staged
-            ? {
-                authorization: await serviceAuthorization(
-                  "com.atproto.server.createAccount",
-                ),
-              }
-            : {}),
-        });
-      },
-      pause: () => transport.pauseAccount(authorization),
+      checkStagedReadiness: (afterCutover) =>
+        withClient(async ({ transport, bearer }) =>
+          transport.checkStagedReadiness(
+            await bearer(),
+            saved.signingKey,
+            afterCutover,
+          ),
+        ),
+      inspect: () =>
+        withClient(({ transport, authorization }) =>
+          transport.getAccountInfo(authorization),
+        ),
+      create: (operation) =>
+        withClient(async ({ transport, serviceAuthorization }) =>
+          transport.createAccount({
+            did: saved.did,
+            handle: saved.handle,
+            operation,
+            ...(saved.staged
+              ? {
+                  authorization: await serviceAuthorization(
+                    "com.atproto.server.createAccount",
+                  ),
+                }
+              : {}),
+          }),
+        ),
+      pause: () =>
+        withClient(({ transport, authorization }) =>
+          transport.pauseAccount(authorization),
+        ),
       activate: () =>
-        transport.activateAccount(
-          saved.staged
-            ? () =>
-                serviceAuthorization("com.atproto.admin.updateSubjectStatus")
-            : authorization,
+        withClient(({ transport, authorization, serviceAuthorization }) =>
+          transport.activateAccount(
+            saved.staged
+              ? () =>
+                  serviceAuthorization("com.atproto.admin.updateSubjectStatus")
+              : authorization,
+          ),
         ),
-      reserveSigningKey: async () =>
-        transport.reserveSigningKey(
-          saved.did,
-          saved.staged
-            ? await serviceAuthorization("com.atproto.server.reserveSigningKey")
-            : undefined,
+      reserveSigningKey: () =>
+        withClient(async ({ transport, serviceAuthorization }) =>
+          transport.reserveSigningKey(
+            saved.did,
+            saved.staged
+              ? await serviceAuthorization(
+                  "com.atproto.server.reserveSigningKey",
+                )
+              : undefined,
+          ),
         ),
     };
   };
@@ -225,10 +286,14 @@ export async function composeIncomingArrival({
       signer: accounts.plcSigner,
       bindPending: admission.bindPending,
       backend: arrivalBackend,
+      placement: accounts.placement,
     }),
     verify,
     client: accounts.plcClient,
     digestKey: config.betterAuthSecret,
+    receipts: createOperationOwnershipStore(db),
+    placement: accounts.placement,
+    validateDestination: (saved) => arrivalBackend(saved).validate(),
   });
   // Browser callables: browser authentication supplies the saved user, never
   // claim.resource or a user ID from the request body.

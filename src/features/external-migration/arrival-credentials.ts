@@ -134,13 +134,20 @@ export function createArrivalCredentials({
     email: string;
     handle: string;
     pdsId: string;
+    pdsRevision?: number;
     pdsUrl?: string;
     status: string;
   } | null>;
   readBinding: (did: string) => Promise<{ userId: string } | null>;
   readDocument: (did: string) => Promise<unknown>;
   /** Configured host for a placement, or undefined when it is not configured. */
-  placement: (pdsId: string) => { url: string; did: string } | undefined;
+  placement: (
+    pdsId: string,
+    revision?: number,
+  ) =>
+    | { url: string; did: string }
+    | undefined
+    | Promise<{ url: string; did: string } | undefined>;
   authentication: BrowserAuthentication;
   checkCsrf: (request: BrowserRequest, browser: unknown) => void;
   loadBrowser: (request: BrowserRequest) => Promise<unknown>;
@@ -177,7 +184,7 @@ export function createArrivalCredentials({
     { unresolved }: { unresolved: "refuse" | "allow" },
   ) => {
     const { arrival } = aggregate;
-    const host = placement(arrival.pdsId);
+    const host = await placement(arrival.pdsId, arrival.pdsRevision);
     if (!host || host.url !== arrival.endpoint)
       throw new DomainError(
         "OperationConflict",
@@ -193,7 +200,9 @@ export function createArrivalCredentials({
       account.status !== "provisioning" ||
       account.email !== arrival.email ||
       account.handle !== arrival.handle ||
-      account.pdsId !== arrival.pdsId
+      account.pdsId !== arrival.pdsId ||
+      (arrival.pdsRevision !== undefined &&
+        account.pdsRevision !== arrival.pdsRevision)
     )
       throw new DomainError(
         "OperationConflict",
@@ -289,7 +298,8 @@ export function createArrivalCredentials({
       !projection ||
       projection.operationId !== tracked.operationId ||
       projection.pdsId !== tracked.pdsId ||
-      placement(projection.pdsId)?.did !== access.pdsDid
+      (await placement(projection.pdsId, projection.pdsRevision))?.did !==
+        access.pdsDid
     )
       throw invalidToken();
     if (tracked.revokedAt !== null) throw expiredToken();
@@ -417,7 +427,15 @@ export function createArrivalCredentials({
               await stillTracked(family);
               if (family.did !== current.arrival.did) throw invalidToken();
               // Configuration drift must not rotate a family for another host.
-              if (family.pdsDid !== placement(current.arrival.pdsId)?.did)
+              if (
+                family.pdsDid !==
+                (
+                  await placement(
+                    current.arrival.pdsId,
+                    current.arrival.pdsRevision,
+                  )
+                )?.did
+              )
                 throw invalidToken();
               return { did: family.did };
             },
@@ -485,7 +503,8 @@ export function createArrivalCredentials({
         !projection.complete ||
         tracked.operationId !== projection.operationId ||
         tracked.pdsId !== projection.pdsId ||
-        placement(projection.pdsId)?.did !== token.pdsDid ||
+        (await placement(projection.pdsId, projection.pdsRevision))?.did !==
+          token.pdsDid ||
         (await arrivals.readActivationReceipt(projection.operationId)) !==
           createHash("sha256").update(bearer).digest("hex")
       )

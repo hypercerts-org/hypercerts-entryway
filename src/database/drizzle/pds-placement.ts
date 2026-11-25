@@ -130,6 +130,7 @@ export function createPdsPlacement(
         return saved
           ? {
               id: saved.hostId,
+              did: saved.serviceDid,
               url: saved.publicUrl,
               internalUrl: saved.internalUrl,
               revision: saved.revision,
@@ -160,6 +161,7 @@ export function createPdsPlacement(
           url: saved.publicUrl,
           internalUrl: saved.internalUrl,
           did: saved.serviceDid,
+          stagedIncomingMigration: saved.stagedIncomingMigration,
           adminPassword,
         };
       });
@@ -280,6 +282,30 @@ export function createPdsPlacement(
         }
         await markRefused(reservation);
         return "refused" as const;
+      });
+    },
+    async beginSourceHandoff(
+      claim: OperationClaim,
+      reservationId: string,
+      input: ExternalAttemptInput,
+    ) {
+      return db.transact(async () => {
+        await db.assertOperationFence(claim);
+        const saved = await find(claim.operationId);
+        if (
+          !saved ||
+          saved.id !== reservationId ||
+          saved.purpose !== "incoming-arrival" ||
+          input.step !== "incoming-handoff" ||
+          input.method !== "com.atproto.identity.submitPlcOperation"
+        )
+          throw new Error("PdsPlacementConflict");
+        const disposition = await this.preflight(claim, reservationId);
+        if (disposition === "refused") return { kind: "refused" as const };
+        if (disposition !== "eligible")
+          return { kind: "prior-dispatch" as const };
+        const attempt = await ownership.beginExternal(claim, input);
+        return { kind: "dispatched" as const, attempt };
       });
     },
     async beginTargetRead(

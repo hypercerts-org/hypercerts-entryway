@@ -21,7 +21,13 @@ import { createBrowserFlow } from "../../../dist/src/http/browser-flow.mjs";
 import { createOperationOwnership } from "../../../dist/src/accounts/operation-ownership.js";
 import { createOperationOwnershipStore } from "../../../dist/src/database/drizzle/operation-ownership.js";
 import { createAccountStorage } from "../../../dist/src/database/drizzle/account-storage.js";
-import { openTestDatabase, verifiedUser, query } from "../database-fixture.mjs";
+import {
+  openTestDatabase,
+  testDatabaseConfiguration,
+  verifiedUser,
+  query,
+} from "../database-fixture.mjs";
+import { openDatabase } from "../../../dist/src/database/connection.js";
 
 export const endpoint = "https://destination.example.test";
 export const sourceEndpoint = "https://source.example.test";
@@ -34,10 +40,19 @@ export async function fixture(
   mutation = "",
   fault = "",
   placement,
+  options = {},
 ) {
   const directory = mkdtempSync(join(tmpdir(), "arrival-preparation-"));
   const path = join(directory, "authority.sqlite");
-  let db = await openTestDatabase(path);
+  const targetEndpoint = options.targetEndpoint ?? endpoint;
+  const open = async () =>
+    options.registry
+      ? openDatabase(
+          await testDatabaseConfiguration(path),
+          "registry-bootstrap",
+        )
+      : openTestDatabase(path);
+  let db = await open();
   t.after(async () => {
     await db.close();
     rmSync(directory, { recursive: true, force: true });
@@ -107,20 +122,121 @@ export async function fixture(
     });
   }
   const hosts = [
-    { id: "pds1", url: endpoint, did: "did:web:destination.example.test" },
+    {
+      id: "pds1",
+      url: targetEndpoint,
+      internalUrl: targetEndpoint,
+      did: "did:web:destination.example.test",
+    },
     {
       id: "pds2",
       url: "https://other.example.test",
       did: "did:web:other.example.test",
     },
   ];
+  if (options.registry) {
+    const { randomBytes } = await import("node:crypto");
+    const { createPdsRegistry } =
+      await import("../../../dist/src/database/drizzle/pds-registry.js");
+    const { createPdsOutboundCheckStore } =
+      await import("../../../dist/src/database/drizzle/pds-registry-checks.js");
+    const { createPdsEnrollment } =
+      await import("../../../dist/src/database/drizzle/pds-registry-enrollment.js");
+    const { createPdsHealthStore } =
+      await import("../../../dist/src/database/drizzle/pds-health.js");
+    const { createPdsLifecycle } =
+      await import("../../../dist/src/database/drizzle/pds-lifecycle.js");
+    const { createPdsPlacement } =
+      await import("../../../dist/src/database/drizzle/pds-placement.js");
+    const { parsePdsRegistryKeyring } =
+      await import("../../../dist/src/database/pds-registry-crypto.js");
+    const keys = parsePdsRegistryKeyring({
+      activeKeyId: "key",
+      keys: { key: randomBytes(32).toString("base64") },
+    });
+    const trust = {
+      issuer: "https://entryway.example.test",
+      serviceDid: "did:web:entryway.example.test",
+      jwtPublicKeyHex: "public",
+      plcRotationKeyDid: "did:key:fixture",
+    };
+    const registry = createPdsRegistry(db, keys, () => trust);
+    const checks = createPdsOutboundCheckStore(
+      db,
+      () => trust,
+      () => "policy",
+    );
+    const health = createPdsHealthStore(db);
+    const enrollment = createPdsEnrollment(db, registry, checks);
+    const lifecycle = createPdsLifecycle(
+      db,
+      registry,
+      health,
+      () => trust,
+      () => "policy",
+    );
+    await registry.stageHostWithCredentials(
+      {
+        host: {
+          hostId: "pds1",
+          serviceDid: hosts[0].did,
+          publicUrl: targetEndpoint,
+          internalUrl: targetEndpoint,
+          order: 0,
+        },
+        credentials: {
+          outboundPassword: "fixture-admin-password",
+          inboundToken: randomBytes(32).toString("base64url"),
+        },
+      },
+      0,
+      "stage",
+    );
+    const attempt = await checks.begin("pds1", 1);
+    const receipt = await checks.complete("pds1", 1, attempt.attemptId, {
+      publicDidOk: true,
+      internalDidOk: true,
+      publicMetadataOk: true,
+      internalMetadataOk: true,
+      adminAttempted: true,
+      adminOk: true,
+      reason: "ok",
+    });
+    const attestation = await enrollment.attest("pds1", {
+      revision: 1,
+      receiptId: receipt.receiptId,
+      idempotencyKey: "attest",
+      emptyStock: true,
+      manifestApplied: true,
+      callbackCredentialApplied: true,
+      restartedBeforeCheck: true,
+    });
+    await enrollment.associate("pds1", {
+      revision: 1,
+      attestationId: attestation.attestationId,
+      idempotencyKey: "associate",
+    });
+    for (let index = 0; index < 2; index++)
+      await health.complete(await health.claim("pds1", 1, 30000, 0, "policy"), {
+        publicOk: true,
+        internalOk: true,
+      });
+    await lifecycle.transition("pds1", "enable", 1, 0, "enable");
+    placement = createPdsPlacement(
+      db,
+      () => trust,
+      () => "policy",
+      keys,
+    );
+    options.onRegistry?.({ lifecycle, registry, placement });
+  }
   const storage = createAccountStorage(db, hosts);
   // The application's own arrival persistence, never a fixture copy.
   const arrivalStorage = () =>
     createIncomingArrivalStorage({
       db,
       config: { pds: hosts },
-      accounts: { storage },
+      accounts: { storage, ...(placement ? { placement } : {}) },
     });
   const arrivals = arrivalStorage();
   await verifiedUser(db, "destination-user", email);
@@ -182,6 +298,9 @@ export async function fixture(
   const publicationAttempts = [];
   const accounts = {
     ...(placement ? { placement } : {}),
+    ...(options.registryVerifier
+      ? { registryVerifier: options.registryVerifier }
+      : {}),
     ownership,
     storage,
     get: (value) => storage.getByDid(value),
@@ -315,7 +434,7 @@ export async function fixture(
       assert.equal(body.handle, handle);
       assert.equal(body.did, did);
       assert.equal(body.plcOp.verificationMethods.atproto, repository.did());
-      assert.equal(body.plcOp.services.atproto_pds.endpoint, endpoint);
+      assert.equal(body.plcOp.services.atproto_pds.endpoint, targetEndpoint);
       assert.equal(typeof body.plcOp.sig, "string");
       assert.ok(body.plcOp.sig.length > 0);
       backendState.exactMove = body.plcOp;
@@ -374,7 +493,9 @@ export async function fixture(
     reservations++;
     assert.equal(
       String(url),
-      `${endpoint}/xrpc/com.atproto.server.reserveSigningKey`,
+      String(
+        new URL("/xrpc/com.atproto.server.reserveSigningKey", targetEndpoint),
+      ),
     );
     assert.deepEqual(JSON.parse(options.body), { did });
     assert.equal(options.headers.authorization, undefined);
@@ -407,7 +528,7 @@ export async function fixture(
     backendState,
     async reopen() {
       await db.close();
-      db = await openTestDatabase(path);
+      db = await open();
       return arrivalStorage();
     },
     request,

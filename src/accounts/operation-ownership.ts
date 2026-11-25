@@ -267,6 +267,7 @@ export function createOperationOwnership({
   async function dispatch<T>(
     input: Omit<ExternalAttemptInput, "intentDigest"> & {
       intent: unknown;
+      beforeFirst?: () => Promise<void>;
       authorizeFirst?: (
         claim: OperationClaim,
         descriptor: ExternalAttemptInput,
@@ -319,6 +320,7 @@ export function createOperationOwnership({
         );
       recoveryDisposition = observed.state;
     }
+    if (!previous) await input.beforeFirst?.();
     const authorization =
       input.authorizeFirst && !previous
         ? await input.authorizeFirst(claim, descriptor)

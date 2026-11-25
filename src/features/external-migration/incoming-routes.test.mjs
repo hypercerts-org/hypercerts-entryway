@@ -440,7 +440,30 @@ test("the existing ID is attached only to the OperationPending refusal of the us
 
 test("unavailable placement is recoverable and reveals a claimed arrival only to its verified owner", async (t) => {
   let available = true;
+  let f;
   const placement = {
+    async read() {
+      return { id: "reservation" };
+    },
+    async beginSourceHandoff(owner, _id, input) {
+      return {
+        kind: "dispatched",
+        attempt: await f.store.beginExternal(owner, input),
+      };
+    },
+    async resolveMigration() {
+      return {
+        id: "pds1",
+        url: "https://destination.example.test",
+        internalUrl: "https://destination.example.test",
+        did: "did:web:destination.example.test",
+        adminPassword: "fixture",
+        stagedIncomingMigration: false,
+      };
+    },
+    async reserve() {
+      return { revision: 1, public_target: "https://destination.example.test" };
+    },
     async offer() {
       if (!available) throw new Error("PdsLifecycleIneligible");
       return {
@@ -451,7 +474,7 @@ test("unavailable placement is recoverable and reveals a claimed arrival only to
       };
     },
   };
-  const f = await fixture(t, "modern", "", "", placement);
+  f = await fixture(t, "modern", "", "", placement);
   const h = await incomingHttp(t, f);
   available = false;
   const empty = await h.browser("/incoming/prepare", prepareBody(f));
@@ -503,5 +526,113 @@ test("a placement race keeps the earlier unclaimed offer and returns a stable re
     (await f.arrivals.readArrival(first.json.operationId, f.principal.userId))
       .operationId,
     first.json.operationId,
+  );
+});
+
+test("published incoming offer cannot claim a different or drained revision", async (t) => {
+  let revision = 1;
+  let available = true;
+  const placement = {
+    async offer() {
+      if (!available) throw Error("PdsLifecycleIneligible");
+      return {
+        id: "pds1",
+        url: "https://destination.example.test",
+        revision,
+        stagedIncomingMigration: false,
+      };
+    },
+    async reserve() {
+      if (!available) throw Error("PdsLifecycleIneligible");
+      return { revision, public_target: "https://destination.example.test" };
+    },
+  };
+  const f = await fixture(t, "modern", "", "", placement);
+  const h = await incomingHttp(t, f);
+  const prepared = (await h.browser("/incoming/prepare", prepareBody(f))).json;
+  const operation = await plc.signOperation(prepared.handoff, f.source);
+  const attempt = async () =>
+    f.composed.admitIncoming(f.request, {
+      operationId: prepared.operationId,
+      method: incomingHandoffMethod,
+      body: { operation },
+      presentation: await f.credential(),
+      arrivalCode: prepared.arrivalCode,
+    });
+  available = false;
+  await assert.rejects(attempt(), { code: "PdsLifecycleIneligible" });
+  assert.equal(
+    (await f.arrivals.readArrival(prepared.operationId, f.principal.userId))
+      .claimOperationId,
+    null,
+  );
+  assert.equal(f.publicationAttempts.length, 0);
+  available = true;
+  revision = 2;
+  await assert.rejects(attempt(), { code: "PdsLifecycleIneligible" });
+  assert.equal(
+    (await f.arrivals.readArrival(prepared.operationId, f.principal.userId))
+      .claimOperationId,
+    null,
+  );
+  assert.equal(f.publicationAttempts.length, 0);
+});
+
+test("changed static destination is refused before a new PLC dispatch marker", async (t) => {
+  const f = await fixture(t);
+  const prepared = await f.prepare();
+  const operation = await plc.signOperation(prepared.handoff, f.source);
+  f.config.pds[0].url = "https://changed.example.test";
+  await assert.rejects(
+    f.composed.admitIncoming(f.request, {
+      operationId: prepared.operationId,
+      method: incomingHandoffMethod,
+      body: { operation },
+      presentation: await f.credential(),
+      arrivalCode: prepared.arrivalCode,
+    }),
+    { code: "OperationConflict" },
+  );
+  assert.equal(f.publicationAttempts.length, 0);
+  assert.equal((await f.db.read("external_operation_attempts")).length, 0);
+  assert.equal((await f.db.read("arrival_signed_operations")).length, 1);
+});
+
+test("changed static destination after key allocation writes no creation marker", async (t) => {
+  const { createInvites } =
+    await import("../../../dist/src/features/account-registration/invites.mjs");
+  const { incomingCreationMethod } =
+    await import("../../../dist/src/features/external-migration/incoming-authorization.js");
+  const f = await fixture(t);
+  const h = await incomingHttp(t, f);
+  const prepared = await claim(f, h);
+  const invites = await createInvites({
+    db: f.db,
+    config: f.config,
+    accounts: { get: async () => null },
+  });
+  const { code } = await invites.createInviteCode({ useCount: 1 });
+  const existingFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    const response = await existingFetch(url, options);
+    if (new URL(url).pathname.endsWith("reserveSigningKey"))
+      f.config.pds[0].url = "https://changed.example.test";
+    return response;
+  };
+  const response = await h.tool("/xrpc/com.atproto.server.createAccount", {
+    code: prepared.arrivalCode,
+    jwt: await f.credential(incomingCreationMethod),
+    json: { handle: "destination.example.test", inviteCode: code },
+  });
+  assert.equal(response.status, 409);
+  assert.equal(f.reservations(), 1);
+  assert.equal(f.backendState.creates, 0);
+  const attempts = await f.db.read("external_operation_attempts");
+  assert.ok(
+    attempts.some((attempt) => attempt.step === "incoming-reservation"),
+  );
+  assert.equal(
+    attempts.some((attempt) => attempt.step === "incoming-creation"),
+    false,
   );
 });
