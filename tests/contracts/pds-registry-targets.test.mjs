@@ -70,3 +70,40 @@ test("stock qualification rejects a path endpoint before making requests", async
   assert.equal(result.reason, "unsupported-stock-endpoint");
   assert.equal(result.adminAttempted, false);
 });
+
+test("registry discovery retains the exact staged resource path", async () => {
+  const { registryProtectedResource } =
+    await import("../../dist/src/pds/registry-resource.js");
+  const { mountAssociatedResourceMetadata } =
+    await import("../../dist/src/features/oauth-authorization/provider.mjs");
+  const stagedUrl = "https://staged.example/qualified/resource";
+  assert.equal(registryProtectedResource(stagedUrl, true), stagedUrl);
+  assert.equal(
+    registryProtectedResource("https://stock.example/", false),
+    "https://stock.example",
+  );
+  let handler;
+  mountAssociatedResourceMetadata(
+    { get: (_path, callback) => (handler = callback) },
+    { metadata: {} },
+    {
+      associatedPds: async () => [
+        { protectedResource: registryProtectedResource(stagedUrl, true) },
+      ],
+    },
+  );
+  let body;
+  await handler(
+    {},
+    {
+      set() {},
+      json(value) {
+        body = value;
+      },
+    },
+    (error) => {
+      throw error;
+    },
+  );
+  assert.deepEqual(body.protected_resources, [stagedUrl]);
+});

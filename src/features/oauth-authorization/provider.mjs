@@ -20,7 +20,7 @@ export function mountAssociatedResourceMetadata(app, provider, accounts) {
         res.json({
           ...provider.metadata,
           protected_resources: [
-            ...new Set(resources.map((resource) => resource.url)),
+            ...new Set(resources.map((resource) => resource.protectedResource)),
           ],
         });
       } catch (error) {

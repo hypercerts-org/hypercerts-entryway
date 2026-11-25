@@ -235,9 +235,7 @@ test("registry product assembly requires serving and discovers associated hosts"
     request.on("error", reject);
   });
   assert.equal(metadata.status, 200);
-  assert.deepEqual(metadata.body.protected_resources, [
-    "https://host.example/",
-  ]);
+  assert.deepEqual(metadata.body.protected_resources, ["https://host.example"]);
   assert.deepEqual(await runtime.placement.choices(), []);
   const login = (identifier) =>
     new Promise((resolve, reject) => {

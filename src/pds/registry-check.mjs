@@ -1,5 +1,6 @@
 import { getPdsJson } from "./registry-http.mjs";
 import { registryPlcEndpoint } from "../plc/policy.js";
+import { registryProtectedResource } from "./registry-resource.js";
 
 export async function checkPdsOutbound(
   revision,
@@ -49,15 +50,12 @@ export async function checkPdsOutbound(
       if (result.reason === "ok") result.reason = metadata.reason;
       continue;
     }
-    let resource;
-    try {
-      resource = new URL(metadata.value.resource).href;
-    } catch {
-      if (result.reason === "ok") result.reason = "invalid-response";
-      continue;
-    }
     if (
-      resource !== revision.publicUrl ||
+      metadata.value?.resource !==
+        registryProtectedResource(
+          revision.publicUrl,
+          revision.stagedIncomingMigration === true,
+        ) ||
       !Array.isArray(metadata.value.authorization_servers) ||
       metadata.value.authorization_servers.length !== 1 ||
       metadata.value.authorization_servers[0] !== issuer

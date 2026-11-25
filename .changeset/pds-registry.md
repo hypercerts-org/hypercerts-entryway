@@ -17,3 +17,5 @@ After associating a verified host, a global administrator can activate fresh reg
 Global administrators can permanently revoke a stored inbound callback verifier for a specific host revision with `scripts/pds-registry.mjs revoke-callback`. Registry callback tokens do not yet authorize administrator routes.
 
 For an unchanged stock PDS, use a root HTTPS public URL. Entryway retains its canonical transport URL and signs the reference PDS origin as the exact PLC service endpoint. Existing saved offers and signed attempts retain their recorded facts.
+
+Registry OAuth discovery advertises the exact checked protected-resource identifier for each associated host, including a staged profile's path where applicable. Staged profiles still require separate qualification before association.
