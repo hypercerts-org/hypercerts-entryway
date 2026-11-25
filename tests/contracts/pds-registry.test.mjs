@@ -907,3 +907,53 @@ test("policy transitions fence stale nodes and never resurrect receipts on rollb
     1,
   );
 });
+
+test("inbound revocation is durable, idempotent and leaves outbound credentials intact", async (t) => {
+  const { randomBytes } = await import("node:crypto");
+  const { parsePdsRegistryKeyring } =
+    await import("../../dist/src/database/pds-registry-crypto.js");
+  const { first, second, configuration } = await fixture(t);
+  const keys = parsePdsRegistryKeyring({
+    activeKeyId: "key",
+    keys: { key: randomBytes(32).toString("base64") },
+  });
+  const registry = registryWithTrust(first, keys),
+    peer = registryWithTrust(second, keys);
+  const token = randomBytes(32).toString("base64url"),
+    other = randomBytes(32).toString("base64url");
+  const request = {
+    host: input("revocation"),
+    credentials: { outboundPassword: "fixture-outbound", inboundToken: token },
+  };
+  const staged = await registry.stageHostWithCredentials(request, 0, "stage");
+  assert.equal(await peer.verifyInbound("revocation", 1, token), true);
+  const outcomes = await Promise.all([
+    registry.revokeInbound("revocation", 1),
+    peer.revokeInbound("revocation", 1),
+  ]);
+  assert.deepEqual(outcomes, [{ revoked: true }, { revoked: true }]);
+  assert.equal(await peer.verifyInbound("revocation", 1, token), false);
+  assert.equal(await peer.verifyInbound("revocation", 1, other), false);
+  assert.equal(
+    await registry.readOutbound("revocation", 1),
+    request.credentials.outboundPassword,
+  );
+  assert.deepEqual(
+    await registry.stageHostWithCredentials(request, 0, "stage"),
+    staged,
+  );
+  assert.equal(await registry.verifyInbound("revocation", 1, token), false);
+  const reopened = await openDatabase(configuration);
+  try {
+    assert.equal(
+      await registryWithTrust(reopened, keys).verifyInbound(
+        "revocation",
+        1,
+        token,
+      ),
+      false,
+    );
+  } finally {
+    await reopened.close();
+  }
+});

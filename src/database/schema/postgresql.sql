@@ -370,6 +370,7 @@ CREATE TABLE "pds_host_credentials" (
 	"ciphertext" text NOT NULL,
 	"tag" text NOT NULL,
 	"inbound_digest" text NOT NULL,
+	"inbound_revoked_at" bigint,
 	CONSTRAINT "pds_host_credentials_pkey" PRIMARY KEY("host_id","revision")
 );
 --> statement-breakpoint

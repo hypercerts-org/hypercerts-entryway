@@ -40,6 +40,7 @@ function argumentsFor(argv) {
       "show",
       "attest",
       "associate",
+      "revoke-callback",
     ].includes(command) ||
     rest.length % 2
   )
@@ -70,6 +71,7 @@ function argumentsFor(argv) {
     "show",
     "attest",
     "associate",
+    "revoke-callback",
   ].includes(command);
   if (
     !options["--url"] ||
@@ -77,7 +79,7 @@ function argumentsFor(argv) {
     ["stage", "attest", "associate"].includes(command) !==
       Boolean(options["--request-file"]) ||
     hostCommand !== Boolean(options["--host"]) ||
-    (command === "check" || command === "policy") !==
+    ["check", "policy", "revoke-callback"].includes(command) !==
       Boolean(options["--revision"]) ||
     (command === "policy") !==
       Boolean(options["--expected-generation"] && options["--fingerprint"]) ||
@@ -117,29 +119,38 @@ try {
     ? JSON.parse(await protectedFile(options["--request-file"]))
     : command === "check"
       ? { expectedRevision: Number(options["--revision"]) }
-      : command === "policy"
-        ? {
-            revision: Number(options["--revision"]),
-            expectedGeneration: Number(options["--expected-generation"]),
-            fingerprint: options["--fingerprint"],
-          }
-        : undefined;
+      : command === "revoke-callback"
+        ? { revision: Number(options["--revision"]) }
+        : command === "policy"
+          ? {
+              revision: Number(options["--revision"]),
+              expectedGeneration: Number(options["--expected-generation"]),
+              fingerprint: options["--fingerprint"],
+            }
+          : undefined;
   const path =
     command === "status"
       ? "/admin/pds-registry/status"
       : command === "trust"
         ? "/admin/pds-registry/trust"
-        : ["show", "attest", "associate"].includes(command)
-          ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}${command === "show" ? "" : `/${command}`}`
-          : command === "check"
-            ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}/check`
-            : command === "policy" || command === "policy-status"
-              ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}/policy`
-              : "/admin/pds-registry/hosts";
+        : command === "revoke-callback"
+          ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}/callback/revoke`
+          : ["show", "attest", "associate"].includes(command)
+            ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}${command === "show" ? "" : `/${command}`}`
+            : command === "check"
+              ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}/check`
+              : command === "policy" || command === "policy-status"
+                ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}/policy`
+                : "/admin/pds-registry/hosts";
   const response = await fetch(new URL(path, base), {
-    method: ["stage", "check", "policy", "attest", "associate"].includes(
-      command,
-    )
+    method: [
+      "stage",
+      "check",
+      "policy",
+      "attest",
+      "associate",
+      "revoke-callback",
+    ].includes(command)
       ? "POST"
       : "GET",
     headers: {
@@ -155,7 +166,10 @@ try {
     process.exitCode = 1;
   } else {
     const result = await response.json();
-    if (command === "status")
+    if (command === "revoke-callback") {
+      if (result.revoked !== true) throw Error("UnexpectedRevocationResult");
+      console.log(JSON.stringify({ revoked: true }));
+    } else if (command === "status")
       console.log(
         JSON.stringify({
           configured: result.configured === true,

@@ -57,6 +57,10 @@ export interface PdsCredentialRegistryStore {
     revision: number,
     token: string,
   ): Promise<boolean>;
+  revokeInbound(
+    hostId: string,
+    revision: number,
+  ): Promise<{ revoked: boolean }>;
   rewrap(
     hostId: string,
     credentialVersion: number,

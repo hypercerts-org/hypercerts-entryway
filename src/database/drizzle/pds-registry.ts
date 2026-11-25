@@ -424,10 +424,29 @@ export function createPdsRegistry(
     },
     async verifyInbound(hostId, version, token) {
       const row = await credentialRow(hostId, version);
-      return equalPdsDigest(
+      const matches = equalPdsDigest(
         Buffer.from(row.inbound_digest, "base64"),
         pdsInboundDigest(hostId, token),
       );
+      return matches && row.inbound_revoked_at === null;
+    },
+    async revokeInbound(hostId, version) {
+      if (!hostId || !Number.isSafeInteger(version) || version < 1)
+        throw new Error("InvalidPdsRegistryCredential");
+      return db.transact(async () => {
+        const row = await credentialRow(hostId, version);
+        if (row.inbound_revoked_at !== null) return { revoked: true };
+        const updated = await db.update(
+          "pds_host_credentials",
+          { inbound_revoked_at: await db.databaseTime() },
+          and(
+            eq(credentials.host_id, hostId),
+            eq(credentials.revision, version),
+          )!,
+        );
+        if (updated !== 1) throw new Error("PdsRegistryCredentialUnavailable");
+        return { revoked: true };
+      });
     },
     async rewrap(hostId, version, expectedKeyId) {
       const keys = configuredKeyring();

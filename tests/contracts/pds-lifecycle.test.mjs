@@ -83,6 +83,10 @@ async function onboard(
   internalUrl = `https://${id}.example`,
 ) {
   const { registry, checks, enrollment } = node;
+  const credentials = {
+    outboundPassword: randomBytes(32).toString("base64url"),
+    inboundToken: randomBytes(32).toString("base64url"),
+  };
   await registry.stageHostWithCredentials(
     {
       host: {
@@ -92,10 +96,7 @@ async function onboard(
         internalUrl,
         order,
       },
-      credentials: {
-        outboundPassword: randomBytes(32).toString("base64url"),
-        inboundToken: randomBytes(32).toString("base64url"),
-      },
+      credentials,
     },
     0,
     `stage-${id}`,
@@ -124,6 +125,7 @@ async function onboard(
     attestationId: attestation.attestationId,
     idempotencyKey: `associate-${id}`,
   });
+  return credentials;
 }
 async function sample(node, id, publicOk, internalOk = publicOk) {
   return node.health.complete(
@@ -1697,4 +1699,113 @@ test("associated resource readers exclude staged hosts and preserve drained hist
   assert.equal(await nodeB.resolveLiveAssociated("host", 1), undefined);
   assert.equal(await nodeA.resolveLiveAssociated("host", 1), undefined);
   assert.equal(await accounts.resourceFor(purportedAccount), undefined);
+});
+
+test("callback verifier binds active host revision and irreversible revocation", async (t) => {
+  const { createPdsPlacement } =
+    await import("../../dist/src/database/drizzle/pds-placement.js");
+  const { db, peer, first, second, trust } = await fixture(t);
+  const hostA = await onboard(first, "host-a");
+  const hostB = await onboard(first, "host-b");
+  const nodeA = createPdsPlacement(
+    db,
+    () => trust,
+    () => "policy",
+  );
+  const nodeB = createPdsPlacement(
+    peer,
+    () => trust,
+    () => "policy",
+  );
+  assert.equal(
+    await nodeA.verifyCallback(
+      "host-a",
+      1,
+      "https://host-a.example/",
+      hostA.inboundToken,
+    ),
+    true,
+  );
+  assert.equal(
+    await nodeB.verifyCallback(
+      "host-a",
+      1,
+      "https://host-a.example/",
+      hostB.inboundToken,
+    ),
+    false,
+  );
+  assert.equal(
+    await nodeB.verifyCallback(
+      "host-a",
+      1,
+      "https://host-b.example/",
+      hostA.inboundToken,
+    ),
+    false,
+  );
+  const nextToken = randomBytes(32).toString("base64url");
+  await first.registry.stageHostWithCredentials(
+    {
+      host: {
+        hostId: "candidate",
+        serviceDid: "did:web:candidate.example",
+        publicUrl: "https://candidate.example",
+        internalUrl: "https://candidate.example",
+        order: 1,
+      },
+      credentials: {
+        outboundPassword: randomBytes(32).toString("base64url"),
+        inboundToken: nextToken,
+      },
+    },
+    0,
+    "stage-next",
+  );
+  assert.equal(
+    await nodeB.verifyCallback(
+      "candidate",
+      1,
+      "https://candidate.example/",
+      nextToken,
+    ),
+    false,
+  );
+  assert.equal(
+    await nodeB.verifyCallback(
+      "host-a",
+      1,
+      "https://host-a.example/",
+      hostA.inboundToken,
+    ),
+    true,
+  );
+  assert.deepEqual(await first.registry.revokeInbound("host-a", 1), {
+    revoked: true,
+  });
+  assert.deepEqual(await second.registry.revokeInbound("host-a", 1), {
+    revoked: true,
+  });
+  assert.equal(
+    await nodeB.verifyCallback(
+      "host-a",
+      1,
+      "https://host-a.example/",
+      hostA.inboundToken,
+    ),
+    false,
+  );
+  assert.equal(
+    await first.registry.readOutbound("host-a", 1),
+    hostA.outboundPassword,
+  );
+  assert.equal(
+    await nodeB.verifyCallback(
+      "host-b",
+      1,
+      "https://host-b.example/",
+      hostB.inboundToken,
+    ),
+    true,
+  );
 });

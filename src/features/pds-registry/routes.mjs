@@ -48,6 +48,7 @@ export function mountPdsRegistryRoutes({
           "PdsHostRevisionConflict",
           "PdsHostIdempotencyConflict",
           "PdsInboundCredentialConflict",
+          "PdsRegistryCredentialUnavailable",
           "PdsVerifierPolicyConflict",
           "PdsEnrollmentConflict",
           "PdsEnrollmentAliasConflict",
@@ -85,6 +86,20 @@ export function mountPdsRegistryRoutes({
     "/admin/pds-registry/trust",
     guarded(async (_req, res) => {
       res.json(pdsPublicTrust(config));
+    }),
+  );
+  app.post(
+    "/admin/pds-registry/hosts/:hostId/callback/revoke",
+    guarded(async (req, res) => {
+      if (
+        !record(req.body, ["revision"]) ||
+        !Number.isSafeInteger(req.body.revision) ||
+        req.body.revision < 1
+      )
+        throw invalid();
+      res.json(
+        await registry.revokeInbound(req.params.hostId, req.body.revision),
+      );
     }),
   );
   app.get(
@@ -304,7 +319,10 @@ export function mountPdsRegistryRoutes({
       const { outboundPassword, inboundToken } = body.credentials;
       const reserved = [
         config.adminPassword,
-        ...config.pds.map((host) => host.adminPassword),
+        ...config.pds.flatMap((host) => [
+          host.adminPassword,
+          host.callbackToken,
+        ]),
       ].filter((value) => typeof value === "string" && value.length > 0);
       if (
         sameSecret(outboundPassword, inboundToken) ||

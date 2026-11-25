@@ -102,6 +102,7 @@ try {
           internalUrl: `http://${id}:3000`,
           did: serviceDid(pdsUrls[i]),
           adminPassword: randomBytes(32).toString("hex"),
+          callbackToken: randomBytes(32).toString("base64url"),
           jwtSecret: randomBytes(32).toString("hex"),
           plcRotationKeyHex: Buffer.from(await plcKey.export()).toString("hex"),
         };
@@ -112,6 +113,59 @@ try {
     mode: 0o600,
   });
   console.log("Generated persisted spike identity and credentials");
+}
+
+// A reused sandbox configuration receives its own callback secret per PDS.
+let updatedCallbackSecrets = false;
+for (const host of config.pds) {
+  if (
+    typeof host.callbackToken !== "string" ||
+    !/^[A-Za-z0-9_-]{43}$/.test(host.callbackToken) ||
+    host.callbackToken === config.adminPassword ||
+    config.pds.some(
+      (other) =>
+        host.callbackToken === other.adminPassword ||
+        (other !== host && host.callbackToken === other.callbackToken),
+    )
+  ) {
+    host.callbackToken = randomBytes(32).toString("base64url");
+    updatedCallbackSecrets = true;
+  }
+}
+if (updatedCallbackSecrets)
+  await writeFile(configPath, JSON.stringify(config, null, 2) + "\n", {
+    mode: 0o600,
+  });
+
+// Each stock PDS receives only its own runtime configuration and no Entryway global secret.
+for (const host of config.pds) {
+  const directory = `/${host.id}-config`;
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const {
+    issuer,
+    serviceDid,
+    jwtPublicHex,
+    plcRotationKeyDid,
+    handleDomains,
+    plcUrl,
+  } = config;
+  await writeFile(
+    `${directory}/config.json`,
+    JSON.stringify(
+      {
+        issuer,
+        serviceDid,
+        jwtPublicHex,
+        plcRotationKeyDid,
+        handleDomains,
+        plcUrl,
+        pds: [host],
+      },
+      null,
+      2,
+    ) + "\n",
+    { mode: 0o600 },
+  );
 }
 
 // Export only public authority metadata to the isolated source fixture. Its

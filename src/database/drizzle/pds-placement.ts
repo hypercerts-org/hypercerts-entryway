@@ -196,6 +196,26 @@ export function createPdsPlacement(
         return result;
       });
     },
+    async verifyCallback(
+      hostId: string,
+      version: number,
+      publicUrl: string,
+      token: string,
+    ) {
+      return db.transact(async () => {
+        const host = await registry.readHost(hostId);
+        if (
+          !host ||
+          host.association !== "associated" ||
+          host.lifecycle === "retired" ||
+          host.activeRevision !== version
+        )
+          return false;
+        const saved = await this.resolveLiveAssociated(hostId, version);
+        if (!saved || saved.url !== publicUrl) return false;
+        return registry.verifyInbound(hostId, version, token);
+      });
+    },
     async resolveAuthenticated(
       hostId: string,
       version: number,
