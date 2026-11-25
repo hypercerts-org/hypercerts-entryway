@@ -157,6 +157,21 @@ CREATE TABLE "authority_operations" (
 	"updated_at" bigint NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "authority_phase" (
+	"id" integer PRIMARY KEY,
+	"phase" text NOT NULL,
+	"generation" bigint NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "authority_phase_events" (
+	"command_key" text PRIMARY KEY,
+	"expected_generation" bigint NOT NULL,
+	"phase" text NOT NULL,
+	"generation" bigint NOT NULL,
+	"principal_class" text NOT NULL,
+	"created_at" bigint NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "backup_emails" (
 	"email" text PRIMARY KEY,
 	"did" text NOT NULL,

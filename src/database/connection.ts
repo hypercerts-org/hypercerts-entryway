@@ -532,6 +532,33 @@ async function connectDatabase(
             500,
             "Database authority mode does not match this application",
           );
+        const phases = (
+          await executor.execute(
+            sql`SELECT id,phase,generation FROM authority_phase`,
+          )
+        ).rows as { id: number; phase: string; generation: number }[];
+        if (
+          mode === "registry-bootstrap" &&
+          (phases.length !== 1 ||
+            phases[0]?.id !== 1 ||
+            !(
+              (phases[0].phase === "bootstrap" &&
+                Number(phases[0].generation) === 1) ||
+              (phases[0].phase === "registry-serving" &&
+                Number(phases[0].generation) === 2)
+            ))
+        )
+          throw new DomainError(
+            "SchemaConflict",
+            500,
+            "Database authority phase is invalid",
+          );
+        if (mode === "static" && phases.length !== 0)
+          throw new DomainError(
+            "SchemaConflict",
+            500,
+            "Database authority phase is invalid",
+          );
         return;
       }
       for (const command of ddl
@@ -543,6 +570,11 @@ async function connectDatabase(
         sql`INSERT INTO authority_mode(id,mode) VALUES (1,${mode})`,
         "run",
       );
+      if (mode === "registry-bootstrap")
+        await executor.execute(
+          sql`INSERT INTO authority_phase(id,phase,generation) VALUES (1,'bootstrap',1)`,
+          "run",
+        );
       await connected((current) =>
         current.execute(
           sql`INSERT INTO schema_identity(version,identity) VALUES (1,${identity})`,
