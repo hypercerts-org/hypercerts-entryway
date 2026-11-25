@@ -187,6 +187,7 @@ function mountProtectedPages({ console, security, renderAppPasswordForm }) {
 export function mountAccountSettingsPage({
   app,
   config,
+  accounts,
   security,
   legacy,
   migration,
@@ -274,6 +275,10 @@ export function mountAccountSettingsPage({
         csrf,
         accountContext,
         migrationState,
+        destinations: accounts?.placement
+          ? await accounts.placement.choices()
+          : config.pds,
+        registry: Boolean(accounts?.placement),
         migrationRecovery:
           migrationState && migrationState.phase !== "complete"
             ? await migration.pendingRecovery(a.did)
