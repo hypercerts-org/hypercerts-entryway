@@ -632,6 +632,7 @@ export const pds_host_credentials = table(
     ciphertext: text("ciphertext").notNull(),
     tag: text("tag").notNull(),
     inbound_digest: text("inbound_digest").notNull(),
+    inbound_revoked_at: count("inbound_revoked_at"),
   },
   (t) => [primaryKey({ columns: [t.host_id, t.revision] })],
 );

@@ -37,6 +37,18 @@ test("registry application liveness does not read the unavailable authority", as
   };
   const accounts = await createAccounts({ db, config });
   accounts.placement = {};
+  const callbackDid = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+  const originalGet = accounts.get;
+  accounts.get = async (value) =>
+    value === callbackDid
+      ? {
+          did: callbackDid,
+          pdsId: "host",
+          pdsRevision: 1,
+          pdsUrl: "https://host.example/",
+          status: "active",
+        }
+      : originalGet(value);
   let resourceReads = 0;
   accounts.associatedPds = async () => {
     resourceReads++;
@@ -61,14 +73,20 @@ test("registry application liveness does not read the unavailable authority", as
   const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   t.after(() => new Promise((resolve) => server.close(resolve)));
-  const get = (path) =>
+  const call = (path, { body, authorization } = {}) =>
     new Promise((resolve, reject) => {
-      const request = http.get(
+      const payload = body === undefined ? undefined : JSON.stringify(body);
+      const request = http.request(
         {
           host: "127.0.0.1",
           port: server.address().port,
           path,
-          headers: { host: "entryway.example.test" },
+          method: payload ? "POST" : "GET",
+          headers: {
+            host: "entryway.example.test",
+            ...(authorization ? { authorization } : {}),
+            ...(payload ? { "content-type": "application/json" } : {}),
+          },
         },
         (response) => {
           const chunks = [];
@@ -82,14 +100,45 @@ test("registry application liveness does not read the unavailable authority", as
         },
       );
       request.on("error", reject);
+      request.end(payload);
     });
-  assert.equal((await get("/_readyz")).status, 200);
+  const callbackToken = randomBytes(32).toString("base64url");
+  const basic = (secret) =>
+    `Basic ${Buffer.from(`admin:${secret}`).toString("base64")}`;
+  for (const [path, body] of [
+    [
+      "/xrpc/com.atproto.admin.updateAccountPassword",
+      { did: callbackDid, password: "fixture-password" },
+    ],
+    ["/xrpc/com.atproto.server.createInviteCode", { useCount: 1 }],
+  ])
+    assert.equal(
+      (await call(path, { body, authorization: basic(callbackToken) })).status,
+      401,
+    );
+  assert.equal(
+    (
+      await call("/admin/pds-registry/status", {
+        authorization: basic(callbackToken),
+      })
+    ).status,
+    401,
+  );
+  assert.equal(
+    (
+      await call("/admin/pds-registry/status", {
+        authorization: basic(config.adminPassword),
+      })
+    ).status,
+    200,
+  );
+  assert.equal((await call("/_readyz")).status, 200);
   state.available = false;
-  const live = await get("/_health");
+  const live = await call("/_health");
   assert.equal(live.status, 200);
   assert.deepEqual(live.body, { status: "ok", role: "entryway", pds: [] });
   assert.equal(resourceReads, 0);
-  const ready = await get("/_readyz");
+  const ready = await call("/_readyz");
   assert.equal(ready.status, 503);
   assert.equal(ready.body.status, "unavailable");
 });

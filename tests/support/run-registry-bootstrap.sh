@@ -19,9 +19,11 @@ node "$root/tests/atmosphere/validate-access.mjs" "$SANDBOX_CHECKOUT/access.json
 gateway=$(node --input-type=module -e 'import {readFileSync} from "node:fs"; const access=JSON.parse(readFileSync(process.argv[1],"utf8")); console.log(access.network.httpsGatewayAddress)' "$SANDBOX_CHECKOUT/access.json")
 compose up -d --wait entryway-postgres
 compose build test
+compose run --rm --no-deps configure
 compose exec -T entryway-postgres createdb -U authority_owner "$REGISTRY_BOOTSTRAP_DATABASE"
 compose run --rm --no-deps --entrypoint node -e "REGISTRY_TEST_GATEWAY_IP=$gateway" configure tests/support/prepare-registry-bootstrap.mjs
 compose up -d --no-deps --wait bootstrap-a bootstrap-b pds1
+compose exec -T pds1 node tests/support/check-pds-config.mjs
 compose up -d --no-deps bootstrap-router
 compose up -d --no-deps --wait entryway-ingress
 compose run --rm --no-deps test node tests/atmosphere/pds-health-network.mjs

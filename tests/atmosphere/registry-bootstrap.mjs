@@ -112,7 +112,7 @@ try {
   const authFile = join(directory, "auth"),
     requestFile = join(directory, "request");
   await writeFile(authFile, config.adminPassword, { mode: 0o600 });
-  const cli = (command, withRequest = false) =>
+  const cli = (command, withRequest = false, extra = []) =>
     spawnSync(
       process.execPath,
       [
@@ -125,6 +125,7 @@ try {
         "--host",
         id,
         ...(withRequest ? ["--request-file", requestFile] : []),
+        ...extra,
       ],
       { encoding: "utf8", timeout: 15000 },
     );
@@ -276,6 +277,27 @@ try {
   );
   console.log(
     "health incident: both operators received one open and one recovery notice in Mailpit",
+  );
+  const callbackDenied = await fetch(
+    new URL(`${base}/callback/revoke`, config.issuer),
+    {
+      method: "POST",
+      headers: {
+        "x-bootstrap-node": "bootstrap-a",
+        "content-type": "application/json",
+        authorization: `Basic ${Buffer.from(`admin:${inboundToken}`).toString("base64")}`,
+      },
+      body: JSON.stringify({ revision: 1 }),
+    },
+  );
+  assert.equal(callbackDenied.status, 401);
+  for (let index = 0; index < 2; index++) {
+    const revoked = cli("revoke-callback", false, ["--revision", "1"]);
+    assert.equal(revoked.status, 0);
+    assert.deepEqual(JSON.parse(revoked.stdout), { revoked: true });
+  }
+  console.log(
+    "operator CLI: callback token refused, global revocation persisted over verified TLS",
   );
   console.log(
     "operator CLI: explicit attestation and disabled association through verified TLS passed",

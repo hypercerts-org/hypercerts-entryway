@@ -23,7 +23,13 @@ test("global admin alone can stage and staged credentials grant no normal author
     jwtPublicHex: publicKey.getPublicKey("hex", "compressed"),
     plcRotationKeyDid: plcKey.did(),
     adminPassword: "global-fixture",
-    pds: [{ id: "existing", adminPassword: "host-fixture" }],
+    pds: [
+      {
+        id: "existing",
+        adminPassword: "host-fixture",
+        callbackToken: "static-callback-fixture",
+      },
+    ],
   };
   const keyring = parsePdsRegistryKeyring({
     activeKeyId: "key",
@@ -101,7 +107,12 @@ test("global admin alone can stage and staged credentials grant no normal author
     (await call("/admin/pds-registry/hosts", "host-fixture", request)).status,
     401,
   );
-  for (const password of ["global-fixture", "host-fixture", token]) {
+  for (const password of [
+    "global-fixture",
+    "host-fixture",
+    "static-callback-fixture",
+    token,
+  ]) {
     const body = {
       ...request,
       credentials: { ...request.credentials, outboundPassword: password },
@@ -135,6 +146,19 @@ test("global admin alone can stage and staged credentials grant no normal author
     request,
   );
   assert.equal(result.status, 200);
+  const revokePath = "/admin/pds-registry/hosts/candidate/callback/revoke";
+  assert.equal((await call(revokePath, token, { revision: 1 })).status, 401);
+  assert.equal(await registry.verifyInbound("candidate", 1, token), true);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const revoked = await call(revokePath, "global-fixture", { revision: 1 });
+    assert.equal(revoked.status, 200);
+    assert.deepEqual(await revoked.json(), { revoked: true });
+  }
+  assert.equal(await registry.verifyInbound("candidate", 1, token), false);
+  assert.equal(
+    await registry.readOutbound("candidate", 1),
+    request.credentials.outboundPassword,
+  );
   const response = await result.text();
   assert.equal(response.includes(token), false);
   assert.equal(response.includes(request.credentials.outboundPassword), false);

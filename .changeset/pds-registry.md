@@ -13,3 +13,5 @@ Registry-bootstrap nodes now sample registered hosts using `PDS_HEALTH_INTERVAL_
 An independent database-fenced sweep opens monitoring-stale incidents when a registered host has not produced a health sample within 45 seconds, including hosts that have never been sampled.
 
 Registry host status now includes an internal lifecycle version; lifecycle controls and registry-backed placement remain unavailable.
+
+Global administrators can permanently revoke a stored inbound callback verifier for a specific host revision with `scripts/pds-registry.mjs revoke-callback`. Registry callback tokens do not yet authorize administrator routes.

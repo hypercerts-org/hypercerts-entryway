@@ -390,6 +390,7 @@ CREATE TABLE `pds_host_credentials` (
 	`ciphertext` text NOT NULL,
 	`tag` text NOT NULL,
 	`inbound_digest` text NOT NULL,
+	`inbound_revoked_at` integer,
 	CONSTRAINT `pds_host_credentials_pk` PRIMARY KEY(`host_id`, `revision`),
 	CONSTRAINT `fk_pds_host_credentials_host_id_pds_hosts_id_fk` FOREIGN KEY (`host_id`) REFERENCES `pds_hosts`(`id`)
 );

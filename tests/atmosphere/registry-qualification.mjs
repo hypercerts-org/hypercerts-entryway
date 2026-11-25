@@ -39,6 +39,7 @@ try {
     jwtPublicKeyHex: config.jwtPublicHex,
     plcRotationKeyDid: config.plcRotationKeyDid,
   });
+  const stagedTokens = new Map();
   async function stage(serviceDid, outboundPassword) {
     const hostId = `qualified-${randomBytes(8).toString("hex")}`;
     const body = {
@@ -58,6 +59,7 @@ try {
     };
     await writeFile(requestFile, JSON.stringify(body), { mode: 0o600 });
     assert.equal(cli("stage", ["--request-file", requestFile]).status, 0);
+    stagedTokens.set(hostId, body.credentials.inboundToken);
     return hostId;
   }
   const good = await stage(pds.did, pds.adminPassword);
@@ -147,6 +149,24 @@ try {
   assert.equal(failed.outbound.last.adminAttempted, false);
   assert.equal(failed.inbound, "unproven");
   assert.notEqual(cli("check", ["--host", good, "--revision", "2"]).status, 0);
+  const callbackAuth = `Basic ${Buffer.from(`admin:${stagedTokens.get(good)}`).toString("base64")}`;
+  const forbidden = await fetch(
+    new URL(`/admin/pds-registry/hosts/${good}/callback/revoke`, config.issuer),
+    {
+      method: "POST",
+      headers: {
+        authorization: callbackAuth,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ revision: 1 }),
+    },
+  );
+  assert.equal(forbidden.status, 401);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = cli("revoke-callback", ["--host", good, "--revision", "1"]);
+    assert.equal(result.status, 0);
+    assert.deepEqual(JSON.parse(result.stdout), { revoked: true });
+  }
   console.log(
     "registry qualification: trust export, matching stock host, wrong DID and revision refusal passed",
   );

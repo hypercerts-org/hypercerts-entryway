@@ -41,6 +41,8 @@ services:
       SOURCE_FIXTURE_TOKEN_DIR: /run/secrets
     volumes:
       - entryway-config:/config
+      - pds1-config:/pds1-config
+      - pds2-config:/pds2-config
       - source-fixture-public:/run/fixture-public
       - source-fixture-token:/run/secrets
   entryway: &entryway-node
@@ -127,7 +129,7 @@ services:
       <<: *runtime-env
       PDS_ID: pds1
     volumes:
-      - entryway-config:/config:ro
+      - pds1-config:/config:ro
       - cluster1-data:/data
     depends_on:
       entryway: { condition: service_healthy }
@@ -149,7 +151,7 @@ services:
       <<: *runtime-env
       PDS_ID: pds2
     volumes:
-      - entryway-config:/config:ro
+      - pds2-config:/config:ro
       - cluster2-data:/data
     depends_on:
       entryway: { condition: service_healthy }
@@ -209,6 +211,8 @@ volumes:
   database-profile-data: {}
   database-profile-backup: {}
   entryway-config: {}
+  pds1-config: {}
+  pds2-config: {}
   entryway-data: {}
   cluster1-data: {}
   cluster2-data: {}
