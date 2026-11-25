@@ -286,7 +286,9 @@ test("a form opened on one node cannot issue after a mailbox change on the other
         expect(refused.status()).toBe(403);
         // The stale form still names the DID it was opened for, which the
         // action rechecks against the moved binding.
-        expect(refused.request().postData()).toContain(pair.first.did);
+        expect(
+          new URLSearchParams(refused.request().postData()).get("did"),
+        ).toBe(pair.first.did);
         await expect(stale.getByRole("alert")).toHaveText(
           "The selected account is not linked to this verified identity",
         );
