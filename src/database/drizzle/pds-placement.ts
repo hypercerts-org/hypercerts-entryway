@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray, or } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import type { DatabaseExecutor } from "../executor.js";
 import type { PdsHostRevision } from "../pds-registry.port.js";
+import type { PdsRegistryKeyring } from "../pds-registry-crypto.js";
 import type { PdsRegistryPublicTrust } from "../pds-registry-manifest.js";
 import { createPdsRegistry } from "./pds-registry.js";
 import { createPdsHealthStore } from "./pds-health.js";
@@ -12,14 +13,31 @@ import type {
   OperationClaim,
 } from "../operation-ownership.port.js";
 
+export const managedMigrationTargetSteps = ["managed-migration:v1"] as const;
+const managedMigrationExact = new Set([
+  "target-freeze",
+  "target-activate",
+  "import-repository",
+  "resign-imported-root",
+]);
+function targetStep(steps: string[], step: string): boolean {
+  if (steps.length === 1 && steps[0] === managedMigrationTargetSteps[0])
+    return (
+      managedMigrationExact.has(step) ||
+      /^(?:reserve-target-key|create-target|import-blob):[^:]+$/.test(step)
+    );
+  return steps.includes(step);
+}
+
 /** Internal placement authority. Every operation below uses the same physical
  * transaction and authority lock as lifecycle and operation ownership. */
 export function createPdsPlacement(
   db: DatabaseExecutor,
   publicTrust: () => PdsRegistryPublicTrust,
   verifierPolicy: (revision: PdsHostRevision) => string | undefined,
+  keyring?: PdsRegistryKeyring,
 ) {
-  const registry = createPdsRegistry(db, undefined, publicTrust);
+  const registry = createPdsRegistry(db, keyring, publicTrust);
   const lifecycle = createPdsLifecycle(
     db,
     registry,
@@ -37,6 +55,45 @@ export function createPdsPlacement(
       })
     )[0];
   }
+  async function hasPriorTarget(
+    reservation: NonNullable<Awaited<ReturnType<typeof find>>>,
+    steps: string[],
+  ) {
+    const external = db.tables.external_operation_attempts;
+    const attempts = await db.read("external_operation_attempts", {
+      where: and(
+        eq(external.operation_id, reservation.operation_id),
+        or(
+          eq(external.target, reservation.target),
+          eq(external.target, reservation.public_target),
+        ),
+      ),
+    });
+    return attempts.some((attempt) => targetStep(steps, attempt.step));
+  }
+  async function markRefused(
+    reservation: NonNullable<Awaited<ReturnType<typeof find>>>,
+    dispatchInput?: string,
+  ) {
+    await db.update(
+      "pds_placement_reservations",
+      {
+        state: "refused",
+        ...(dispatchInput ? { dispatch_input: dispatchInput } : {}),
+      },
+      eq(reservations.id, reservation.id),
+    );
+    await db.update(
+      "authority_operations",
+      {
+        pending: true,
+        phase: "placement-refused",
+        last_error_code: "PdsLifecycleIneligible",
+        updated_at: await db.databaseTime(),
+      },
+      eq(db.tables.authority_operations.id, reservation.operation_id),
+    );
+  }
   return {
     async select() {
       return (await lifecycle.candidates())[0]?.hostId;
@@ -52,8 +109,36 @@ export function createPdsPlacement(
               id: saved.hostId,
               url: saved.publicUrl,
               internalUrl: saved.internalUrl,
+              revision: saved.revision,
             }
           : undefined;
+      });
+    },
+    async eligible(hostId: string, revision: number) {
+      try {
+        const [host] = await lifecycle.candidates(hostId);
+        return host?.activeRevision === revision;
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === "PdsLifecycleIneligible"
+        )
+          return false;
+        throw error;
+      }
+    },
+    async resolveMigration(hostId: string, revision: number) {
+      return db.transact(async () => {
+        const saved = await registry.readHostRevision(hostId, revision);
+        if (!saved) return undefined;
+        const adminPassword = await registry.readOutbound(hostId, revision);
+        return {
+          id: saved.hostId,
+          url: saved.publicUrl,
+          internalUrl: saved.internalUrl,
+          did: saved.serviceDid,
+          adminPassword,
+        };
       });
     },
     async read(claim: OperationClaim) {
@@ -76,6 +161,11 @@ export function createPdsPlacement(
         !targetSteps.length ||
         targetSteps.some((step) => !step || step.length > 128) ||
         new Set(targetSteps).size !== targetSteps.length ||
+        (purpose === "managed-migration" &&
+          (targetSteps.length !== 1 ||
+            targetSteps[0] !== managedMigrationTargetSteps[0])) ||
+        (purpose !== "managed-migration" &&
+          targetSteps.includes(managedMigrationTargetSteps[0])) ||
         (requestedHostId !== undefined && !requestedHostId)
       )
         throw new Error("InvalidPdsPlacementRequest");
@@ -119,6 +209,82 @@ export function createPdsPlacement(
         return reservation;
       });
     },
+    async preflight(claim: OperationClaim, reservationId: string) {
+      return db.transact(async () => {
+        await db.assertOperationFence(claim);
+        const reservation = await find(claim.operationId);
+        if (!reservation || reservation.id !== reservationId)
+          throw new Error("PdsPlacementConflict");
+        if (reservation.state === "refused") return "refused" as const;
+        if (reservation.state !== "reserved") return "prior-dispatch" as const;
+        const steps: unknown = JSON.parse(reservation.target_steps);
+        if (
+          !Array.isArray(steps) ||
+          !steps.every((step) => typeof step === "string")
+        )
+          throw new Error("PdsPlacementConflict");
+        if (await hasPriorTarget(reservation, steps))
+          return "prior-dispatch" as const;
+        if (reservation.purpose === "managed-migration") {
+          const external = db.tables.external_operation_attempts;
+          const reads = await db.read("external_operation_attempts", {
+            where: and(
+              eq(external.operation_id, claim.operationId),
+              eq(external.step, "probe-target"),
+            ),
+          });
+          if (reads.some((attempt) => attempt.state === "recovery-approved"))
+            return "read-recovery" as const;
+          if (
+            reads.some(
+              (attempt) =>
+                attempt.state !== "acknowledged" &&
+                attempt.state !== "rejected",
+            )
+          )
+            return "prior-dispatch" as const;
+        }
+        try {
+          const [host] = await lifecycle.candidates(reservation.host_id);
+          if (host?.activeRevision === reservation.revision)
+            return "eligible" as const;
+        } catch (error) {
+          if (
+            !(error instanceof Error) ||
+            error.message !== "PdsLifecycleIneligible"
+          )
+            throw error;
+        }
+        await markRefused(reservation);
+        return "refused" as const;
+      });
+    },
+    async beginTargetRead(
+      claim: OperationClaim,
+      reservationId: string,
+      input: ExternalAttemptInput,
+    ) {
+      return db.transact(async () => {
+        await db.assertOperationFence(claim);
+        const saved = await find(claim.operationId);
+        if (
+          !saved ||
+          saved.id !== reservationId ||
+          saved.purpose !== "managed-migration" ||
+          input.step !== "probe-target" ||
+          input.method !== "com.atproto.admin.getAccountInfo" ||
+          (input.target !== saved.target &&
+            input.target !== saved.public_target)
+        )
+          throw new Error("PdsPlacementConflict");
+        const disposition = await this.preflight(claim, reservationId);
+        if (disposition === "refused") return { kind: "refused" as const };
+        if (disposition !== "eligible")
+          return { kind: "prior-dispatch" as const };
+        const attempt = await ownership.beginExternal(claim, input);
+        return { kind: "dispatched" as const, attempt };
+      });
+    },
     async beginFirstDispatch(
       claim: OperationClaim,
       reservationId: string,
@@ -138,7 +304,7 @@ export function createPdsPlacement(
         if (
           !Array.isArray(targetSteps) ||
           !targetSteps.every((step) => typeof step === "string") ||
-          !targetSteps.includes(input.step)
+          !targetStep(targetSteps, input.step)
         )
           throw new Error("PdsPlacementConflict");
         const dispatchInput = JSON.stringify([
@@ -149,6 +315,7 @@ export function createPdsPlacement(
         ]);
         if (
           reservation.state !== "reserved" &&
+          reservation.dispatch_input !== null &&
           reservation.dispatch_input !== dispatchInput
         )
           throw new Error("PdsPlacementConflict");
@@ -166,22 +333,7 @@ export function createPdsPlacement(
         }
         if (reservation.state !== "reserved")
           throw new Error("PdsPlacementConflict");
-        const external = db.tables.external_operation_attempts;
-        const priorTargetAttempt = await db.read(
-          "external_operation_attempts",
-          {
-            where: and(
-              eq(external.operation_id, claim.operationId),
-              or(
-                eq(external.target, reservation.target),
-                eq(external.target, reservation.public_target),
-              ),
-              inArray(external.step, targetSteps),
-            ),
-            limit: 1,
-          },
-        );
-        if (priorTargetAttempt.length)
+        if (await hasPriorTarget(reservation, targetSteps))
           return { kind: "prior-dispatch" as const };
 
         let admissible = false;
@@ -196,21 +348,7 @@ export function createPdsPlacement(
             throw error;
         }
         if (!admissible) {
-          await db.update(
-            "pds_placement_reservations",
-            { state: "refused", dispatch_input: dispatchInput },
-            eq(reservations.id, reservation.id),
-          );
-          await db.update(
-            "authority_operations",
-            {
-              pending: true,
-              phase: "placement-refused",
-              last_error_code: "PdsLifecycleIneligible",
-              updated_at: await db.databaseTime(),
-            },
-            eq(db.tables.authority_operations.id, claim.operationId),
-          );
+          await markRefused(reservation, dispatchInput);
           return { kind: "refused" as const };
         }
         const attempt = await ownership.beginExternal(claim, input);

@@ -5,34 +5,66 @@ import https from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadPdsRegistryVerifier } from "../../dist/src/pds/registry-targets.mjs";
+import { registryPdsFetch } from "../../dist/src/pds/registry-transport.mjs";
 import { checkPdsOutbound } from "../../dist/src/pds/registry-check.mjs";
 
 if (process.argv.includes("--client")) {
   const origin = process.env.PDS_TEST_ORIGIN;
-  const result = await checkPdsOutbound(
-    {
-      hostId: "fixture",
-      revision: 1,
-      serviceDid: "did:web:fixture.test",
-      publicUrl: `${origin}/`,
-      internalUrl: `${origin}/`,
-      order: 1,
-    },
-    "https://issuer.example",
-    "fixture-password",
-    {
-      targets: new Map([[origin, ["127.0.0.1"]]]),
-      ca: readFileSync(process.env.PDS_TEST_CA_FILE),
-    },
-  );
-  const expected = {
-    redirect: "unexpected-status",
-    oversized: "invalid-response",
-    timeout: "network-error",
-    hostname: "network-error",
-  }[process.env.PDS_TEST_MODE];
-  assert.equal(result.reason, expected);
-  assert.equal(result.adminAttempted, false);
+  if (process.env.PDS_TEST_MODE.startsWith("transport-")) {
+    const mode = process.env.PDS_TEST_MODE;
+    const verifier = {
+      targets: new Map([
+        [origin, [mode === "transport-wrong-ip" ? "127.0.0.2" : "127.0.0.1"]],
+      ]),
+      ca:
+        mode === "transport-wrong-ca"
+          ? Buffer.from("invalid CA")
+          : readFileSync(process.env.PDS_TEST_CA_FILE),
+    };
+    const request = () =>
+      registryPdsFetch(
+        `${origin}/transport`,
+        {
+          headers: { authorization: "Bearer disposable-fixture" },
+          signal: AbortSignal.timeout(3000),
+        },
+        verifier,
+        150000,
+      );
+    if (mode === "transport-204" || mode === "transport-205") {
+      const response = await request();
+      assert.equal(response.status, Number(mode.slice(-3)));
+      assert.equal((await response.arrayBuffer()).byteLength, 0);
+    } else if (mode === "transport-good") {
+      const response = await request();
+      assert.equal((await response.arrayBuffer()).byteLength, 100000);
+    } else await assert.rejects(request());
+  } else {
+    const result = await checkPdsOutbound(
+      {
+        hostId: "fixture",
+        revision: 1,
+        serviceDid: "did:web:fixture.test",
+        publicUrl: `${origin}/`,
+        internalUrl: `${origin}/`,
+        order: 1,
+      },
+      "https://issuer.example",
+      "fixture-password",
+      {
+        targets: new Map([[origin, ["127.0.0.1"]]]),
+        ca: readFileSync(process.env.PDS_TEST_CA_FILE),
+      },
+    );
+    const expected = {
+      redirect: "unexpected-status",
+      oversized: "invalid-response",
+      timeout: "network-error",
+      hostname: "network-error",
+    }[process.env.PDS_TEST_MODE];
+    assert.equal(result.reason, expected);
+    assert.equal(result.adminAttempted, false);
+  }
 } else {
   const directory = mkdtempSync(join(tmpdir(), "entryway-tls-fixture-"));
   try {
@@ -63,10 +95,27 @@ if (process.argv.includes("--client")) {
     );
     let mode = "",
       redirectHits = 0,
-      adminHits = 0;
+      adminHits = 0,
+      transportHits = 0;
     const server = https.createServer(
       { key: readFileSync(key), cert: readFileSync(certificate) },
       (req, res) => {
+        if (req.url === "/transport") {
+          transportHits++;
+          assert.equal(req.headers.authorization, "Bearer disposable-fixture");
+          if (mode === "transport-204" || mode === "transport-205") {
+            res.writeHead(Number(mode.slice(-3)));
+            res.end();
+            return;
+          }
+          if (mode === "transport-redirect") {
+            res.writeHead(302, { location: "/redirect-target" });
+            res.end();
+            return;
+          }
+          res.end(Buffer.alloc(100000));
+          return;
+        }
         if (req.url === "/redirect-target") {
           redirectHits++;
           res.end("{}");
@@ -174,7 +223,19 @@ if (process.argv.includes("--client")) {
       /InvalidPdsRegistryVerifier/,
     );
     try {
-      for (mode of ["redirect", "oversized", "timeout", "hostname"]) {
+      for (mode of [
+        "redirect",
+        "oversized",
+        "timeout",
+        "hostname",
+        "transport-good",
+        "transport-204",
+        "transport-205",
+        "transport-wrong-ca",
+        "transport-wrong-host",
+        "transport-wrong-ip",
+        "transport-redirect",
+      ]) {
         const child = spawn(
           process.execPath,
           ["tests/atmosphere/registry-network-safety.mjs", "--client"],
@@ -183,7 +244,7 @@ if (process.argv.includes("--client")) {
               ...process.env,
               PDS_TEST_CA_FILE: certificate,
               PDS_TEST_ORIGIN:
-                mode === "hostname"
+                mode === "hostname" || mode === "transport-wrong-host"
                   ? origin.replace("fixture.test", "other.test")
                   : origin,
               PDS_TEST_MODE: mode,
@@ -200,6 +261,7 @@ if (process.argv.includes("--client")) {
       }
       assert.equal(redirectHits, 0);
       assert.equal(adminHits, 0);
+      assert.equal(transportHits, 4);
       console.log(
         "registry network: redirect, response bound and deadline controls passed",
       );

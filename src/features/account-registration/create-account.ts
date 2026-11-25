@@ -105,6 +105,7 @@ interface Context {
       host_id: string;
       target: string;
       public_target: string;
+      revision: number;
     }>;
     beginFirstDispatch(
       claim: OperationClaim,
@@ -526,6 +527,7 @@ export function createRegistration({
       handle,
       pdsId,
       pdsUrl: pds.url,
+      ...(reservation ? { pdsRevision: reservation.revision } : {}),
       status: "provisioning",
       op,
       createdAt,

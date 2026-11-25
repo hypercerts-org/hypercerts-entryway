@@ -1,6 +1,6 @@
 import { fail } from "../../accounts/security-primitives.mjs";
 
-export function createMigrationProof({ proofs, config }) {
+export function createMigrationProof({ proofs, config, accounts }) {
   const { principal, issue, consume } = proofs;
   const requestMigrationProof = async (
     actor,
@@ -8,7 +8,13 @@ export function createMigrationProof({ proofs, config }) {
     { exposeChallengeId = false } = {},
   ) => {
     const row = await principal(actor);
-    if (!config.pds.some((pds) => pds.id === pdsId) || row.pdsId === pdsId)
+    const registryHost = accounts?.placement
+      ? await accounts.placement.resolve(pdsId)
+      : undefined;
+    if (
+      (!registryHost && !config.pds.some((pds) => pds.id === pdsId)) ||
+      row.pdsId === pdsId
+    )
       throw fail(400, "InvalidPds", "Choose another configured PDS");
     return await issue(
       "account-migrate",

@@ -311,8 +311,18 @@ export function createAccountStorage(
         }
       }
     });
-  const assertPds = async (row: AccountRow) => {
+  const assertPds = async (row: AccountRow, allowExisting = false) => {
     if (registryPds) {
+      if (allowExisting) {
+        const previous = await getByDid(row.did);
+        if (
+          previous &&
+          previous.pdsId === row.pdsId &&
+          previous.pdsUrl === row.pdsUrl &&
+          previous.pdsRevision === row.pdsRevision
+        )
+          return;
+      }
       if (await registryPds(row)) return;
       throw new DomainError("InvalidAccount", 400, "Unknown account data host");
     }
@@ -361,7 +371,7 @@ export function createAccountStorage(
     assertAccountShape(row);
     try {
       await db.transact(async () => {
-        await assertPds(row);
+        await assertPds(row, true);
         await assertNoActiveArrival(row.email, row.did, row.handle);
         const previous = await getByDid(row.did);
         if (!previous)

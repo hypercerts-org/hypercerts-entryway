@@ -778,3 +778,57 @@ test("registration uses real registry reservation and pinned host for both targe
     "dispatched",
   );
 });
+
+test("managed move target classification is anchored and excludes source steps", async (t) => {
+  const { createPdsPlacement, managedMigrationTargetSteps } =
+    await import("../../dist/src/database/drizzle/pds-placement.js");
+  const { createOperationOwnershipStore } =
+    await import("../../dist/src/database/drizzle/operation-ownership.js");
+  const { db, first, trust } = await fixture(t);
+  for (const host of ["one", "two"]) {
+    await onboard(first, host);
+    await sample(first, host, true);
+    await sample(first, host, true);
+    await first.lifecycle.transition(host, "enable", 1, 0, `enable-${host}`);
+  }
+  const ownership = createOperationOwnershipStore(db);
+  const placement = createPdsPlacement(
+    db,
+    () => trust,
+    () => "policy",
+  );
+  for (const [host, priorStep, expected] of [
+    ["one", "source-reserve-target-key:cid", "refused"],
+    ["two", "reserve-target-key:cid", "prior-dispatch"],
+  ]) {
+    const claim = await ownership.acquire({
+      resource: `did:${host}`,
+      kind: "managed-migration",
+      requestDigest: "a".repeat(64),
+      workerId: `worker-${host}`,
+      leaseMs: 60000,
+    });
+    const reservation = await placement.reserve(
+      claim,
+      "managed-migration",
+      claim.requestDigest,
+      managedMigrationTargetSteps,
+      host,
+    );
+    const prior = await ownership.beginExternal(claim, {
+      step: priorStep,
+      target: reservation.public_target,
+      method: "fixture",
+      intentDigest: "b".repeat(64),
+    });
+    await ownership.acknowledgeExternal(claim, prior, {});
+    await first.lifecycle.transition(host, "drain", 1, 1, `drain-${host}`);
+    const result = await placement.beginFirstDispatch(claim, reservation.id, {
+      step: "reserve-target-key:head",
+      target: reservation.public_target,
+      method: "reserve",
+      intentDigest: "c".repeat(64),
+    });
+    assert.equal(result.kind, expected);
+  }
+});
