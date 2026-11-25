@@ -95,6 +95,10 @@ export interface OperationOwnershipStore {
     claim: OperationClaim,
     input: ExternalAttemptInput,
   ): Promise<ExternalAttempt | null>;
+  readExternalById(
+    claim: OperationClaim,
+    attemptId: string,
+  ): Promise<ExternalAttempt | null>;
   beginExternal(
     claim: OperationClaim,
     input: ExternalAttemptInput,
