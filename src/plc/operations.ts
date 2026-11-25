@@ -14,7 +14,7 @@ import { signingKeyResult } from "../accounts/operation-ownership.js";
 import type { CustodyInventoryTransactor } from "../database/custody.port.js";
 
 import { fail } from "../accounts/input.mjs";
-import { xrpc } from "../pds/client.mjs";
+import { xrpc, registryXrpc } from "../pds/client.mjs";
 
 import type { AuthorityDatabase } from "../database/connection.js";
 import type { createOperationOwnership } from "../accounts/operation-ownership.js";
@@ -25,6 +25,7 @@ interface Account {
   did: string;
   email: string;
   status: string;
+  pdsRevision?: number;
 }
 interface Pds {
   internalUrl: string;
@@ -75,7 +76,7 @@ interface Context {
     };
     registryVerifier?: Parameters<typeof registryPdsFetch>[2];
     get(did: string): Promise<Account | null>;
-    pdsFor(row: Account): Pds;
+    pdsFor(row: Account): Pds | Promise<Pds>;
     assertNoMigration?(did: string): Promise<void>;
     serialized<T>(
       did: string,
@@ -259,13 +260,23 @@ export function createPlcOperations({
             perform,
           );
     }
-    const pds = existing ? accounts.pdsFor(existing) : choosePds(pdsId);
-    const send = () =>
-      xrpc(
+    const pds = existing ? await accounts.pdsFor(existing) : choosePds(pdsId);
+    if (existing && accounts.placement)
+      registryPdsTarget(
+        new URL("/xrpc/com.atproto.server.reserveSigningKey", pds.internalUrl),
+        accounts.registryVerifier,
+        1024 * 1024,
+      );
+    const send = async () => {
+      if (existing && accounts.placement) await accounts.pdsFor(existing);
+      return (existing && accounts.placement ? registryXrpc : xrpc)(
         pds.internalUrl,
         "com.atproto.server.reserveSigningKey",
         did ? { did } : {},
+        undefined,
+        accounts.registryVerifier,
       );
+    };
     if (!did) return send();
     return accounts.ownership.dispatch(
       {

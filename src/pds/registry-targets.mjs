@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import { readProtectedJson } from "../protected-json.js";
 
@@ -42,7 +43,7 @@ export async function loadPdsRegistryVerifier(targetsPath, caPath) {
   try {
     const { constants } = await import("node:fs");
     const { open } = await import("node:fs/promises");
-    const { createHash, X509Certificate } = await import("node:crypto");
+    const { X509Certificate } = await import("node:crypto");
     const targets = await loadPdsRegistryTargets(targetsPath);
     const file = await open(caPath, constants.O_RDONLY | constants.O_NONBLOCK);
     let ca;
@@ -73,34 +74,37 @@ export async function loadPdsRegistryVerifier(targetsPath, caPath) {
     if (!certificates?.length || text.replace(expression, "").trim())
       throw new Error();
     for (const certificate of certificates) new X509Certificate(certificate);
-    const caDigest = createHash("sha256").update(ca).digest("hex");
-    const policyFor = (revision) => {
-      const origins = [
-        ...new Set([
-          new URL(revision.publicUrl).origin,
-          new URL(revision.internalUrl).origin,
-        ]),
-      ].sort();
-      const entries = origins.map((origin) => [
-        origin,
-        targets.get(origin) ?? null,
-      ]);
-      return createHash("sha256")
-        .update(
-          JSON.stringify([
-            "pds-registry-verifier",
-            1,
-            entries,
-            caDigest,
-            3000,
-            65536,
-            "https-get-no-redirect-no-reuse",
-          ]),
-        )
-        .digest("hex");
-    };
+    const policyFor = (revision) =>
+      pdsVerifierPolicy(revision, { targets, ca });
     return { targets, ca, policyFor };
   } catch {
     throw new Error("InvalidPdsRegistryVerifier");
   }
+}
+
+export function pdsVerifierPolicy(revision, verifier) {
+  if (!verifier?.targets || !verifier?.ca) return undefined;
+  const origins = [
+    ...new Set([
+      new URL(revision.publicUrl).origin,
+      new URL(revision.internalUrl).origin,
+    ]),
+  ].sort();
+  const entries = origins.map((origin) => [
+    origin,
+    verifier.targets.get(origin) ?? null,
+  ]);
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        "pds-registry-verifier",
+        1,
+        entries,
+        createHash("sha256").update(verifier.ca).digest("hex"),
+        3000,
+        65536,
+        "https-get-no-redirect-no-reuse",
+      ]),
+    )
+    .digest("hex");
 }

@@ -139,6 +139,75 @@ export function createPdsPlacement(
           : undefined;
       });
     },
+    async resolveAuthenticated(
+      hostId: string,
+      version: number,
+      actualPolicy: (revision: PdsHostRevision) => string | undefined,
+    ) {
+      return db.transact(async () => {
+        if (typeof actualPolicy !== "function") return undefined;
+        const host = await registry.readHost(hostId);
+        const revision = await registry.readHostRevision(hostId, version);
+        const [policy] = await db.read("pds_host_verifier_policies", {
+          where: eq(db.tables.pds_host_verifier_policies.host_id, hostId),
+        });
+        const [event] = await db.read("pds_host_enrollment_events", {
+          where: and(
+            eq(db.tables.pds_host_enrollment_events.host_id, hostId),
+            eq(db.tables.pds_host_enrollment_events.revision, version),
+            eq(db.tables.pds_host_enrollment_events.kind, "associate"),
+          ),
+        });
+        if (
+          !host ||
+          host.association !== "associated" ||
+          !revision ||
+          !policy ||
+          policy.revision !== version ||
+          !event ||
+          event.policy_generation !== policy.generation ||
+          policy.fingerprint !== verifierPolicy(revision) ||
+          policy.fingerprint !== actualPolicy(revision)
+        )
+          return undefined;
+        const manifest = await registry.readManifest(hostId, version);
+        if (!manifest || manifest.fingerprint !== event.manifest_fingerprint)
+          return undefined;
+        let receipt: unknown;
+        try {
+          receipt = JSON.parse(event.receipt_snapshot);
+        } catch {
+          return undefined;
+        }
+        if (!receipt || typeof receipt !== "object") return undefined;
+        const evidence = receipt as Record<string, unknown>;
+        if (
+          evidence.receiptId !== event.receipt_id ||
+          evidence.direction !== "entryway-to-pds" ||
+          evidence.verifierVersion !== 1 ||
+          evidence.publicDidOk !== true ||
+          evidence.internalDidOk !== true ||
+          evidence.publicMetadataOk !== true ||
+          evidence.internalMetadataOk !== true ||
+          evidence.adminAttempted !== true ||
+          evidence.adminOk !== true ||
+          evidence.revision !== version ||
+          evidence.verifierPolicyGeneration !== policy.generation ||
+          evidence.verifierPolicyFingerprint !== policy.fingerprint ||
+          evidence.manifestFingerprint !== event.manifest_fingerprint ||
+          evidence.generation !== event.generation ||
+          evidence.reason !== "ok"
+        )
+          return undefined;
+        return {
+          id: revision.hostId,
+          did: revision.serviceDid,
+          url: revision.publicUrl,
+          internalUrl: revision.internalUrl,
+          revision: revision.revision,
+        };
+      });
+    },
     async eligible(hostId: string, revision: number) {
       try {
         const [host] = await lifecycle.candidates(hostId);
