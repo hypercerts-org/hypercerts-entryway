@@ -567,6 +567,67 @@ test("one authorization attempt owns a request across replacement", async (t) =>
   assert.equal(await f.store.readRequest(id), null);
 });
 
+test("a flow-bound delete refuses a request that already issued its code", async (t) => {
+  const f = await fixture(t);
+  const clientId = "https://client.example/metadata";
+  const deviceId = "browser";
+  const peek = (id) => async () => (await f.store.readRequest(id))?.clientId;
+  const admit = async (id) =>
+    f.store.admitAuthorization(clientId, deviceId, peek(id), async (entry) => {
+      const flow = {
+        id: `${id}-flow`,
+        clientId,
+        deviceId,
+        requestRecordId: id,
+        requestOwner: entry.owner,
+      };
+      await f.db.transact(() => f.store.setAuthorizationFlow(flow));
+      return flow;
+    });
+  // A pending request keeps the owner's cleanup path: the provider's
+  // catch-block delete still removes it.
+  const pendingId = "pending-request";
+  await f.store.createRequest(pendingId, {
+    clientId,
+    deviceId: null,
+    did: null,
+    code: null,
+    expiresAt: new Date(Date.now() + 60_000),
+    parameters: {},
+  });
+  const pendingFlow = await admit(pendingId);
+  await f.store.runAuthorizationFlow(pendingFlow, () =>
+    f.store.deleteRequest(pendingId),
+  );
+  assert.equal(await f.store.readRequest(pendingId), null);
+
+  // A completed request carries the winner's code. Owner and flow are
+  // unchanged after consent, so a late flow-bound delete must not remove it.
+  const issuedId = "issued-request";
+  await f.store.createRequest(issuedId, {
+    clientId,
+    deviceId: null,
+    did: null,
+    code: null,
+    expiresAt: new Date(Date.now() + 60_000),
+    parameters: {},
+  });
+  const issuedFlow = await admit(issuedId);
+  await f.store.updateRequest(issuedId, {
+    code: "winner-code",
+    did: f.row.did,
+  });
+  // The flow-bound delete is refused by returning: the caller's original
+  // error survives its catch block, and the winner's code stays untouched.
+  await f.store.runAuthorizationFlow(issuedFlow, () =>
+    f.store.deleteRequest(issuedId),
+  );
+  assert.equal((await f.store.readRequest(issuedId)).code, "winner-code");
+  // Expiry and consumption cleanup without an entry still deletes it.
+  await f.store.deleteRequest(issuedId);
+  assert.equal(await f.store.readRequest(issuedId), null);
+});
+
 test("failed initial authorization releases its owned reservation", async (t) => {
   const f = await fixture(t);
   const id = "failed-request";

@@ -364,6 +364,15 @@ export function createOAuthStores(db, accounts, config) {
       await transaction(async () => {
         const entry = admission.getStore();
         const current = await get("requests", id);
+        // A request that already carries a code or DID belongs to the attempt
+        // that completed consent. Owner and flow are unchanged after consent,
+        // so the provider's catch-block delete would otherwise remove the
+        // winner's issued code. Refuse by returning: callers run deletes from
+        // their own error paths and rethrow the original failure, and nobody
+        // may act on a completed request anyway. Pending requests keep the
+        // guarded cleanup path, and deletes outside an entry (consumption and
+        // expiry cleanup) are untouched.
+        if (entry && (current?.code || current?.did)) return;
         if (
           entry &&
           (entry.requestId !== id ||
