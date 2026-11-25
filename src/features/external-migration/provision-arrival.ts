@@ -60,6 +60,9 @@ export function createDurableArrivalProvisioning({
     create(operation?: Record<string, unknown>): Promise<unknown>;
     assertStagingEnabled(): void;
     validate?(): Promise<void>;
+    authorizeAttempt?: Parameters<
+      OperationOwnership["dispatch"]
+    >[0]["authorizeAttempt"];
     installedSigningKey(): Promise<string>;
     pause(): Promise<void>;
     reserveSigningKey(): Promise<string>;
@@ -190,6 +193,9 @@ export function createDurableArrivalProvisioning({
           target: saved.endpoint,
           method: "com.atproto.server.reserveSigningKey",
           intent: { did: saved.did, pdsId: saved.pdsId },
+          ...(target.authorizeAttempt
+            ? { authorizeAttempt: target.authorizeAttempt }
+            : {}),
           ...(target.validate ? { beforeFirst: () => target.validate!() } : {}),
           ...(placement && registryReservation
             ? {
@@ -278,6 +284,9 @@ export function createDurableArrivalProvisioning({
           target: saved.endpoint,
           method,
           intent,
+          ...(target.authorizeAttempt
+            ? { authorizeAttempt: target.authorizeAttempt }
+            : {}),
           ...(target.validate ? { beforeFirst: () => target.validate!() } : {}),
         },
         {

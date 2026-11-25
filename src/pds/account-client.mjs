@@ -5,10 +5,11 @@ import { importJWK, SignJWT } from "jose";
 
 import { fail } from "../accounts/input.mjs";
 import { xrpc, registryXrpc } from "./client.mjs";
+import { authorizeRegistryAttempt } from "./registry-policy.mjs";
 import { registryPdsTarget } from "./registry-transport.mjs";
 import { rejectedPlcSubmission } from "./xrpc-response.js";
 
-export async function createPdsAccountClient({ config, accounts }) {
+export async function createPdsAccountClient({ db, config, accounts }) {
   const jwtKey = await importJWK(config.jwtJwk, "ES256K");
   const internalAccess = async (row, audience) =>
     new SignJWT({ scope: "com.atproto.access" })
@@ -50,6 +51,16 @@ export async function createPdsAccountClient({ config, accounts }) {
       {
         target: pds.url ?? pds.internalUrl,
         intent: body,
+        ...(accounts.placement
+          ? {
+              authorizeAttempt: authorizeRegistryAttempt(
+                db,
+                accounts.placement,
+                accounts.registryVerifier,
+                pds,
+              ),
+            }
+          : {}),
       },
       {
         ...noExternalResult,

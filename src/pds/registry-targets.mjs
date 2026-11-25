@@ -74,9 +74,7 @@ export async function loadPdsRegistryVerifier(targetsPath, caPath) {
     if (!certificates?.length || text.replace(expression, "").trim())
       throw new Error();
     for (const certificate of certificates) new X509Certificate(certificate);
-    const policyFor = (revision) =>
-      pdsVerifierPolicy(revision, { targets, ca });
-    return { targets, ca, policyFor };
+    return snapshotPdsRegistryVerifier({ targets, ca });
   } catch {
     throw new Error("InvalidPdsRegistryVerifier");
   }
@@ -107,4 +105,29 @@ export function pdsVerifierPolicy(revision, verifier) {
       ]),
     )
     .digest("hex");
+}
+
+const snapshots = new WeakSet();
+
+/** Capture startup verifier inputs; callers cannot mutate the dial addresses or CA bytes. */
+export function snapshotPdsRegistryVerifier(verifier) {
+  if (!verifier) return undefined;
+  if (snapshots.has(verifier)) return verifier;
+  const entries = new Map(
+    [...verifier.targets].map(([origin, addresses]) => [
+      origin,
+      Object.freeze([...addresses]),
+    ]),
+  );
+  const ca = Buffer.from(verifier.ca);
+  const targets = Object.freeze({ get: (origin) => entries.get(origin) });
+  const snapshot = {
+    targets,
+    get ca() {
+      return Buffer.from(ca);
+    },
+    policyFor: (revision) => pdsVerifierPolicy(revision, snapshot),
+  };
+  snapshots.add(snapshot);
+  return Object.freeze(snapshot);
 }

@@ -1,3 +1,4 @@
+import { pdsVerifierPolicy } from "../../dist/src/pds/registry-targets.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import https from "node:https";
@@ -71,6 +72,7 @@ test("standalone keys use a pinned TLS target and retain retirement obligations"
     registry: true,
     targetEndpoint: `${origin}/`,
     registryVerifier: verifier,
+    registryPolicy: (revision) => pdsVerifierPolicy(revision, verifier),
     onRegistry(value) {
       registry = value;
     },
@@ -98,7 +100,7 @@ test("standalone keys use a pinned TLS target and retain retirement obligations"
     },
     authenticatedRoute: () => {},
   });
-  verifier.targets.clear();
+  accounts.registryVerifier = { ...verifier, ca: Buffer.from("divergent CA") };
   await assert.rejects(handler({ ip: "127.0.0.1", body: {} }), {
     code: "AccountUnavailable",
   });
@@ -107,7 +109,7 @@ test("standalone keys use a pinned TLS target and retain retirement obligations"
     (await f.db.read("pds_placement_reservations"))[0].state,
     "released",
   );
-  verifier.targets.set(origin, ["127.0.0.1"]);
+  accounts.registryVerifier = verifier;
   assert.deepEqual(await handler({ ip: "127.0.0.1", body: {} }), {
     signingKey: "did:key:z123456789",
   });

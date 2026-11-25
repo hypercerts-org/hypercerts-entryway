@@ -10,6 +10,11 @@ import { cidForCbor } from "@atproto/common";
 import { HttpError } from "../../http/http-error.mjs";
 import { xrpc } from "../../pds/client.mjs";
 import { readXrpcResponse } from "../../pds/xrpc-response.js";
+import { snapshotPdsRegistryVerifier } from "../../pds/registry-targets.mjs";
+import {
+  authorizeRegistryAttempt,
+  authorizeRegistryTarget,
+} from "../../pds/registry-policy.mjs";
 import { registryPdsFetch } from "../../pds/registry-transport.mjs";
 
 const error = (name, message, status = 400) =>
@@ -46,6 +51,7 @@ export async function createAccountMigration({
   registryVerifier,
   registryTransport = registryPdsFetch,
 }) {
+  registryVerifier = snapshotPdsRegistryVerifier(registryVerifier);
   const signingKey = await importJWK(config.jwtJwk, "ES256K");
   const maxBytes = config.migrationMaxBytes ?? 256 * 1024 * 1024;
   const maxBlobs = config.migrationMaxBlobs ?? 1000;
@@ -84,7 +90,9 @@ export async function createAccountMigration({
     );
     if (!resolved)
       throw error("InvalidPds", "The saved destination PDS is unavailable");
-    return { ...resolved, revision: candidate.revision };
+    const target = { ...resolved, revision: candidate.revision };
+    await authorizeRegistryTarget(placement, registryVerifier, target);
+    return target;
   };
   const chooseSource = async (operation) => {
     if (!placement) return choose(operation.sourcePdsId);
@@ -108,7 +116,9 @@ export async function createAccountMigration({
         "The saved source PDS configuration is unavailable",
         409,
       );
-    return source;
+    const savedSource = { ...source, revision: operation.sourcePdsRevision };
+    await authorizeRegistryTarget(placement, registryVerifier, savedSource);
+    return savedSource;
   };
   const requireOwner = async (principal, did = principal?.did) => {
     if (!principal || principal.did !== did)
@@ -146,14 +156,18 @@ export async function createAccountMigration({
       .setExpirationTime("60s")
       .setJti(randomUUID())
       .sign(signingKey);
-  const fetchPds = (url, options, limit) =>
-    placement
+  const fetchPds = async (pds, url, options, limit) => {
+    if (placement)
+      await authorizeRegistryTarget(placement, registryVerifier, pds);
+    return placement
       ? registryTransport(url, options, registryVerifier, limit)
       : fetch(url, options);
-  const pdsXrpc = async (url, method, body, authorization) => {
-    if (!placement) return xrpc(url, method, body, authorization);
+  };
+  const pdsXrpc = async (pds, method, body, authorization) => {
+    if (!placement) return xrpc(pds.internalUrl, method, body, authorization);
     const response = await fetchPds(
-      new URL(`/xrpc/${method}`, url),
+      pds,
+      new URL(`/xrpc/${method}`, pds.internalUrl),
       {
         method: body === undefined ? "GET" : "POST",
         headers: {
@@ -165,10 +179,10 @@ export async function createAccountMigration({
       },
       65536,
     );
-    return readXrpcResponse(response, url, method);
+    return readXrpcResponse(response, pds.internalUrl, method);
   };
   const userCall = async (did, pds, method, body) =>
-    pdsXrpc(pds.internalUrl, method, body, `Bearer ${await jwt(did, pds)}`);
+    pdsXrpc(pds, method, body, `Bearer ${await jwt(did, pds)}`);
   const setActive = (did, pds, active, step) =>
     ownership.dispatch(
       {
@@ -176,12 +190,22 @@ export async function createAccountMigration({
         target: pds.url,
         method: "com.atproto.admin.updateSubjectStatus",
         intent: { did, active },
+        ...(placement
+          ? {
+              authorizeAttempt: authorizeRegistryAttempt(
+                db,
+                placement,
+                registryVerifier,
+                pds,
+              ),
+            }
+          : {}),
       },
       {
         ...noExternalResult,
         send: () =>
           pdsXrpc(
-            pds.internalUrl,
+            pds,
             "com.atproto.admin.updateSubjectStatus",
             {
               subject: { $type: "com.atproto.admin.defs#repoRef", did },
@@ -214,6 +238,16 @@ export async function createAccountMigration({
         target: target.url,
         method: "com.atproto.server.reserveSigningKey",
         intent: { did },
+        ...(placement
+          ? {
+              authorizeAttempt: authorizeRegistryAttempt(
+                db,
+                placement,
+                registryVerifier,
+                target,
+              ),
+            }
+          : {}),
         ...(placement && reservation?.state !== "dispatched"
           ? {
               authorizeFirst: (claim, descriptor) =>
@@ -224,15 +258,16 @@ export async function createAccountMigration({
       {
         ...signingKeyResult,
         send: () =>
-          pdsXrpc(target.internalUrl, "com.atproto.server.reserveSigningKey", {
+          pdsXrpc(target, "com.atproto.server.reserveSigningKey", {
             did,
           }),
         observe: async () => ({ state: "replay-safe" }),
       },
     );
   };
-  const request = async (url, init = {}, limit = maxBytes) => {
+  const request = async (pds, url, init = {}, limit = maxBytes) => {
     const response = await fetchPds(
+      pds,
       url,
       {
         ...init,
@@ -279,6 +314,7 @@ export async function createAccountMigration({
       "com.atproto.server.checkAccountStatus",
     );
     const repo = await request(
+      source,
       getUrl(source, "com.atproto.sync.getRepo", { did: operation.did }),
       {
         headers: { authorization: basic(source) },
@@ -293,6 +329,7 @@ export async function createAccountMigration({
       totalBytes = repo.bytes.length;
     for (;;) {
       const result = await request(
+        source,
         getUrl(source, "com.atproto.sync.listBlobs", {
           did: operation.did,
           limit: "1000",
@@ -310,6 +347,7 @@ export async function createAccountMigration({
             413,
           );
         const blob = await request(
+          source,
           getUrl(source, "com.atproto.sync.getBlob", {
             did: operation.did,
             cid,
@@ -488,6 +526,7 @@ export async function createAccountMigration({
   const probeTarget = async (operation, target) => {
     try {
       const result = await request(
+        target,
         getUrl(target, "com.atproto.admin.getAccountInfo", {
           did: operation.did,
         }),
@@ -517,6 +556,16 @@ export async function createAccountMigration({
           handle: operation.handle,
           plcOp: operation.plcOp,
         },
+        ...(placement
+          ? {
+              authorizeAttempt: authorizeRegistryAttempt(
+                db,
+                placement,
+                registryVerifier,
+                target,
+              ),
+            }
+          : {}),
       },
       {
         project: (outcome) => outcome,
@@ -530,15 +579,11 @@ export async function createAccountMigration({
           return outcome;
         },
         send: async () => {
-          await pdsXrpc(
-            target.internalUrl,
-            "com.atproto.server.createAccount",
-            {
-              did: operation.did,
-              handle: operation.handle,
-              plcOp: operation.plcOp,
-            },
-          );
+          await pdsXrpc(target, "com.atproto.server.createAccount", {
+            did: operation.did,
+            handle: operation.handle,
+            plcOp: operation.plcOp,
+          });
           return "created";
         },
         observe: async () => {
@@ -585,6 +630,7 @@ export async function createAccountMigration({
         409,
       );
     const targetRepo = await request(
+      target,
       getUrl(target, "com.atproto.sync.getRepo", { did: operation.did }),
       { headers: { authorization: basic(target) } },
     );
@@ -603,6 +649,7 @@ export async function createAccountMigration({
       if (!expected)
         throw error("MissingSnapshot", "A saved blob is missing", 409);
       const observed = await request(
+        target,
         getUrl(target, "com.atproto.sync.getBlob", { did: operation.did, cid }),
         { headers: { authorization: basic(target) } },
       );
@@ -678,6 +725,16 @@ export async function createAccountMigration({
             target: target.url,
             method: "com.atproto.admin.getAccountInfo",
             intent: { did: operation.did },
+            ...(placement
+              ? {
+                  authorizeAttempt: authorizeRegistryAttempt(
+                    db,
+                    placement,
+                    registryVerifier,
+                    target,
+                  ),
+                }
+              : {}),
             authorizeFirst: (claim, descriptor) =>
               db.transact(async () => {
                 const outcome = await placement.beginTargetRead(
@@ -852,11 +909,22 @@ export async function createAccountMigration({
               did: operation.did,
               sourceCommit: operation.snapshot.status.repoCommit,
             },
+            ...(placement
+              ? {
+                  authorizeAttempt: authorizeRegistryAttempt(
+                    db,
+                    placement,
+                    registryVerifier,
+                    target,
+                  ),
+                }
+              : {}),
           },
           {
             ...noExternalResult,
             send: async () => {
               await request(
+                target,
                 new URL(
                   "/xrpc/com.atproto.repo.importRepo",
                   target.internalUrl,
@@ -919,11 +987,22 @@ export async function createAccountMigration({
               target: target.url,
               method: "com.atproto.repo.uploadBlob",
               intent: { did: operation.did, cid },
+              ...(placement
+                ? {
+                    authorizeAttempt: authorizeRegistryAttempt(
+                      db,
+                      placement,
+                      registryVerifier,
+                      target,
+                    ),
+                  }
+                : {}),
             },
             {
               ...noExternalResult,
               send: async () => {
                 const result = await request(
+                  target,
                   new URL(
                     "/xrpc/com.atproto.repo.uploadBlob",
                     target.internalUrl,
@@ -957,6 +1036,7 @@ export async function createAccountMigration({
                   return { state: "diverged" };
                 try {
                   const observed = await request(
+                    target,
                     getUrl(target, "com.atproto.sync.getBlob", {
                       did: operation.did,
                       cid,
@@ -1010,6 +1090,16 @@ export async function createAccountMigration({
             target: target.url,
             method: "com.atproto.repo.applyWrites",
             intent: { did: operation.did, writes: [] },
+            ...(placement
+              ? {
+                  authorizeAttempt: authorizeRegistryAttempt(
+                    db,
+                    placement,
+                    registryVerifier,
+                    target,
+                  ),
+                }
+              : {}),
           },
           {
             ...noExternalResult,

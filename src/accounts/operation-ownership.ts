@@ -19,6 +19,20 @@ export interface OwnedOperation {
   /** Whole-operation callers opt in; a staged workflow may return still pending. */
   readonly completeOnReturn?: boolean;
 }
+type AttemptAuthorization =
+  | { kind: "dispatched"; attempt: ExternalAttempt }
+  | { kind: "existing"; attempt: ExternalAttempt }
+  | { kind: "refused" }
+  | { kind: "prior-dispatch" };
+type AttemptGuard = (
+  claim: OperationClaim,
+  descriptor: ExternalAttemptInput,
+  begin: () => Promise<AttemptAuthorization>,
+) => Promise<AttemptAuthorization>;
+type FirstAttemptGuard = (
+  claim: OperationClaim,
+  descriptor: ExternalAttemptInput,
+) => Promise<AttemptAuthorization>;
 interface Execution {
   readonly claim: OperationClaim;
   readonly resources: Set<string>;
@@ -268,15 +282,8 @@ export function createOperationOwnership({
     input: Omit<ExternalAttemptInput, "intentDigest"> & {
       intent: unknown;
       beforeFirst?: () => Promise<void>;
-      authorizeFirst?: (
-        claim: OperationClaim,
-        descriptor: ExternalAttemptInput,
-      ) => Promise<
-        | { kind: "dispatched"; attempt: ExternalAttempt }
-        | { kind: "existing"; attempt: ExternalAttempt }
-        | { kind: "refused" }
-        | { kind: "prior-dispatch" }
-      >;
+      authorizeAttempt?: AttemptGuard;
+      authorizeFirst?: FirstAttemptGuard;
     },
     callbacks: DispatchCallbacks<T>,
     classifyRejection?: (error: unknown) => PlcSubmissionRejection | null,
@@ -321,9 +328,9 @@ export function createOperationOwnership({
       recoveryDisposition = observed.state;
     }
     if (!previous) await input.beforeFirst?.();
-    const authorization =
+    const begin = async () =>
       input.authorizeFirst && !previous
-        ? await input.authorizeFirst(claim, descriptor)
+        ? input.authorizeFirst(claim, descriptor)
         : {
             kind: "dispatched" as const,
             attempt: await store.beginExternal(
@@ -332,6 +339,9 @@ export function createOperationOwnership({
               recoveryDisposition,
             ),
           };
+    const authorization = input.authorizeAttempt
+      ? await input.authorizeAttempt(claim, descriptor, begin)
+      : await begin();
     if (authorization.kind === "refused")
       throw new DomainError(
         "PdsLifecycleIneligible",
@@ -452,19 +462,18 @@ export function createOperationOwnership({
     dispatch: <T>(
       input: Omit<ExternalAttemptInput, "intentDigest"> & {
         intent: unknown;
-        authorizeFirst?: (
-          claim: OperationClaim,
-          descriptor: ExternalAttemptInput,
-        ) => Promise<
-          | { kind: "dispatched" | "existing"; attempt: ExternalAttempt }
-          | { kind: "refused" | "prior-dispatch" }
-        >;
+        authorizeAttempt?: AttemptGuard;
+        authorizeFirst?: FirstAttemptGuard;
       },
       callbacks: DispatchCallbacks<T>,
     ) => dispatch(input, callbacks),
     /** Only the complete one-shot PLC operation may settle an audited rejection. */
     dispatchPlcSubmission: <T>(
-      input: { target: string; intent: unknown },
+      input: {
+        target: string;
+        intent: unknown;
+        authorizeAttempt?: AttemptGuard;
+      },
       callbacks: DispatchCallbacks<T> & {
         rejection: (error: unknown) => PlcSubmissionRejection | null;
       },

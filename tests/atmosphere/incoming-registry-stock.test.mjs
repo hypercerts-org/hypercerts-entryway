@@ -1,3 +1,4 @@
+import { pdsVerifierPolicy } from "../../dist/src/pds/registry-targets.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import https from "node:https";
@@ -47,9 +48,11 @@ test("stock incoming claim and first destination effects use saved registry revi
     { stdio: "ignore" },
   );
   let origin;
+  let targetRequests = 0;
   const server = https.createServer(
     { key: readFileSync(key), cert: readFileSync(cert) },
     async (req, res) => {
+      targetRequests++;
       try {
         const chunks = [];
         for await (const chunk of req) chunks.push(chunk);
@@ -85,6 +88,7 @@ test("stock incoming claim and first destination effects use saved registry revi
     registry: true,
     targetEndpoint: `${origin}/`,
     registryVerifier: verifier,
+    registryPolicy: (revision) => pdsVerifierPolicy(revision, verifier),
     onRegistry(value) {
       firstLifecycle = value.lifecycle;
     },
@@ -149,6 +153,7 @@ test("stock incoming claim and first destination effects use saved registry revi
     registry: true,
     targetEndpoint: `${origin}/`,
     registryVerifier: verifier,
+    registryPolicy: (revision) => pdsVerifierPolicy(revision, verifier),
     onRegistry(value) {
       lifecycle = value.lifecycle;
     },
@@ -190,6 +195,7 @@ test("stock incoming claim and first destination effects use saved registry revi
     registry: true,
     targetEndpoint: `${origin}/`,
     registryVerifier: verifier,
+    registryPolicy: (revision) => pdsVerifierPolicy(revision, verifier),
     onRegistry(value) {
       thirdRegistry = value;
     },
@@ -244,4 +250,57 @@ test("stock incoming claim and first destination effects use saved registry revi
   assert.equal(observed.status, 200, observed.text);
   assert.equal(f3.publicationAttempts.length, 0);
   assert.equal((await f3.db.read("external_operation_attempts")).length, 0);
+  const nodeVerifier = {
+    targets: new Map(verifier.targets),
+    ca: Buffer.from(verifier.ca),
+  };
+  let fourthRegistry;
+  const f4 = await fixture(t, "modern", "", "", undefined, {
+    registry: true,
+    targetEndpoint: `${origin}/`,
+    registryVerifier: nodeVerifier,
+    registryPolicy: (revision) => pdsVerifierPolicy(revision, nodeVerifier),
+    onRegistry(value) {
+      fourthRegistry = value;
+    },
+  });
+  const h4 = await incomingHttp(t, f4);
+  const fourth = await f4.prepare();
+  const fourthHandoff = await plc.signOperation(fourth.handoff, f4.source);
+  assert.equal(
+    (
+      await h4.tool("/xrpc/com.atproto.identity.submitPlcOperation", {
+        code: fourth.arrivalCode,
+        jwt: await f4.credential(incomingHandoffMethod),
+        json: { operation: fourthHandoff },
+      })
+    ).status,
+    200,
+  );
+  const invites4 = await createInvites({
+    db: f4.db,
+    config: f4.config,
+    accounts: { get: async () => null },
+  });
+  const fourthCode = (await invites4.createInviteCode({ useCount: 1 })).code;
+  nodeVerifier.ca = Buffer.from("next policy CA");
+  const fourthRevision = await fourthRegistry.registry.readHostRevision(
+    "pds1",
+    1,
+  );
+  await fourthRegistry.checks.transitionPolicy(
+    "pds1",
+    1,
+    1,
+    pdsVerifierPolicy(fourthRevision, nodeVerifier),
+  );
+  const before = targetRequests;
+  const stale = await h4.tool("/xrpc/com.atproto.server.createAccount", {
+    code: fourth.arrivalCode,
+    jwt: await f4.credential(incomingCreationMethod),
+    json: { handle, inviteCode: fourthCode },
+  });
+  assert.notEqual(stale.status, 200);
+  assert.equal(targetRequests, before);
+  assert.equal(f4.reservations(), 0);
 });

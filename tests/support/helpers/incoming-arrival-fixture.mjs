@@ -229,7 +229,14 @@ export async function fixture(
       );
     await lifecycle.transition("pds1", "enable", 1, 0, "enable");
     placement = createPdsPlacement(db, () => trust, policyFor, keys);
-    options.onRegistry?.({ lifecycle, registry, placement, keys, trust });
+    options.onRegistry?.({
+      lifecycle,
+      registry,
+      placement,
+      checks,
+      keys,
+      trust,
+    });
   }
   const storage = createAccountStorage(db, hosts);
   // The application's own arrival persistence, never a fixture copy.

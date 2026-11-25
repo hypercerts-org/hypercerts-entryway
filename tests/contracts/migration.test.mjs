@@ -24,6 +24,7 @@ import {
 } from "../support/database-fixture.mjs";
 import { openDatabase } from "../../dist/src/database/connection.js";
 import { createCustodyInventoryStorage } from "../../dist/src/database/drizzle/migration-custody.js";
+import { pdsVerifierPolicy } from "../../dist/src/pds/registry-targets.mjs";
 import { createAccountMigration } from "../../dist/src/features/pds-migration/move-between-pds.mjs";
 
 async function fixture(
@@ -73,7 +74,16 @@ async function fixture(
       },
     ],
   };
-  let registryLifecycle, registryClient;
+  let registryLifecycle, registryClient, registryChecks;
+  const registryVerifier = {
+    targets: new Map([
+      ["https://pds1.example", ["127.0.0.1"]],
+      ["https://pds2.example", ["127.0.0.1"]],
+    ]),
+    ca: Buffer.from("fixture"),
+  };
+  const registryPolicy = (revision) =>
+    pdsVerifierPolicy(revision, registryVerifier);
   if (registryMode) {
     for (const host of config.pds) {
       host.url = `https://${host.id}.example/`;
@@ -105,11 +115,7 @@ async function fixture(
       plcRotationKeyDid: "did:key:fixture",
     };
     const registry = createPdsRegistry(db, keyring, () => trust);
-    const checks = createPdsOutboundCheckStore(
-      db,
-      () => trust,
-      () => "policy",
-    );
+    const checks = createPdsOutboundCheckStore(db, () => trust, registryPolicy);
     const enrollment = createPdsEnrollment(db, registry, checks);
     const health = createPdsHealthStore(db);
     const lifecycle = createPdsLifecycle(
@@ -117,7 +123,7 @@ async function fixture(
       registry,
       health,
       () => trust,
-      () => "policy",
+      registryPolicy,
     );
     for (const [order, host] of config.pds.entries()) {
       await registry.stageHostWithCredentials(
@@ -163,18 +169,25 @@ async function fixture(
       });
       for (let count = 0; count < 2; count++)
         await health.complete(
-          await health.claim(host.id, 1, 30000, 0, "policy"),
+          await health.claim(
+            host.id,
+            1,
+            30000,
+            0,
+            registryPolicy(await registry.readHostRevision(host.id, 1)),
+          ),
           { publicOk: true, internalOk: true },
         );
       await lifecycle.transition(host.id, "enable", 1, 0, `enable-${host.id}`);
     }
     registryLifecycle = lifecycle;
     registryClient = registry;
+    registryChecks = checks;
     placementFactory = (connection) => {
       const placement = createPdsPlacement(
         connection,
         () => trust,
-        () => "policy",
+        registryPolicy,
         keyring,
       );
       if (drainAfterHint) {
@@ -493,6 +506,16 @@ async function fixture(
     targetKey,
     registryLifecycle,
     registryClient,
+    async supersedePolicy(hostId) {
+      registryVerifier.ca = Buffer.from("different policy CA");
+      const revision = await registryClient.readHostRevision(hostId, 1);
+      await registryChecks.transitionPolicy(
+        hostId,
+        1,
+        1,
+        registryPolicy(revision),
+      );
+    },
     actor: { did: row.did, kind: "legacy", authenticatedAt: new Date() },
     getCurrent: () => currentOp,
     setCurrent: (op) => {
@@ -527,6 +550,7 @@ async function fixture(
         ? {
             placement: placementFactory(db, config),
             registryTransport: (url, options) => fetch(url, options),
+            registryVerifier,
           }
         : {}),
       legacy: {},
@@ -1012,6 +1036,9 @@ test("managed migration retains its journal and sends no target request when adm
     async resolveMigration(id) {
       return config.pds.find((item) => item.id === id);
     },
+    async resolveAuthenticated(id) {
+      return config.pds.find((item) => item.id === id);
+    },
     async read() {
       return saved;
     },
@@ -1063,6 +1090,9 @@ test("managed migration pins target and credentials across a recovered target-cr
     },
     async resolveMigration(id, revision) {
       assert.equal(revision, 1);
+      return config.pds.find((item) => item.id === id);
+    },
+    async resolveAuthenticated(id) {
       return config.pds.find((item) => item.id === id);
     },
     async read() {
@@ -1322,4 +1352,18 @@ test("drain between preflight and read admission prevents the target read", asyn
       .placementRefused,
     true,
   );
+});
+
+test("managed migration refuses changed verifier policy before contacting a PDS", async (t) => {
+  const f = await fixture(t, { registryMode: true });
+  await f.supersedePolicy("pds2");
+  await assert.rejects(
+    f.migration.importAccount(f.actor, {
+      did: f.row.did,
+      pdsId: "pds2",
+      token: "migration-proof",
+    }),
+    { code: "PdsVerifierPolicyConflict" },
+  );
+  assert.deepEqual(f.state.calls, []);
 });

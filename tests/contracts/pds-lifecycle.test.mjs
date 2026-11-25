@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomBytes } from "node:crypto";
+import https from "node:https";
+import { EventEmitter } from "node:events";
+import { Readable } from "node:stream";
+import { pdsVerifierPolicy } from "../../dist/src/pds/registry-targets.mjs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,7 +22,11 @@ import {
   removeFailureTrigger,
   hasFailure,
 } from "../support/database-fixture.mjs";
-async function fixture(t, mode = "registry-bootstrap") {
+async function fixture(
+  t,
+  mode = "registry-bootstrap",
+  policyFor = () => "policy",
+) {
   const directory = mkdtempSync(join(tmpdir(), "entryway-lifecycle-"));
   const configuration = await testDatabaseConfiguration(
     join(directory, "authority.sqlite"),
@@ -48,20 +56,21 @@ async function fixture(t, mode = "registry-bootstrap") {
     const checks = createPdsOutboundCheckStore(
       connection,
       () => trust,
-      () => "policy",
+      policyFor,
     );
     const health = createPdsHealthStore(connection);
     return {
       registry,
       checks,
       health,
+      policyFor,
       enrollment: createPdsEnrollment(connection, registry, checks),
       lifecycle: createPdsLifecycle(
         connection,
         registry,
         health,
         () => trust,
-        () => "policy",
+        policyFor,
       ),
     };
   };
@@ -118,7 +127,13 @@ async function onboard(
 }
 async function sample(node, id, publicOk, internalOk = publicOk) {
   return node.health.complete(
-    await node.health.claim(id, 1, 30_000, 0, "policy"),
+    await node.health.claim(
+      id,
+      1,
+      30_000,
+      0,
+      node.policyFor(await node.registry.readHostRevision(id, 1)),
+    ),
     { publicOk, internalOk },
   );
 }
@@ -631,7 +646,16 @@ test("registration uses the real placement transaction before any target request
   const { createPdsPlacement } =
     await import("../../dist/src/database/drizzle/pds-placement.js");
   const { Secp256k1Keypair } = await import("@atproto/crypto");
-  const { db, first, trust } = await fixture(t);
+  const verifier = {
+    targets: new Map([["https://host.example", ["127.0.0.1"]]]),
+    ca: Buffer.from("fixture"),
+  };
+  const policyFor = (revision) => pdsVerifierPolicy(revision, verifier);
+  const { db, first, trust } = await fixture(
+    t,
+    "registry-bootstrap",
+    policyFor,
+  );
   await onboard(first, "host");
   await sample(first, "host", true);
   await sample(first, "host", true);
@@ -653,11 +677,7 @@ test("registration uses the real placement transaction before any target request
       },
     ],
   };
-  const placement = createPdsPlacement(
-    db,
-    () => trust,
-    () => "policy",
-  );
+  const placement = createPdsPlacement(db, () => trust, policyFor);
   const originalFetch = globalThis.fetch;
   let targetCalls = 0;
   globalThis.fetch = async () => {
@@ -667,7 +687,12 @@ test("registration uses the real placement transaction before any target request
   t.after(() => {
     globalThis.fetch = originalFetch;
   });
-  const accounts = await createAccounts({ db, config, placement });
+  const accounts = await createAccounts({
+    db,
+    config,
+    placement,
+    registryVerifier: verifier,
+  });
   const { createInvites } =
     await import("../../dist/src/features/account-registration/invites.mjs");
   const invites = await createInvites({
@@ -719,7 +744,16 @@ test("registration uses real registry reservation and pinned host for both targe
   const { createPdsPlacement } =
     await import("../../dist/src/database/drizzle/pds-placement.js");
   const { Secp256k1Keypair } = await import("@atproto/crypto");
-  const { db, first, trust } = await fixture(t);
+  const verifier = {
+    targets: new Map([["https://host.example", ["127.0.0.1"]]]),
+    ca: Buffer.from("fixture"),
+  };
+  const policyFor = (revision) => pdsVerifierPolicy(revision, verifier);
+  const { db, first, trust } = await fixture(
+    t,
+    "registry-bootstrap",
+    policyFor,
+  );
   await onboard(first, "host");
   await sample(first, "host", true);
   await sample(first, "host", true);
@@ -734,25 +768,31 @@ test("registration uses real registry reservation and pinned host for both targe
     handleDomains: [".example"],
     pds: [],
   };
-  const placement = createPdsPlacement(
-    db,
-    () => trust,
-    () => "policy",
-  );
+  const placement = createPdsPlacement(db, () => trust, policyFor);
   const calls = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url) => {
-    const parsed = new URL(url);
-    calls.push(parsed);
-    if (parsed.pathname.endsWith("reserveSigningKey"))
-      return Response.json({ signingKey: signingKey.did() });
-    if (parsed.pathname.endsWith("createAccount")) return Response.json({});
-    throw Error("Unexpected request");
-  };
-  t.after(() => {
-    globalThis.fetch = originalFetch;
+  t.mock.method(https, "request", (url, _options, respond) => {
+    const request = new EventEmitter();
+    request.write = () => true;
+    request.end = () =>
+      queueMicrotask(() => {
+        const parsed = new URL(url);
+        calls.push(parsed);
+        const result = parsed.pathname.endsWith("reserveSigningKey")
+          ? { signingKey: signingKey.did() }
+          : {};
+        const response = Readable.from([JSON.stringify(result)]);
+        response.statusCode = 200;
+        response.headers = { "content-type": "application/json" };
+        respond(response);
+      });
+    return request;
   });
-  const accounts = await createAccounts({ db, config, placement });
+  const accounts = await createAccounts({
+    db,
+    config,
+    placement,
+    registryVerifier: verifier,
+  });
   accounts.plcClient.getAuditableLog = async () => {
     throw Object.assign(new Error("offline"), { status: 503 });
   };
@@ -1148,7 +1188,16 @@ test("standalone signing key refuses a drained registry target before dispatch",
     await import("../../dist/src/plc/operations.js");
   const { mountPlcXrpc } = await import("../../dist/src/plc/xrpc-routes.mjs");
   const { Secp256k1Keypair } = await import("@atproto/crypto");
-  const { db, first, trust } = await fixture(t);
+  const verifier = {
+    targets: new Map([["https://host.example", ["127.0.0.1"]]]),
+    ca: Buffer.from("fixture"),
+  };
+  const policyFor = (revision) => pdsVerifierPolicy(revision, verifier);
+  const { db, first, trust } = await fixture(
+    t,
+    "registry-bootstrap",
+    policyFor,
+  );
   await onboard(first, "host");
   await sample(first, "host", true);
   await sample(first, "host", true);
@@ -1162,19 +1211,12 @@ test("standalone signing key refuses a drained registry target before dispatch",
     handleDomains: [".example"],
     pds: [],
   };
-  const placement = createPdsPlacement(
-    db,
-    () => trust,
-    () => "policy",
-  );
+  const placement = createPdsPlacement(db, () => trust, policyFor);
   const accounts = await createAccounts({
     db,
     config,
     placement,
-    registryVerifier: {
-      targets: new Map([["https://host.example", ["127.0.0.1"]]]),
-      ca: "fixture",
-    },
+    registryVerifier: verifier,
   });
   const originalReserve = placement.reserve;
   placement.reserve = async (...args) => {
@@ -1237,5 +1279,269 @@ test("standalone signing key refuses a drained registry target before dispatch",
       )
     ).lifecycle,
     "retired",
+  );
+});
+
+test("registration blocks a superseded verifier before the first target request", async (t) => {
+  const { createAccounts } =
+    await import("../../dist/src/compose-accounts.mjs");
+  const { createPdsPlacement } =
+    await import("../../dist/src/database/drizzle/pds-placement.js");
+  const { Secp256k1Keypair } = await import("@atproto/crypto");
+  const verifier = {
+    targets: new Map([["https://host.example", ["127.0.0.1"]]]),
+    ca: Buffer.from("first CA"),
+  };
+  const policyFor = (revision) => pdsVerifierPolicy(revision, verifier);
+  const { db, first, trust } = await fixture(
+    t,
+    "registry-bootstrap",
+    policyFor,
+  );
+  await onboard(first, "host");
+  await sample(first, "host", true);
+  await sample(first, "host", true);
+  await first.lifecycle.transition("host", "enable", 1, 0, "enable");
+  const signer = await Secp256k1Keypair.create({ exportable: true });
+  const offline = await Secp256k1Keypair.create();
+  const config = {
+    plcRecoveryKeyDid: offline.did(),
+    plcRotationKeyHex: Buffer.from(await signer.export()).toString("hex"),
+    plcUrl: "https://plc.example",
+    handleDomains: [".example"],
+    pds: [],
+  };
+  const placement = createPdsPlacement(db, () => trust, policyFor);
+  const accounts = await createAccounts({
+    db,
+    config,
+    placement,
+    registryVerifier: verifier,
+  });
+  const reserve = placement.reserve;
+  placement.reserve = async (...args) => {
+    const saved = await reserve(...args);
+    verifier.ca = Buffer.from("next CA");
+    const revision = await first.registry.readHostRevision("host", 1);
+    await first.checks.transitionPolicy("host", 1, 1, policyFor(revision));
+    return saved;
+  };
+  let requests = 0;
+  t.mock.method(https, "request", () => {
+    requests++;
+    throw new Error("Unexpected network request");
+  });
+  await assert.rejects(
+    accounts.create({
+      email: "alice@example.test",
+      handle: "alice.example",
+      pdsId: "host",
+      pdsSelection: "implicit",
+    }),
+    { code: "PdsVerifierPolicyConflict" },
+  );
+  assert.equal(requests, 0);
+  assert.equal((await db.read("external_operation_attempts")).length, 0);
+});
+
+test("registration retains its allocated key without a creation marker when verifier policy changes", async (t) => {
+  const { createAccounts } =
+    await import("../../dist/src/compose-accounts.mjs");
+  const { createPdsPlacement } =
+    await import("../../dist/src/database/drizzle/pds-placement.js");
+  const { Secp256k1Keypair } = await import("@atproto/crypto");
+  const verifier = {
+    targets: new Map([["https://host.example", ["127.0.0.1"]]]),
+    ca: Buffer.from("first CA"),
+  };
+  const policyFor = (revision) => pdsVerifierPolicy(revision, verifier);
+  const { db, first, trust } = await fixture(
+    t,
+    "registry-bootstrap",
+    policyFor,
+  );
+  await onboard(first, "host");
+  await sample(first, "host", true);
+  await sample(first, "host", true);
+  await first.lifecycle.transition("host", "enable", 1, 0, "enable");
+  const signer = await Secp256k1Keypair.create({ exportable: true });
+  const offline = await Secp256k1Keypair.create();
+  const signingKey = await Secp256k1Keypair.create();
+  const config = {
+    plcRecoveryKeyDid: offline.did(),
+    plcRotationKeyHex: Buffer.from(await signer.export()).toString("hex"),
+    plcUrl: "https://plc.example",
+    handleDomains: [".example"],
+    pds: [],
+  };
+  const placement = createPdsPlacement(db, () => trust, policyFor);
+  const accounts = await createAccounts({
+    db,
+    config,
+    placement,
+    registryVerifier: verifier,
+  });
+  let calls = 0;
+  t.mock.method(https, "request", (_url, _options, respond) => {
+    calls++;
+    const request = new EventEmitter();
+    request.write = () => true;
+    request.end = () => {
+      void (async () => {
+        verifier.ca = Buffer.from("next CA");
+        const revision = await first.registry.readHostRevision("host", 1);
+        await first.checks.transitionPolicy("host", 1, 1, policyFor(revision));
+        const response = Readable.from([
+          JSON.stringify({ signingKey: signingKey.did() }),
+        ]);
+        response.statusCode = 200;
+        response.headers = { "content-type": "application/json" };
+        respond(response);
+      })().catch((error) => request.emit("error", error));
+    };
+    return request;
+  });
+  await assert.rejects(
+    accounts.create({
+      email: "alice@example.test",
+      handle: "alice.example",
+      pdsId: "host",
+      pdsSelection: "implicit",
+    }),
+    { code: "PdsVerifierPolicyConflict" },
+  );
+  assert.equal(calls, 1);
+  const attempts = await db.read("external_operation_attempts");
+  assert.deepEqual(
+    attempts.map((attempt) => [attempt.step, attempt.state]),
+    [["reserve-signing-key", "acknowledged"]],
+  );
+  assert.equal(
+    (await db.read("pds_placement_reservations"))[0].state,
+    "dispatched",
+  );
+});
+
+async function standalonePolicyFixture(t) {
+  const { createAccounts } =
+    await import("../../dist/src/compose-accounts.mjs");
+  const { createPdsPlacement } =
+    await import("../../dist/src/database/drizzle/pds-placement.js");
+  const { createPlcOperations } =
+    await import("../../dist/src/plc/operations.js");
+  const { Secp256k1Keypair } = await import("@atproto/crypto");
+  const verifier = {
+    targets: new Map([["https://host.example", ["127.0.0.1"]]]),
+    ca: Buffer.from("first CA"),
+  };
+  const policyFor = (revision) => pdsVerifierPolicy(revision, verifier);
+  const { db, first, trust } = await fixture(
+    t,
+    "registry-bootstrap",
+    policyFor,
+  );
+  await onboard(first, "host");
+  await sample(first, "host", true);
+  await sample(first, "host", true);
+  await first.lifecycle.transition("host", "enable", 1, 0, "enable");
+  const signer = await Secp256k1Keypair.create({ exportable: true });
+  const offline = await Secp256k1Keypair.create();
+  const config = {
+    plcRecoveryKeyDid: offline.did(),
+    plcRotationKeyHex: Buffer.from(await signer.export()).toString("hex"),
+    plcUrl: "https://plc.example",
+    handleDomains: [".example"],
+    pds: [],
+  };
+  const placement = createPdsPlacement(db, () => trust, policyFor);
+  const accounts = await createAccounts({
+    db,
+    config,
+    placement,
+    registryVerifier: verifier,
+  });
+  const operations = createPlcOperations({
+    db,
+    accounts,
+    custody: accounts.custody,
+    choosePds: () => {
+      throw Error("unexpected static host");
+    },
+  });
+  const transition = async () => {
+    verifier.ca = Buffer.from("next CA");
+    const revision = await first.registry.readHostRevision("host", 1);
+    await first.checks.transitionPolicy("host", 1, 1, policyFor(revision));
+  };
+  return { db, first, accounts, operations, transition };
+}
+
+test("unbound key policy refusal at the marker releases unused authority for retirement", async (t) => {
+  const { db, first, accounts, operations, transition } =
+    await standalonePolicyFixture(t);
+  const dispatch = accounts.ownership.dispatch;
+  accounts.ownership.dispatch = async (...args) => {
+    await transition();
+    return dispatch(...args);
+  };
+  let calls = 0;
+  t.mock.method(https, "request", () => {
+    calls++;
+    throw Error("unexpected network");
+  });
+  await assert.rejects(operations.reserveSigningKey({}), {
+    code: "AccountUnavailable",
+  });
+  assert.equal(calls, 0);
+  assert.equal((await db.read("external_operation_attempts")).length, 0);
+  assert.equal(
+    (await db.read("pds_placement_reservations"))[0].state,
+    "released",
+  );
+  assert.equal(
+    (await db.read("authority_operations"))[0].phase,
+    "unbound-key-unused",
+  );
+  await first.lifecycle.transition("host", "drain", 1, 1, "drain");
+  assert.equal(
+    (await first.lifecycle.transition("host", "retire", 1, 2, "retire"))
+      .lifecycle,
+    "retired",
+  );
+});
+
+test("unbound key policy refusal after marker retains uncertainty and blocks retirement", async (t) => {
+  const { db, first, accounts, operations, transition } =
+    await standalonePolicyFixture(t);
+  const dispatch = accounts.ownership.dispatch;
+  accounts.ownership.dispatch = (input, callbacks) =>
+    dispatch(input, {
+      ...callbacks,
+      send: async () => {
+        await transition();
+        return callbacks.send();
+      },
+    });
+  let calls = 0;
+  t.mock.method(https, "request", () => {
+    calls++;
+    throw Error("unexpected network");
+  });
+  await assert.rejects(operations.reserveSigningKey({}), {
+    code: "AccountUnavailable",
+  });
+  assert.equal(calls, 0);
+  const attempts = await db.read("external_operation_attempts");
+  assert.equal(attempts.length, 1);
+  assert.equal(attempts[0].state, "dispatched");
+  assert.equal(
+    (await db.read("pds_placement_reservations"))[0].state,
+    "dispatched",
+  );
+  assert.equal((await db.read("authority_operations"))[0].pending, true);
+  await first.lifecycle.transition("host", "drain", 1, 1, "drain");
+  await assert.rejects(
+    first.lifecycle.transition("host", "retire", 1, 2, "retire"),
+    /PdsEnrollmentReferencesExist/,
   );
 });

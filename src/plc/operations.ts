@@ -4,6 +4,10 @@ import {
   registryPdsFetch,
   registryPdsTarget,
 } from "../pds/registry-transport.mjs";
+import {
+  authorizeRegistryAttempt,
+  authorizeRegistryTarget,
+} from "../pds/registry-policy.mjs";
 import { readXrpcResponse } from "../pds/xrpc-response.js";
 import type {
   OperationClaim,
@@ -58,6 +62,16 @@ interface Context {
         hostId: string,
         revision: number,
       ): Promise<{ url: string; internalUrl: string } | undefined>;
+      resolveAuthenticated(
+        hostId: string,
+        revision: number,
+        actualPolicy: (
+          revision: import("../database/pds-registry.port.js").PdsHostRevision,
+        ) => string | undefined,
+      ): Promise<
+        | { id: string; revision: number; url: string; internalUrl: string }
+        | undefined
+      >;
       finishUnusedUnboundKey(owner: OperationClaim): Promise<void>;
       releaseUnused(
         owner: OperationClaim,
@@ -177,6 +191,25 @@ export function createPlcOperations({
             "The reserved data server configuration is unavailable",
           );
         }
+        const boundTarget = {
+          id: reservation.host_id,
+          revision: reservation.revision,
+          ...target,
+        };
+        try {
+          await authorizeRegistryTarget(
+            accounts.placement!,
+            accounts.registryVerifier,
+            boundTarget,
+          );
+        } catch {
+          if (!did) await accounts.placement!.finishUnusedUnboundKey(claim);
+          throw new DomainError(
+            "AccountUnavailable",
+            409,
+            "The selected data server is unavailable",
+          );
+        }
         const targetUrl = new URL(
           "/xrpc/com.atproto.server.reserveSigningKey",
           target.internalUrl,
@@ -200,6 +233,12 @@ export function createPlcOperations({
               target: target.url,
               method: "com.atproto.server.reserveSigningKey",
               intent: did ? { did } : {},
+              authorizeAttempt: authorizeRegistryAttempt(
+                db,
+                accounts.placement,
+                accounts.registryVerifier,
+                boundTarget,
+              ),
               authorizeFirst: (owner, descriptor) =>
                 accounts.placement!.beginFirstDispatch(
                   owner,
@@ -210,6 +249,11 @@ export function createPlcOperations({
             {
               ...signingKeyResult,
               send: async () => {
+                await authorizeRegistryTarget(
+                  accounts.placement!,
+                  accounts.registryVerifier,
+                  boundTarget,
+                );
                 const response = await registryPdsFetch(
                   targetUrl,
                   {
@@ -234,6 +278,27 @@ export function createPlcOperations({
             },
           );
         } catch (error) {
+          if (
+            !did &&
+            error instanceof Error &&
+            "code" in error &&
+            error.code === "PdsVerifierPolicyConflict"
+          ) {
+            try {
+              await accounts.placement!.finishUnusedUnboundKey(claim);
+            } catch (finalizationError) {
+              if (
+                !(finalizationError instanceof Error) ||
+                finalizationError.message !== "PdsPlacementConflict"
+              )
+                throw finalizationError;
+            }
+            throw new DomainError(
+              "AccountUnavailable",
+              409,
+              "The selected data server is unavailable",
+            );
+          }
           if (
             error instanceof DomainError &&
             error.code === "PdsLifecycleIneligible"
@@ -284,6 +349,20 @@ export function createPlcOperations({
         target: pds.url ?? pds.internalUrl,
         method: "com.atproto.server.reserveSigningKey",
         intent: { did },
+        ...(existing && accounts.placement
+          ? {
+              authorizeAttempt: authorizeRegistryAttempt(
+                db,
+                accounts.placement,
+                accounts.registryVerifier,
+                {
+                  ...pds,
+                  id: (existing as Account & { pdsId: string }).pdsId,
+                  revision: existing.pdsRevision,
+                },
+              ),
+            }
+          : {}),
       },
       {
         ...signingKeyResult,

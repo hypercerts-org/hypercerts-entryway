@@ -11,7 +11,12 @@ import {
   registrationInputSchema,
   type RegistrationInput,
 } from "../../accounts/input-schema.js";
-import { xrpc } from "../../pds/client.mjs";
+import { xrpc, registryXrpc } from "../../pds/client.mjs";
+import {
+  authorizeRegistryAttempt,
+  authorizeRegistryTarget,
+} from "../../pds/registry-policy.mjs";
+import { registryPdsFetch } from "../../pds/registry-transport.mjs";
 import { createPendingArrivalGuard } from "../../accounts/pending-arrival.js";
 
 import type {
@@ -19,6 +24,7 @@ import type {
   ExternalAttemptInput,
   ExternalAttempt,
 } from "../../database/operation-ownership.port.js";
+import type { PdsHostRevision } from "../../database/pds-registry.port.js";
 import type { AuthorityDatabase } from "../../database/connection.js";
 import type { AccountRow } from "../../accounts/types.js";
 import type {
@@ -79,8 +85,17 @@ interface Context {
     registrationIdentity?: RegistrationIdentity;
   }): Promise<void>;
   ownership: ReturnType<typeof createOperationOwnership>;
+  registryVerifier?: Parameters<typeof registryPdsFetch>[2];
   placement?: {
     select(): Promise<string | undefined>;
+    resolveAuthenticated(
+      hostId: string,
+      revision: number,
+      actualPolicy: (revision: PdsHostRevision) => string | undefined,
+    ): Promise<
+      | { id: string; url: string; internalUrl: string; revision: number }
+      | undefined
+    >;
     resolve(
       hostId: string,
       revision?: number,
@@ -179,6 +194,7 @@ export function createRegistration({
   journal,
   ownership,
   placement,
+  registryVerifier,
 }: Context) {
   const pending = new Map<
     string,
@@ -479,12 +495,27 @@ export function createRegistration({
         "RequiredSignerUnavailable",
         "The selected genesis signer is unavailable",
       );
+    if (placement && reservation)
+      await authorizeRegistryTarget(placement, registryVerifier, {
+        ...pds,
+        revision: reservation.revision,
+      });
     const reserved = await ownership.dispatch<unknown>(
       {
         step: "reserve-signing-key",
         target: pds.url,
         method: "com.atproto.server.reserveSigningKey",
         intent: {},
+        ...(placement && reservation
+          ? {
+              authorizeAttempt: authorizeRegistryAttempt(
+                db,
+                placement,
+                registryVerifier,
+                { ...pds, revision: reservation.revision },
+              ),
+            }
+          : {}),
         ...(placement && reservation
           ? {
               authorizeFirst: (
@@ -505,8 +536,26 @@ export function createRegistration({
           : {}),
       },
       {
-        send: () =>
-          xrpc(pds.internalUrl, "com.atproto.server.reserveSigningKey", {}),
+        send: async () => {
+          if (placement && reservation) {
+            await authorizeRegistryTarget(placement, registryVerifier, {
+              ...pds,
+              revision: reservation.revision,
+            });
+            return registryXrpc(
+              pds.internalUrl,
+              "com.atproto.server.reserveSigningKey",
+              {},
+              undefined,
+              registryVerifier,
+            );
+          }
+          return xrpc(
+            pds.internalUrl,
+            "com.atproto.server.reserveSigningKey",
+            {},
+          );
+        },
         ...signingKeyResult,
         // An unbound reserved key has no DID/account effect; after dispatcher
         // isolation and upstream drain a fresh allocation is safe.
@@ -665,7 +714,7 @@ export function createRegistration({
     if (row && row.status !== "provisioning")
       throw new HttpError(409, "AccountUnavailable", "Account is unavailable");
     await validateHandle(handle, row?.did);
-    const saved = placement
+    let saved = placement
       ? await placement.read(ownership.currentClaim!)
       : undefined;
     const pds = placement
@@ -698,6 +747,14 @@ export function createRegistration({
       },
       pds,
     );
+    if (placement && !saved)
+      saved = await placement.read(ownership.currentClaim!);
+    if (placement && !saved)
+      throw new HttpError(
+        409,
+        "OperationRecoveryRequired",
+        "The saved data server is unavailable",
+      );
     const operation = {
       id: `create:${row.did}`,
       kind: "create",
@@ -713,20 +770,58 @@ export function createRegistration({
         target: pds.url,
         method: "com.atproto.server.createAccount",
         intent: { did: row.did, handle, plcOp: row.op },
+        ...(placement && saved
+          ? {
+              authorizeAttempt: authorizeRegistryAttempt(
+                db,
+                placement,
+                registryVerifier,
+                { ...pds, revision: saved.revision },
+              ),
+            }
+          : {}),
       },
       {
         ...noExternalResult,
-        send: () =>
-          xrpc(pds.internalUrl, "com.atproto.server.createAccount", {
-            did: row.did,
-            handle,
-            plcOp: row.op,
-          }),
-        observe: async () => {
-          const probe = await fetch(
-            `${pds.internalUrl}/xrpc/com.atproto.repo.describeRepo?repo=${encodeURIComponent(row.did)}`,
-            { signal: AbortSignal.timeout(5000) },
+        send: async () => {
+          const body = { did: row.did, handle, plcOp: row.op };
+          if (placement && saved) {
+            await authorizeRegistryTarget(placement, registryVerifier, {
+              ...pds,
+              revision: saved.revision,
+            });
+            return registryXrpc(
+              pds.internalUrl,
+              "com.atproto.server.createAccount",
+              body,
+              undefined,
+              registryVerifier,
+            );
+          }
+          return xrpc(
+            pds.internalUrl,
+            "com.atproto.server.createAccount",
+            body,
           );
+        },
+        observe: async () => {
+          const probeUrl = new URL(
+            `/xrpc/com.atproto.repo.describeRepo?repo=${encodeURIComponent(row.did)}`,
+            pds.internalUrl,
+          );
+          if (placement && saved)
+            await authorizeRegistryTarget(placement, registryVerifier, {
+              ...pds,
+              revision: saved.revision,
+            });
+          const probe = placement
+            ? await registryPdsFetch(
+                probeUrl,
+                { signal: AbortSignal.timeout(5000) },
+                registryVerifier,
+                1_000_000,
+              )
+            : await fetch(probeUrl, { signal: AbortSignal.timeout(5000) });
           const data = await probe.json().catch(() => ({}));
           let head;
           try {

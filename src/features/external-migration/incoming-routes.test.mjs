@@ -451,6 +451,15 @@ test("unavailable placement is recoverable and reveals a claimed arrival only to
         attempt: await f.store.beginExternal(owner, input),
       };
     },
+    async resolveAuthenticated() {
+      return {
+        id: "pds1",
+        revision: 1,
+        did: "did:web:destination.example.test",
+        url: "https://destination.example.test",
+        internalUrl: "https://destination.example.test",
+      };
+    },
     async resolveMigration() {
       return {
         id: "pds1",

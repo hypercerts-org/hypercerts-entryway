@@ -1,3 +1,4 @@
+import { snapshotPdsRegistryVerifier } from "./pds/registry-targets.mjs";
 import { createOperationOwnership } from "./accounts/operation-ownership.js";
 import { createOperationOwnershipStore } from "./database/drizzle/operation-ownership.js";
 import { genesisRotationKeys } from "./plc/policy.js";
@@ -28,6 +29,7 @@ export async function createAccounts({
     ...config.operationLease,
   }),
 }) {
+  registryVerifier = snapshotPdsRegistryVerifier(registryVerifier);
   const plcSigner = await Secp256k1MigrationPlcSigner.fromHex(
     config.plcRotationKeyHex,
   );
@@ -89,6 +91,7 @@ export async function createAccounts({
     observeCustody,
     custody,
     placement,
+    registryVerifier,
     ...shared,
   };
   const registration = createRegistration(context);
