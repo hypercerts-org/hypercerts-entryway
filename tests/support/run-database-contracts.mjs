@@ -39,6 +39,7 @@ const files = [
   "authority-mode",
   "pds-registry",
   "pds-registry-enrollment",
+  "pds-health",
   "pds-registry-routes",
   "pds-registry-targets",
 ].map((name) => `tests/contracts/${name}.test.mjs`);

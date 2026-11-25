@@ -726,3 +726,21 @@ export const pds_host_enrollment_events = table(
     ),
   ],
 );
+
+export const pds_host_health = table("pds_host_health", {
+  host_id: text("host_id")
+    .primaryKey()
+    .references(() => pds_hosts.id),
+  revision: count("revision").notNull(),
+  generation: count("generation").notNull(),
+  claim_id: text("claim_id"),
+  claim_expires_at: count("claim_expires_at"),
+  claim_started_at: count("claim_started_at"),
+  observed_at: count("observed_at"),
+  completed_at: count("completed_at"),
+  public_ok: boolean("public_ok"),
+  internal_ok: boolean("internal_ok"),
+  failures: count("failures").notNull(),
+  successes: count("successes").notNull(),
+  state: text("state").notNull(),
+});
