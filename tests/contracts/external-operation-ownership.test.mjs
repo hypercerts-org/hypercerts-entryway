@@ -701,3 +701,43 @@ test(
     );
   },
 );
+
+test("attempt authorization refusal preserves the original approved uncertain marker", async (t) => {
+  const { db, store, owner, successor } = await fixture(t);
+  let sends = 0;
+  const callbacks = {
+    ...noExternalResult,
+    send: async () => {
+      sends++;
+      throw Error("response lost");
+    },
+    observe: async () => ({ state: "unapplied" }),
+  };
+  await assert.rejects(
+    owner.run("did:plc:policy-retry", request, () =>
+      owner.dispatch(descriptor, callbacks),
+    ),
+    /response lost/,
+  );
+  const first = await store.pendingExternal("did:plc:policy-retry");
+  await store.approveRecovery(acknowledgement(first, "retry-if-safe"));
+  await assert.rejects(
+    successor.run("did:plc:policy-retry", request, () =>
+      successor.dispatch(
+        {
+          ...descriptor,
+          authorizeAttempt: async () => {
+            throw Error("policy changed");
+          },
+        },
+        callbacks,
+      ),
+    ),
+    /policy changed/,
+  );
+  const attempts = await db.read("external_operation_attempts");
+  assert.equal(attempts.length, 1);
+  assert.equal(attempts[0].id, first.id);
+  assert.equal(attempts[0].state, "recovery-approved");
+  assert.equal(sends, 1);
+});

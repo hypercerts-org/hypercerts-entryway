@@ -8,6 +8,7 @@ import { createInvites } from "./features/account-registration/invites.mjs";
 import { createIncomingPreparation } from "./features/external-migration/prepare-arrival.js";
 import { createProtocolChallenges } from "./accounts/challenges.mjs";
 import { createPdsAccountClient } from "./pds/account-client.mjs";
+import { authorizeRegistryTarget } from "./pds/registry-policy.mjs";
 import { registryPdsFetch } from "./pds/registry-transport.mjs";
 import { ArrivalPdsClient } from "./pds/arrival-client.js";
 import { createIncomingAuthorization } from "./features/external-migration/incoming-authorization.js";
@@ -99,6 +100,7 @@ export async function composeIncomingArrival({
     accounts,
   });
   const { choosePds, internalAccess } = await createPdsAccountClient({
+    db,
     config,
     accounts,
   });
@@ -135,6 +137,12 @@ export async function composeIncomingArrival({
           409,
           "Arrival placement changed",
         );
+      if (saved.pdsRevision !== undefined)
+        await authorizeRegistryTarget(
+          accounts.placement,
+          accounts.registryVerifier,
+          { ...pds, revision: saved.pdsRevision },
+        );
       return pds;
     };
     const withClient = async (work) => {
@@ -146,13 +154,19 @@ export async function composeIncomingArrival({
         ...(saved.pdsRevision === undefined
           ? {}
           : {
-              fetch: (url, options) =>
-                registryPdsFetch(
+              fetch: async (url, options) => {
+                await authorizeRegistryTarget(
+                  accounts.placement,
+                  accounts.registryVerifier,
+                  { ...pds, revision: saved.pdsRevision },
+                );
+                return registryPdsFetch(
                   url,
                   options,
                   accounts.registryVerifier,
                   1_000_000,
-                ),
+                );
+              },
             }),
       });
       const authorization = () =>
@@ -170,6 +184,21 @@ export async function composeIncomingArrival({
       });
     };
     return {
+      ...(saved.pdsRevision === undefined
+        ? {}
+        : {
+            authorizeAttempt: async (_claim, descriptor, begin) =>
+              db.transact(async () => {
+                const current = await host();
+                if (descriptor.target !== current.url)
+                  throw new DomainError(
+                    "OperationConflict",
+                    409,
+                    "Arrival placement changed",
+                  );
+                return begin();
+              }),
+          }),
       validate: async () => {
         await host();
       },
@@ -294,6 +323,14 @@ export async function composeIncomingArrival({
     receipts: createOperationOwnershipStore(db),
     placement: accounts.placement,
     validateDestination: (saved) => arrivalBackend(saved).validate(),
+    authorizeDestinationAttempt: (saved) =>
+      saved.pdsRevision === undefined
+        ? undefined
+        : async (_claim, _descriptor, begin) =>
+            db.transact(async () => {
+              await arrivalBackend(saved).validate();
+              return begin();
+            }),
   });
   // Browser callables: browser authentication supplies the saved user, never
   // claim.resource or a user ID from the request body.

@@ -31,3 +31,24 @@ test("target policy accepts only canonical HTTPS origins and explicit IP address
     );
   }
 });
+
+test("startup verifier snapshot isolates later address and CA mutations", async () => {
+  const { snapshotPdsRegistryVerifier, pdsVerifierPolicy } =
+    await import("../../dist/src/pds/registry-targets.mjs");
+  const revision = {
+    publicUrl: "https://pds.example",
+    internalUrl: "https://pds.example",
+  };
+  const source = {
+    targets: new Map([["https://pds.example", ["192.0.2.1"]]]),
+    ca: Buffer.from("initial CA"),
+  };
+  const pinned = snapshotPdsRegistryVerifier(source);
+  const fingerprint = pdsVerifierPolicy(revision, pinned);
+  source.targets.get("https://pds.example").push("192.0.2.2");
+  source.ca.fill(0);
+  pinned.ca.fill(0);
+  assert.deepEqual(pinned.targets.get("https://pds.example"), ["192.0.2.1"]);
+  assert.equal(pdsVerifierPolicy(revision, pinned), fingerprint);
+  assert.equal(snapshotPdsRegistryVerifier(pinned), pinned);
+});

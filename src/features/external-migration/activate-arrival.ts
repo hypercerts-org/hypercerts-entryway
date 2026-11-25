@@ -93,6 +93,9 @@ export function createArrivalActivation({
       deactivated: boolean;
     } | null>;
     activate(): Promise<void>;
+    authorizeAttempt?: Parameters<
+      OperationOwnership["dispatch"]
+    >[0]["authorizeAttempt"];
     checkStagedReadiness(afterCutover: boolean): Promise<void>;
   };
   authorizeAccess: (bearer: unknown) => Promise<AuthorizedArrivalAccess>;
@@ -360,6 +363,9 @@ export function createArrivalActivation({
         target: saved.endpoint,
         method: activationMethod,
         intent: intentFacts,
+        ...(target.authorizeAttempt
+          ? { authorizeAttempt: target.authorizeAttempt }
+          : {}),
       },
       {
         send: async () => {

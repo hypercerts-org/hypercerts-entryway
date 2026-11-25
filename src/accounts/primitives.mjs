@@ -3,6 +3,7 @@ import { ensureValidHandle, isValidDid, isValidHandle } from "@atproto/syntax";
 import { validateHostedHandle } from "./input-schema.js";
 import { HttpError } from "../http/http-error.mjs";
 import { xrpc, registryXrpc } from "../pds/client.mjs";
+import { authorizeRegistryAttempt } from "../pds/registry-policy.mjs";
 import { pdsVerifierPolicy } from "../pds/registry-targets.mjs";
 import { registryPdsTarget } from "../pds/registry-transport.mjs";
 
@@ -97,6 +98,16 @@ export function createAccountPrimitives({
         target: p.url ?? p.internalUrl,
         method: nsid,
         intent: body,
+        ...(placement
+          ? {
+              authorizeAttempt: authorizeRegistryAttempt(
+                db,
+                placement,
+                registryVerifier,
+                p,
+              ),
+            }
+          : {}),
       },
       {
         ...noExternalResult,

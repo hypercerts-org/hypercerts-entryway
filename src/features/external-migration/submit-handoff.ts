@@ -69,6 +69,7 @@ export function createAuthenticatedArrival({
   digestKey,
   placement,
   validateDestination,
+  authorizeDestinationAttempt,
   receipts,
 }: {
   /** Server secret that keys the password commitment inside the request digest. */
@@ -78,6 +79,9 @@ export function createAuthenticatedArrival({
     "readExternal"
   >;
   validateDestination?: (saved: ArrivalRecord) => Promise<void>;
+  authorizeDestinationAttempt?: (
+    saved: ArrivalRecord,
+  ) => Parameters<OperationOwnership["dispatch"]>[0]["authorizeAttempt"];
   placement?: {
     reserve(
       owner: OperationClaim,
@@ -295,12 +299,16 @@ export function createAuthenticatedArrival({
         409,
         "The saved destination reservation is unavailable",
       );
+    const destinationAuthorization = authorizeDestinationAttempt?.(saved);
     await ownership.dispatch(
       {
         step: saved.staged ? "incoming-cutover" : "incoming-handoff",
         target: client.url,
         method: incomingHandoffMethod,
         intent: { did: saved.did, cid: handoff.cid },
+        ...(destinationAuthorization
+          ? { authorizeAttempt: destinationAuthorization }
+          : {}),
         ...(validateDestination
           ? { beforeFirst: () => validateDestination(saved) }
           : {}),
