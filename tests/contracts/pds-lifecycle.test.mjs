@@ -8,7 +8,7 @@ import { pdsVerifierPolicy } from "../../dist/src/pds/registry-targets.mjs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { openDatabase } from "../../dist/src/database/connection.js";
 import { createPdsRegistry } from "../../dist/src/database/drizzle/pds-registry.js";
 import { createPdsEnrollment } from "../../dist/src/database/drizzle/pds-registry-enrollment.js";
@@ -74,7 +74,14 @@ async function fixture(
       ),
     };
   };
-  return { db, peer, trust, first: node(db), second: node(peer) };
+  return {
+    db,
+    peer,
+    configuration,
+    trust,
+    first: node(db),
+    second: node(peer),
+  };
 }
 async function onboard(
   node,
@@ -1812,4 +1819,141 @@ test("callback verifier binds active host revision and irreversible revocation",
     ),
     true,
   );
+});
+
+test("fresh serving phase requires intact association and records a single replayable transition", async (t) => {
+  const { createAuthorityPhase } =
+    await import("../../dist/src/database/drizzle/authority-phase.js");
+  const { first, second, db, peer } = await fixture(t);
+  const phase = createAuthorityPhase(db, first.lifecycle);
+  const other = createAuthorityPhase(peer, second.lifecycle);
+  assert.deepEqual(await phase.read(), { phase: "bootstrap", generation: 1 });
+  await assert.rejects(
+    phase.activate(1, "empty"),
+    /AuthorityPhaseEnrollmentRequired/,
+  );
+  assert.equal((await db.read("authority_phase_events")).length, 0);
+  await onboard(first, "host");
+  const race = await Promise.allSettled([
+    phase.activate(1, "first"),
+    other.activate(1, "second"),
+  ]);
+  assert.equal(race.filter((entry) => entry.status === "fulfilled").length, 1);
+  assert.equal((await db.read("authority_phase_events")).length, 1);
+  const winner = race[0].status === "fulfilled" ? "first" : "second";
+  assert.deepEqual(await other.activate(1, winner), {
+    phase: "registry-serving",
+    generation: 2,
+  });
+  await assert.rejects(
+    phase.activate(1, "new-command"),
+    /AuthorityPhaseConflict/,
+  );
+  assert.deepEqual(await phase.read(), {
+    phase: "registry-serving",
+    generation: 2,
+  });
+});
+
+test("serving phase refuses superseded association policy and static authority", async (t) => {
+  const { createAuthorityPhase } =
+    await import("../../dist/src/database/drizzle/authority-phase.js");
+  let policy = "policy";
+  const { first, db } = await fixture(t, "registry-bootstrap", () => policy);
+  await onboard(first, "host");
+  policy = "other";
+  await assert.rejects(
+    createAuthorityPhase(db, first.lifecycle).activate(1, "stale"),
+    /AuthorityPhaseEnrollmentRequired/,
+  );
+  assert.equal((await db.read("authority_phase_events")).length, 0);
+  const staticFixture = await fixture(t, "static");
+  await assert.rejects(
+    createAuthorityPhase(
+      staticFixture.db,
+      staticFixture.first.lifecycle,
+    ).activate(1, "static"),
+    /AuthorityPhaseConflict/,
+  );
+});
+
+test("phase audit failure rolls back the serving transition", async (t) => {
+  const { createAuthorityPhase } =
+    await import("../../dist/src/database/drizzle/authority-phase.js");
+  const { db, first } = await fixture(t);
+  await onboard(first, "host");
+  const phase = createAuthorityPhase(db, first.lifecycle);
+  await failureTrigger(
+    db,
+    "phase_failure",
+    "authority_phase_events",
+    "Injected phase failure",
+  );
+  await assert.rejects(phase.activate(1, "fail"));
+  assert.deepEqual(await phase.read(), { phase: "bootstrap", generation: 1 });
+  await removeFailureTrigger(db, "phase_failure", "authority_phase_events");
+  assert.deepEqual(await phase.activate(1, "retry"), {
+    phase: "registry-serving",
+    generation: 2,
+  });
+});
+
+test("a suppressed phase update cannot create a success event", async (t) => {
+  const { createAuthorityPhase } =
+    await import("../../dist/src/database/drizzle/authority-phase.js");
+  const { db, first } = await fixture(t);
+  await onboard(first, "host");
+  if (db.backend === "sqlite") {
+    await db.execute(
+      sql.raw(
+        "CREATE TRIGGER phase_no_update BEFORE UPDATE ON authority_phase BEGIN SELECT RAISE(IGNORE); END",
+      ),
+      "run",
+    );
+  } else {
+    await db.execute(
+      sql.raw(
+        "CREATE FUNCTION phase_no_update() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$",
+      ),
+      "run",
+    );
+    await db.execute(
+      sql.raw(
+        "CREATE TRIGGER phase_no_update BEFORE UPDATE ON authority_phase FOR EACH ROW EXECUTE FUNCTION phase_no_update()",
+      ),
+      "run",
+    );
+  }
+  const phase = createAuthorityPhase(db, first.lifecycle);
+  await assert.rejects(
+    phase.activate(1, "suppressed"),
+    /AuthorityPhaseConflict/,
+  );
+  assert.deepEqual(await phase.read(), { phase: "bootstrap", generation: 1 });
+  assert.equal((await db.read("authority_phase_events")).length, 0);
+});
+
+test("completed phase and command replay survive a connection restart", async (t) => {
+  const { createAuthorityPhase } =
+    await import("../../dist/src/database/drizzle/authority-phase.js");
+  const { db, first, configuration } = await fixture(t);
+  await onboard(first, "host");
+  await createAuthorityPhase(db, first.lifecycle).activate(1, "restart");
+  const before = await openDatabase(configuration, "registry-bootstrap");
+  await before.close();
+  const reopened = await openDatabase(configuration, "registry-bootstrap");
+  try {
+    const phase = createAuthorityPhase(reopened, first.lifecycle);
+    assert.deepEqual(await phase.read(), {
+      phase: "registry-serving",
+      generation: 2,
+    });
+    assert.deepEqual(await phase.activate(1, "restart"), {
+      phase: "registry-serving",
+      generation: 2,
+    });
+    assert.equal((await reopened.read("authority_phase_events")).length, 1);
+  } finally {
+    await reopened.close();
+  }
 });

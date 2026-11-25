@@ -25,6 +25,19 @@ export const authority_mode = table("authority_mode", {
   id: integer("id").primaryKey(),
   mode: text("mode").notNull(),
 });
+export const authority_phase = table("authority_phase", {
+  id: integer("id").primaryKey(),
+  phase: text("phase").notNull(),
+  generation: count("generation").notNull(),
+});
+export const authority_phase_events = table("authority_phase_events", {
+  command_key: text("command_key").primaryKey(),
+  expected_generation: count("expected_generation").notNull(),
+  phase: text("phase").notNull(),
+  generation: count("generation").notNull(),
+  principal_class: text("principal_class").notNull(),
+  created_at: count("created_at").notNull(),
+});
 // Explicit Better Auth 1.7.3 core schema; emailOTP persists proofs in verification.
 export const user = table(
   "user",

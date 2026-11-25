@@ -1,6 +1,7 @@
 import type { PdsHost } from "./pds-registry.port.js";
 export type PdsLifecycleCommand = "enable" | "drain" | "retire";
 export interface PdsLifecycleStore {
+  hasTrustedAssociation(): Promise<boolean>;
   transition(
     hostId: string,
     command: PdsLifecycleCommand,

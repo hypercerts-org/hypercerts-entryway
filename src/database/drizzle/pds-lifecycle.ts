@@ -122,6 +122,16 @@ export function createPdsLifecycle(
     return result;
   }
   return {
+    async hasTrustedAssociation() {
+      return db.transact(async () => {
+        await requireMode();
+        for (const host of await db.read("pds_hosts")) {
+          if (host.lifecycle !== "retired" && (await trusted(host)))
+            return true;
+        }
+        return false;
+      });
+    },
     async transition(
       hostId,
       command,

@@ -49,3 +49,18 @@ test("an existing authority without its mode marker fails closed", async (t) => 
   );
   await assert.rejects(openDatabase(config, "static"), /authority mode/);
 });
+
+test("a registry authority without its phase marker fails closed", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "entryway-phase-missing-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const config = await testDatabaseConfiguration(
+    join(directory, "authority.sqlite"),
+  );
+  const db = await openDatabase(config, "registry-bootstrap");
+  await db.execute(sql`DELETE FROM authority_phase`, "run");
+  await db.close();
+  await assert.rejects(
+    openDatabase(config, "registry-bootstrap"),
+    /authority phase/,
+  );
+});
