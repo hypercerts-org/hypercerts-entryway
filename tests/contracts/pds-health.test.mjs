@@ -35,6 +35,12 @@ async function fixture(t) {
     0,
     "stage",
   );
+  await db.insert("pds_host_verifier_policies", {
+    host_id: "host",
+    revision: 1,
+    generation: 1,
+    fingerprint: "policy",
+  });
   const store = createPdsHealthStore(db),
     other = createPdsHealthStore(peer);
   return { db, store, other, registry };
@@ -47,7 +53,7 @@ async function associate(db) {
   );
 }
 async function sample(store, publicOk, internalOk) {
-  return store.complete(await store.claim("host", 1, 30_000), {
+  return store.complete(await store.claim("host", 1, 30_000, 0, "policy"), {
     publicOk,
     internalOk,
   });
@@ -56,7 +62,7 @@ test("health observes both paths with failure and recovery hysteresis without li
   const { db, store, registry } = await fixture(t);
   assert.equal(await store.status("host"), null);
   await assert.rejects(
-    store.claim("host", 1, 1000),
+    store.claim("host", 1, 1000, 0, "policy"),
     /PdsHealthRevisionConflict/,
   );
   await associate(db);
@@ -79,16 +85,19 @@ test("health observes both paths with failure and recovery hysteresis without li
 test("claims fence competing workers and observations age from database start time", async (t) => {
   const { db, store, other } = await fixture(t);
   await associate(db);
-  const first = await store.claim("host", 1, 30_000);
-  await assert.rejects(other.claim("host", 1, 30_000), /PdsHealthPending/);
+  const first = await store.claim("host", 1, 30_000, 0, "policy");
+  await assert.rejects(
+    other.claim("host", 1, 30_000, 0, "policy"),
+    /PdsHealthPending/,
+  );
   await db.update(
     "pds_host_health",
     { claim_expires_at: 0 },
     eq(db.tables.pds_host_health.host_id, "host"),
   );
   const contenders = await Promise.allSettled([
-    store.claim("host", 1, 30_000),
-    other.claim("host", 1, 30_000),
+    store.claim("host", 1, 30_000, 0, "policy"),
+    other.claim("host", 1, 30_000, 0, "policy"),
   ]);
   const won = contenders.filter((entry) => entry.status === "fulfilled");
   const lost = contenders.filter((entry) => entry.status === "rejected");
@@ -116,7 +125,7 @@ test("claims fence competing workers and observations age from database start ti
   assert.equal(staleFailure.state, "unknown");
   assert.equal(staleFailure.failures, 1);
   await assert.rejects(
-    store.claim("host", 2, 1000),
+    store.claim("host", 2, 1000, 0, "policy"),
     /PdsHealthRevisionConflict/,
   );
 });
@@ -126,7 +135,7 @@ test("a previously healthy sample expiring during a probe cannot be carried forw
   await associate(db);
   await sample(store, true, true);
   assert.equal((await sample(store, true, true)).state, "healthy");
-  const claim = await store.claim("host", 1, 30_000);
+  const claim = await store.claim("host", 1, 30_000, 0, "policy");
   await db.update(
     "pds_host_health",
     { observed_at: claim.observedAt - 44_999 },
@@ -143,4 +152,47 @@ test("a previously healthy sample expiring during a probe cannot be carried forw
   const second = await sample(store, true, true);
   assert.equal(second.state, "healthy");
   assert.equal(second.successes, 2);
+});
+
+test("sample interval and verifier policy are fenced across workers", async (t) => {
+  const { db, store, other } = await fixture(t);
+  await associate(db);
+  const first = await store.claim("host", 1, 30_000, 10_000, "policy");
+  await store.complete(first, { publicOk: true, internalOk: true });
+  await assert.rejects(
+    other.claim("host", 1, 30_000, 0, "policy"),
+    /PdsHealthNotDue/,
+  );
+  await db.update(
+    "pds_host_health",
+    { next_sample_at: 0 },
+    eq(db.tables.pds_host_health.host_id, "host"),
+  );
+  const pending = await other.claim("host", 1, 30_000, 10_000, "policy");
+  await db.update(
+    "pds_host_verifier_policies",
+    { generation: 2, fingerprint: "new-policy" },
+    eq(db.tables.pds_host_verifier_policies.host_id, "host"),
+  );
+  await assert.rejects(
+    other.complete(pending, { publicOk: true, internalOk: true }),
+    /PdsHealthClaimConflict/,
+  );
+  assert.equal((await store.status("host")).fresh, false);
+  await assert.rejects(
+    store.claim("host", 1, 30_000, 0, "policy"),
+    /PdsHealthPolicyConflict/,
+  );
+  await db.update(
+    "pds_host_health",
+    { claim_expires_at: 0 },
+    eq(db.tables.pds_host_health.host_id, "host"),
+  );
+  const changed = await store.claim("host", 1, 30_000, 0, "new-policy");
+  const result = await store.complete(changed, {
+    publicOk: true,
+    internalOk: true,
+  });
+  assert.equal(result.state, "unknown");
+  assert.equal(result.successes, 1);
 });

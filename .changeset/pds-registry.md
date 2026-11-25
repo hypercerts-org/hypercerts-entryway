@@ -7,3 +7,5 @@ Add protected PDS registry staging and outbound checks through `/admin/pds-regis
 Fresh empty authorities can start with `AUTHORITY_MODE=registry-bootstrap` and an empty static PDS list to expose only registry administration and health endpoints. The database records its mode permanently; existing databases cannot switch modes. Account serving and placement remain unavailable in this bootstrap mode.
 
 For a fresh registry-bootstrap authority, a global administrator may explicitly attest an empty stock host and associate its checked revision with placement disabled. The operator confirmation does not prove a callback or enable account serving.
+
+Registry-bootstrap nodes now sample registered hosts using `PDS_HEALTH_INTERVAL_MS` and `PDS_HEALTH_TIMEOUT_MS`; status shows bounded health observations. Sampling does not enable placement or send notifications.

@@ -196,6 +196,19 @@ try {
   assert.equal(final.host.lifecycle, "disabled");
   assert.equal(final.attestation.confirmed, "empty-stock-configuration");
   assert.equal(final.attestation.usable, false);
+  async function awaitHealth(node, expected) {
+    const deadline = Date.now() + 12_000;
+    while (Date.now() < deadline) {
+      const result = await request(node, base);
+      if (result.body.health?.state === expected && result.body.health?.fresh)
+        return result.body.health;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    throw new Error(`Health did not reach ${expected}`);
+  }
+  const healthy = await awaitHealth("bootstrap-a", "healthy");
+  assert.equal(healthy.publicOk, true);
+  assert.equal(healthy.internalOk, true);
   const historicalReceipt = final.attestation.associationReceipt;
   assert.deepEqual(historicalReceipt, rechecked.body.outbound.last);
   assert.equal(
@@ -214,7 +227,11 @@ try {
     fingerprint: b.intended.fingerprint,
   });
   assert.equal(changed.body.policy.generation, 4);
+  const unhealthy = await awaitHealth("bootstrap-b", "unhealthy");
+  assert.equal(unhealthy.publicOk, false);
+  assert.equal(unhealthy.internalOk, false);
   const afterPolicy = JSON.parse(cli("show").stdout);
+  assert.equal(afterPolicy.host.lifecycle, "disabled");
   assert.deepEqual(
     afterPolicy.attestation.associationReceipt,
     historicalReceipt,

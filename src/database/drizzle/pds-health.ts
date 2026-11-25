@@ -38,7 +38,8 @@ function project(
 }
 export function createPdsHealthStore(db: DatabaseExecutor): PdsHealthStore {
   const hosts = db.tables.pds_hosts,
-    health = db.tables.pds_host_health;
+    health = db.tables.pds_host_health,
+    policies = db.tables.pds_host_verifier_policies;
   async function active(hostId: string, revision: number) {
     const [host] = await db.read("pds_hosts", { where: eq(hosts.id, hostId) });
     if (
@@ -50,18 +51,32 @@ export function createPdsHealthStore(db: DatabaseExecutor): PdsHealthStore {
       throw new Error("PdsHealthRevisionConflict");
   }
   return {
-    async claim(hostId, revision, leaseMs) {
+    async claim(hostId, revision, leaseMs, intervalMs, policyFingerprint) {
       if (
         !Number.isSafeInteger(revision) ||
         revision < 1 ||
         !Number.isSafeInteger(leaseMs) ||
         leaseMs < 1 ||
-        leaseMs > 30_000
+        leaseMs > 30_000 ||
+        !Number.isSafeInteger(intervalMs) ||
+        intervalMs < 0 ||
+        intervalMs > 600_000 ||
+        typeof policyFingerprint !== "string" ||
+        !policyFingerprint
       )
         throw new Error("InvalidPdsHealthClaim");
       return db.transact(async () => {
         await active(hostId, revision);
         const now = await db.databaseTime();
+        const [policy] = await db.read("pds_host_verifier_policies", {
+          where: eq(policies.host_id, hostId),
+        });
+        if (
+          !policy ||
+          policy.revision !== revision ||
+          policy.fingerprint !== policyFingerprint
+        )
+          throw new Error("PdsHealthPolicyConflict");
         const [previous] = await db.read("pds_host_health", {
           where: eq(health.host_id, hostId),
         });
@@ -71,22 +86,31 @@ export function createPdsHealthStore(db: DatabaseExecutor): PdsHealthStore {
           previous.claim_expires_at > now
         )
           throw new Error("PdsHealthPending");
+        const samePolicy =
+          previous?.revision === revision &&
+          previous.policy_generation === policy.generation &&
+          previous.policy_fingerprint === policy.fingerprint;
+        if (
+          samePolicy &&
+          previous.next_sample_at !== null &&
+          previous.next_sample_at > now
+        )
+          throw new Error("PdsHealthNotDue");
         const generation = (previous?.generation ?? 0) + 1;
         if (!Number.isSafeInteger(generation))
           throw new Error("InvalidPdsHealthState");
         const claimId = randomUUID();
-        const reset =
-          previous && previous.revision === revision
-            ? {}
-            : {
-                observed_at: null,
-                completed_at: null,
-                public_ok: null,
-                internal_ok: null,
-                failures: 0,
-                successes: 0,
-                state: "unknown",
-              };
+        const reset = samePolicy
+          ? {}
+          : {
+              observed_at: null,
+              completed_at: null,
+              public_ok: null,
+              internal_ok: null,
+              failures: 0,
+              successes: 0,
+              state: "unknown",
+            };
         const value = {
           ...reset,
           revision,
@@ -94,6 +118,9 @@ export function createPdsHealthStore(db: DatabaseExecutor): PdsHealthStore {
           claim_id: claimId,
           claim_started_at: now,
           claim_expires_at: now + leaseMs,
+          next_sample_at: now + intervalMs,
+          policy_generation: policy.generation,
+          policy_fingerprint: policy.fingerprint,
         };
         if (previous)
           await db.update("pds_host_health", value, eq(health.host_id, hostId));
@@ -105,6 +132,9 @@ export function createPdsHealthStore(db: DatabaseExecutor): PdsHealthStore {
             claim_id: claimId,
             claim_started_at: now,
             claim_expires_at: now + leaseMs,
+            next_sample_at: now + intervalMs,
+            policy_generation: policy.generation,
+            policy_fingerprint: policy.fingerprint,
             observed_at: null,
             completed_at: null,
             public_ok: null,
@@ -113,7 +143,15 @@ export function createPdsHealthStore(db: DatabaseExecutor): PdsHealthStore {
             successes: 0,
             state: "unknown",
           });
-        return { hostId, revision, claimId, generation, observedAt: now };
+        return {
+          hostId,
+          revision,
+          claimId,
+          generation,
+          observedAt: now,
+          policyGeneration: policy.generation,
+          policyFingerprint: policy.fingerprint,
+        };
       });
     },
     async complete(claim: PdsHealthClaim, observation) {
@@ -128,12 +166,21 @@ export function createPdsHealthStore(db: DatabaseExecutor): PdsHealthStore {
         const [row] = await db.read("pds_host_health", {
           where: eq(health.host_id, claim.hostId),
         });
+        const [policy] = await db.read("pds_host_verifier_policies", {
+          where: eq(policies.host_id, claim.hostId),
+        });
         if (
           !row ||
           row.revision !== claim.revision ||
           row.claim_id !== claim.claimId ||
           row.generation !== claim.generation ||
           row.claim_started_at !== claim.observedAt ||
+          row.policy_generation !== claim.policyGeneration ||
+          row.policy_fingerprint !== claim.policyFingerprint ||
+          !policy ||
+          policy.revision !== claim.revision ||
+          policy.generation !== claim.policyGeneration ||
+          policy.fingerprint !== claim.policyFingerprint ||
           row.claim_expires_at === null ||
           row.claim_expires_at <= now
         )
@@ -189,7 +236,18 @@ export function createPdsHealthStore(db: DatabaseExecutor): PdsHealthStore {
         });
         if (!row) return null;
         await active(hostId, row.revision);
-        return project(row, await db.databaseTime());
+        const result = project(row, await db.databaseTime());
+        const [policy] = await db.read("pds_host_verifier_policies", {
+          where: eq(policies.host_id, hostId),
+        });
+        if (
+          !policy ||
+          policy.revision !== row.revision ||
+          policy.generation !== row.policy_generation ||
+          policy.fingerprint !== row.policy_fingerprint
+        )
+          return { ...result, state: "unknown", fresh: false };
+        return result;
       });
     },
   };
