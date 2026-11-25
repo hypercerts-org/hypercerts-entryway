@@ -447,6 +447,7 @@ async function verificationFixture(
   };
   let boundRows = stage === "multiple-accounts" ? [row, secondRow] : [row];
   let session = null;
+  let sent = 0;
   let cookies = 0;
   let loginEmailResolutions = 0;
   const checkedAccounts = [];
@@ -545,7 +546,11 @@ async function verificationFixture(
       `<form action="/auth/consent">${flow.id} ${account.did}</form>`,
     authentication: {
       async queueSignInCode() {
-        return { async deliver() {} };
+        return {
+          async deliver() {
+            sent++;
+          },
+        };
       },
       async verifySignInCode({ email, otp }) {
         if (stage === "verification") await gate.pause();
@@ -602,6 +607,9 @@ async function verificationFixture(
     gate,
     get cookies() {
       return cookies;
+    },
+    get sent() {
+      return sent;
     },
     get loginEmailResolutions() {
       return loginEmailResolutions;
@@ -1109,6 +1117,8 @@ test("refresh restores OTP, verified chooser and selected consent without sendin
   const consent = await f.resume();
   assert.match(consent.body, /action="\/auth\/consent"/);
   assert.match(consent.body, new RegExp(did));
+  // No resume step queued or delivered a sign-in code.
+  assert.equal(f.sent, 0);
 });
 
 test("same mailbox reproof does not restore the retired chooser", async (t) => {
