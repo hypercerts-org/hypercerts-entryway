@@ -574,3 +574,39 @@ export const mail_outbox = table(
     ),
   ],
 );
+
+export const pds_hosts = table("pds_hosts", {
+  id: text("id").primaryKey(),
+  revision: count("revision").notNull(),
+  configured_order: count("configured_order").notNull(),
+  association: text("association").notNull(),
+  lifecycle: text("lifecycle").notNull(),
+  active_revision: count("active_revision"),
+  staged_revision: count("staged_revision"),
+});
+export const pds_host_revisions = table(
+  "pds_host_revisions",
+  {
+    host_id: text("host_id")
+      .notNull()
+      .references(() => pds_hosts.id),
+    revision: count("revision").notNull(),
+    service_did: text("service_did").notNull(),
+    public_url: text("public_url").notNull(),
+    internal_url: text("internal_url").notNull(),
+    configured_order: count("configured_order").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.host_id, t.revision] })],
+);
+export const pds_host_stage_requests = table(
+  "pds_host_stage_requests",
+  {
+    host_id: text("host_id")
+      .notNull()
+      .references(() => pds_hosts.id),
+    idempotency_key: text("idempotency_key").notNull(),
+    request: text("request").notNull(),
+    revision: count("revision").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.host_id, t.idempotency_key] })],
+);

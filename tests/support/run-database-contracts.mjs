@@ -36,6 +36,7 @@ const files = [
   "migration-boundary",
   "migration-custody",
   "incoming-arrival-storage",
+  "pds-registry",
 ].map((name) => `tests/contracts/${name}.test.mjs`);
 files.push(
   "src/features/email-login/routes.test.mjs",
