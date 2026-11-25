@@ -737,6 +737,7 @@ export const pds_host_health = table("pds_host_health", {
   policy_generation: count("policy_generation").notNull(),
   policy_fingerprint: text("policy_fingerprint").notNull(),
   observed_at: count("observed_at"),
+  monitor_observed_at: count("monitor_observed_at"),
   completed_at: count("completed_at"),
   public_ok: boolean("public_ok"),
   internal_ok: boolean("internal_ok"),
@@ -754,6 +755,7 @@ export const pds_health_incidents = table(
       .references(() => pds_hosts.id),
     revision: count("revision").notNull(),
     generation: count("generation").notNull(),
+    cause: text("cause").notNull(),
     opened_at: count("opened_at").notNull(),
     closed_at: count("closed_at"),
     state: text("state").notNull(),
@@ -782,3 +784,12 @@ export const pds_health_notices = table(
     uniqueIndex("pds_health_notice_role").on(t.incident_id, t.phase, t.role),
   ],
 );
+
+export const pds_health_sweep = table("pds_health_sweep", {
+  id: integer("id").primaryKey(),
+  generation: count("generation").notNull(),
+  claim_id: text("claim_id"),
+  lease_expires_at: count("lease_expires_at"),
+  last_clock: count("last_clock").notNull(),
+  cursor: text("cursor").notNull(),
+});

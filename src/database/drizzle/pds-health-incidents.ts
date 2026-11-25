@@ -42,9 +42,11 @@ export function createPdsHealthIncidents(
         payload: {
           kind: "admin",
           subject: opened
-            ? "Entryway PDS health incident"
+            ? incident.cause === "monitoring-stale"
+              ? "Entryway PDS monitoring stale"
+              : "Entryway PDS health incident"
             : "Entryway PDS health recovered",
-          text: `PDS ${incident.host_id} (revision ${incident.revision}) ${opened ? "has a failed health observation" : "has recovered after a health incident"}. Review the operator status for current details.`,
+          text: `PDS ${incident.host_id} (revision ${incident.revision}) ${opened ? (incident.cause === "monitoring-stale" ? "has stale health monitoring" : "has a failed health observation") : "has recovered after a health incident"}. Review the operator status for current details.`,
         },
         createdAt: now,
         expiresAt: END_OF_TIME,
@@ -114,6 +116,7 @@ export function createPdsHealthIncidents(
       now: number,
       failed: boolean,
       recovered: boolean,
+      cause: "probe-failed" | "monitoring-stale" = "probe-failed",
     ) {
       let [open] = await db.read("pds_health_incidents", {
         where: and(eq(incidents.host_id, hostId), eq(incidents.state, "open")),
@@ -133,6 +136,7 @@ export function createPdsHealthIncidents(
           host_id: hostId,
           revision,
           generation,
+          cause,
           opened_at: now,
           closed_at: null,
           state: "open",
@@ -209,6 +213,7 @@ export function createPdsHealthIncidents(
         return {
           id: latest.id,
           state: latest.state,
+          cause: latest.cause,
           openedAt: latest.opened_at,
           closedAt: latest.closed_at,
           notices: result,

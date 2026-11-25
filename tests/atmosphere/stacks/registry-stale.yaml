@@ -1,0 +1,9 @@
+services:
+  bootstrap-a:
+    environment:
+      PDS_REGISTRY_TARGETS_FILE:
+      PDS_REGISTRY_CA_FILE:
+  bootstrap-b:
+    environment:
+      PDS_REGISTRY_TARGETS_FILE:
+      PDS_REGISTRY_CA_FILE:

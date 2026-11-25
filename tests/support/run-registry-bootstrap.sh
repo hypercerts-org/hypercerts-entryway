@@ -7,6 +7,7 @@ export REGISTRY_BOOTSTRAP_DATABASE="registry_bootstrap_$(date +%s)_$$"
 base=(-f "$SANDBOX_CHECKOUT/compose.yaml" -f "$root/tests/atmosphere/stacks/incoming-source-mail.yaml")
 registry=(-f "$root/tests/atmosphere/stacks/registry-bootstrap.yaml")
 compose() { docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" "${base[@]}" "${registry[@]}" "$@"; }
+stale_compose() { docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" "${base[@]}" "${registry[@]}" -f "$root/tests/atmosphere/stacks/registry-stale.yaml" "$@"; }
 restore() {
   result=$?
   compose stop bootstrap-a bootstrap-b bootstrap-router || result=1
@@ -26,3 +27,11 @@ compose up -d --no-deps --wait entryway-ingress
 compose run --rm --no-deps test node tests/atmosphere/pds-health-network.mjs
 compose run --rm --no-deps test node tests/atmosphere/registry-bootstrap-startup.mjs
 compose run --rm --no-deps test node tests/atmosphere/registry-bootstrap.mjs
+# Stop the processes that were sampling, then restart without a verifier so only
+# the independent sweep can advance; restore the verifier for recovery.
+compose stop bootstrap-a bootstrap-b
+stale_compose up -d --no-deps --wait bootstrap-a bootstrap-b
+compose run --rm --no-deps test node tests/atmosphere/registry-stale.mjs stale
+compose stop bootstrap-a bootstrap-b
+compose up -d --no-deps --wait bootstrap-a bootstrap-b
+compose run --rm --no-deps test node tests/atmosphere/registry-stale.mjs recovery
