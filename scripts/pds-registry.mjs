@@ -37,6 +37,9 @@ function argumentsFor(argv) {
       "trust",
       "policy-status",
       "policy",
+      "show",
+      "attest",
+      "associate",
     ].includes(command) ||
     rest.length % 2
   )
@@ -60,11 +63,19 @@ function argumentsFor(argv) {
       throw Error("InvalidArguments");
     options[name] = rest[i + 1];
   }
-  const hostCommand = ["check", "policy-status", "policy"].includes(command);
+  const hostCommand = [
+    "check",
+    "policy-status",
+    "policy",
+    "show",
+    "attest",
+    "associate",
+  ].includes(command);
   if (
     !options["--url"] ||
     !options["--auth-file"] ||
-    (command === "stage") !== Boolean(options["--request-file"]) ||
+    ["stage", "attest", "associate"].includes(command) !==
+      Boolean(options["--request-file"]) ||
     hostCommand !== Boolean(options["--host"]) ||
     (command === "check" || command === "policy") !==
       Boolean(options["--revision"]) ||
@@ -102,33 +113,35 @@ try {
     "",
   );
   if (!password) throw Error("InvalidProtectedInput");
-  const body =
-    command === "stage"
-      ? JSON.parse(await protectedFile(options["--request-file"]))
-      : command === "check"
-        ? { expectedRevision: Number(options["--revision"]) }
-        : command === "policy"
-          ? {
-              revision: Number(options["--revision"]),
-              expectedGeneration: Number(options["--expected-generation"]),
-              fingerprint: options["--fingerprint"],
-            }
-          : undefined;
+  const body = ["stage", "attest", "associate"].includes(command)
+    ? JSON.parse(await protectedFile(options["--request-file"]))
+    : command === "check"
+      ? { expectedRevision: Number(options["--revision"]) }
+      : command === "policy"
+        ? {
+            revision: Number(options["--revision"]),
+            expectedGeneration: Number(options["--expected-generation"]),
+            fingerprint: options["--fingerprint"],
+          }
+        : undefined;
   const path =
     command === "status"
       ? "/admin/pds-registry/status"
       : command === "trust"
         ? "/admin/pds-registry/trust"
-        : command === "check"
-          ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}/check`
-          : command === "policy" || command === "policy-status"
-            ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}/policy`
-            : "/admin/pds-registry/hosts";
+        : ["show", "attest", "associate"].includes(command)
+          ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}${command === "show" ? "" : `/${command}`}`
+          : command === "check"
+            ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}/check`
+            : command === "policy" || command === "policy-status"
+              ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}/policy`
+              : "/admin/pds-registry/hosts";
   const response = await fetch(new URL(path, base), {
-    method:
-      command === "stage" || command === "check" || command === "policy"
-        ? "POST"
-        : "GET",
+    method: ["stage", "check", "policy", "attest", "associate"].includes(
+      command,
+    )
+      ? "POST"
+      : "GET",
     headers: {
       authorization: `Basic ${Buffer.from(`admin:${password}`).toString("base64")}`,
       ...(body === undefined ? {} : { "content-type": "application/json" }),
@@ -216,10 +229,12 @@ try {
             },
           },
           inbound: "unproven",
-          association: "disabled",
+          association: result.association,
         }),
       );
       if (!last || last.reason !== "ok") process.exitCode = 1;
+    } else if (["show", "attest", "associate"].includes(command)) {
+      console.log(JSON.stringify(result));
     } else if (command === "stage") {
       const {
         hostId,

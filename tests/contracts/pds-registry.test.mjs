@@ -612,7 +612,6 @@ test("outbound checks fence stale revisions and expired attempts", async (t) => 
   };
   await registry.stageHostWithCredentials(request, 0, "first");
   const attempt = await checks.begin("checked", 1);
-  await assert.rejects(peer.begin("checked", 1), /PdsCheckPending/);
   await registry.stageHostWithCredentials(
     {
       ...request,
@@ -682,11 +681,6 @@ test("outbound checks fence stale revisions and expired attempts", async (t) => 
   );
   const slow = await checks.begin("checked", 2);
   assert.equal((await checks.status("checked")).last, null);
-  await first.update(
-    "pds_host_checks",
-    { expires_at: 0 },
-    eq(first.tables.pds_host_checks.host_id, "checked"),
-  );
   const failed = await peer.begin("checked", 2);
   await peer.complete("checked", 2, failed.attemptId, {
     ...observation,

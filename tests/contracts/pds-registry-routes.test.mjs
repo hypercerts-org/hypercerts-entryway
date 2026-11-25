@@ -235,7 +235,10 @@ test("check response returns the committed attempt despite a later status", asyn
     config: {},
     keyring: {},
     admin: async () => {},
-    registry: { readOutbound: async () => "fixture" },
+    registry: {
+      readOutbound: async () => "fixture",
+      readHost: async () => ({ association: "unassociated" }),
+    },
     checks: {
       begin: async () => ({
         attemptId: "first",

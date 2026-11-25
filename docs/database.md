@@ -25,8 +25,9 @@ separate work.
 
 For operators preparing a host, staging records its configuration and credentials
 without associating it or making it eligible for placement. Existing static host
-routing remains in effect. An outbound check is available; inbound pairing and
-association are not yet available.
+routing remains in effect. A fresh registry-bootstrap authority also supports
+explicit operator-attested association for an empty stock PDS. Inbound pairing
+remains unobserved.
 
 Mount a protected JSON keyring on every Entryway node and set
 `PDS_REGISTRY_KEYRING_FILE` to its path before starting the nodes. The file must
@@ -112,9 +113,31 @@ The check compares the service DID and protected-resource issuer at both public
 and internal URLs, then performs an authenticated PDS admin read only when those
 checks match. It records a generation, receipt ID, fingerprint and bounded
 result for that revision, and returns nonzero on failure. Receipts expire ten
-minutes after the check starts. A new check invalidates the previous result; an incomplete attempt
-can be retried after its 30-second lease. A successful outbound check does not
-prove a PDS-originated callback or permit association.
+minutes after the check starts. A new check immediately invalidates the previous
+result and supersedes an in-flight attempt; a late result cannot replace it. A successful outbound check does not
+prove a PDS-originated callback. On a fresh registry-bootstrap authority only,
+the operator may separately attest and associate an empty stock host as described
+below.
+
+### Associating an empty stock PDS
+
+In a fresh `registry-bootstrap` authority, use `show --host pds-new` with the same URL and admin file to inspect the host DID, both endpoints, manifest fingerprint, check results and expiry. The inbound callback is unobserved. Ask the PDS operator to confirm through your existing relationship that the host is empty, the exact manifest and callback credential version were applied, and the PDS was restarted before the check. The outbound read does not prove emptiness or physical equivalence of the two endpoints.
+
+Only after receiving all four confirmations, prepare a protected JSON file with `revision`, the displayed `receiptId`, a unique `idempotencyKey`, and the four explicitly affirmed fields `emptyStock`, `manifestApplied`, `callbackCredentialApplied` and `restartedBeforeCheck`, each set to `true`. Then run:
+
+```sh
+node scripts/pds-registry.mjs show --url https://entryway.example.org --auth-file /secure/admin --host pds-new
+node scripts/pds-registry.mjs attest --url https://entryway.example.org --auth-file /secure/admin --host pds-new --request-file /secure/attest.json
+```
+
+Attestation alone grants no membership or callback authority. For the separate association, prepare another protected JSON file containing `revision`, the returned `attestationId`, and a unique `idempotencyKey`, then run:
+
+```sh
+node scripts/pds-registry.mjs associate --url https://entryway.example.org --auth-file /secure/admin --host pds-new --request-file /secure/associate.json
+node scripts/pds-registry.mjs show --url https://entryway.example.org --auth-file /secure/admin --host pds-new
+```
+
+The transaction rechecks the receipt, manifest, verifier policy and expiry, requires an empty authority with no product records or conflicting historical aliases, and records the association with placement disabled. The operator's assertion does not establish an observed callback. Exact retries return their original result; use new IDs for new requests. Unknown DID methods and encoded endpoint paths fail closed. Association is unavailable in static mode and does not enable account serving or placement.
 
 For a new host use revision `0`. A retry with the same request ID and identical
 input returns the original revision; changed input conflicts. To stage a new
@@ -187,6 +210,6 @@ raw interoperability moderation blocker reported separately.
 
 ### Registry bootstrap authority
 
-Operators preparing a fresh authority can set `AUTHORITY_MODE=registry-bootstrap` with an empty `pds` array in the service configuration. This starts health, readiness and globally authenticated registry administration only; account routes, synthetic clients, mail and reconciliation workers are absent. Staging and outbound checks do not associate a host or enable placement.
+Operators preparing a fresh authority can set `AUTHORITY_MODE=registry-bootstrap` with an empty `pds` array in the service configuration. This starts health, readiness and globally authenticated registry administration only; account routes, synthetic clients, mail and reconciliation workers are absent. Staging, outbound checks and attestation do not associate a host or enable placement; the separate association operation retains disabled placement.
 
 The authority mode is recorded when the fresh schema is created. Every process must use the same mode when opening that database; missing or mismatched markers fail startup. `AUTHORITY_MODE` defaults to `static`. Changing an existing static authority to registry bootstrap is not supported, and this mode does not provide a production cutover. Use a fresh database and consistent configuration for all participating processes.

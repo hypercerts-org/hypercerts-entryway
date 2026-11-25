@@ -1,4 +1,5 @@
 import { and, asc, eq } from "drizzle-orm";
+import { assertNoAssociatedPdsAlias } from "./pds-registry-enrollment-guard.js";
 import type { DatabaseExecutor, StoredRow } from "../executor.js";
 import {
   pdsRegistryManifest,
@@ -22,7 +23,7 @@ import type {
 
 function host(row: StoredRow<"pds_hosts">): PdsHost {
   if (
-    row.association !== "unassociated" ||
+    !["unassociated", "associated"].includes(row.association) ||
     row.lifecycle !== "disabled" ||
     row.staged_revision === null
   )
@@ -31,7 +32,7 @@ function host(row: StoredRow<"pds_hosts">): PdsHost {
     hostId: row.id,
     revision: row.revision,
     order: row.configured_order,
-    association: row.association,
+    association: row.association as "unassociated" | "associated",
     lifecycle: row.lifecycle,
     activeRevision: row.active_revision,
     stagedRevision: row.staged_revision,
@@ -138,6 +139,12 @@ export function createPdsRegistry(
         await onReplay?.(prior);
         return prior;
       }
+      const existingHost = (
+        await db.read("pds_hosts", { where: eq(hosts.id, value.hostId) })
+      )[0];
+      if (existingHost?.association === "associated")
+        throw new Error("PdsEnrollmentAliasConflict");
+      await assertNoAssociatedPdsAlias(db, value);
       if (expectedRevision === 0)
         await db.insert(
           "pds_hosts",

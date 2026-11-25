@@ -1,9 +1,7 @@
 import { createServer, request } from "node:http";
 const allowed = new Set(["bootstrap-a", "bootstrap-b"]);
 createServer((incoming, outgoing) => {
-  const node =
-    incoming.headers["x-bootstrap-node"] ??
-    (incoming.url === "/_health" ? "bootstrap-a" : undefined);
+  const node = incoming.headers["x-bootstrap-node"] ?? "bootstrap-a";
   if (typeof node !== "string" || !allowed.has(node))
     return outgoing.writeHead(400).end();
   const headers = { ...incoming.headers };

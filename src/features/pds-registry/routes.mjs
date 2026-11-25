@@ -25,6 +25,7 @@ export function mountPdsRegistryRoutes({
   keyStatus,
   checks,
   outboundCheck,
+  enrollment,
   admin,
 }) {
   const guarded = (handler) => async (req, res, next) => {
@@ -40,20 +41,17 @@ export function mountPdsRegistryRoutes({
             "Registry checking is not configured",
           ),
         );
-      if (error.message === "PdsCheckPending")
-        return next(
-          new HttpError(
-            409,
-            "OperationPending",
-            "A registry check is already running",
-          ),
-        );
       if (
         [
           "PdsHostRevisionConflict",
           "PdsHostIdempotencyConflict",
           "PdsInboundCredentialConflict",
           "PdsVerifierPolicyConflict",
+          "PdsEnrollmentConflict",
+          "PdsEnrollmentAliasConflict",
+          "PdsEnrollmentModeConflict",
+          "PdsEnrollmentReferencesExist",
+          "PdsEnrollmentIdentityInvalid",
         ].includes(error.message)
       )
         return next(
@@ -161,7 +159,9 @@ export function mountPdsRegistryRoutes({
       res.json({
         outbound: { pending: false, last: receipt },
         inbound: "unproven",
-        association: "disabled",
+        association:
+          (await registry.readHost(revision.hostId))?.association ??
+          "unassociated",
       });
     }),
   );
@@ -186,10 +186,59 @@ export function mountPdsRegistryRoutes({
           ? await checks.status(host.hostId)
           : { pending: false, last: null },
         inbound: "unproven",
+        attestation: enrollment ? await enrollment.status(host.hostId) : null,
         manifest: await registry.readManifest(host.hostId, host.stagedRevision),
       });
     }),
   );
+  for (const kind of ["attest", "associate"]) {
+    app.post(
+      `/admin/pds-registry/hosts/:hostId/${kind}`,
+      guarded(async (req, res) => {
+        if (!enrollment)
+          throw new HttpError(
+            409,
+            "OperationConflict",
+            "Registry enrollment is not available in this authority mode",
+          );
+        const body = req.body;
+        const keys =
+          kind === "attest"
+            ? [
+                "revision",
+                "receiptId",
+                "idempotencyKey",
+                "emptyStock",
+                "manifestApplied",
+                "callbackCredentialApplied",
+                "restartedBeforeCheck",
+              ]
+            : ["revision", "attestationId", "idempotencyKey"];
+        if (
+          !record(body, keys) ||
+          !Number.isSafeInteger(body.revision) ||
+          body.revision < 1 ||
+          typeof body.idempotencyKey !== "string" ||
+          !body.idempotencyKey ||
+          body.idempotencyKey.length > 128 ||
+          typeof body[kind === "attest" ? "receiptId" : "attestationId"] !==
+            "string" ||
+          !/^[0-9a-f-]{36}$/.test(
+            body[kind === "attest" ? "receiptId" : "attestationId"],
+          ) ||
+          (kind === "attest" &&
+            ![
+              body.emptyStock,
+              body.manifestApplied,
+              body.callbackCredentialApplied,
+              body.restartedBeforeCheck,
+            ].every((value) => value === true))
+        )
+          throw invalid();
+        res.json(await enrollment[kind](req.params.hostId, body));
+      }),
+    );
+  }
   app.post(
     "/admin/pds-registry/hosts",
     guarded(async (req, res) => {

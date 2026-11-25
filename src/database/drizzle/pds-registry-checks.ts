@@ -194,12 +194,6 @@ export function createPdsOutboundCheckStore(
         const [existing] = await db.read("pds_host_checks", {
           where: eq(checks.host_id, hostId),
         });
-        if (
-          existing?.attempt_id &&
-          existing.expires_at !== null &&
-          existing.expires_at > now
-        )
-          throw new Error("PdsCheckPending");
         const generation = (existing?.generation ?? 0) + 1;
         if (!Number.isSafeInteger(generation))
           throw new Error("InvalidPdsCheckState");
