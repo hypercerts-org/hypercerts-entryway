@@ -99,6 +99,22 @@ export function createPdsPlacement(
     async select() {
       return (await lifecycle.candidates())[0]?.hostId;
     },
+    async choices() {
+      return db.transact(async () => {
+        const hosts = await lifecycle.candidates();
+        const choices = [];
+        for (const host of hosts) {
+          if (host.activeRevision === null) continue;
+          const revision = await registry.readHostRevision(
+            host.hostId,
+            host.activeRevision,
+          );
+          if (revision)
+            choices.push({ id: revision.hostId, url: revision.publicUrl });
+        }
+        return choices;
+      });
+    },
     async offer(hostId?: string, expectedRevision?: number) {
       return db.transact(async () => {
         const host = (await lifecycle.candidates(hostId))[0];

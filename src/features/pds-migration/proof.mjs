@@ -8,13 +8,10 @@ export function createMigrationProof({ proofs, config, accounts }) {
     { exposeChallengeId = false } = {},
   ) => {
     const row = await principal(actor);
-    const registryHost = accounts?.placement
-      ? await accounts.placement.resolve(pdsId)
-      : undefined;
-    if (
-      (!registryHost && !config.pds.some((pds) => pds.id === pdsId)) ||
-      row.pdsId === pdsId
-    )
+    const valid = accounts?.placement
+      ? (await accounts.placement.choices()).some((pds) => pds.id === pdsId)
+      : config.pds.some((pds) => pds.id === pdsId);
+    if (!valid || row.pdsId === pdsId)
       throw fail(400, "InvalidPds", "Choose another configured PDS");
     return await issue(
       "account-migrate",

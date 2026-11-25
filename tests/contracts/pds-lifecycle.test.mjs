@@ -918,6 +918,9 @@ test("incoming offer pins revision and capability and refuses stale replacement 
     services: predecessor.services,
     alsoKnownAs: predecessor.alsoKnownAs,
   };
+  assert.deepEqual(await placement.choices(), [
+    { id: "host", url: "https://host.example/" },
+  ]);
   const offer = await placement.offer();
   const input = {
     operationId: "offer-one",
@@ -940,6 +943,7 @@ test("incoming offer pins revision and capability and refuses stale replacement 
   assert.equal(saved.pdsRevision, 1);
   assert.equal(saved.stagedIncomingMigration, false);
   await second.lifecycle.transition("host", "drain", 1, 1, "drain");
+  assert.deepEqual(await placement.choices(), []);
   assert.deepEqual(await arrivals.createArrival(input), saved);
   await assert.rejects(
     arrivals.createArrival({
