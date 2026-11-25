@@ -12,6 +12,15 @@ import {
   hasFailure,
 } from "../support/database-fixture.mjs";
 
+const TEST_TRUST = {
+  issuer: "https://entryway.example",
+  serviceDid: "did:web:entryway.example",
+  jwtPublicKeyHex: "fixture-public-key",
+  plcRotationKeyDid: "did:key:fixture",
+};
+const registryWithTrust = (db, keyring) =>
+  createPdsRegistry(db, keyring, () => TEST_TRUST);
+
 const input = (hostId, order = 1) => ({
   hostId,
   serviceDid: `did:web:${hostId}.example`,
@@ -36,7 +45,7 @@ async function fixture(t) {
 }
 test("staged revisions are immutable, ordered, and idempotent across restart", async (t) => {
   const { first, configuration } = await fixture(t);
-  const registry = createPdsRegistry(first),
+  const registry = registryWithTrust(first),
     original = input("alpha", 2);
   const staged = await registry.stageHost(original, 0, "one");
   assert.deepEqual(await registry.stageHost(original, 0, "one"), staged);
@@ -58,7 +67,7 @@ test("staged revisions are immutable, ordered, and idempotent across restart", a
   const restarted = await openDatabase(configuration);
   try {
     assert.deepEqual(
-      await createPdsRegistry(restarted).readHostRevision("alpha", 1),
+      await registryWithTrust(restarted).readHostRevision("alpha", 1),
       staged,
     );
   } finally {
@@ -75,8 +84,8 @@ test("staged revisions are immutable, ordered, and idempotent across restart", a
 });
 test("conflicting revisions serialize across independent connections", async (t) => {
   const { first, second } = await fixture(t);
-  const firstStore = createPdsRegistry(first),
-    secondStore = createPdsRegistry(second);
+  const firstStore = registryWithTrust(first),
+    secondStore = registryWithTrust(second);
   await firstStore.stageHost(input("race"), 0, "initial");
   const retries = await Promise.all([
     firstStore.stageHost(input("shared"), 0, "same"),
@@ -102,7 +111,7 @@ test("conflicting revisions serialize across independent connections", async (t)
 });
 test("failure writing history rolls back host update", async (t) => {
   const { first } = await fixture(t),
-    registry = createPdsRegistry(first);
+    registry = registryWithTrust(first);
   await registry.stageHost(input("rollback"), 0, "initial");
   await failureTrigger(
     first,
@@ -138,8 +147,8 @@ test("credential revisions remain private, idempotent, host scoped and rewrappab
     activeKeyId: "b",
     keys: { a: keyA, b: keyB },
   });
-  const registry = createPdsRegistry(first, originalKeys),
-    peer = createPdsRegistry(second, originalKeys);
+  const registry = registryWithTrust(first, originalKeys),
+    peer = registryWithTrust(second, originalKeys);
   const token = randomBytes(32).toString("base64url"),
     otherToken = randomBytes(32).toString("base64url");
   const request = {
@@ -182,10 +191,10 @@ test("credential revisions remain private, idempotent, host scoped and rewrappab
   ]);
   assert.equal(stored.includes(token), false);
   assert.equal(stored.includes(request.credentials.outboundPassword), false);
-  const rotating = createPdsRegistry(first, rotatingKeys);
+  const rotating = registryWithTrust(first, rotatingKeys);
   const rewraps = await Promise.all([
     rotating.rewrap("credential", 1, "a"),
-    createPdsRegistry(second, rotatingKeys).rewrap("credential", 1, "a"),
+    registryWithTrust(second, rotatingKeys).rewrap("credential", 1, "a"),
   ]);
   assert.deepEqual(rewraps.sort(), ["conflict", "rewrapped"]);
   assert.equal(await rotating.rewrap("credential", 1, "b"), "already-current");
@@ -196,7 +205,7 @@ test("credential revisions remain private, idempotent, host scoped and rewrappab
   const restarted = await openDatabase(configuration);
   try {
     assert.equal(
-      await createPdsRegistry(restarted, rotatingKeys).readOutbound(
+      await registryWithTrust(restarted, rotatingKeys).readOutbound(
         "credential",
         1,
       ),
@@ -205,7 +214,7 @@ test("credential revisions remain private, idempotent, host scoped and rewrappab
   } finally {
     await restarted.close();
   }
-  const onlyNew = createPdsRegistry(
+  const onlyNew = registryWithTrust(
     first,
     parsePdsRegistryKeyring({ activeKeyId: "b", keys: { b: keyB } }),
   );
@@ -228,7 +237,7 @@ test("credential write failure rolls back host and revision", async (t) => {
     activeKeyId: "a",
     keys: { a: randomBytes(32).toString("base64") },
   });
-  const registry = createPdsRegistry(first, keys);
+  const registry = registryWithTrust(first, keys);
   await failureTrigger(
     first,
     "reject_pds_credential",
@@ -320,7 +329,7 @@ test("malformed Unicode password is refused before creating a host", async (t) =
     activeKeyId: "key",
     keys: { key: randomBytes(32).toString("base64") },
   });
-  const registry = createPdsRegistry(first, keys);
+  const registry = registryWithTrust(first, keys);
   const request = {
     host: input("invalid-unicode"),
     credentials: {
@@ -373,7 +382,7 @@ test("bootstrap protects keyring files and checks all retained key references", 
     (error) => error.message === "InvalidPdsRegistryKeyring",
   );
   chmodSync(file, 0o600);
-  const registry = createPdsRegistry(first, loaded.keyring);
+  const registry = registryWithTrust(first, loaded.keyring);
   const request = {
     host: input("bootstrap"),
     credentials: {
@@ -390,7 +399,7 @@ test("bootstrap protects keyring files and checks all retained key references", 
     activeKeyId: "b",
     keys: { a: keyA, b: keyB },
   });
-  await createPdsRegistry(first, rotated).rewrap("bootstrap", 1, "a");
+  await registryWithTrust(first, rotated).rewrap("bootstrap", 1, "a");
   const missingDigestKey = parsePdsRegistryKeyring({
     activeKeyId: "b",
     keys: { b: keyB },
@@ -436,12 +445,12 @@ test("different hosts cannot concurrently stage the same inbound token", async (
     inboundToken: token,
   };
   const results = await Promise.allSettled([
-    createPdsRegistry(first, keys).stageHostWithCredentials(
+    registryWithTrust(first, keys).stageHostWithCredentials(
       { host: input("first"), credentials },
       0,
       "request",
     ),
-    createPdsRegistry(second, keys).stageHostWithCredentials(
+    registryWithTrust(second, keys).stageHostWithCredentials(
       { host: input("second"), credentials },
       0,
       "request",
@@ -459,7 +468,7 @@ test("different hosts cannot concurrently stage the same inbound token", async (
     ).length,
     1,
   );
-  assert.equal((await createPdsRegistry(first).listHosts()).length, 1);
+  assert.equal((await registryWithTrust(first).listHosts()).length, 1);
 });
 
 test("retained credential versions forbid cross-role reuse without partial host state", async (t) => {
@@ -471,7 +480,7 @@ test("retained credential versions forbid cross-role reuse without partial host 
     activeKeyId: "key",
     keys: { key: randomBytes(32).toString("base64") },
   });
-  const registry = createPdsRegistry(first, keys);
+  const registry = registryWithTrust(first, keys);
   const oldInbound = randomBytes(32).toString("base64url"),
     oldOutbound = randomBytes(32).toString("base64url");
   await registry.stageHostWithCredentials(
@@ -533,7 +542,7 @@ test("concurrent hosts cannot reuse an inbound token as an outbound password", a
   });
   const shared = randomBytes(32).toString("base64url");
   const results = await Promise.allSettled([
-    createPdsRegistry(first, keys).stageHostWithCredentials(
+    registryWithTrust(first, keys).stageHostWithCredentials(
       {
         host: input("cross-a"),
         credentials: {
@@ -544,7 +553,7 @@ test("concurrent hosts cannot reuse an inbound token as an outbound password", a
       0,
       "request",
     ),
-    createPdsRegistry(second, keys).stageHostWithCredentials(
+    registryWithTrust(second, keys).stageHostWithCredentials(
       {
         host: input("cross-b"),
         credentials: {
@@ -568,7 +577,7 @@ test("concurrent hosts cannot reuse an inbound token as an outbound password", a
     ).length,
     1,
   );
-  assert.equal((await createPdsRegistry(first).listHosts()).length, 1);
+  assert.equal((await registryWithTrust(first).listHosts()).length, 1);
 });
 
 test("outbound checks fence stale revisions and expired attempts", async (t) => {
@@ -583,9 +592,17 @@ test("outbound checks fence stale revisions and expired attempts", async (t) => 
     activeKeyId: "key",
     keys: { key: randomBytes(32).toString("base64") },
   });
-  const registry = createPdsRegistry(first, keys),
-    checks = createPdsOutboundCheckStore(first),
-    peer = createPdsOutboundCheckStore(second);
+  const registry = registryWithTrust(first, keys),
+    checks = createPdsOutboundCheckStore(
+      first,
+      () => TEST_TRUST,
+      () => "fixture-policy",
+    ),
+    peer = createPdsOutboundCheckStore(
+      second,
+      () => TEST_TRUST,
+      () => "fixture-policy",
+    );
   const request = {
     host: input("checked"),
     credentials: {
@@ -625,6 +642,7 @@ test("outbound checks fence stale revisions and expired attempts", async (t) => 
     { expires_at: 0 },
     eq(first.tables.pds_host_checks.host_id, "checked"),
   );
+  await peer.transitionPolicy("checked", 2, 1, "fixture-policy");
   const successor = await peer.begin("checked", 2);
   await assert.rejects(
     checks.complete("checked", 1, attempt.attemptId, observation),
@@ -633,10 +651,12 @@ test("outbound checks fence stale revisions and expired attempts", async (t) => 
   await peer.complete("checked", 2, successor.attemptId, observation);
   const status = await checks.status("checked");
   assert.equal(status.pending, false);
-  assert.deepEqual(
-    { ...status.last, observedAt: 0 },
-    { ...observation, revision: 2, observedAt: 0 },
-  );
+  assert.equal(status.last.revision, 2);
+  assert.equal(status.last.reason, observation.reason);
+  assert.equal(status.last.generation, 2);
+  assert.equal(status.last.verifierVersion, 1);
+  assert.equal(status.last.expiresAt - status.last.observedAt, 600_000);
+  assert.equal(status.last.receiptId, successor.attemptId);
   const stale = await checks.begin("checked", 2);
   assert.equal((await checks.status("checked")).last, null);
   await first.update(
@@ -649,11 +669,247 @@ test("outbound checks fence stale revisions and expired attempts", async (t) => 
     checks.complete("checked", 2, stale.attemptId, observation),
     /PdsHostRevisionConflict/,
   );
+  const originalObservationTime = (await first.databaseTime()) - 1_000;
   await first.update(
     "pds_host_checks",
-    { started_at: 1 },
+    { started_at: originalObservationTime },
     eq(first.tables.pds_host_checks.host_id, "checked"),
   );
   await peer.complete("checked", 2, takeover.attemptId, observation);
-  assert.equal((await checks.status("checked")).last.observedAt, 1);
+  assert.equal(
+    (await checks.status("checked")).last.observedAt,
+    originalObservationTime,
+  );
+  const slow = await checks.begin("checked", 2);
+  assert.equal((await checks.status("checked")).last, null);
+  await first.update(
+    "pds_host_checks",
+    { expires_at: 0 },
+    eq(first.tables.pds_host_checks.host_id, "checked"),
+  );
+  const failed = await peer.begin("checked", 2);
+  await peer.complete("checked", 2, failed.attemptId, {
+    ...observation,
+    adminAttempted: false,
+    adminOk: false,
+    reason: "network-error",
+  });
+  await assert.rejects(
+    checks.complete("checked", 2, slow.attemptId, observation),
+    /PdsHostRevisionConflict/,
+  );
+  assert.equal((await checks.status("checked")).last.reason, "network-error");
+});
+
+test("manifest, capability, trust changes and receipt generation remain revision bound", async (t) => {
+  const { randomBytes } = await import("node:crypto");
+  const { eq } = await import("drizzle-orm");
+  const { parsePdsRegistryKeyring } =
+    await import("../../dist/src/database/pds-registry-crypto.js");
+  const { createPdsOutboundCheckStore } =
+    await import("../../dist/src/database/drizzle/pds-registry-checks.js");
+  const { first } = await fixture(t);
+  const keys = parsePdsRegistryKeyring({
+    activeKeyId: "key",
+    keys: { key: randomBytes(32).toString("base64") },
+  });
+  let trust = { ...TEST_TRUST },
+    policy = "fixture-policy";
+  const registry = createPdsRegistry(first, keys, () => trust),
+    checks = createPdsOutboundCheckStore(
+      first,
+      () => trust,
+      () => policy,
+    );
+  const credentials = () => ({
+    outboundPassword: randomBytes(32).toString("base64url"),
+    inboundToken: randomBytes(32).toString("base64url"),
+  });
+  const request = {
+    host: { ...input("manifest"), stagedIncomingMigration: true },
+    credentials: credentials(),
+  };
+  const staged = await registry.stageHostWithCredentials(request, 0, "first");
+  assert.equal(staged.stagedIncomingMigration, true);
+  const firstManifest = await registry.readManifest("manifest", 1);
+  assert.equal(firstManifest.manifest.stagedIncomingMigration, true);
+  assert.equal(firstManifest.manifest.outboundCredentialVersion, 1);
+  assert.equal(firstManifest.manifest.inboundCredentialVersion, 1);
+  assert.deepEqual(firstManifest.manifest.trust, trust);
+  const oldAttempt = await checks.begin("manifest", 1);
+  trust = { ...trust, issuer: "https://changed.example" };
+  const observation = {
+    publicDidOk: true,
+    internalDidOk: true,
+    publicMetadataOk: true,
+    internalMetadataOk: true,
+    adminAttempted: true,
+    adminOk: true,
+    reason: "ok",
+  };
+  await assert.rejects(
+    checks.complete("manifest", 1, oldAttempt.attemptId, observation),
+    /PdsHostRevisionConflict/,
+  );
+  assert.deepEqual(
+    await registry.stageHostWithCredentials(request, 0, "first"),
+    staged,
+  );
+  await assert.rejects(
+    registry.stageHostWithCredentials(
+      { ...request, credentials: credentials() },
+      0,
+      "first",
+    ),
+    /PdsHostIdempotencyConflict/,
+  );
+  await registry.stageHostWithCredentials(
+    {
+      host: { ...input("manifest"), stagedIncomingMigration: false },
+      credentials: credentials(),
+    },
+    1,
+    "second",
+  );
+  const nextManifest = await registry.readManifest("manifest", 2);
+  assert.equal(nextManifest.manifest.stagedIncomingMigration, false);
+  assert.notEqual(nextManifest.fingerprint, firstManifest.fingerprint);
+  await first.update(
+    "pds_host_checks",
+    { expires_at: 0 },
+    eq(first.tables.pds_host_checks.host_id, "manifest"),
+  );
+  await checks.transitionPolicy("manifest", 2, 1, "fixture-policy");
+  const current = await checks.begin("manifest", 2);
+  await checks.complete("manifest", 2, current.attemptId, observation);
+  assert.equal(
+    (await checks.status("manifest")).last.manifestFingerprint,
+    nextManifest.fingerprint,
+  );
+  policy = "changed-policy";
+  assert.equal((await checks.status("manifest")).last, null);
+  await assert.rejects(
+    checks.begin("manifest", 2),
+    /PdsVerifierPolicyConflict/,
+  );
+  await checks.transitionPolicy("manifest", 2, 2, "changed-policy");
+  const newPolicyAttempt = await checks.begin("manifest", 2);
+  policy = "fixture-policy";
+  await assert.rejects(
+    checks.complete("manifest", 2, newPolicyAttempt.attemptId, observation),
+    /PdsHostRevisionConflict/,
+  );
+  trust = { ...trust, serviceDid: "did:web:changed.example" };
+  assert.equal((await checks.status("manifest")).last, null);
+  await assert.rejects(checks.begin("manifest", 2), /PdsHostRevisionConflict/);
+});
+
+test("policy transitions fence stale nodes and never resurrect receipts on rollback", async (t) => {
+  const { randomBytes } = await import("node:crypto");
+  const { parsePdsRegistryKeyring } =
+    await import("../../dist/src/database/pds-registry-crypto.js");
+  const { createPdsOutboundCheckStore } =
+    await import("../../dist/src/database/drizzle/pds-registry-checks.js");
+  const { first, second } = await fixture(t);
+  const keys = parsePdsRegistryKeyring({
+    activeKeyId: "key",
+    keys: { key: randomBytes(32).toString("base64") },
+  });
+  const registry = registryWithTrust(first, keys);
+  await registry.stageHostWithCredentials(
+    {
+      host: input("policy"),
+      credentials: {
+        outboundPassword: randomBytes(32).toString("base64url"),
+        inboundToken: randomBytes(32).toString("base64url"),
+      },
+    },
+    0,
+    "stage",
+  );
+  const oldNode = createPdsOutboundCheckStore(
+    first,
+    () => TEST_TRUST,
+    () => "old-policy",
+  );
+  const newNode = createPdsOutboundCheckStore(
+    second,
+    () => TEST_TRUST,
+    () => "new-policy",
+  );
+  const observation = {
+    publicDidOk: true,
+    internalDidOk: true,
+    publicMetadataOk: true,
+    internalMetadataOk: true,
+    adminAttempted: true,
+    adminOk: true,
+    reason: "ok",
+  };
+  const oldAttempt = await oldNode.begin("policy", 1);
+  const oldReceipt = await oldNode.complete(
+    "policy",
+    1,
+    oldAttempt.attemptId,
+    observation,
+  );
+  assert.equal(oldReceipt.verifierPolicyGeneration, 1);
+  assert.equal((await newNode.status("policy")).last, null);
+  await assert.rejects(newNode.begin("policy", 1), /PdsVerifierPolicyConflict/);
+  assert.deepEqual(await newNode.policyStatus("policy"), {
+    current: { revision: 1, generation: 1, fingerprint: "old-policy" },
+    intended: { revision: 1, fingerprint: "new-policy" },
+  });
+  await assert.rejects(
+    newNode.transitionPolicy("policy", 1, 1, "wrong-policy"),
+    /PdsVerifierPolicyConflict/,
+  );
+  assert.equal(
+    (await newNode.transitionPolicy("policy", 1, 1, "new-policy")).generation,
+    2,
+  );
+  assert.equal((await oldNode.status("policy")).last, null);
+  await assert.rejects(oldNode.begin("policy", 1), /PdsVerifierPolicyConflict/);
+  const next = await newNode.begin("policy", 1);
+  const nextReceipt = await newNode.complete(
+    "policy",
+    1,
+    next.attemptId,
+    observation,
+  );
+  assert.equal(nextReceipt.verifierPolicyGeneration, 2);
+  assert.equal(
+    (await oldNode.transitionPolicy("policy", 1, 2, "old-policy")).generation,
+    3,
+  );
+  assert.equal((await oldNode.status("policy")).last, null);
+  assert.equal((await newNode.status("policy")).last, null);
+  await assert.rejects(newNode.begin("policy", 1), /PdsVerifierPolicyConflict/);
+  const refreshed = await oldNode.begin("policy", 1);
+  assert.equal(
+    (await oldNode.complete("policy", 1, refreshed.attemptId, observation))
+      .verifierPolicyGeneration,
+    3,
+  );
+  const thirdNode = createPdsOutboundCheckStore(
+    first,
+    () => TEST_TRUST,
+    () => "third-policy",
+  );
+  const race = await Promise.allSettled([
+    newNode.transitionPolicy("policy", 1, 3, "new-policy"),
+    thirdNode.transitionPolicy("policy", 1, 3, "third-policy"),
+  ]);
+  assert.equal(
+    race.filter((result) => result.status === "fulfilled").length,
+    1,
+  );
+  assert.equal(
+    race.filter(
+      (result) =>
+        result.status === "rejected" &&
+        /PdsVerifierPolicyConflict/.test(result.reason.message),
+    ).length,
+    1,
+  );
 });

@@ -1,6 +1,10 @@
 import { and, asc, eq } from "drizzle-orm";
 import type { DatabaseExecutor, StoredRow } from "../executor.js";
 import {
+  pdsRegistryManifest,
+  type PdsRegistryPublicTrust,
+} from "../pds-registry-manifest.js";
+import {
   decryptPdsCredential,
   encryptPdsCredential,
   equalPdsDigest,
@@ -40,11 +44,20 @@ function revision(row: StoredRow<"pds_host_revisions">): PdsHostRevision {
     serviceDid: row.service_did,
     publicUrl: row.public_url,
     internalUrl: row.internal_url,
+    stagedIncomingMigration: row.staged_incoming_migration,
     order: row.configured_order,
   };
 }
-function normalize(input: PdsHostConfiguration): PdsHostConfiguration {
-  if (!input.hostId || !input.serviceDid || !Number.isSafeInteger(input.order))
+function normalize(
+  input: PdsHostConfiguration,
+): PdsHostConfiguration & { stagedIncomingMigration: boolean } {
+  if (
+    !input.hostId ||
+    !input.serviceDid ||
+    !Number.isSafeInteger(input.order) ||
+    (input.stagedIncomingMigration !== undefined &&
+      typeof input.stagedIncomingMigration !== "boolean")
+  )
     throw new Error("InvalidPdsHost");
   const urls = [input.publicUrl, input.internalUrl].map((value) => {
     let parsed: URL;
@@ -68,12 +81,14 @@ function normalize(input: PdsHostConfiguration): PdsHostConfiguration {
     serviceDid: input.serviceDid,
     publicUrl: urls[0]!,
     internalUrl: urls[1]!,
+    stagedIncomingMigration: input.stagedIncomingMigration === true,
     order: input.order,
   };
 }
 export function createPdsRegistry(
   db: DatabaseExecutor,
   keyring?: PdsRegistryKeyring,
+  publicTrust?: () => PdsRegistryPublicTrust,
 ): PdsRegistryStore & PdsCredentialRegistryStore {
   const hosts = db.tables.pds_hosts,
     revisions = db.tables.pds_host_revisions,
@@ -165,6 +180,7 @@ export function createPdsRegistry(
         service_did: value.serviceDid,
         public_url: value.publicUrl,
         internal_url: value.internalUrl,
+        staged_incoming_migration: value.stagedIncomingMigration,
         configured_order: value.order,
       });
       await db.insert("pds_host_stage_requests", {
@@ -194,8 +210,56 @@ export function createPdsRegistry(
     if (!rows[0]) throw new Error("PdsRegistryCredentialUnavailable");
     return rows[0];
   }
+  async function readManifest(hostId: string, version: number) {
+    const rows = await db.read("pds_host_manifests", {
+      where: and(
+        eq(db.tables.pds_host_manifests.host_id, hostId),
+        eq(db.tables.pds_host_manifests.revision, version),
+      ),
+    });
+    if (!rows[0]) return undefined;
+    const revision = await readHostRevision(hostId, version);
+    if (!revision) throw new Error("InvalidPdsRegistryManifest");
+    try {
+      const saved: unknown = JSON.parse(rows[0].manifest);
+      if (
+        !saved ||
+        typeof saved !== "object" ||
+        Array.isArray(saved) ||
+        !("trust" in saved) ||
+        !saved.trust ||
+        typeof saved.trust !== "object" ||
+        Array.isArray(saved.trust)
+      )
+        throw new Error();
+      const trustRecord = saved.trust as Record<string, unknown>;
+      if (
+        Object.keys(trustRecord).length !== 4 ||
+        !["issuer", "serviceDid", "jwtPublicKeyHex", "plcRotationKeyDid"].every(
+          (key) => typeof trustRecord[key] === "string",
+        )
+      )
+        throw new Error();
+      const trust = {
+        issuer: trustRecord.issuer as string,
+        serviceDid: trustRecord.serviceDid as string,
+        jwtPublicKeyHex: trustRecord.jwtPublicKeyHex as string,
+        plcRotationKeyDid: trustRecord.plcRotationKeyDid as string,
+      };
+      const result = pdsRegistryManifest(revision, trust);
+      if (
+        rows[0].fingerprint !== result.fingerprint ||
+        rows[0].manifest !== JSON.stringify(result.manifest)
+      )
+        throw new Error();
+      return result;
+    } catch {
+      throw new Error("InvalidPdsRegistryManifest");
+    }
+  }
   return {
     stageHost,
+    readManifest,
     async stageHostWithCredentials(input, expectedRevision, idempotencyKey) {
       const keys = configuredKeyring();
       const hostInput = normalize(input.host);
@@ -212,13 +276,18 @@ export function createPdsRegistry(
           inboundToken
       )
         throw new Error("InvalidPdsRegistryCredential");
-      const request = [
+      const requestFor = (trust: PdsRegistryPublicTrust) => [
         1,
         hostInput.hostId,
         hostInput.serviceDid,
         hostInput.publicUrl,
         hostInput.internalUrl,
         hostInput.order,
+        hostInput.stagedIncomingMigration === true,
+        trust.issuer,
+        trust.serviceDid,
+        trust.jwtPublicKeyHex,
+        trust.plcRotationKeyDid,
         expectedRevision,
         outboundPassword,
         inboundToken,
@@ -235,17 +304,25 @@ export function createPdsRegistry(
             ),
           });
           const row = rows[0];
+          const saved = await readManifest(result.hostId, result.revision);
           if (
             !row ||
+            !saved ||
             row.revision !== result.revision ||
             !equalPdsDigest(
               Buffer.from(row.digest, "base64"),
-              pdsStageDigest(keys, row.key_id, request),
+              pdsStageDigest(
+                keys,
+                row.key_id,
+                requestFor(saved.manifest.trust),
+              ),
             )
           )
             throw new Error("PdsHostIdempotencyConflict");
         },
         async (result) => {
+          if (!publicTrust) throw new Error("PdsTrustConfigurationUnavailable");
+          const trust = publicTrust();
           // The enclosing authority transaction serializes writers across nodes.
           const existingCredentials = await db.read("pds_host_credentials");
           for (const existing of existingCredentials) {
@@ -289,6 +366,13 @@ export function createPdsRegistry(
             result.revision,
             outboundPassword,
           );
+          const { manifest, fingerprint } = pdsRegistryManifest(result, trust);
+          await db.insert("pds_host_manifests", {
+            host_id: result.hostId,
+            revision: result.revision,
+            manifest: JSON.stringify(manifest),
+            fingerprint,
+          });
           await db.insert("pds_host_credentials", {
             host_id: result.hostId,
             revision: result.revision,
@@ -305,9 +389,11 @@ export function createPdsRegistry(
             host_id: result.hostId,
             idempotency_key: idempotencyKey,
             key_id: keys.activeKeyId,
-            digest: pdsStageDigest(keys, keys.activeKeyId, request).toString(
-              "base64",
-            ),
+            digest: pdsStageDigest(
+              keys,
+              keys.activeKeyId,
+              requestFor(trust),
+            ).toString("base64"),
             revision: result.revision,
           });
         },

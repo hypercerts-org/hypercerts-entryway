@@ -1,7 +1,7 @@
-import { createHash, ECDH, timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { isValidDid } from "@atproto/syntax";
 import { HttpError } from "../../http/http-error.mjs";
-import { publicRotationKey } from "../../plc/policy.js";
+import { pdsPublicTrust } from "./trust.mjs";
 
 const record = (value, keys) =>
   value !== null &&
@@ -32,6 +32,14 @@ export function mountPdsRegistryRoutes({
       await admin(req, undefined, true);
       await handler(req, res);
     } catch (error) {
+      if (error.message === "PdsVerifierUnavailable")
+        return next(
+          new HttpError(
+            503,
+            "InvalidRequest",
+            "Registry checking is not configured",
+          ),
+        );
       if (error.message === "PdsCheckPending")
         return next(
           new HttpError(
@@ -45,6 +53,7 @@ export function mountPdsRegistryRoutes({
           "PdsHostRevisionConflict",
           "PdsHostIdempotencyConflict",
           "PdsInboundCredentialConflict",
+          "PdsVerifierPolicyConflict",
         ].includes(error.message)
       )
         return next(
@@ -75,48 +84,47 @@ export function mountPdsRegistryRoutes({
   app.get(
     "/admin/pds-registry/trust",
     guarded(async (_req, res) => {
-      if (
-        ![
-          config.issuer,
-          config.serviceDid,
-          config.jwtPublicHex,
-          config.plcRotationKeyDid,
-        ].every((value) => typeof value === "string" && value.length > 0)
-      )
-        throw new Error("PdsTrustConfigurationUnavailable");
-      try {
-        const issuer = new URL(config.issuer);
-        if (
-          issuer.protocol !== "https:" ||
-          issuer.username ||
-          issuer.password ||
-          issuer.search ||
-          issuer.hash ||
-          !isValidDid(config.serviceDid)
-        )
-          throw new Error();
-        publicRotationKey(config.plcRotationKeyDid);
-        if (
-          !/^(?:(?:02|03)[0-9a-f]{64}|04[0-9a-f]{128})$/i.test(
-            config.jwtPublicHex,
-          )
-        )
-          throw new Error();
-        ECDH.convertKey(
-          config.jwtPublicHex,
-          "secp256k1",
-          "hex",
-          "hex",
-          "compressed",
+      res.json(pdsPublicTrust(config));
+    }),
+  );
+  app.get(
+    "/admin/pds-registry/hosts/:hostId/policy",
+    guarded(async (req, res) => {
+      if (!checks)
+        throw new HttpError(
+          503,
+          "InvalidRequest",
+          "Registry checking is not configured",
         );
-      } catch {
-        throw new Error("PdsTrustConfigurationUnavailable");
-      }
+      res.json(await checks.policyStatus(req.params.hostId));
+    }),
+  );
+  app.post(
+    "/admin/pds-registry/hosts/:hostId/policy",
+    guarded(async (req, res) => {
+      if (!checks)
+        throw new HttpError(
+          503,
+          "InvalidRequest",
+          "Registry checking is not configured",
+        );
+      if (
+        !record(req.body, ["revision", "expectedGeneration", "fingerprint"]) ||
+        !Number.isSafeInteger(req.body.revision) ||
+        req.body.revision < 1 ||
+        !Number.isSafeInteger(req.body.expectedGeneration) ||
+        req.body.expectedGeneration < 0 ||
+        typeof req.body.fingerprint !== "string" ||
+        !/^[a-f0-9]{64}$/.test(req.body.fingerprint)
+      )
+        throw invalid();
       res.json({
-        issuer: config.issuer,
-        serviceDid: config.serviceDid,
-        jwtPublicKeyHex: config.jwtPublicHex,
-        plcRotationKeyDid: config.plcRotationKeyDid,
+        policy: await checks.transitionPolicy(
+          req.params.hostId,
+          req.body.revision,
+          req.body.expectedGeneration,
+          req.body.fingerprint,
+        ),
       });
     }),
   );
@@ -178,6 +186,7 @@ export function mountPdsRegistryRoutes({
           ? await checks.status(host.hostId)
           : { pending: false, last: null },
         inbound: "unproven",
+        manifest: await registry.readManifest(host.hostId, host.stagedRevision),
       });
     }),
   );
@@ -198,13 +207,25 @@ export function mountPdsRegistryRoutes({
           "expectedRevision",
           "idempotencyKey",
         ]) ||
-        !record(body.host, [
-          "hostId",
-          "serviceDid",
-          "publicUrl",
-          "internalUrl",
-          "order",
-        ]) ||
+        !(
+          record(body.host, [
+            "hostId",
+            "serviceDid",
+            "publicUrl",
+            "internalUrl",
+            "order",
+          ]) ||
+          record(body.host, [
+            "hostId",
+            "serviceDid",
+            "publicUrl",
+            "internalUrl",
+            "order",
+            "stagedIncomingMigration",
+          ])
+        ) ||
+        (body.host.stagedIncomingMigration !== undefined &&
+          typeof body.host.stagedIncomingMigration !== "boolean") ||
         !record(body.credentials, ["outboundPassword", "inboundToken"]) ||
         ![
           body.host.hostId,

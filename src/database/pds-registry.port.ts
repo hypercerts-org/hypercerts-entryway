@@ -1,13 +1,16 @@
+import type { pdsRegistryManifest } from "./pds-registry-manifest.js";
 export interface PdsHostConfiguration {
   hostId: string;
   serviceDid: string;
   publicUrl: string;
   internalUrl: string;
   order: number;
+  stagedIncomingMigration?: boolean;
 }
 
 export interface PdsHostRevision extends PdsHostConfiguration {
   revision: number;
+  stagedIncomingMigration: boolean;
 }
 
 export interface PdsHost {
@@ -35,6 +38,10 @@ export interface PdsRegistryStore {
 }
 
 export interface PdsCredentialRegistryStore {
+  readManifest(
+    hostId: string,
+    revision: number,
+  ): Promise<ReturnType<typeof pdsRegistryManifest> | undefined>;
   stageHostWithCredentials(
     input: {
       host: PdsHostConfiguration;

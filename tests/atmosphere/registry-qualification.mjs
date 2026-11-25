@@ -73,6 +73,69 @@ try {
   assert.equal(successful.outbound.last.adminOk, true);
   assert.equal(successful.inbound, "unproven");
   assert.equal(successful.association, "disabled");
+  const policyStatus = cli("policy-status", ["--host", good]);
+  assert.equal(policyStatus.status, 0);
+  const policy = JSON.parse(policyStatus.stdout);
+  assert.equal(policy.current.generation, 1);
+  assert.equal(policy.current.fingerprint, policy.intended.fingerprint);
+  const transition = cli("policy", [
+    "--host",
+    good,
+    "--revision",
+    "1",
+    "--expected-generation",
+    "1",
+    "--fingerprint",
+    policy.intended.fingerprint,
+  ]);
+  assert.equal(transition.status, 0);
+  assert.equal(JSON.parse(transition.stdout).policy.generation, 1);
+  const wrongFingerprint =
+    "0".repeat(64) === policy.intended.fingerprint
+      ? "1".repeat(64)
+      : "0".repeat(64);
+  assert.notEqual(
+    cli("policy", [
+      "--host",
+      good,
+      "--revision",
+      "1",
+      "--expected-generation",
+      "1",
+      "--fingerprint",
+      wrongFingerprint,
+    ]).status,
+    0,
+  );
+  assert.equal(successful.outbound.last.direction, "entryway-to-pds");
+  assert.equal(successful.outbound.last.generation, 1);
+  assert.equal(successful.outbound.last.verifierVersion, 1);
+  assert.match(
+    successful.outbound.last.verifierPolicyFingerprint,
+    /^[a-f0-9]{64}$/,
+  );
+  assert.equal(
+    successful.outbound.last.expiresAt - successful.outbound.last.observedAt,
+    600_000,
+  );
+  const detailResponse = await fetch(
+    new URL(`/admin/pds-registry/hosts/${good}`, config.issuer),
+    {
+      headers: {
+        authorization: `Basic ${Buffer.from(`admin:${config.adminPassword}`).toString("base64")}`,
+      },
+    },
+  );
+  assert.equal(detailResponse.status, 200);
+  const detail = await detailResponse.json();
+  assert.equal(
+    detail.manifest.fingerprint,
+    successful.outbound.last.manifestFingerprint,
+  );
+  assert.equal(detail.manifest.manifest.stagedIncomingMigration, false);
+  assert.equal(detail.manifest.manifest.outboundCredentialVersion, 1);
+  assert.equal(detail.manifest.manifest.inboundCredentialVersion, 1);
+  assert.equal(detail.inbound, "unproven");
   const bad = await stage(
     "did:web:wrong.example",
     randomBytes(32).toString("base64url"),

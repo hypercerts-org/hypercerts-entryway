@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import https from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { loadPdsRegistryVerifier } from "../../dist/src/pds/registry-targets.mjs";
 import { checkPdsOutbound } from "../../dist/src/pds/registry-check.mjs";
 
 if (process.argv.includes("--client")) {
@@ -19,7 +20,10 @@ if (process.argv.includes("--client")) {
     },
     "https://issuer.example",
     "fixture-password",
-    new Map([[origin, ["127.0.0.1"]]]),
+    {
+      targets: new Map([[origin, ["127.0.0.1"]]]),
+      ca: readFileSync(process.env.PDS_TEST_CA_FILE),
+    },
   );
   const expected = {
     redirect: "unexpected-status",
@@ -96,6 +100,79 @@ if (process.argv.includes("--client")) {
     );
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     const origin = `https://fixture.test:${server.address().port}`;
+    const targetsFile = join(directory, "targets.json"),
+      alternateCa = join(directory, "alternate.pem");
+    writeFileSync(
+      targetsFile,
+      JSON.stringify({
+        [origin]: ["127.0.0.1"],
+        "https://other.example": ["192.0.2.1"],
+      }),
+      { mode: 0o600 },
+    );
+    const policy = await loadPdsRegistryVerifier(targetsFile, certificate);
+    const revision = { publicUrl: origin, internalUrl: origin };
+    const fingerprint = policy.policyFor(revision);
+    writeFileSync(
+      targetsFile,
+      JSON.stringify({
+        "https://other.example": ["192.0.2.1"],
+        [origin]: ["127.0.0.1"],
+      }),
+    );
+    assert.equal(
+      (await loadPdsRegistryVerifier(targetsFile, certificate)).policyFor(
+        revision,
+      ),
+      fingerprint,
+    );
+    writeFileSync(
+      targetsFile,
+      JSON.stringify({
+        [origin]: ["127.0.0.1"],
+        "https://other.example": ["192.0.2.2"],
+      }),
+    );
+    assert.equal(
+      (await loadPdsRegistryVerifier(targetsFile, certificate)).policyFor(
+        revision,
+      ),
+      fingerprint,
+    );
+    writeFileSync(
+      targetsFile,
+      JSON.stringify({
+        [origin]: ["127.0.0.2"],
+        "https://other.example": ["192.0.2.2"],
+      }),
+    );
+    assert.notEqual(
+      (await loadPdsRegistryVerifier(targetsFile, certificate)).policyFor(
+        revision,
+      ),
+      fingerprint,
+    );
+    writeFileSync(
+      targetsFile,
+      JSON.stringify({
+        [origin]: ["127.0.0.1"],
+        "https://other.example": ["192.0.2.2"],
+      }),
+    );
+    writeFileSync(
+      alternateCa,
+      Buffer.concat([readFileSync(certificate), Buffer.from("\n")]),
+    );
+    assert.notEqual(
+      (await loadPdsRegistryVerifier(targetsFile, alternateCa)).policyFor(
+        revision,
+      ),
+      fingerprint,
+    );
+    await assert.rejects(
+      loadPdsRegistryVerifier(targetsFile, undefined),
+      /InvalidPdsRegistryVerifier/,
+    );
     try {
       for (mode of ["redirect", "oversized", "timeout", "hostname"]) {
         const child = spawn(
@@ -104,7 +181,7 @@ if (process.argv.includes("--client")) {
           {
             env: {
               ...process.env,
-              NODE_EXTRA_CA_CERTS: certificate,
+              PDS_TEST_CA_FILE: certificate,
               PDS_TEST_ORIGIN:
                 mode === "hostname"
                   ? origin.replace("fixture.test", "other.test")

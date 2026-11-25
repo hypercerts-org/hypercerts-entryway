@@ -8,6 +8,7 @@ import { parsePdsRegistryKeyring } from "../../dist/src/database/pds-registry-cr
 import { createPdsRegistry } from "../../dist/src/database/drizzle/pds-registry.js";
 import { pdsRegistryKeyStatus } from "../../dist/src/database/pds-registry-bootstrap.js";
 import { createProtocolRouting } from "../../dist/src/http/protocol-authentication.mjs";
+import { pdsPublicTrust } from "../../dist/src/features/pds-registry/trust.mjs";
 import { mountPdsRegistryRoutes } from "../../dist/src/features/pds-registry/routes.mjs";
 
 test("global admin alone can stage and staged credentials grant no normal authority", async (t) => {
@@ -28,7 +29,7 @@ test("global admin alone can stage and staged credentials grant no normal author
     activeKeyId: "key",
     keys: { key: randomBytes(32).toString("base64") },
   });
-  const registry = createPdsRegistry(db, keyring);
+  const registry = createPdsRegistry(db, keyring, () => pdsPublicTrust(config));
   const { admin } = await createProtocolRouting({
     config,
     db,

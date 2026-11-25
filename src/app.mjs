@@ -19,6 +19,7 @@ import { createPdsOutboundCheckStore } from "./database/drizzle/pds-registry-che
 import { checkPdsOutbound } from "./pds/registry-check.mjs";
 import { createPdsRegistry } from "./database/drizzle/pds-registry.js";
 import { pdsRegistryKeyStatus } from "./database/pds-registry-bootstrap.js";
+import { pdsPublicTrust } from "./features/pds-registry/trust.mjs";
 import { mountPdsRegistryRoutes } from "./features/pds-registry/routes.mjs";
 import { mountIncomingRoutes } from "./features/external-migration/routes.js";
 
@@ -223,9 +224,15 @@ export async function createApp({
     config,
     admin,
     keyring: registryKeyring,
-    registry: createPdsRegistry(db, registryKeyring),
+    registry: createPdsRegistry(db, registryKeyring, () =>
+      pdsPublicTrust(config),
+    ),
     keyStatus: () => pdsRegistryKeyStatus(db, registryKeyring),
-    checks: createPdsOutboundCheckStore(db),
+    checks: createPdsOutboundCheckStore(
+      db,
+      () => pdsPublicTrust(config),
+      (revision) => registryTargets?.policyFor(revision),
+    ),
     outboundCheck: (revision, password) =>
       checkPdsOutbound(revision, config.issuer, password, registryTargets),
   });

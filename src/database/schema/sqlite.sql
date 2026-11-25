@@ -310,10 +310,18 @@ CREATE TABLE `operation_admissions` (
 CREATE TABLE `pds_host_checks` (
 	`host_id` text PRIMARY KEY,
 	`attempt_id` text,
+	`generation` integer NOT NULL,
 	`attempt_revision` integer,
 	`expires_at` integer,
 	`started_at` integer,
 	`last_revision` integer,
+	`last_receipt_id` text,
+	`manifest_fingerprint` text,
+	`verifier_version` integer,
+	`verifier_policy_fingerprint` text,
+	`verifier_policy_generation` integer,
+	`completed_at` integer,
+	`receipt_expires_at` integer,
 	`observed_at` integer,
 	`public_did_ok` integer,
 	`internal_did_ok` integer,
@@ -347,12 +355,22 @@ CREATE TABLE `pds_host_credentials` (
 	CONSTRAINT `fk_pds_host_credentials_host_id_pds_hosts_id_fk` FOREIGN KEY (`host_id`) REFERENCES `pds_hosts`(`id`)
 );
 --> statement-breakpoint
+CREATE TABLE `pds_host_manifests` (
+	`host_id` text NOT NULL,
+	`revision` integer NOT NULL,
+	`manifest` text NOT NULL,
+	`fingerprint` text NOT NULL,
+	CONSTRAINT `pds_host_manifests_pk` PRIMARY KEY(`host_id`, `revision`),
+	CONSTRAINT `fk_pds_host_manifests_host_id_pds_hosts_id_fk` FOREIGN KEY (`host_id`) REFERENCES `pds_hosts`(`id`)
+);
+--> statement-breakpoint
 CREATE TABLE `pds_host_revisions` (
 	`host_id` text NOT NULL,
 	`revision` integer NOT NULL,
 	`service_did` text NOT NULL,
 	`public_url` text NOT NULL,
 	`internal_url` text NOT NULL,
+	`staged_incoming_migration` integer DEFAULT false NOT NULL,
 	`configured_order` integer NOT NULL,
 	CONSTRAINT `pds_host_revisions_pk` PRIMARY KEY(`host_id`, `revision`),
 	CONSTRAINT `fk_pds_host_revisions_host_id_pds_hosts_id_fk` FOREIGN KEY (`host_id`) REFERENCES `pds_hosts`(`id`)
@@ -365,6 +383,14 @@ CREATE TABLE `pds_host_stage_requests` (
 	`revision` integer NOT NULL,
 	CONSTRAINT `pds_host_stage_requests_pk` PRIMARY KEY(`host_id`, `idempotency_key`),
 	CONSTRAINT `fk_pds_host_stage_requests_host_id_pds_hosts_id_fk` FOREIGN KEY (`host_id`) REFERENCES `pds_hosts`(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `pds_host_verifier_policies` (
+	`host_id` text PRIMARY KEY,
+	`revision` integer NOT NULL,
+	`generation` integer NOT NULL,
+	`fingerprint` text NOT NULL,
+	CONSTRAINT `fk_pds_host_verifier_policies_host_id_pds_hosts_id_fk` FOREIGN KEY (`host_id`) REFERENCES `pds_hosts`(`id`)
 );
 --> statement-breakpoint
 CREATE TABLE `pds_hosts` (

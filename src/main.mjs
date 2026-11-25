@@ -6,7 +6,7 @@ import { createMailFeature } from "./mail/create-mail.js";
 import { createMailOutbox } from "./database/drizzle/mail-outbox.js";
 import { createSmtpMailTransport } from "./mail/smtp.js";
 import { createLifecycle } from "./http/lifecycle.js";
-import { loadPdsRegistryTargets } from "./pds/registry-targets.mjs";
+import { loadPdsRegistryVerifier } from "./pds/registry-targets.mjs";
 import { bootstrapPdsRegistryKeyring } from "./database/pds-registry-bootstrap.js";
 
 const config = await loadConfig();
@@ -19,8 +19,9 @@ try {
     db,
     process.env.PDS_REGISTRY_KEYRING_FILE,
   ));
-  registryTargets = await loadPdsRegistryTargets(
+  registryTargets = await loadPdsRegistryVerifier(
     process.env.PDS_REGISTRY_TARGETS_FILE,
+    process.env.PDS_REGISTRY_CA_FILE,
   );
 } catch (error) {
   await db.close();
