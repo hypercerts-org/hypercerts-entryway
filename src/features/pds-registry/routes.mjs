@@ -26,6 +26,7 @@ export function mountPdsRegistryRoutes({
   checks,
   outboundCheck,
   enrollment,
+  health,
   admin,
 }) {
   const guarded = (handler) => async (req, res, next) => {
@@ -186,6 +187,7 @@ export function mountPdsRegistryRoutes({
           ? await checks.status(host.hostId)
           : { pending: false, last: null },
         inbound: "unproven",
+        health: health ? await health.status(host.hostId) : null,
         attestation: enrollment ? await enrollment.status(host.hostId) : null,
         manifest: await registry.readManifest(host.hostId, host.stagedRevision),
       });

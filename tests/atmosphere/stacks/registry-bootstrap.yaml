@@ -12,6 +12,8 @@ x-bootstrap: &bootstrap
     PDS_REGISTRY_KEYRING_FILE: /config/registry-keyring.json
     PDS_REGISTRY_TARGETS_FILE: /config/registry-targets.json
     PDS_REGISTRY_CA_FILE: /ca/root.crt
+    PDS_HEALTH_INTERVAL_MS: "1000"
+    PDS_HEALTH_TIMEOUT_MS: "500"
     NODE_EXTRA_CA_CERTS: /ca/root.crt
   volumes:
     - entryway-config:/config:ro

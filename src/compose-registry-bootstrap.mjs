@@ -3,6 +3,8 @@ import express from "express";
 import { HttpError } from "./http/http-error.mjs";
 import { canonicalBasic } from "./http/authorization-scheme.js";
 import { requestFailureEvent } from "./logging/request-event.js";
+import { createPdsHealthStore } from "./database/drizzle/pds-health.js";
+import { createPdsHealthSampler } from "./pds/registry-health-sampler.mjs";
 import { createPdsEnrollment } from "./database/drizzle/pds-registry-enrollment.js";
 import { createPdsRegistry } from "./database/drizzle/pds-registry.js";
 import { createPdsOutboundCheckStore } from "./database/drizzle/pds-registry-checks.js";
@@ -62,6 +64,13 @@ export function createRegistryBootstrap({
     (revision) => registryTargets?.policyFor(revision),
   );
   const enrollment = createPdsEnrollment(db, registry, checks);
+  const health = createPdsHealthStore(db);
+  const sampleHealth = createPdsHealthSampler({
+    registry,
+    health,
+    verifier: registryTargets,
+    ...config.pdsHealth,
+  });
   mountPdsRegistryRoutes({
     app,
     config,
@@ -69,6 +78,7 @@ export function createRegistryBootstrap({
     keyring: registryKeyring,
     registry,
     enrollment,
+    health,
     keyStatus: () => pdsRegistryKeyStatus(db, registryKeyring),
     checks,
     outboundCheck: (revision, password) =>
@@ -90,5 +100,5 @@ export function createRegistryBootstrap({
           : "The operation could not be completed. Retry or inspect service logs.",
     });
   });
-  return app;
+  return { app, sampleHealth };
 }

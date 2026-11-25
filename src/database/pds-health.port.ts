@@ -4,6 +4,8 @@ export interface PdsHealthClaim {
   claimId: string;
   generation: number;
   observedAt: number;
+  policyGeneration: number;
+  policyFingerprint: string;
 }
 export interface PdsHealthStatus {
   revision: number;
@@ -22,6 +24,8 @@ export interface PdsHealthStore {
     hostId: string,
     revision: number,
     leaseMs: number,
+    intervalMs: number,
+    policyFingerprint: string,
   ): Promise<PdsHealthClaim>;
   complete(
     claim: PdsHealthClaim,

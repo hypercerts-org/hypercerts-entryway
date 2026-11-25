@@ -23,5 +23,6 @@ compose run --rm --no-deps --entrypoint node -e "REGISTRY_TEST_GATEWAY_IP=$gatew
 compose up -d --no-deps --wait bootstrap-a bootstrap-b pds1
 compose up -d --no-deps bootstrap-router
 compose up -d --no-deps --wait entryway-ingress
+compose run --rm --no-deps test node tests/atmosphere/pds-health-network.mjs
 compose run --rm --no-deps test node tests/atmosphere/registry-bootstrap-startup.mjs
 compose run --rm --no-deps test node tests/atmosphere/registry-bootstrap.mjs
