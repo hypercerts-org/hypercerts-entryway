@@ -119,6 +119,9 @@ export default defineConfig({
   timeout: 90_000,
   expect: { timeout: 20_000 },
   reporter: [
+    ...(process.env.STAGED_QUALIFICATION_RESULTS
+      ? [["./support/staged-qualification-reporter.mjs"]]
+      : []),
     ["list"],
     ["json", { outputFile: `artifacts/${artifactPrefix}-results.json` }],
     [

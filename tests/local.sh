@@ -209,9 +209,18 @@ case "$command" in
   _incoming-late-cutover-run)
     require_state
     prepare_incoming_access
+    private=$(mktemp -d "$sandbox/.staged-controller.XXXXXX")
+    results=$(mktemp "$sandbox/.staged-results.XXXXXX")
+    node "$root/tests/support/staged-qualification.mjs" before "$project" "$private"
     compose run --rm --no-deps --volume "$sandbox/incoming-access.json:/run/incoming-access.json:ro" \
+      --volume "$results:/qualification-results.json" -e STAGED_QUALIFICATION_RESULTS=/qualification-results.json \
       -e INCOMING_ACCESS_PATH=/run/incoming-access.json -e "INCOMING_PROJECT=$project" -e INCOMING_LATE_CUTOVER=1 \
       browser npx --no-install playwright test --config tests/playwright.config.mjs 2>&1 | tee "$artifacts/incoming-late-cutover.log" | python3 "$root/scripts/ci-summary.py"
+    mv "$results" "$private/staged-qualification-results.json"
+    node "$root/tests/support/staged-qualification.mjs" after "$project" "$private"
+    receipt="$artifacts/staged-qualification-$(basename "$private").json"
+    cp "$private/staged-qualification.json" "$receipt"
+    echo "Staged observation: $receipt"
     ;;
   contracts)
     require_state
