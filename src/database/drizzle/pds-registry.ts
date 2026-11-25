@@ -1,10 +1,19 @@
 import { and, asc, eq } from "drizzle-orm";
 import type { DatabaseExecutor, StoredRow } from "../executor.js";
+import {
+  decryptPdsCredential,
+  encryptPdsCredential,
+  equalPdsDigest,
+  pdsInboundDigest,
+  pdsStageDigest,
+  type PdsRegistryKeyring,
+} from "../pds-registry-crypto.js";
 import type {
   PdsHost,
   PdsHostConfiguration,
   PdsHostRevision,
   PdsRegistryStore,
+  PdsCredentialRegistryStore,
 } from "../pds-registry.port.js";
 
 function host(row: StoredRow<"pds_hosts">): PdsHost {
@@ -62,7 +71,10 @@ function normalize(input: PdsHostConfiguration): PdsHostConfiguration {
     order: input.order,
   };
 }
-export function createPdsRegistry(db: DatabaseExecutor): PdsRegistryStore {
+export function createPdsRegistry(
+  db: DatabaseExecutor,
+  keyring?: PdsRegistryKeyring,
+): PdsRegistryStore & PdsCredentialRegistryStore {
   const hosts = db.tables.pds_hosts,
     revisions = db.tables.pds_host_revisions,
     requests = db.tables.pds_host_stage_requests;
@@ -75,85 +87,261 @@ export function createPdsRegistry(db: DatabaseExecutor): PdsRegistryStore {
     });
     return rows[0] && revision(rows[0]);
   }
-  return {
-    async stageHost(input, expectedRevision, idempotencyKey) {
-      const value = normalize(input);
-      if (
-        !Number.isSafeInteger(expectedRevision) ||
-        expectedRevision < 0 ||
-        expectedRevision === Number.MAX_SAFE_INTEGER ||
-        !idempotencyKey
-      )
-        throw new Error("InvalidPdsHostRequest");
-      const request = JSON.stringify({ ...value, expectedRevision });
-      return db.transact(async () => {
-        const replay = async () => {
-          const rows = await db.read("pds_host_stage_requests", {
-            where: and(
-              eq(requests.host_id, value.hostId),
-              eq(requests.idempotency_key, idempotencyKey),
-            ),
-          });
-          if (!rows[0]) return undefined;
-          if (rows[0].request !== request)
-            throw new Error("PdsHostIdempotencyConflict");
-          const prior = await readHostRevision(value.hostId, rows[0].revision);
-          if (!prior) throw new Error("InvalidPdsHostRequestState");
-          return prior;
-        };
-        const prior = await replay();
-        if (prior) return prior;
-        if (expectedRevision === 0)
-          await db.insert(
-            "pds_hosts",
-            {
-              id: value.hostId,
-              revision: 0,
-              configured_order: value.order,
-              association: "unassociated",
-              lifecycle: "disabled",
-              active_revision: null,
-              staged_revision: null,
-            },
-            { ignoreConflict: true },
-          );
-        const next = expectedRevision + 1;
-        const changed = await db.update(
+  async function stageHost(
+    input: PdsHostConfiguration,
+    expectedRevision: number,
+    idempotencyKey: string,
+    onReplay?: (result: PdsHostRevision) => Promise<void>,
+    onCreated?: (result: PdsHostRevision) => Promise<void>,
+  ): Promise<PdsHostRevision> {
+    const value = normalize(input);
+    if (
+      !Number.isSafeInteger(expectedRevision) ||
+      expectedRevision < 0 ||
+      expectedRevision === Number.MAX_SAFE_INTEGER ||
+      !idempotencyKey
+    )
+      throw new Error("InvalidPdsHostRequest");
+    const request = JSON.stringify({ ...value, expectedRevision });
+    return db.transact(async () => {
+      const replay = async () => {
+        const rows = await db.read("pds_host_stage_requests", {
+          where: and(
+            eq(requests.host_id, value.hostId),
+            eq(requests.idempotency_key, idempotencyKey),
+          ),
+        });
+        if (!rows[0]) return undefined;
+        if (rows[0].request !== request)
+          throw new Error("PdsHostIdempotencyConflict");
+        const prior = await readHostRevision(value.hostId, rows[0].revision);
+        if (!prior) throw new Error("InvalidPdsHostRequestState");
+        return prior;
+      };
+      const prior = await replay();
+      if (prior) {
+        await onReplay?.(prior);
+        return prior;
+      }
+      if (expectedRevision === 0)
+        await db.insert(
           "pds_hosts",
           {
-            revision: next,
+            id: value.hostId,
+            revision: 0,
             configured_order: value.order,
-            staged_revision: next,
+            association: "unassociated",
+            lifecycle: "disabled",
+            active_revision: null,
+            staged_revision: null,
+          },
+          { ignoreConflict: true },
+        );
+      const next = expectedRevision + 1;
+      const changed = await db.update(
+        "pds_hosts",
+        {
+          revision: next,
+          configured_order: value.order,
+          staged_revision: next,
+        },
+        and(eq(hosts.id, value.hostId), eq(hosts.revision, expectedRevision))!,
+      );
+      if (!changed) {
+        const retried = await replay();
+        if (retried) {
+          await onReplay?.(retried);
+          return retried;
+        }
+        throw new Error("PdsHostRevisionConflict");
+      }
+      // A concurrent request may have committed this key while the host update waited.
+      // Rechecking under the host write lock turns key reuse into a stable conflict.
+      const concurrent = await replay();
+      if (concurrent) throw new Error("PdsHostIdempotencyConflict");
+      await db.insert("pds_host_revisions", {
+        host_id: value.hostId,
+        revision: next,
+        service_did: value.serviceDid,
+        public_url: value.publicUrl,
+        internal_url: value.internalUrl,
+        configured_order: value.order,
+      });
+      await db.insert("pds_host_stage_requests", {
+        host_id: value.hostId,
+        idempotency_key: idempotencyKey,
+        request,
+        revision: next,
+      });
+      const result = { ...value, revision: next };
+      await onCreated?.(result);
+      return result;
+    });
+  }
+  const credentials = db.tables.pds_host_credentials;
+  const credentialRequests = db.tables.pds_host_credential_requests;
+  function configuredKeyring(): PdsRegistryKeyring {
+    if (!keyring) throw new Error("PdsRegistryKeyUnavailable");
+    return keyring;
+  }
+  async function credentialRow(hostId: string, version: number) {
+    const rows = await db.read("pds_host_credentials", {
+      where: and(
+        eq(credentials.host_id, hostId),
+        eq(credentials.revision, version),
+      ),
+    });
+    if (!rows[0]) throw new Error("PdsRegistryCredentialUnavailable");
+    return rows[0];
+  }
+  return {
+    stageHost,
+    async stageHostWithCredentials(input, expectedRevision, idempotencyKey) {
+      const keys = configuredKeyring();
+      const hostInput = normalize(input.host);
+      const { outboundPassword, inboundToken } = input.credentials;
+      if (
+        typeof outboundPassword !== "string" ||
+        !outboundPassword ||
+        Buffer.from(outboundPassword, "utf8").toString("utf8") !==
+          outboundPassword ||
+        typeof inboundToken !== "string" ||
+        !/^[A-Za-z0-9_-]{43}$/.test(inboundToken) ||
+        Buffer.from(inboundToken, "base64url").length !== 32 ||
+        Buffer.from(inboundToken, "base64url").toString("base64url") !==
+          inboundToken
+      )
+        throw new Error("InvalidPdsRegistryCredential");
+      const request = [
+        1,
+        hostInput.hostId,
+        hostInput.serviceDid,
+        hostInput.publicUrl,
+        hostInput.internalUrl,
+        hostInput.order,
+        expectedRevision,
+        outboundPassword,
+        inboundToken,
+      ];
+      return stageHost(
+        hostInput,
+        expectedRevision,
+        idempotencyKey,
+        async (result) => {
+          const rows = await db.read("pds_host_credential_requests", {
+            where: and(
+              eq(credentialRequests.host_id, hostInput.hostId),
+              eq(credentialRequests.idempotency_key, idempotencyKey),
+            ),
+          });
+          const row = rows[0];
+          if (
+            !row ||
+            row.revision !== result.revision ||
+            !equalPdsDigest(
+              Buffer.from(row.digest, "base64"),
+              pdsStageDigest(keys, row.key_id, request),
+            )
+          )
+            throw new Error("PdsHostIdempotencyConflict");
+        },
+        async (result) => {
+          const encrypted = encryptPdsCredential(
+            keys,
+            result.hostId,
+            "outbound-admin",
+            result.revision,
+            outboundPassword,
+          );
+          await db.insert("pds_host_credentials", {
+            host_id: result.hostId,
+            revision: result.revision,
+            key_id: encrypted.keyId,
+            nonce: encrypted.nonce,
+            ciphertext: encrypted.ciphertext,
+            tag: encrypted.tag,
+            inbound_digest: pdsInboundDigest(
+              result.hostId,
+              inboundToken,
+            ).toString("base64"),
+          });
+          await db.insert("pds_host_credential_requests", {
+            host_id: result.hostId,
+            idempotency_key: idempotencyKey,
+            key_id: keys.activeKeyId,
+            digest: pdsStageDigest(keys, keys.activeKeyId, request).toString(
+              "base64",
+            ),
+            revision: result.revision,
+          });
+        },
+      );
+    },
+    async readOutbound(hostId, version) {
+      const row = await credentialRow(hostId, version);
+      return decryptPdsCredential(
+        configuredKeyring(),
+        hostId,
+        "outbound-admin",
+        version,
+        {
+          keyId: row.key_id,
+          nonce: row.nonce,
+          ciphertext: row.ciphertext,
+          tag: row.tag,
+        },
+      );
+    },
+    async verifyInbound(hostId, version, token) {
+      const row = await credentialRow(hostId, version);
+      return equalPdsDigest(
+        Buffer.from(row.inbound_digest, "base64"),
+        pdsInboundDigest(hostId, token),
+      );
+    },
+    async rewrap(hostId, version, expectedKeyId) {
+      const keys = configuredKeyring();
+      return db.transact(async () => {
+        const row = await credentialRow(hostId, version);
+        if (row.key_id !== expectedKeyId) return "conflict";
+        const plaintext = decryptPdsCredential(
+          keys,
+          hostId,
+          "outbound-admin",
+          version,
+          {
+            keyId: row.key_id,
+            nonce: row.nonce,
+            ciphertext: row.ciphertext,
+            tag: row.tag,
+          },
+        );
+        if (row.key_id === keys.activeKeyId) return "already-current";
+        const next = encryptPdsCredential(
+          keys,
+          hostId,
+          "outbound-admin",
+          version,
+          plaintext,
+        );
+        const changed = await db.update(
+          "pds_host_credentials",
+          {
+            key_id: next.keyId,
+            nonce: next.nonce,
+            ciphertext: next.ciphertext,
+            tag: next.tag,
           },
           and(
-            eq(hosts.id, value.hostId),
-            eq(hosts.revision, expectedRevision),
+            eq(credentials.host_id, hostId),
+            eq(credentials.revision, version),
+            eq(credentials.key_id, row.key_id),
+            eq(credentials.nonce, row.nonce),
+            eq(credentials.ciphertext, row.ciphertext),
+            eq(credentials.tag, row.tag),
           )!,
         );
-        if (!changed) {
-          const retried = await replay();
-          if (retried) return retried;
-          throw new Error("PdsHostRevisionConflict");
-        }
-        // A concurrent request may have committed this key while the host update waited.
-        // Rechecking under the host write lock turns key reuse into a stable conflict.
-        const concurrent = await replay();
-        if (concurrent) throw new Error("PdsHostIdempotencyConflict");
-        await db.insert("pds_host_revisions", {
-          host_id: value.hostId,
-          revision: next,
-          service_did: value.serviceDid,
-          public_url: value.publicUrl,
-          internal_url: value.internalUrl,
-          configured_order: value.order,
-        });
-        await db.insert("pds_host_stage_requests", {
-          host_id: value.hostId,
-          idempotency_key: idempotencyKey,
-          request,
-          revision: next,
-        });
-        return { ...value, revision: next };
+        return changed ? "rewrapped" : "conflict";
       });
     },
     async readHost(hostId) {

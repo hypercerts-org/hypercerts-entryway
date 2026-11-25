@@ -33,3 +33,25 @@ export interface PdsRegistryStore {
     revision: number,
   ): Promise<PdsHostRevision | undefined>;
 }
+
+export interface PdsCredentialRegistryStore {
+  stageHostWithCredentials(
+    input: {
+      host: PdsHostConfiguration;
+      credentials: { outboundPassword: string; inboundToken: string };
+    },
+    expectedRevision: number,
+    idempotencyKey: string,
+  ): Promise<PdsHostRevision>;
+  readOutbound(hostId: string, revision: number): Promise<string>;
+  verifyInbound(
+    hostId: string,
+    revision: number,
+    token: string,
+  ): Promise<boolean>;
+  rewrap(
+    hostId: string,
+    credentialVersion: number,
+    expectedKeyId: string,
+  ): Promise<"rewrapped" | "already-current" | "conflict">;
+}

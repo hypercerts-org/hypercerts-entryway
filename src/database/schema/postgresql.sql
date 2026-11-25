@@ -291,6 +291,26 @@ CREATE TABLE "operation_admissions" (
 	"operation_id" text NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "pds_host_credential_requests" (
+	"host_id" text,
+	"idempotency_key" text,
+	"key_id" text NOT NULL,
+	"digest" text NOT NULL,
+	"revision" bigint NOT NULL,
+	CONSTRAINT "pds_host_credential_requests_pkey" PRIMARY KEY("host_id","idempotency_key")
+);
+--> statement-breakpoint
+CREATE TABLE "pds_host_credentials" (
+	"host_id" text,
+	"revision" bigint,
+	"key_id" text NOT NULL,
+	"nonce" text NOT NULL,
+	"ciphertext" text NOT NULL,
+	"tag" text NOT NULL,
+	"inbound_digest" text NOT NULL,
+	CONSTRAINT "pds_host_credentials_pkey" PRIMARY KEY("host_id","revision")
+);
+--> statement-breakpoint
 CREATE TABLE "pds_host_revisions" (
 	"host_id" text,
 	"revision" bigint,
@@ -400,6 +420,8 @@ ALTER TABLE "handle_claims" ADD CONSTRAINT "handle_claims_did_accounts_did_fkey"
 ALTER TABLE "migration_checkpoint" ADD CONSTRAINT "migration_checkpoint_workflow_id_migration_workflow_id_fkey" FOREIGN KEY ("workflow_id") REFERENCES "migration_workflow"("id");--> statement-breakpoint
 ALTER TABLE "migration_snapshot_manifest" ADD CONSTRAINT "migration_snapshot_manifest_MV6jDrceH3um_fkey" FOREIGN KEY ("workflow_id") REFERENCES "migration_workflow"("id");--> statement-breakpoint
 ALTER TABLE "operation_admissions" ADD CONSTRAINT "operation_admissions_operation_id_authority_operations_id_fkey" FOREIGN KEY ("operation_id") REFERENCES "authority_operations"("id");--> statement-breakpoint
+ALTER TABLE "pds_host_credential_requests" ADD CONSTRAINT "pds_host_credential_requests_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
+ALTER TABLE "pds_host_credentials" ADD CONSTRAINT "pds_host_credentials_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_revisions" ADD CONSTRAINT "pds_host_revisions_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_stage_requests" ADD CONSTRAINT "pds_host_stage_requests_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "session" ADD CONSTRAINT "session_userId_user_id_fkey" FOREIGN KEY ("userId") REFERENCES "user"("id") ON DELETE CASCADE;

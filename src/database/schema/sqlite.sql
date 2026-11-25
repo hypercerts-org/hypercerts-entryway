@@ -307,6 +307,28 @@ CREATE TABLE `operation_admissions` (
 	CONSTRAINT `fk_operation_admissions_operation_id_authority_operations_id_fk` FOREIGN KEY (`operation_id`) REFERENCES `authority_operations`(`id`)
 );
 --> statement-breakpoint
+CREATE TABLE `pds_host_credential_requests` (
+	`host_id` text NOT NULL,
+	`idempotency_key` text NOT NULL,
+	`key_id` text NOT NULL,
+	`digest` text NOT NULL,
+	`revision` integer NOT NULL,
+	CONSTRAINT `pds_host_credential_requests_pk` PRIMARY KEY(`host_id`, `idempotency_key`),
+	CONSTRAINT `fk_pds_host_credential_requests_host_id_pds_hosts_id_fk` FOREIGN KEY (`host_id`) REFERENCES `pds_hosts`(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `pds_host_credentials` (
+	`host_id` text NOT NULL,
+	`revision` integer NOT NULL,
+	`key_id` text NOT NULL,
+	`nonce` text NOT NULL,
+	`ciphertext` text NOT NULL,
+	`tag` text NOT NULL,
+	`inbound_digest` text NOT NULL,
+	CONSTRAINT `pds_host_credentials_pk` PRIMARY KEY(`host_id`, `revision`),
+	CONSTRAINT `fk_pds_host_credentials_host_id_pds_hosts_id_fk` FOREIGN KEY (`host_id`) REFERENCES `pds_hosts`(`id`)
+);
+--> statement-breakpoint
 CREATE TABLE `pds_host_revisions` (
 	`host_id` text NOT NULL,
 	`revision` integer NOT NULL,
