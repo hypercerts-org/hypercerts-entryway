@@ -8,6 +8,7 @@ import { importJWK, SignJWT } from "jose";
 import * as plc from "@did-plc/lib";
 import { cidForCbor } from "@atproto/common";
 import { HttpError } from "../../http/http-error.mjs";
+import { registryPlcEndpoint } from "../../plc/policy.js";
 import { xrpc } from "../../pds/client.mjs";
 import { readXrpcResponse } from "../../pds/xrpc-response.js";
 import { snapshotPdsRegistryVerifier } from "../../pds/registry-targets.mjs";
@@ -452,10 +453,19 @@ export async function createAccountMigration({
         "This entryway is not an authorized PLC rotation signer",
         403,
       );
-    if (
-      normalized.services.atproto_pds?.endpoint !==
-      (await chooseSource(operation)).url
-    )
+    const source = await chooseSource(operation);
+    // Existing PLC documents may contain the canonical URL with its trailing
+    // slash, while new stock documents use the origin. Both identify this exact
+    // recorded source; the signed operation still binds the observed PLC head.
+    const sourceEndpoints = [source.url];
+    if (operation.targetPlcEndpoint !== undefined)
+      sourceEndpoints.push(
+        registryPlcEndpoint(
+          source.url,
+          source.stagedIncomingMigration === true,
+        ),
+      );
+    if (!sourceEndpoints.includes(normalized.services.atproto_pds?.endpoint))
       throw error(
         "IdentityChanged",
         "The DID document no longer points at the recorded source PDS",
@@ -469,7 +479,7 @@ export async function createAccountMigration({
     const expected = await accounts.plcSigner.signManagedMove(
       current,
       reservedKey,
-      target.url,
+      operation.targetPlcEndpoint ?? target.url,
       async (candidate, facts) => {
         if (operation.requestedPlcOp) {
           await plc.assureValidOp(operation.requestedPlcOp);
@@ -1292,6 +1302,10 @@ export async function createAccountMigration({
               sourcePdsRevision: row.pdsRevision,
               sourcePdsUrl: row.pdsUrl,
               targetPdsId: target.id,
+              targetPlcEndpoint: registryPlcEndpoint(
+                target.url,
+                target.stagedIncomingMigration === true,
+              ),
               phase: "authorized",
               requestedPlcOp: input.plcOp,
               authorizedAt: new Date(),

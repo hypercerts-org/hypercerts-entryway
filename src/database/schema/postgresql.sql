@@ -108,6 +108,7 @@ CREATE TABLE "arrivals" (
 	"pds_revision" bigint,
 	"staged_incoming_migration" boolean DEFAULT false NOT NULL,
 	"endpoint" text NOT NULL,
+	"plc_endpoint" text,
 	"source_plc_head" text NOT NULL,
 	"source_endpoint" text,
 	"canonical_handoff_cid" text,

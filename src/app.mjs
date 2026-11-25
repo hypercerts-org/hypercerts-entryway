@@ -1,6 +1,6 @@
 import { HttpError } from "./http/http-error.mjs";
 import { mountOperationRecoveryRoutes } from "./features/account-settings/operation-recovery-routes.js";
-import { createECDH, ECDH, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import express from "express";
 import { createAccounts } from "./compose-accounts.mjs";
 import { createAccountAccess } from "./accounts/account-access.mjs";
@@ -22,6 +22,7 @@ import { pdsRegistryKeyStatus } from "./database/pds-registry-bootstrap.js";
 import { pdsPublicTrust } from "./features/pds-registry/trust.mjs";
 import { mountPdsRegistryRoutes } from "./features/pds-registry/routes.mjs";
 import { mountIncomingRoutes } from "./features/external-migration/routes.js";
+import { validateRegistryServingConfiguration } from "./pds/registry-serving-config.mjs";
 
 export async function createApp({
   config,
@@ -41,56 +42,18 @@ export async function createApp({
       registryRuntime.db !== db ||
       registryRuntime.config !== config ||
       registryRuntime.registryKeyring !== registryKeyring ||
+      !registryKeyring ||
+      !registryRuntime.registryTargets ||
       !Array.isArray(config.pds) ||
       config.pds.length ||
       (await registryRuntime.phase.read()).phase !== "registry-serving"
     )
       throw new Error("RegistryServingUnavailable");
-    try {
-      const privateKey = config.jwtJwk;
-      if (
-        privateKey?.kty !== "EC" ||
-        privateKey.crv !== "secp256k1" ||
-        typeof privateKey.d !== "string" ||
-        typeof privateKey.x !== "string" ||
-        typeof privateKey.y !== "string"
-      )
-        throw new Error();
-      const coordinates = [privateKey.d, privateKey.x, privateKey.y].map(
-        (value) => {
-          const bytes = Buffer.from(value, "base64url");
-          if (bytes.length !== 32 || bytes.toString("base64url") !== value)
-            throw new Error();
-          return bytes;
-        },
-      );
-      const signer = createECDH("secp256k1");
-      signer.setPrivateKey(coordinates[0]);
-      const actual = signer.getPublicKey(undefined, "compressed");
-      const advertised = ECDH.convertKey(
-        config.jwtPublicHex,
-        "secp256k1",
-        "hex",
-        undefined,
-        "compressed",
-      );
-      const declared = ECDH.convertKey(
-        Buffer.concat([Buffer.from([4]), coordinates[1], coordinates[2]]),
-        "secp256k1",
-        undefined,
-        undefined,
-        "compressed",
-      );
-      if (
-        actual.length !== advertised.length ||
-        actual.length !== declared.length ||
-        !timingSafeEqual(actual, advertised) ||
-        !timingSafeEqual(actual, declared)
-      )
-        throw new Error();
-    } catch {
-      throw new Error("RegistrySigningKeyConflict");
-    }
+    await validateRegistryServingConfiguration(
+      config,
+      registryKeyring,
+      registryRuntime.registryTargets,
+    );
     registryTargets = registryRuntime.registryTargets;
   }
   const accounts = await createAccounts({
@@ -298,6 +261,8 @@ export async function createApp({
     enrollment: registryRuntime?.enrollment,
     health: registryRuntime?.health,
     incidents: registryRuntime?.incidents,
+    phase: registryRuntime?.phase,
+    lifecycleControl: registryRuntime?.lifecycleControl,
     keyStatus: () => pdsRegistryKeyStatus(db, registryKeyring),
     checks:
       registryRuntime?.checks ??
@@ -313,7 +278,9 @@ export async function createApp({
     page(
       res,
       "Your identity, your data",
-      `<p>This entryway handles email sign-in and OAuth authorization for two stock personal data servers.</p><p><a href="/login">Sign in or create a test account</a></p><p><a href="${config.clientUrl}/client">Open the test application</a></p><p><a href="/account">Account settings</a></p><small>Focused local spike. Email codes are delivered to the private test mailbox.</small>`,
+      config.authorityMode === "registry-bootstrap"
+        ? `<p>Sign in or create an account with this Entryway.</p><p><a href="/login">Sign in</a></p><p><a href="/account">Account settings</a></p>`
+        : `<p>This entryway handles email sign-in and OAuth authorization for two stock personal data servers.</p><p><a href="/login">Sign in or create a test account</a></p><p><a href="${config.clientUrl}/client">Open the test application</a></p><p><a href="/account">Account settings</a></p><small>Focused local spike. Email codes are delivered to the private test mailbox.</small>`,
     ),
   );
   app.use((_req, res) =>

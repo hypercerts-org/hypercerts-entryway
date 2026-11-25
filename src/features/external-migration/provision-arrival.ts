@@ -400,7 +400,7 @@ export function createDurableArrivalProvisioning({
           {
             handoffOperation: handoff.operation,
             repositoryKey: saved.signingKey,
-            endpoint: saved.endpoint,
+            endpoint: saved.plcEndpoint ?? saved.endpoint,
             handle: saved.handle,
             rotationKeys: destinationRotationKeys(saved),
           },
@@ -430,7 +430,8 @@ export function createDurableArrivalProvisioning({
         String(await cidForCbor(move.operation)) !== move.cid ||
         parsedMove.prev !== creationHead ||
         parsedMove.verificationMethods.atproto !== saved.signingKey ||
-        parsedMove.services.atproto_pds?.endpoint !== saved.endpoint ||
+        parsedMove.services.atproto_pds?.endpoint !==
+          (saved.plcEndpoint ?? saved.endpoint) ||
         parsedMove.services.atproto_pds?.type !== "AtprotoPersonalDataServer" ||
         !parsedMove.alsoKnownAs.includes(`at://${saved.handle}`) ||
         JSON.stringify(parsedMove.rotationKeys) !==

@@ -5,7 +5,7 @@ import {
 import { cidForCbor } from "@atproto/common";
 import type { CustodyInventoryTransactor } from "../../database/custody.port.js";
 import * as plc from "@did-plc/lib";
-import { genesisRotationKeys } from "../../plc/policy.js";
+import { genesisRotationKeys, registryPlcEndpoint } from "../../plc/policy.js";
 import { HttpError } from "../../http/http-error.mjs";
 import {
   registrationInputSchema,
@@ -99,7 +99,15 @@ interface Context {
     resolve(
       hostId: string,
       revision?: number,
-    ): Promise<{ id: string; url: string; internalUrl: string } | undefined>;
+    ): Promise<
+      | {
+          id: string;
+          url: string;
+          internalUrl: string;
+          stagedIncomingMigration?: boolean;
+        }
+      | undefined
+    >;
     read(claim: OperationClaim): Promise<
       | {
           host_id: string;
@@ -567,7 +575,13 @@ export function createRegistration({
       signingKey,
       rotationKeys: savedIntent.rotationKeys,
       handle,
-      pds: pds.url,
+      pds: placement
+        ? registryPlcEndpoint(
+            pds.url,
+            "stagedIncomingMigration" in pds &&
+              pds.stagedIncomingMigration === true,
+          )
+        : pds.url,
     });
     const createdAt = new Date().toISOString();
     const row: AccountRow = {

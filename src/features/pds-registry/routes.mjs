@@ -28,6 +28,8 @@ export function mountPdsRegistryRoutes({
   enrollment,
   health,
   incidents,
+  phase,
+  lifecycleControl,
   admin,
 }) {
   const guarded = (handler) => async (req, res, next) => {
@@ -53,6 +55,13 @@ export function mountPdsRegistryRoutes({
         );
       if (
         [
+          "RegistrySigningKeyConflict",
+          "RegistryServingUnavailable",
+          "AuthorityPhaseConflict",
+          "AuthorityPhaseEnrollmentRequired",
+          "PdsLifecycleModeConflict",
+          "PdsLifecycleConflict",
+          "PdsLifecycleIneligible",
           "PdsHostRevisionConflict",
           "PdsHostIdempotencyConflict",
           "PdsInboundCredentialConflict",
@@ -74,6 +83,8 @@ export function mountPdsRegistryRoutes({
         );
       if (
         [
+          "InvalidAuthorityPhaseRequest",
+          "InvalidPdsLifecycleRequest",
           "InvalidPdsHost",
           "InvalidPdsHostUrl",
           "InvalidPdsHostRequest",
@@ -84,6 +95,56 @@ export function mountPdsRegistryRoutes({
       return next(error);
     }
   };
+  if (phase && lifecycleControl) {
+    app.get(
+      "/admin/pds-registry/phase",
+      guarded(async (_req, res) => res.json(await phase.read())),
+    );
+    app.post(
+      "/admin/pds-registry/activate",
+      guarded(async (req, res) => {
+        if (
+          !record(req.body, ["expectedGeneration", "commandKey"]) ||
+          !Number.isSafeInteger(req.body.expectedGeneration) ||
+          typeof req.body.commandKey !== "string"
+        )
+          throw invalid();
+        res.json(
+          await phase.activate(
+            req.body.expectedGeneration,
+            req.body.commandKey,
+          ),
+        );
+      }),
+    );
+    app.post(
+      "/admin/pds-registry/hosts/:hostId/lifecycle",
+      guarded(async (req, res) => {
+        if (
+          !record(req.body, [
+            "command",
+            "revision",
+            "expectedLifecycleVersion",
+            "commandKey",
+          ]) ||
+          typeof req.body.command !== "string" ||
+          !Number.isSafeInteger(req.body.revision) ||
+          !Number.isSafeInteger(req.body.expectedLifecycleVersion) ||
+          typeof req.body.commandKey !== "string"
+        )
+          throw invalid();
+        res.json(
+          await lifecycleControl.transition(
+            req.params.hostId,
+            req.body.command,
+            req.body.revision,
+            req.body.expectedLifecycleVersion,
+            req.body.commandKey,
+          ),
+        );
+      }),
+    );
+  }
   app.get(
     "/admin/pds-registry/status",
     guarded(async (_req, res) => {

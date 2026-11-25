@@ -383,6 +383,7 @@ export function createPdsOutboundCheckStore(
           "did-mismatch",
           "metadata-mismatch",
           "admin-rejected",
+          "unsupported-stock-endpoint",
         ];
         if (!allowed.includes(state.reason as PdsCheckReason))
           throw new Error("InvalidPdsCheckState");

@@ -21,6 +21,7 @@ import { pdsRegistryKeyStatus } from "./database/pds-registry-bootstrap.js";
 import { pdsPublicTrust } from "./features/pds-registry/trust.mjs";
 import { mountPdsRegistryRoutes } from "./features/pds-registry/routes.mjs";
 import { checkPdsOutbound } from "./pds/registry-check.mjs";
+import { validateRegistryServingConfiguration } from "./pds/registry-serving-config.mjs";
 
 export function createRegistryBootstrap({
   config,
@@ -42,7 +43,10 @@ export function createRegistryBootstrap({
   app.get("/_health", (_req, res) =>
     res.json({ status: "ok", role: "registry-bootstrap" }),
   );
-  app.get("/_readyz", lifecycle.readiness);
+  app.get(
+    "/_readyz",
+    lifecycle.readinessWithProbe((timeout) => db.probeBootstrap(timeout)),
+  );
   app.use(lifecycle.admission);
   app.use(express.json({ limit: "64kb" }));
   app.use("/admin/pds-registry", (error, _req, _res, next) => {
@@ -92,7 +96,28 @@ export function createRegistryBootstrap({
     () => pdsPublicTrust(config),
     (revision) => registryTargets?.policyFor(revision),
   );
-  const phase = createAuthorityPhase(db, pdsLifecycle);
+  const phase = createAuthorityPhase(db, pdsLifecycle, () =>
+    validateRegistryServingConfiguration(
+      config,
+      registryKeyring,
+      registryTargets,
+    ),
+  );
+  const lifecycleControl = {
+    transition: (hostId, command, revision, expectedVersion, key) =>
+      db.transact(async () => {
+        const current = await phase.read();
+        if (current.phase !== "registry-serving" || current.generation !== 2)
+          throw new Error("PdsLifecycleModeConflict");
+        return pdsLifecycle.transition(
+          hostId,
+          command,
+          revision,
+          expectedVersion,
+          key,
+        );
+      }),
+  };
   const sweep = createPdsHealthSweep(db, incidents);
   const sweepHealth = () => sweep.run();
   sweepHealth.stop = () => sweep.stop();
@@ -121,6 +146,8 @@ export function createRegistryBootstrap({
     enrollment,
     health,
     incidents,
+    phase,
+    lifecycleControl,
     keyStatus: () => pdsRegistryKeyStatus(db, registryKeyring),
     checks,
     outboundCheck: (revision, password) =>
@@ -158,6 +185,7 @@ export function createRegistryBootstrap({
     placement,
     phase,
     pdsLifecycle,
+    lifecycleControl,
     registryTargets,
   };
 }

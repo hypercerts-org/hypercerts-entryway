@@ -594,7 +594,7 @@ export function createAuthenticatedArrival({
             const signed = await validateStagedMove({
               predecessor: saved.sourcePredecessor,
               operation: parsed.operation,
-              endpoint: saved.endpoint,
+              endpoint: saved.plcEndpoint ?? saved.endpoint,
               handle: saved.handle,
               repositoryKey: locked.arrival.signingKey,
               rotationKeys: destinationRotationKeys(locked.arrival),

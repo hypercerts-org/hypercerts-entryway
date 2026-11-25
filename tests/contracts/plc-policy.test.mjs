@@ -5,6 +5,7 @@ import * as plc from "@did-plc/lib";
 import { cidForCbor } from "@atproto/common";
 import {
   genesisRotationKeys,
+  registryPlcEndpoint,
   incomingRotationKeys,
   publicUpdateCandidate,
   validateIncomingHandoff,
@@ -142,4 +143,21 @@ test("updates preserve omission and pinned duplicate behavior, enforce bounds an
     await assert.rejects(publicUpdateCandidate(op, replacement), {
       code: "InvalidPlcOperation",
     });
+});
+
+test("stock PLC endpoint uses the exact origin while staged profiles retain their nominated endpoint", () => {
+  assert.equal(
+    registryPlcEndpoint("https://pds.example/", false),
+    "https://pds.example",
+  );
+  assert.equal(
+    registryPlcEndpoint("https://pds.example/", true),
+    "https://pds.example/",
+  );
+  assert.throws(() => registryPlcEndpoint("https://pds.example/path", false), {
+    code: "InvalidPlcOperation",
+  });
+  assert.throws(() => registryPlcEndpoint("http://pds.example/", false), {
+    code: "InvalidPlcOperation",
+  });
 });

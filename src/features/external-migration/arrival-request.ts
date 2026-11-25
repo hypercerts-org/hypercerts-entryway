@@ -196,6 +196,9 @@ export function parseArrivalRequest(
             handle: saved.handle,
             pdsId: saved.pdsId,
             endpoint: saved.endpoint,
+            ...(saved.plcEndpoint === undefined
+              ? {}
+              : { plcEndpoint: saved.plcEndpoint }),
             sourcePlcHead:
               method === incomingCreationMethod
                 ? (saved.staged?.creationPlcHead ?? saved.sourcePlcHead)

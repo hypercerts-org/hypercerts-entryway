@@ -1,4 +1,5 @@
 import { getPdsJson } from "./registry-http.mjs";
+import { registryPlcEndpoint } from "../plc/policy.js";
 
 export async function checkPdsOutbound(
   revision,
@@ -15,6 +16,13 @@ export async function checkPdsOutbound(
     adminOk: false,
     reason: "ok",
   };
+  if (revision.stagedIncomingMigration !== true) {
+    try {
+      registryPlcEndpoint(revision.publicUrl, false);
+    } catch {
+      return { ...result, reason: "unsupported-stock-endpoint" };
+    }
+  }
   for (const [label, origin] of [
     ["public", revision.publicUrl],
     ["internal", revision.internalUrl],

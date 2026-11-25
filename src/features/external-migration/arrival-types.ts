@@ -67,6 +67,8 @@ export interface ArrivalRecord extends ArrivalPreparationAuthority {
   readonly pdsRevision?: number;
   readonly stagedIncomingMigration?: boolean;
   readonly endpoint: string;
+  /** Exact published PLC destination; absent for saved legacy offers. */
+  readonly plcEndpoint?: string;
   readonly sourcePlcHead: string;
   readonly version: number;
   readonly codeHash: string;

@@ -206,6 +206,7 @@ export const arrivals = table(
       .notNull()
       .default(false),
     endpoint: text("endpoint").notNull(),
+    plc_endpoint: text("plc_endpoint"),
     source_plc_head: text("source_plc_head").notNull(),
     source_endpoint: text("source_endpoint"),
     canonical_handoff_cid: text("canonical_handoff_cid"),

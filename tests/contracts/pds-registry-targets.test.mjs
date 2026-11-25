@@ -52,3 +52,21 @@ test("startup verifier snapshot isolates later address and CA mutations", async 
   assert.equal(pdsVerifierPolicy(revision, pinned), fingerprint);
   assert.equal(snapshotPdsRegistryVerifier(pinned), pinned);
 });
+
+test("stock qualification rejects a path endpoint before making requests", async () => {
+  const { checkPdsOutbound } =
+    await import("../../dist/src/pds/registry-check.mjs");
+  const result = await checkPdsOutbound(
+    {
+      publicUrl: "https://pds.example/path",
+      internalUrl: "https://pds.example/",
+      serviceDid: "did:web:pds.example",
+      stagedIncomingMigration: false,
+    },
+    "https://issuer.example",
+    "unused",
+    undefined,
+  );
+  assert.equal(result.reason, "unsupported-stock-endpoint");
+  assert.equal(result.adminAttempted, false);
+});

@@ -396,7 +396,9 @@ async function fixture(
         return Response.json({ error: "AccountNotFound" }, { status: 404 });
       result = {
         activated: node.active,
-        validDid: currentOp.services.atproto_pds.endpoint === pds.url,
+        validDid:
+          currentOp.services.atproto_pds.endpoint ===
+          (registryMode ? new URL(pds.url).origin : pds.url),
         indexedRecords: node.imported ? 1 : 0,
         expectedBlobs: node.imported ? 1 : 0,
         importedBlobs: node.blob ? 1 : 0,

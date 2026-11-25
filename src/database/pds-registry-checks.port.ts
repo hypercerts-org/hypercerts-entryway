@@ -7,7 +7,8 @@ export type PdsCheckReason =
   | "invalid-response"
   | "did-mismatch"
   | "metadata-mismatch"
-  | "admin-rejected";
+  | "admin-rejected"
+  | "unsupported-stock-endpoint";
 export interface PdsOutboundObservation {
   publicDidOk: boolean;
   internalDidOk: boolean;

@@ -131,14 +131,41 @@ test("registry product assembly requires serving and discovers associated hosts"
     attestationId: attestation.attestationId,
     idempotencyKey: "associate",
   });
-  await runtime.phase.activate(1, "activate");
   const wrongKey = {
     ...generateKeyPairSync("ec", { namedCurve: "secp256k1" }).privateKey.export(
       { format: "jwk" },
     ),
     alg: "ES256K",
   };
+  const originalDpop = config.dpopSecret;
+  config.dpopSecret = "not-a-provider-secret";
+  await assert.rejects(
+    runtime.phase.activate(1, "invalid-dpop"),
+    /RegistryServingUnavailable/,
+  );
+  assert.deepEqual(await runtime.phase.read(), {
+    phase: "bootstrap",
+    generation: 1,
+  });
+  assert.equal((await db.read("authority_phase_events")).length, 0);
+  config.dpopSecret = originalDpop;
   config.jwtJwk = wrongKey;
+  await assert.rejects(
+    runtime.phase.activate(1, "invalid-key"),
+    /RegistrySigningKeyConflict/,
+  );
+  assert.deepEqual(await runtime.phase.read(), {
+    phase: "bootstrap",
+    generation: 1,
+  });
+  assert.equal((await db.read("authority_phase_events")).length, 0);
+  config.jwtJwk = jwtJwk;
+  await runtime.phase.activate(1, "activate");
+  config.jwtJwk = wrongKey;
+  assert.deepEqual(await runtime.phase.activate(1, "activate"), {
+    phase: "registry-serving",
+    generation: 2,
+  });
   await assert.rejects(createApp(options), /RegistrySigningKeyConflict/);
   config.jwtJwk = { ...wrongKey, d: jwtJwk.d };
   await assert.rejects(createApp(options), /RegistrySigningKeyConflict/);
