@@ -177,6 +177,14 @@ export async function assertFreshPdsEnrollment(
     modes[0].mode !== "registry-bootstrap"
   )
     throw new Error("PdsEnrollmentModeConflict");
+  const phases = await db.read("authority_phase");
+  if (
+    phases.length !== 1 ||
+    phases[0]?.id !== 1 ||
+    phases[0].phase !== "bootstrap" ||
+    phases[0].generation !== 1
+  )
+    throw new Error("PdsEnrollmentModeConflict");
   await assertNoPdsAuthorityReferences(db);
   const did = canonicalDid(candidate.serviceDid);
   const endpoints = new Set([

@@ -1957,3 +1957,20 @@ test("completed phase and command replay survive a connection restart", async (t
     await reopened.close();
   }
 });
+
+test("a serving phase fences new fresh-only enrollment across connections", async (t) => {
+  const { createAuthorityPhase } =
+    await import("../../dist/src/database/drizzle/authority-phase.js");
+  const { db, peer, first, second } = await fixture(t);
+  await onboard(first, "original");
+  await createAuthorityPhase(db, first.lifecycle).activate(1, "activate");
+  await assert.rejects(onboard(second, "later"), /PdsEnrollmentModeConflict/);
+  assert.equal(
+    (await peer.read("pds_host_enrollment_events")).filter(
+      (event) => event.host_id === "later",
+    ).length,
+    0,
+  );
+  const host = await second.registry.readHost("later");
+  assert.equal(host.association, "unassociated");
+});
