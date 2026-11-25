@@ -79,6 +79,8 @@ export interface ArrivalTransactor {
       email: string;
       handle: string;
       pdsId: string;
+      pdsRevision?: number;
+      stagedIncomingMigration?: boolean;
       endpoint: string;
       sourcePlcHead: string;
       codeHash: string;

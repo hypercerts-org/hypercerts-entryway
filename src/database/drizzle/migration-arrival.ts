@@ -249,6 +249,12 @@ function arrivalRecord(
     email: row.email,
     handle: row.handle,
     pdsId: row.pds_id,
+    ...(row.pds_revision === null
+      ? {}
+      : {
+          pdsRevision: row.pds_revision,
+          stagedIncomingMigration: row.staged_incoming_migration,
+        }),
     endpoint: row.endpoint,
     sourcePlcHead: row.source_plc_head,
     sourcePredecessor: JSON.parse(row.source_predecessor),
@@ -283,6 +289,15 @@ export function createArrivalStorage(
     readonly stagedIncomingMigration?: boolean;
   }[],
   authority: ArrivalAuthority,
+  registryOffer?: (
+    pdsId: string,
+    revision: number,
+  ) => Promise<{
+    id: string;
+    url: string;
+    revision: number;
+    stagedIncomingMigration: boolean;
+  }>,
 ): ArrivalTransactor {
   const table = db.tables.arrivals;
   const codeTable = db.tables.arrival_code;
@@ -646,7 +661,9 @@ export function createArrivalStorage(
         );
         if (
           input.staged.creationPlcHead !== undefined ||
-          host?.stagedIncomingMigration !== true ||
+          (registryOffer
+            ? input.stagedIncomingMigration !== true
+            : host?.stagedIncomingMigration !== true) ||
           canonicalJson(
             stagedRotationKeys(
               normalized.rotationKeys,
@@ -809,7 +826,13 @@ export function createArrivalStorage(
           400,
           "Invalid arrival operation",
         );
-      assertConfiguredHost(input.pdsId, input.endpoint);
+      if (!registryOffer) assertConfiguredHost(input.pdsId, input.endpoint);
+      else if (
+        !Number.isSafeInteger(input.pdsRevision) ||
+        !input.pdsRevision ||
+        typeof input.stagedIncomingMigration !== "boolean"
+      )
+        throw immutableTuple();
       assertCodeLifetime(input.codeLifetimeMs);
       const saved = await row(input.operationId);
       if (saved) {
@@ -820,6 +843,10 @@ export function createArrivalStorage(
           saved.handle !== input.handle ||
           saved.pds_id !== input.pdsId ||
           saved.endpoint !== input.endpoint ||
+          saved.pds_revision !== (input.pdsRevision ?? null) ||
+          (input.pdsRevision !== undefined &&
+            saved.staged_incoming_migration !==
+              input.stagedIncomingMigration) ||
           saved.source_plc_head !== input.sourcePlcHead ||
           canonicalJson(JSON.parse(saved.source_predecessor)) !==
             canonicalJson(input.sourcePredecessor) ||
@@ -838,6 +865,17 @@ export function createArrivalStorage(
         );
       }
       return db.transact(async () => {
+        if (registryOffer) {
+          const offer = await registryOffer(input.pdsId, input.pdsRevision!);
+          if (
+            offer.id !== input.pdsId ||
+            offer.revision !== input.pdsRevision ||
+            offer.url !== input.endpoint ||
+            offer.stagedIncomingMigration !== input.stagedIncomingMigration ||
+            Boolean(input.staged) !== offer.stagedIncomingMigration
+          )
+            throw immutableTuple();
+        }
         const user = (
           await db.read("user", {
             where: eq(db.tables.user.id, input.userId),
@@ -890,6 +928,9 @@ export function createArrivalStorage(
             email,
             handle: input.handle,
             pds_id: input.pdsId,
+            pds_revision: input.pdsRevision ?? null,
+            staged_incoming_migration:
+              input.stagedIncomingMigration ?? Boolean(input.staged),
             endpoint: input.endpoint,
             source_plc_head: input.sourcePlcHead,
             source_endpoint: input.source.services.atproto_pds?.endpoint,

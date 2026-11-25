@@ -105,6 +105,8 @@ CREATE TABLE "arrivals" (
 	"email" text NOT NULL,
 	"handle" text NOT NULL,
 	"pds_id" text NOT NULL,
+	"pds_revision" bigint,
+	"staged_incoming_migration" boolean DEFAULT false NOT NULL,
 	"endpoint" text NOT NULL,
 	"source_plc_head" text NOT NULL,
 	"source_endpoint" text,

@@ -194,6 +194,10 @@ export const arrivals = table(
     email: text("email").notNull(),
     handle: text("handle").notNull(),
     pds_id: text("pds_id").notNull(),
+    pds_revision: count("pds_revision"),
+    staged_incoming_migration: boolean("staged_incoming_migration")
+      .notNull()
+      .default(false),
     endpoint: text("endpoint").notNull(),
     source_plc_head: text("source_plc_head").notNull(),
     source_endpoint: text("source_endpoint"),
