@@ -330,6 +330,11 @@ export function mountAuthorizationRoutes({
             "Sign-in is still starting. Try again.",
           );
         const flow = await flows.readFlow(admitted.flowId, browser);
+        // Resume renews the provider request like getFlow does, so the
+        // five-minute inactivity window still covers the pages ahead. An
+        // expired request fails here with the client redirect instead of
+        // after the user picks an account or sends a code.
+        if (flow.requestUri) await flows.request(flow, browser);
         if (
           flow.initialEntry &&
           !flow.email &&

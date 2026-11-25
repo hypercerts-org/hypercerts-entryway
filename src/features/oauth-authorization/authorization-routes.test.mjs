@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { OAuthProvider } from "@atproto/oauth-provider/provider";
+import { AccessDeniedError } from "@atproto/oauth-provider/errors";
 import { openTestDatabase } from "../../../tests/support/database-fixture.mjs";
 import { createOAuthStores } from "../../../dist/src/database/drizzle/oauth-stores.mjs";
 import { createBrowserFlow } from "../../../dist/src/http/browser-flow.mjs";
 import { mountAuthorizationRoutes } from "../../../dist/src/features/oauth-authorization/authorization-routes.mjs";
+import { authorizationRedirect } from "../../../dist/src/features/oauth-authorization/redirect.mjs";
 import { createConsent } from "../../../dist/src/features/oauth-authorization/consent.mjs";
 import { maskEmail } from "../../../dist/src/features/email-login/page.mjs";
 import { fakeApp, fakeResponse } from "../../../tests/support/fake-http.mjs";
@@ -43,6 +45,8 @@ async function fixture(
       "account-1.example.test": hostedFirst,
     },
     hintLookupFails = false,
+    // The provider request answers get() with the stock expiry error.
+    expiredRequest = false,
     // The automatic-code budget is spent: a send marked automatic is refused.
     automaticLimit = false,
     // Accounts that own each email, by normalized address.
@@ -109,6 +113,7 @@ async function fixture(
   const upserts = [];
   const emailCodes = [];
   let authorizeCalls = 0;
+  let requestGets = 0;
   const authorizationContexts = [];
   let lookup;
   const provider = {
@@ -125,6 +130,9 @@ async function fixture(
         return (await stores.readRequest("request-id"))?.clientId;
       },
       async get() {
+        requestGets++;
+        if (expiredRequest)
+          throw new AccessDeniedError(parameters, "This request has expired");
         return { parameters };
       },
       async setAuthorized(_uri, _client, account) {
@@ -191,7 +199,21 @@ async function fixture(
     issuer: "https://entryway.example.test",
     clientUrl: "https://client.example.test",
   };
-  const flows = createBrowserFlow({ db, config, provider, stores });
+  const flows = createBrowserFlow({
+    db,
+    config,
+    provider,
+    stores,
+    // Same client redirect as compose-authentication, so an authorization
+    // error reaches the client instead of an error page.
+    redirectAuthorizationError: (res, error) =>
+      authorizationRedirect(
+        res,
+        config.issuer,
+        error.parameters,
+        error.toJSON(),
+      ),
+  });
   const flow = await flows.newFlow(browser, {
     requestUri: "request-uri",
     clientId: "client-id",
@@ -301,6 +323,9 @@ async function fixture(
     },
     get authorizeCalls() {
       return authorizeCalls;
+    },
+    get requestGets() {
+      return requestGets;
     },
     async restart() {
       const res = response();
@@ -459,6 +484,62 @@ test("restart requires renewed proof even for a remembered hinted DID", async (t
   assert.match(restarted.body, /Sign in to authorize/);
   assert.equal(f.authorizeCalls, 0);
   assert.match(restarted.body, /action="\/auth\/email"/);
+});
+
+test("authorization resume renews the provider request without re-running authorization", async (t) => {
+  const f = await fixture(t, { realAdmission: true });
+  await f.startAuthorization();
+  assert.equal(f.requestGets, 0);
+  assert.equal(f.authorizeCalls, 1);
+  const record = await f.stores.readRequest("request-id");
+  const original = await f.db.get("auth-flows", record.entryFlowId);
+  const replacement = await f.db.transact(() =>
+    f.flows.replaceFlow(original, f.browser),
+  );
+  await f.db.set("auth-flows", replacement.id, {
+    ...replacement,
+    authDid: hostedFirst.did,
+    authEmail: verifiedEmail,
+    authUserId: identity.userId,
+  });
+
+  const resumed = await f.startAuthorization();
+
+  // The GET renders the login form for the replacement attempt without
+  // re-running account selection or sending a code, and renews the pending
+  // provider request.
+  assert.equal(resumed.statusCode, 200);
+  assert.match(resumed.body, /action="\/auth\/email"/);
+  assert.equal(f.authorizeCalls, 1);
+  assert.deepEqual(f.emailCodes, []);
+  assert.equal(f.requestGets, 1);
+});
+
+test("an expired provider request fails resume with the client redirect", async (t) => {
+  const f = await fixture(t, { realAdmission: true, expiredRequest: true });
+  await f.startAuthorization();
+  const record = await f.stores.readRequest("request-id");
+  const original = await f.db.get("auth-flows", record.entryFlowId);
+  const replacement = await f.db.transact(() =>
+    f.flows.replaceFlow(original, f.browser),
+  );
+  await f.db.set("auth-flows", replacement.id, {
+    ...replacement,
+    authDid: hostedFirst.did,
+    authEmail: verifiedEmail,
+    authUserId: identity.userId,
+  });
+
+  const resumed = await f.startAuthorization();
+
+  // The inactivity deadline ran out, so resume refuses before any account
+  // choice or code send, with the stock access_denied redirect.
+  assert.equal(resumed.statusCode, 303);
+  assert.match(resumed.redirectUrl, /error=access_denied/);
+  assert.match(resumed.redirectUrl, /state=original-state/);
+  assert.equal(f.authorizeCalls, 1);
+  assert.deepEqual(f.emailCodes, []);
+  assert.equal(f.requestGets, 1);
 });
 
 test("restart gives a spent per-flow code budget a fresh count", async (t) => {
