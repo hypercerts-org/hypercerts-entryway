@@ -72,7 +72,7 @@ try {
   assert.equal(successful.outbound.last.adminAttempted, true);
   assert.equal(successful.outbound.last.adminOk, true);
   assert.equal(successful.inbound, "unproven");
-  assert.equal(successful.association, "disabled");
+  assert.equal(successful.association, "unassociated");
   const policyStatus = cli("policy-status", ["--host", good]);
   assert.equal(policyStatus.status, 0);
   const policy = JSON.parse(policyStatus.stdout);

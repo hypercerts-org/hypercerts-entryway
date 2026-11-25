@@ -695,3 +695,34 @@ export const pds_host_verifier_policies = table("pds_host_verifier_policies", {
   generation: count("generation").notNull(),
   fingerprint: text("fingerprint").notNull(),
 });
+
+export const pds_host_enrollment_events = table(
+  "pds_host_enrollment_events",
+  {
+    id: text("id").primaryKey(),
+    host_id: text("host_id")
+      .notNull()
+      .references(() => pds_hosts.id),
+    revision: count("revision").notNull(),
+    kind: text("kind").notNull(),
+    principal_class: text("principal_class").notNull(),
+    idempotency_key: text("idempotency_key").notNull(),
+    request: text("request").notNull(),
+    receipt_id: text("receipt_id").notNull(),
+    attestation_id: text("attestation_id").notNull(),
+    generation: count("generation").notNull(),
+    policy_generation: count("policy_generation").notNull(),
+    manifest_fingerprint: text("manifest_fingerprint").notNull(),
+    receipt_snapshot: text("receipt_snapshot").notNull(),
+    expires_at: count("expires_at").notNull(),
+    created_at: count("created_at").notNull(),
+    result: text("result").notNull(),
+  },
+  (t) => [
+    uniqueIndex("pds_host_enrollment_idempotency").on(
+      t.host_id,
+      t.kind,
+      t.idempotency_key,
+    ),
+  ],
+);

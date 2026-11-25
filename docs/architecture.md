@@ -496,15 +496,17 @@ adapted to unchanged reference PDS support:
 2. The PDS operator applies that configuration and restarts the PDS. A record
    staged before this step must stay disabled and unassociated.
 3. Verify the live PDS identity against the intended DID, its protected-resource
-   metadata against this Entryway issuer, and authenticated admin callback access.
-   Use the PDS callback credential securely; do not log or expose it in reports.
+   metadata against this Entryway issuer, and an authenticated outbound admin read.
+   This does not establish a PDS-originated callback.
 4. Only after configuration and verification may Entryway associate the PDS and
    make it eligible under the separate placement policy. Failed or incomplete
    verification must not activate an association or admit new placements.
 
 Protected registry staging, public trust export and outbound checks are available.
-Inbound pairing and association remain unavailable, and current host routing is
-statically configured. Whole-PDS conversion additionally
+For a fresh registry-bootstrap authority, a global administrator can separately
+record the PDS operator's empty-stock configuration confirmation and associate
+the exact checked revision with placement disabled. The callback remains unobserved;
+the attestation does not grant callback authority. Static host routing is unchanged. Whole-PDS conversion additionally
 needs its [account and custody import](data-custody.md#5-migration-and-whole-pds-joining);
 it does not waive this gate or permit early effective association.
 
@@ -520,7 +522,7 @@ flowchart LR
   enabled["Enabled<br/>Accept new placements"]
   draining["Draining<br/>Move existing accounts"]
   retired["Retired<br/>Retain required history"]
-  configured -->|"Verify DID, issuer and callback access"| registered
+  configured -->|"Verify outbound identity and attest configuration"| registered
   registered -->|"Operator enables healthy host"| enabled
   enabled -->|"Operator stops new placement"| draining
   draining -->|"No placements, transfers or retention blockers"| retired

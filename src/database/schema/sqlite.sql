@@ -360,6 +360,26 @@ CREATE TABLE `pds_host_credentials` (
 	CONSTRAINT `fk_pds_host_credentials_host_id_pds_hosts_id_fk` FOREIGN KEY (`host_id`) REFERENCES `pds_hosts`(`id`)
 );
 --> statement-breakpoint
+CREATE TABLE `pds_host_enrollment_events` (
+	`id` text PRIMARY KEY,
+	`host_id` text NOT NULL,
+	`revision` integer NOT NULL,
+	`kind` text NOT NULL,
+	`principal_class` text NOT NULL,
+	`idempotency_key` text NOT NULL,
+	`request` text NOT NULL,
+	`receipt_id` text NOT NULL,
+	`attestation_id` text NOT NULL,
+	`generation` integer NOT NULL,
+	`policy_generation` integer NOT NULL,
+	`manifest_fingerprint` text NOT NULL,
+	`receipt_snapshot` text NOT NULL,
+	`expires_at` integer NOT NULL,
+	`created_at` integer NOT NULL,
+	`result` text NOT NULL,
+	CONSTRAINT `fk_pds_host_enrollment_events_host_id_pds_hosts_id_fk` FOREIGN KEY (`host_id`) REFERENCES `pds_hosts`(`id`)
+);
+--> statement-breakpoint
 CREATE TABLE `pds_host_manifests` (
 	`host_id` text NOT NULL,
 	`revision` integer NOT NULL,
@@ -471,6 +491,7 @@ CREATE INDEX `migration_email_ci` ON `migration_reservations` (lower("email"));-
 CREATE INDEX `migration_user_id` ON `migration_reservations` (`user_id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `migration_handle_ci` ON `migration_reservations` (lower("handle"));--> statement-breakpoint
 CREATE INDEX `operation_admission_id` ON `operation_admissions` (`operation_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `pds_host_enrollment_idempotency` ON `pds_host_enrollment_events` (`host_id`,`kind`,`idempotency_key`);--> statement-breakpoint
 CREATE INDEX `session_user_id` ON `session` (`userId`);--> statement-breakpoint
 CREATE UNIQUE INDEX `user_email_ci` ON `user` (lower("email"));--> statement-breakpoint
 CREATE INDEX `verification_identifier` ON `verification` (`identifier`);

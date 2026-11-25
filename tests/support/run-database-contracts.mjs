@@ -38,6 +38,7 @@ const files = [
   "incoming-arrival-storage",
   "authority-mode",
   "pds-registry",
+  "pds-registry-enrollment",
   "pds-registry-routes",
   "pds-registry-targets",
 ].map((name) => `tests/contracts/${name}.test.mjs`);

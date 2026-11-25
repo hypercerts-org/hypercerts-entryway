@@ -3,6 +3,7 @@ import express from "express";
 import { HttpError } from "./http/http-error.mjs";
 import { canonicalBasic } from "./http/authorization-scheme.js";
 import { requestFailureEvent } from "./logging/request-event.js";
+import { createPdsEnrollment } from "./database/drizzle/pds-registry-enrollment.js";
 import { createPdsRegistry } from "./database/drizzle/pds-registry.js";
 import { createPdsOutboundCheckStore } from "./database/drizzle/pds-registry-checks.js";
 import { pdsRegistryKeyStatus } from "./database/pds-registry-bootstrap.js";
@@ -52,20 +53,24 @@ export function createRegistryBootstrap({
         "Administrator credentials required",
       );
   };
+  const registry = createPdsRegistry(db, registryKeyring, () =>
+    pdsPublicTrust(config),
+  );
+  const checks = createPdsOutboundCheckStore(
+    db,
+    () => pdsPublicTrust(config),
+    (revision) => registryTargets?.policyFor(revision),
+  );
+  const enrollment = createPdsEnrollment(db, registry, checks);
   mountPdsRegistryRoutes({
     app,
     config,
     admin,
     keyring: registryKeyring,
-    registry: createPdsRegistry(db, registryKeyring, () =>
-      pdsPublicTrust(config),
-    ),
+    registry,
+    enrollment,
     keyStatus: () => pdsRegistryKeyStatus(db, registryKeyring),
-    checks: createPdsOutboundCheckStore(
-      db,
-      () => pdsPublicTrust(config),
-      (revision) => registryTargets?.policyFor(revision),
-    ),
+    checks,
     outboundCheck: (revision, password) =>
       checkPdsOutbound(revision, config.issuer, password, registryTargets),
   });

@@ -341,6 +341,25 @@ CREATE TABLE "pds_host_credentials" (
 	CONSTRAINT "pds_host_credentials_pkey" PRIMARY KEY("host_id","revision")
 );
 --> statement-breakpoint
+CREATE TABLE "pds_host_enrollment_events" (
+	"id" text PRIMARY KEY,
+	"host_id" text NOT NULL,
+	"revision" bigint NOT NULL,
+	"kind" text NOT NULL,
+	"principal_class" text NOT NULL,
+	"idempotency_key" text NOT NULL,
+	"request" text NOT NULL,
+	"receipt_id" text NOT NULL,
+	"attestation_id" text NOT NULL,
+	"generation" bigint NOT NULL,
+	"policy_generation" bigint NOT NULL,
+	"manifest_fingerprint" text NOT NULL,
+	"receipt_snapshot" text NOT NULL,
+	"expires_at" bigint NOT NULL,
+	"created_at" bigint NOT NULL,
+	"result" text NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "pds_host_manifests" (
 	"host_id" text,
 	"revision" bigint,
@@ -447,6 +466,7 @@ CREATE INDEX "migration_email_ci" ON "migration_reservations" (lower("email"));-
 CREATE INDEX "migration_user_id" ON "migration_reservations" ("user_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "migration_handle_ci" ON "migration_reservations" (lower("handle"));--> statement-breakpoint
 CREATE INDEX "operation_admission_id" ON "operation_admissions" ("operation_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "pds_host_enrollment_idempotency" ON "pds_host_enrollment_events" ("host_id","kind","idempotency_key");--> statement-breakpoint
 CREATE INDEX "session_user_id" ON "session" ("userId");--> statement-breakpoint
 CREATE UNIQUE INDEX "user_email_ci" ON "user" (lower("email"));--> statement-breakpoint
 CREATE INDEX "verification_identifier" ON "verification" ("identifier");--> statement-breakpoint
@@ -469,6 +489,7 @@ ALTER TABLE "operation_admissions" ADD CONSTRAINT "operation_admissions_operatio
 ALTER TABLE "pds_host_checks" ADD CONSTRAINT "pds_host_checks_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_credential_requests" ADD CONSTRAINT "pds_host_credential_requests_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_credentials" ADD CONSTRAINT "pds_host_credentials_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
+ALTER TABLE "pds_host_enrollment_events" ADD CONSTRAINT "pds_host_enrollment_events_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_manifests" ADD CONSTRAINT "pds_host_manifests_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_revisions" ADD CONSTRAINT "pds_host_revisions_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_stage_requests" ADD CONSTRAINT "pds_host_stage_requests_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
