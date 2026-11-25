@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { DomainError } from "../../accounts/errors.js";
 import { and, eq, or } from "drizzle-orm";
 import type { DatabaseExecutor } from "../executor.js";
 import type { PdsHostRevision } from "../pds-registry.port.js";
@@ -234,6 +235,63 @@ export function createPdsPlacement(
         return reservation;
       });
     },
+    async releaseUnused(claim: OperationClaim, reservationId: string) {
+      return db.transact(async () => {
+        await db.assertOperationFence(claim);
+        const saved = await find(claim.operationId);
+        if (!saved || saved.id !== reservationId)
+          throw new Error("PdsPlacementConflict");
+        if (saved.state === "released") return "already-released" as const;
+        if (!["reserved", "refused"].includes(saved.state))
+          throw new Error("PdsPlacementConflict");
+        const attempts = db.tables.external_operation_attempts;
+        const recorded = await db.read("external_operation_attempts", {
+          where: eq(attempts.operation_id, claim.operationId),
+        });
+        const revisions = await db.read("pds_host_revisions", {
+          where: eq(db.tables.pds_host_revisions.host_id, saved.host_id),
+        });
+        const canonical = (value: string) => {
+          try {
+            return new URL(value).href;
+          } catch {
+            return value;
+          }
+        };
+        const aliases = new Set(
+          [
+            saved.target,
+            saved.public_target,
+            ...revisions.flatMap((revision) => [
+              revision.public_url,
+              revision.internal_url,
+            ]),
+          ].map(canonical),
+        );
+        const unrelatedSource = (step: string, method: string) =>
+          (saved.purpose === "incoming-arrival" &&
+            step === "incoming-handoff" &&
+            method === "com.atproto.identity.submitPlcOperation") ||
+          (saved.purpose === "managed-migration" &&
+            ["source-freeze", "source-retain"].includes(step) &&
+            method === "com.atproto.admin.updateSubjectStatus");
+        if (
+          recorded.some(
+            (attempt) =>
+              attempt.state !== "acknowledged" ||
+              aliases.has(canonical(attempt.target)) ||
+              !unrelatedSource(attempt.step, attempt.method),
+          )
+        )
+          throw new Error("PdsPlacementConflict");
+        await db.update(
+          "pds_placement_reservations",
+          { state: "released" },
+          eq(reservations.id, reservationId),
+        );
+        return "released" as const;
+      });
+    },
     async preflight(claim: OperationClaim, reservationId: string) {
       return db.transact(async () => {
         await db.assertOperationFence(claim);
@@ -241,6 +299,7 @@ export function createPdsPlacement(
         if (!reservation || reservation.id !== reservationId)
           throw new Error("PdsPlacementConflict");
         if (reservation.state === "refused") return "refused" as const;
+        if (reservation.state === "released") return "released" as const;
         if (reservation.state !== "reserved") return "prior-dispatch" as const;
         const steps: unknown = JSON.parse(reservation.target_steps);
         if (
@@ -302,6 +361,12 @@ export function createPdsPlacement(
           throw new Error("PdsPlacementConflict");
         const disposition = await this.preflight(claim, reservationId);
         if (disposition === "refused") return { kind: "refused" as const };
+        if (disposition === "released")
+          throw new DomainError(
+            "OperationNoLongerPending",
+            409,
+            "The saved destination reservation was released",
+          );
         if (disposition !== "eligible")
           return { kind: "prior-dispatch" as const };
         const attempt = await ownership.beginExternal(claim, input);
@@ -328,6 +393,12 @@ export function createPdsPlacement(
           throw new Error("PdsPlacementConflict");
         const disposition = await this.preflight(claim, reservationId);
         if (disposition === "refused") return { kind: "refused" as const };
+        if (disposition === "released")
+          throw new DomainError(
+            "OperationNoLongerPending",
+            409,
+            "The saved destination reservation was released",
+          );
         if (disposition !== "eligible")
           return { kind: "prior-dispatch" as const };
         const attempt = await ownership.beginExternal(claim, input);
@@ -349,6 +420,12 @@ export function createPdsPlacement(
             reservation.public_target !== input.target)
         )
           throw new Error("PdsPlacementConflict");
+        if (reservation.state === "released")
+          throw new DomainError(
+            "OperationNoLongerPending",
+            409,
+            "The saved destination reservation was released",
+          );
         const targetSteps: unknown = JSON.parse(reservation.target_steps);
         if (
           !Array.isArray(targetSteps) ||
