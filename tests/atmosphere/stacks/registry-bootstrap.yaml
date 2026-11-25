@@ -14,6 +14,7 @@ x-bootstrap: &bootstrap
     PDS_REGISTRY_CA_FILE: /ca/root.crt
     PDS_HEALTH_INTERVAL_MS: "1000"
     PDS_HEALTH_TIMEOUT_MS: "500"
+    PDS_HEALTH_CONTACTS_FILE: /config/health-contacts.json
     NODE_EXTRA_CA_CERTS: /ca/root.crt
   volumes:
     - entryway-config:/config:ro

@@ -1,3 +1,4 @@
+import { ne, or } from "drizzle-orm";
 import { isValidDid } from "@atproto/syntax";
 import type { DatabaseExecutor, TableName } from "../executor.js";
 import type {
@@ -36,7 +37,6 @@ const productTables: TableName[] = [
   "authority_operations",
   "operation_admissions",
   "external_operation_attempts",
-  "mail_outbox",
 ];
 
 function canonicalDid(did: string): string {
@@ -107,6 +107,18 @@ export async function assertFreshPdsEnrollment(
   for (const table of productTables)
     if ((await db.read(table, { limit: 1 })).length)
       throw new Error("PdsEnrollmentReferencesExist");
+  if (
+    (
+      await db.read("mail_outbox", {
+        where: or(
+          ne(db.tables.mail_outbox.purpose, "pds-health"),
+          ne(db.tables.mail_outbox.message_kind, "admin"),
+        ),
+        limit: 1,
+      })
+    ).length
+  )
+    throw new Error("PdsEnrollmentReferencesExist");
   const did = canonicalDid(candidate.serviceDid);
   const endpoints = new Set([
     canonicalEndpoint(candidate.publicUrl),

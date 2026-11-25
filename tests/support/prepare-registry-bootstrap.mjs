@@ -17,6 +17,12 @@ const keyring = {
 const origin = new URL(pds.url).origin;
 for (const [name, contents] of Object.entries({
   "bootstrap.json": config,
+  "health-contacts.json": {
+    fleet: `fleet-${randomBytes(8).toString("hex")}@example.test`,
+    hosts: {
+      "pds-monitor": `pds-${randomBytes(8).toString("hex")}@example.test`,
+    },
+  },
   "outbound-pds1.json": pdsConfig,
   "registry-keyring.json": keyring,
   "registry-targets.json": { [origin]: [address] },

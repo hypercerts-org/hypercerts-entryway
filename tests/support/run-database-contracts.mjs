@@ -40,6 +40,7 @@ const files = [
   "pds-registry",
   "pds-registry-enrollment",
   "pds-health",
+  "pds-health-incidents",
   "pds-registry-routes",
   "pds-registry-targets",
 ].map((name) => `tests/contracts/${name}.test.mjs`);

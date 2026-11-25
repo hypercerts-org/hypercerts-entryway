@@ -8,18 +8,22 @@ import { createMailOutbox } from "./database/drizzle/mail-outbox.js";
 import { createSmtpMailTransport } from "./mail/smtp.js";
 import { createLifecycle } from "./http/lifecycle.js";
 import { loadPdsRegistryVerifier } from "./pds/registry-targets.mjs";
+import { loadPdsHealthContacts } from "./mail/pds-health-contacts.js";
 import { bootstrapPdsRegistryKeyring } from "./database/pds-registry-bootstrap.js";
 
 const config = await loadConfig();
 const dataDir = process.env.STATE_DIRECTORY ?? "/data";
 mkdirSync(dataDir, { recursive: true });
 const db = await openDatabase(config.database, config.authorityMode);
-let registryKeyring, registryTargets;
+let registryKeyring, registryTargets, healthContacts;
 try {
   ({ keyring: registryKeyring } = await bootstrapPdsRegistryKeyring(
     db,
     process.env.PDS_REGISTRY_KEYRING_FILE,
   ));
+  healthContacts = await loadPdsHealthContacts(
+    process.env.PDS_HEALTH_CONTACTS_FILE,
+  );
   registryTargets = await loadPdsRegistryVerifier(
     process.env.PDS_REGISTRY_TARGETS_FILE,
     process.env.PDS_REGISTRY_CA_FILE,
@@ -32,14 +36,16 @@ const lifecycle = createLifecycle({
   probe: db.probe,
   configuration: config.lifecycle,
 });
-let app, reconcile, mail, sampleHealth;
+let app, reconcile, mail, sampleHealth, processHealthNotices;
 if (config.authorityMode === "registry-bootstrap") {
-  ({ app, sampleHealth } = createRegistryBootstrap({
+  ({ app, sampleHealth, processHealthNotices } = createRegistryBootstrap({
     config,
     db,
     lifecycle,
     registryKeyring,
     registryTargets,
+    healthContacts,
+    workerId: lifecycle.instanceId,
   }));
 } else {
   mail = createMailFeature({
@@ -79,7 +85,14 @@ const runWorker = (name, work) => {
 };
 // Shared durable claims protect independent processes. Local tracking coalesces
 // scheduling and lets shutdown wait for admitted work, including SMTP delivery.
-let repairTimer, mailTimer, healthTimer;
+let repairTimer, mailTimer, healthTimer, healthNoticeTimer;
+if (processHealthNotices) {
+  runWorker("pds-health-notices", processHealthNotices);
+  healthNoticeTimer = setInterval(
+    () => runWorker("pds-health-notices", processHealthNotices),
+    config.pdsHealth.intervalMs,
+  ).unref();
+}
 if (sampleHealth) {
   runWorker("pds-health", sampleHealth);
   healthTimer = setInterval(
@@ -107,6 +120,7 @@ for (const signal of ["SIGTERM", "SIGINT"])
     clearInterval(repairTimer);
     clearInterval(mailTimer);
     clearInterval(healthTimer);
+    clearInterval(healthNoticeTimer);
     sampleHealth?.stop();
     void lifecycle
       .stop(server, () => db.close())

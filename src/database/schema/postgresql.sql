@@ -244,7 +244,7 @@ CREATE TABLE "mail_outbox" (
 	"lease_expires_at" bigint,
 	"delivery_uncertain" boolean DEFAULT false NOT NULL,
 	CONSTRAINT "mail_message_kind" CHECK ("message_kind" IN ('otp','proof','admin')),
-	CONSTRAINT "mail_attempts" CHECK ("attempt_count" BETWEEN 0 AND 3),
+	CONSTRAINT "mail_attempts" CHECK ("attempt_count" >= 0 AND (("purpose" = 'pds-health' AND "message_kind" = 'admin') OR "attempt_count" <= 3)),
 	CONSTRAINT "mail_state" CHECK ("state" IN ('queued','sending','delivered','failed','expired')),
 	CONSTRAINT "mail_claim" CHECK (("state"='sending' AND "claim_owner" IS NOT NULL AND "claim_attempt" IS NOT NULL AND "lease_expires_at" IS NOT NULL) OR ("state"!='sending' AND "claim_owner" IS NULL AND "claim_attempt" IS NULL AND "lease_expires_at" IS NULL)),
 	CONSTRAINT "mail_expiry" CHECK ("expires_at">"created_at"),
@@ -294,6 +294,26 @@ CREATE TABLE "migration_workflow" (
 CREATE TABLE "operation_admissions" (
 	"resource" text PRIMARY KEY,
 	"operation_id" text NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "pds_health_incidents" (
+	"id" text PRIMARY KEY,
+	"host_id" text NOT NULL,
+	"revision" bigint NOT NULL,
+	"generation" bigint NOT NULL,
+	"opened_at" bigint NOT NULL,
+	"closed_at" bigint,
+	"state" text NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "pds_health_notices" (
+	"id" text PRIMARY KEY,
+	"incident_id" text NOT NULL,
+	"phase" text NOT NULL,
+	"role" text NOT NULL,
+	"recipient" text,
+	"outbox_id" text,
+	"created_at" bigint NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "pds_host_checks" (
@@ -485,6 +505,9 @@ CREATE INDEX "migration_email_ci" ON "migration_reservations" (lower("email"));-
 CREATE INDEX "migration_user_id" ON "migration_reservations" ("user_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "migration_handle_ci" ON "migration_reservations" (lower("handle"));--> statement-breakpoint
 CREATE INDEX "operation_admission_id" ON "operation_admissions" ("operation_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "pds_health_incident_generation" ON "pds_health_incidents" ("host_id","generation");--> statement-breakpoint
+CREATE UNIQUE INDEX "pds_health_open_incident" ON "pds_health_incidents" ("host_id") WHERE "state" = 'open';--> statement-breakpoint
+CREATE UNIQUE INDEX "pds_health_notice_role" ON "pds_health_notices" ("incident_id","phase","role");--> statement-breakpoint
 CREATE UNIQUE INDEX "pds_host_enrollment_idempotency" ON "pds_host_enrollment_events" ("host_id","kind","idempotency_key");--> statement-breakpoint
 CREATE INDEX "session_user_id" ON "session" ("userId");--> statement-breakpoint
 CREATE UNIQUE INDEX "user_email_ci" ON "user" (lower("email"));--> statement-breakpoint
@@ -505,6 +528,8 @@ ALTER TABLE "handle_claims" ADD CONSTRAINT "handle_claims_did_accounts_did_fkey"
 ALTER TABLE "migration_checkpoint" ADD CONSTRAINT "migration_checkpoint_workflow_id_migration_workflow_id_fkey" FOREIGN KEY ("workflow_id") REFERENCES "migration_workflow"("id");--> statement-breakpoint
 ALTER TABLE "migration_snapshot_manifest" ADD CONSTRAINT "migration_snapshot_manifest_MV6jDrceH3um_fkey" FOREIGN KEY ("workflow_id") REFERENCES "migration_workflow"("id");--> statement-breakpoint
 ALTER TABLE "operation_admissions" ADD CONSTRAINT "operation_admissions_operation_id_authority_operations_id_fkey" FOREIGN KEY ("operation_id") REFERENCES "authority_operations"("id");--> statement-breakpoint
+ALTER TABLE "pds_health_incidents" ADD CONSTRAINT "pds_health_incidents_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
+ALTER TABLE "pds_health_notices" ADD CONSTRAINT "pds_health_notices_incident_id_pds_health_incidents_id_fkey" FOREIGN KEY ("incident_id") REFERENCES "pds_health_incidents"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_checks" ADD CONSTRAINT "pds_host_checks_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_credential_requests" ADD CONSTRAINT "pds_host_credential_requests_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_credentials" ADD CONSTRAINT "pds_host_credentials_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint

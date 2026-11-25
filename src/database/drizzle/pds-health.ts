@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
+import type { PdsHealthIncidents } from "./pds-health-incidents.js";
 import type { DatabaseExecutor, StoredRow } from "../executor.js";
 import type {
   PdsHealthClaim,
@@ -36,7 +37,10 @@ function project(
     completedAt: row.completed_at,
   };
 }
-export function createPdsHealthStore(db: DatabaseExecutor): PdsHealthStore {
+export function createPdsHealthStore(
+  db: DatabaseExecutor,
+  incidents?: PdsHealthIncidents,
+): PdsHealthStore {
   const hosts = db.tables.pds_hosts,
     health = db.tables.pds_host_health,
     policies = db.tables.pds_host_verifier_policies;
@@ -222,6 +226,13 @@ export function createPdsHealthStore(db: DatabaseExecutor): PdsHealthStore {
           )!,
         );
         if (changed !== 1) throw new Error("PdsHealthClaimConflict");
+        await incidents?.transition(
+          claim.hostId,
+          claim.revision,
+          now,
+          !passed,
+          passed && successes >= RECOVERY_THRESHOLD,
+        );
         const [saved] = await db.read("pds_host_health", {
           where: eq(health.host_id, claim.hostId),
         });
