@@ -433,6 +433,16 @@ CREATE TABLE `pds_host_health` (
 	CONSTRAINT `fk_pds_host_health_host_id_pds_hosts_id_fk` FOREIGN KEY (`host_id`) REFERENCES `pds_hosts`(`id`)
 );
 --> statement-breakpoint
+CREATE TABLE `pds_host_lifecycle_events` (
+	`id` text PRIMARY KEY,
+	`host_id` text NOT NULL,
+	`command_key` text NOT NULL,
+	`request` text NOT NULL,
+	`result` text NOT NULL,
+	`created_at` integer NOT NULL,
+	CONSTRAINT `fk_pds_host_lifecycle_events_host_id_pds_hosts_id_fk` FOREIGN KEY (`host_id`) REFERENCES `pds_hosts`(`id`)
+);
+--> statement-breakpoint
 CREATE TABLE `pds_host_manifests` (
 	`host_id` text NOT NULL,
 	`revision` integer NOT NULL,
@@ -477,6 +487,7 @@ CREATE TABLE `pds_hosts` (
 	`configured_order` integer NOT NULL,
 	`association` text NOT NULL,
 	`lifecycle` text NOT NULL,
+	`lifecycle_version` integer DEFAULT 0 NOT NULL,
 	`active_revision` integer,
 	`staged_revision` integer
 );
@@ -548,6 +559,7 @@ CREATE UNIQUE INDEX `pds_health_incident_generation` ON `pds_health_incidents` (
 CREATE UNIQUE INDEX `pds_health_open_incident` ON `pds_health_incidents` (`host_id`) WHERE "pds_health_incidents"."state" = 'open';--> statement-breakpoint
 CREATE UNIQUE INDEX `pds_health_notice_role` ON `pds_health_notices` (`incident_id`,`phase`,`role`);--> statement-breakpoint
 CREATE UNIQUE INDEX `pds_host_enrollment_idempotency` ON `pds_host_enrollment_events` (`host_id`,`kind`,`idempotency_key`);--> statement-breakpoint
+CREATE UNIQUE INDEX `pds_host_lifecycle_command` ON `pds_host_lifecycle_events` (`host_id`,`command_key`);--> statement-breakpoint
 CREATE INDEX `session_user_id` ON `session` (`userId`);--> statement-breakpoint
 CREATE UNIQUE INDEX `user_email_ci` ON `user` (lower("email"));--> statement-breakpoint
 CREATE INDEX `verification_identifier` ON `verification` (`identifier`);

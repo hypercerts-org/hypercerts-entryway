@@ -18,7 +18,8 @@ export interface PdsHost {
   revision: number;
   order: number;
   association: "unassociated" | "associated";
-  lifecycle: "disabled";
+  lifecycle: "disabled" | "enabled" | "draining" | "retired";
+  lifecycleVersion: number;
   activeRevision: number | null;
   stagedRevision: number;
 }

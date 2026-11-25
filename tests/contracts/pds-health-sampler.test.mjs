@@ -157,3 +157,32 @@ test("a tick just before database due time skips and the following tick stays in
   assert.equal(completions[1], 44_997);
   assert.ok(completions[1] < 45_000);
 });
+
+test("retired hosts are not probed", async () => {
+  let claims = 0;
+  const sampler = createPdsHealthSampler({
+    registry: {
+      listHosts: async () => [
+        {
+          hostId: "retired",
+          association: "associated",
+          activeRevision: 1,
+          lifecycle: "retired",
+        },
+      ],
+      readHostRevision: async () => {
+        throw new Error("UnexpectedRead");
+      },
+    },
+    health: {
+      claim: async () => {
+        claims++;
+      },
+    },
+    verifier: { policyFor: () => "policy" },
+    intervalMs: 1000,
+    timeoutMs: 500,
+  });
+  await sampler();
+  assert.equal(claims, 0);
+});

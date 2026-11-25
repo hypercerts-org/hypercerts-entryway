@@ -582,6 +582,7 @@ export const pds_hosts = table("pds_hosts", {
   configured_order: count("configured_order").notNull(),
   association: text("association").notNull(),
   lifecycle: text("lifecycle").notNull(),
+  lifecycle_version: count("lifecycle_version").notNull().default(0),
   active_revision: count("active_revision"),
   staged_revision: count("staged_revision"),
 });
@@ -793,3 +794,20 @@ export const pds_health_sweep = table("pds_health_sweep", {
   last_clock: count("last_clock").notNull(),
   cursor: text("cursor").notNull(),
 });
+
+export const pds_host_lifecycle_events = table(
+  "pds_host_lifecycle_events",
+  {
+    id: text("id").primaryKey(),
+    host_id: text("host_id")
+      .notNull()
+      .references(() => pds_hosts.id),
+    command_key: text("command_key").notNull(),
+    request: text("request").notNull(),
+    result: text("result").notNull(),
+    created_at: count("created_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("pds_host_lifecycle_command").on(t.host_id, t.command_key),
+  ],
+);

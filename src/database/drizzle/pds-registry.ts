@@ -24,7 +24,7 @@ import type {
 function host(row: StoredRow<"pds_hosts">): PdsHost {
   if (
     !["unassociated", "associated"].includes(row.association) ||
-    row.lifecycle !== "disabled" ||
+    !["disabled", "enabled", "draining", "retired"].includes(row.lifecycle) ||
     row.staged_revision === null
   )
     throw new Error("InvalidPdsHostState");
@@ -33,7 +33,8 @@ function host(row: StoredRow<"pds_hosts">): PdsHost {
     revision: row.revision,
     order: row.configured_order,
     association: row.association as "unassociated" | "associated",
-    lifecycle: row.lifecycle,
+    lifecycle: row.lifecycle as PdsHost["lifecycle"],
+    lifecycleVersion: row.lifecycle_version,
     activeRevision: row.active_revision,
     stagedRevision: row.staged_revision,
   };

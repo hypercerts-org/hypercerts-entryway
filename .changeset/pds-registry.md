@@ -11,3 +11,5 @@ For a fresh registry-bootstrap authority, a global administrator may explicitly 
 Registry-bootstrap nodes now sample registered hosts using `PDS_HEALTH_INTERVAL_MS` and `PDS_HEALTH_TIMEOUT_MS`; status shows bounded health observations. Sampling does not enable placement. Operators can configure `PDS_HEALTH_CONTACTS_FILE` for durable incident and recovery email; missing contacts and permanent delivery failures remain visible in status.
 
 An independent database-fenced sweep opens monitoring-stale incidents when a registered host has not produced a health sample within 45 seconds, including hosts that have never been sampled.
+
+Registry host status now includes an internal lifecycle version; lifecycle controls and registry-backed placement remain unavailable.

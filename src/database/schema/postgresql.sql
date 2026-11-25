@@ -410,6 +410,15 @@ CREATE TABLE "pds_host_health" (
 	"state" text NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "pds_host_lifecycle_events" (
+	"id" text PRIMARY KEY,
+	"host_id" text NOT NULL,
+	"command_key" text NOT NULL,
+	"request" text NOT NULL,
+	"result" text NOT NULL,
+	"created_at" bigint NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "pds_host_manifests" (
 	"host_id" text,
 	"revision" bigint,
@@ -450,6 +459,7 @@ CREATE TABLE "pds_hosts" (
 	"configured_order" bigint NOT NULL,
 	"association" text NOT NULL,
 	"lifecycle" text NOT NULL,
+	"lifecycle_version" bigint DEFAULT 0 NOT NULL,
 	"active_revision" bigint,
 	"staged_revision" bigint
 );
@@ -520,6 +530,7 @@ CREATE UNIQUE INDEX "pds_health_incident_generation" ON "pds_health_incidents" (
 CREATE UNIQUE INDEX "pds_health_open_incident" ON "pds_health_incidents" ("host_id") WHERE "state" = 'open';--> statement-breakpoint
 CREATE UNIQUE INDEX "pds_health_notice_role" ON "pds_health_notices" ("incident_id","phase","role");--> statement-breakpoint
 CREATE UNIQUE INDEX "pds_host_enrollment_idempotency" ON "pds_host_enrollment_events" ("host_id","kind","idempotency_key");--> statement-breakpoint
+CREATE UNIQUE INDEX "pds_host_lifecycle_command" ON "pds_host_lifecycle_events" ("host_id","command_key");--> statement-breakpoint
 CREATE INDEX "session_user_id" ON "session" ("userId");--> statement-breakpoint
 CREATE UNIQUE INDEX "user_email_ci" ON "user" (lower("email"));--> statement-breakpoint
 CREATE INDEX "verification_identifier" ON "verification" ("identifier");--> statement-breakpoint
@@ -546,6 +557,7 @@ ALTER TABLE "pds_host_credential_requests" ADD CONSTRAINT "pds_host_credential_r
 ALTER TABLE "pds_host_credentials" ADD CONSTRAINT "pds_host_credentials_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_enrollment_events" ADD CONSTRAINT "pds_host_enrollment_events_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_health" ADD CONSTRAINT "pds_host_health_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
+ALTER TABLE "pds_host_lifecycle_events" ADD CONSTRAINT "pds_host_lifecycle_events_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_manifests" ADD CONSTRAINT "pds_host_manifests_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_revisions" ADD CONSTRAINT "pds_host_revisions_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_stage_requests" ADD CONSTRAINT "pds_host_stage_requests_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
