@@ -654,6 +654,12 @@ export async function createAccountMigration({
             operation = await journal(operation, { placementRefused: true });
           return disposition;
         });
+        if (result === "released")
+          throw error(
+            "OperationNoLongerPending",
+            "The saved destination reservation was released",
+            409,
+          );
         if (result === "prior-dispatch")
           throw error(
             "OperationRecoveryRequired",

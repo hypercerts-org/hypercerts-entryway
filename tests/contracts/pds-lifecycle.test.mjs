@@ -910,3 +910,231 @@ test("incoming offer pins revision and capability and refuses stale replacement 
   assert.equal((await db.read("arrivals")).length, 1);
   assert.equal((await db.read("arrivals"))[0].operation_id, "offer-one");
 });
+
+test("release of a proven unused reservation preserves target and separate obligations", async (t) => {
+  const { createPdsPlacement } =
+    await import("../../dist/src/database/drizzle/pds-placement.js");
+  const { createOperationOwnershipStore } =
+    await import("../../dist/src/database/drizzle/operation-ownership.js");
+  const { db, first, trust } = await fixture(t);
+  await onboard(first, "host");
+  await sample(first, "host", true);
+  await sample(first, "host", true);
+  await first.lifecycle.transition("host", "enable", 1, 0, "enable");
+  const owner = createOperationOwnershipStore(db);
+  const claim = await owner.acquire({
+    resource: "release-test",
+    kind: "registration",
+    requestDigest: "a".repeat(64),
+    workerId: "worker",
+    leaseMs: 60000,
+  });
+  const placement = createPdsPlacement(
+    db,
+    () => trust,
+    () => "policy",
+  );
+  const reservation = await placement.reserve(
+    claim,
+    "registration",
+    claim.requestDigest,
+    ["reserve-signing-key"],
+    "host",
+  );
+  await db.set("migration:operations", "separate-obligation", {
+    target: reservation.public_target,
+  });
+  assert.equal(
+    await placement.releaseUnused(claim, reservation.id),
+    "released",
+  );
+  assert.equal(
+    await placement.releaseUnused(claim, reservation.id),
+    "already-released",
+  );
+  const retained = await placement.reserve(
+    claim,
+    "registration",
+    claim.requestDigest,
+    ["reserve-signing-key"],
+    "host",
+  );
+  assert.equal(retained.id, reservation.id);
+  assert.equal(retained.state, "released");
+  assert.equal(await placement.preflight(claim, reservation.id), "released");
+  await assert.rejects(
+    placement.beginFirstDispatch(claim, reservation.id, {
+      step: "reserve-signing-key",
+      target: reservation.public_target,
+      method: "reserve",
+      intentDigest: "b".repeat(64),
+    }),
+    { code: "OperationNoLongerPending" },
+  );
+  assert.equal(retained.public_target, reservation.public_target);
+  assert.deepEqual(
+    await db.get("migration:operations", "separate-obligation"),
+    { target: reservation.public_target },
+  );
+  await first.lifecycle.transition("host", "drain", 1, 1, "drain");
+  await assert.rejects(
+    first.lifecycle.transition("host", "retire", 1, 2, "retire-blocked"),
+  );
+  await db.delete("migration:operations", "separate-obligation");
+  await db.remove(
+    "operation_admissions",
+    eq(db.tables.operation_admissions.operation_id, claim.operationId),
+  );
+  await db.remove(
+    "authority_operations",
+    eq(db.tables.authority_operations.id, claim.operationId),
+  );
+  await first.lifecycle.transition("host", "retire", 1, 2, "retire-clear");
+  assert.equal(
+    (await db.read("pds_placement_reservations"))[0].state,
+    "released",
+  );
+});
+
+test("release refuses an existing target attempt and preserves its reservation", async (t) => {
+  const { createPdsPlacement } =
+    await import("../../dist/src/database/drizzle/pds-placement.js");
+  const { createOperationOwnershipStore } =
+    await import("../../dist/src/database/drizzle/operation-ownership.js");
+  const { db, first, trust } = await fixture(t);
+  await onboard(first, "host");
+  await sample(first, "host", true);
+  await sample(first, "host", true);
+  await first.lifecycle.transition("host", "enable", 1, 0, "enable");
+  const owner = createOperationOwnershipStore(db);
+  const claim = await owner.acquire({
+    resource: "release-test",
+    kind: "registration",
+    requestDigest: "a".repeat(64),
+    workerId: "worker",
+    leaseMs: 60000,
+  });
+  const placement = createPdsPlacement(
+    db,
+    () => trust,
+    () => "policy",
+  );
+  const saved = await placement.reserve(
+    claim,
+    "registration",
+    claim.requestDigest,
+    ["reserve-signing-key"],
+    "host",
+  );
+  await owner.beginExternal(claim, {
+    step: "reserve-signing-key",
+    target: "https://historical.example/",
+    method: "reserve",
+    intentDigest: "b".repeat(64),
+  });
+  await assert.rejects(
+    placement.releaseUnused(claim, saved.id),
+    /PdsPlacementConflict/,
+  );
+  assert.equal(
+    (await db.read("pds_placement_reservations"))[0].state,
+    "reserved",
+  );
+});
+
+test("release retains an acknowledged source handoff while preserving its separate obligation", async (t) => {
+  const { createPdsPlacement } =
+    await import("../../dist/src/database/drizzle/pds-placement.js");
+  const { createOperationOwnershipStore } =
+    await import("../../dist/src/database/drizzle/operation-ownership.js");
+  const { db, first, trust } = await fixture(t);
+  await onboard(first, "host");
+  await sample(first, "host", true);
+  await sample(first, "host", true);
+  await first.lifecycle.transition("host", "enable", 1, 0, "enable");
+  const owner = createOperationOwnershipStore(db);
+  const claim = await owner.acquire({
+    resource: "arrival:fixture",
+    kind: "public-arrival",
+    requestDigest: "a".repeat(64),
+    workerId: "worker",
+    leaseMs: 60000,
+  });
+  const placement = createPdsPlacement(
+    db,
+    () => trust,
+    () => "policy",
+  );
+  const saved = await placement.reserve(
+    claim,
+    "incoming-arrival",
+    claim.requestDigest,
+    ["incoming-reservation"],
+    "host",
+  );
+  const handoff = await owner.beginExternal(claim, {
+    step: "incoming-handoff",
+    target: "https://plc.example",
+    method: "com.atproto.identity.submitPlcOperation",
+    intentDigest: "b".repeat(64),
+  });
+  await owner.acknowledgeExternal(claim, handoff, null);
+  assert.equal(await placement.releaseUnused(claim, saved.id), "released");
+  assert.equal(
+    (await db.read("external_operation_attempts"))[0].id,
+    handoff.id,
+  );
+  await first.lifecycle.transition("host", "drain", 1, 1, "drain");
+  await assert.rejects(
+    first.lifecycle.transition("host", "retire", 1, 2, "retire"),
+  );
+});
+
+test("release rejects source-labelled attempts to either destination alias", async (t) => {
+  const { createPdsPlacement } =
+    await import("../../dist/src/database/drizzle/pds-placement.js");
+  const { createOperationOwnershipStore } =
+    await import("../../dist/src/database/drizzle/operation-ownership.js");
+  const { db, first, trust } = await fixture(t);
+  await onboard(first, "host", 1, "https://internal.host.example");
+  await sample(first, "host", true);
+  await sample(first, "host", true);
+  await first.lifecycle.transition("host", "enable", 1, 0, "enable");
+  const owner = createOperationOwnershipStore(db);
+  const placement = createPdsPlacement(
+    db,
+    () => trust,
+    () => "policy",
+  );
+  for (const alias of [
+    "https://host.example/",
+    "https://internal.host.example/",
+  ]) {
+    const claim = await owner.acquire({
+      resource: `move:${alias}`,
+      kind: "managed-migration",
+      requestDigest: "a".repeat(64),
+      workerId: "worker",
+      leaseMs: 60000,
+    });
+    const saved = await placement.reserve(
+      claim,
+      "managed-migration",
+      claim.requestDigest,
+      ["managed-migration:v1"],
+      "host",
+    );
+    const attempt = await owner.beginExternal(claim, {
+      step: "source-freeze",
+      target: alias,
+      method: "com.atproto.admin.updateSubjectStatus",
+      intentDigest: "b".repeat(64),
+    });
+    await owner.acknowledgeExternal(claim, attempt, null);
+    await assert.rejects(
+      placement.releaseUnused(claim, saved.id),
+      /PdsPlacementConflict/,
+    );
+    assert.equal((await placement.read(claim)).state, "reserved");
+  }
+});

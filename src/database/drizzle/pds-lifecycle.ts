@@ -185,7 +185,7 @@ export function createPdsLifecycle(
         } else {
           if (!["disabled", "draining"].includes(host.lifecycle))
             throw new Error("PdsLifecycleConflict");
-          await assertNoPdsAuthorityReferences(db);
+          await assertNoPdsAuthorityReferences(db, true);
           next = "retired";
         }
         const changed = await db.update(

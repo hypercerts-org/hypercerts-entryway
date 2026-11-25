@@ -96,9 +96,25 @@ function canonicalEndpoint(value: string): string {
 /** Conservative reference proof for fresh-only lifecycle operations. */
 export async function assertNoPdsAuthorityReferences(
   db: DatabaseExecutor,
+  ignoreReleasedPlacements = false,
 ): Promise<void> {
   for (const table of productTables)
-    if ((await db.read(table, { limit: 1 })).length)
+    if (
+      (
+        await db.read(
+          table,
+          table === "pds_placement_reservations" && ignoreReleasedPlacements
+            ? {
+                where: ne(
+                  db.tables.pds_placement_reservations.state,
+                  "released",
+                ),
+                limit: 1,
+              }
+            : { limit: 1 },
+        )
+      ).length
+    )
       throw new Error("PdsEnrollmentReferencesExist");
   if (
     (
