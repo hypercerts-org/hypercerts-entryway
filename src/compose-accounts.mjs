@@ -21,6 +21,7 @@ export async function createAccounts({
   config,
   workerId,
   placement,
+  registryVerifier,
   ownership = createOperationOwnership({
     store: createOperationOwnershipStore(db),
     workerId,
@@ -98,6 +99,8 @@ export async function createAccounts({
   return {
     ...shared,
     ...operations,
+    placement,
+    registryVerifier,
     selectRegistrationPds: () =>
       placement ? placement.select() : Promise.resolve(config.pds[0]?.id),
     plcSigner,

@@ -9,6 +9,8 @@ import * as plc from "@did-plc/lib";
 import { cidForCbor } from "@atproto/common";
 import { HttpError } from "../../http/http-error.mjs";
 import { xrpc } from "../../pds/client.mjs";
+import { readXrpcResponse } from "../../pds/xrpc-response.js";
+import { registryPdsFetch } from "../../pds/registry-transport.mjs";
 
 const error = (name, message, status = 400) =>
   new HttpError(status, name, message);
@@ -40,6 +42,9 @@ export async function createAccountMigration({
   accounts,
   custody,
   security,
+  placement,
+  registryVerifier,
+  registryTransport = registryPdsFetch,
 }) {
   const signingKey = await importJWK(config.jwtJwk, "ES256K");
   const maxBytes = config.migrationMaxBytes ?? 256 * 1024 * 1024;
@@ -67,6 +72,43 @@ export async function createAccountMigration({
     const pds = config.pds.find((candidate) => candidate.id === pdsId);
     if (!pds) throw error("InvalidPds", "Choose a configured PDS");
     return pds;
+  };
+  const chooseTarget = async (pdsId, revision) => {
+    if (!placement) return choose(pdsId);
+    const candidate = await placement.resolve(pdsId, revision);
+    if (!candidate)
+      throw error("InvalidPds", "Choose an enrolled destination PDS");
+    const resolved = await placement.resolveMigration(
+      pdsId,
+      candidate.revision,
+    );
+    if (!resolved)
+      throw error("InvalidPds", "The saved destination PDS is unavailable");
+    return { ...resolved, revision: candidate.revision };
+  };
+  const chooseSource = async (operation) => {
+    if (!placement) return choose(operation.sourcePdsId);
+    if (
+      !Number.isSafeInteger(operation.sourcePdsRevision) ||
+      operation.sourcePdsRevision < 1 ||
+      typeof operation.sourcePdsUrl !== "string"
+    )
+      throw error(
+        "OperationRecoveryRequired",
+        "The source PDS revision requires reconciliation",
+        409,
+      );
+    const source = await placement.resolveMigration(
+      operation.sourcePdsId,
+      operation.sourcePdsRevision,
+    );
+    if (!source || source.url !== operation.sourcePdsUrl)
+      throw error(
+        "OperationRecoveryRequired",
+        "The saved source PDS configuration is unavailable",
+        409,
+      );
+    return source;
   };
   const requireOwner = async (principal, did = principal?.did) => {
     if (!principal || principal.did !== did)
@@ -104,8 +146,29 @@ export async function createAccountMigration({
       .setExpirationTime("60s")
       .setJti(randomUUID())
       .sign(signingKey);
+  const fetchPds = (url, options, limit) =>
+    placement
+      ? registryTransport(url, options, registryVerifier, limit)
+      : fetch(url, options);
+  const pdsXrpc = async (url, method, body, authorization) => {
+    if (!placement) return xrpc(url, method, body, authorization);
+    const response = await fetchPds(
+      new URL(`/xrpc/${method}`, url),
+      {
+        method: body === undefined ? "GET" : "POST",
+        headers: {
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
+          ...(authorization ? { authorization } : {}),
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(15000),
+      },
+      65536,
+    );
+    return readXrpcResponse(response, url, method);
+  };
   const userCall = async (did, pds, method, body) =>
-    xrpc(pds.internalUrl, method, body, `Bearer ${await jwt(did, pds)}`);
+    pdsXrpc(pds.internalUrl, method, body, `Bearer ${await jwt(did, pds)}`);
   const setActive = (did, pds, active, step) =>
     ownership.dispatch(
       {
@@ -117,7 +180,7 @@ export async function createAccountMigration({
       {
         ...noExternalResult,
         send: () =>
-          xrpc(
+          pdsXrpc(
             pds.internalUrl,
             "com.atproto.admin.updateSubjectStatus",
             {
@@ -141,29 +204,43 @@ export async function createAccountMigration({
         },
       },
     );
-  const reserveKey = (did, target, head) =>
-    ownership.dispatch(
+  const reserveKey = async (did, target, head) => {
+    const reservation = placement
+      ? await placement.read(ownership.currentClaim)
+      : undefined;
+    return ownership.dispatch(
       {
         step: `reserve-target-key:${head}`,
         target: target.url,
         method: "com.atproto.server.reserveSigningKey",
         intent: { did },
+        ...(placement && reservation?.state !== "dispatched"
+          ? {
+              authorizeFirst: (claim, descriptor) =>
+                placement.beginFirstDispatch(claim, reservation.id, descriptor),
+            }
+          : {}),
       },
       {
         ...signingKeyResult,
         send: () =>
-          xrpc(target.internalUrl, "com.atproto.server.reserveSigningKey", {
+          pdsXrpc(target.internalUrl, "com.atproto.server.reserveSigningKey", {
             did,
           }),
         observe: async () => ({ state: "replay-safe" }),
       },
     );
+  };
   const request = async (url, init = {}, limit = maxBytes) => {
-    const response = await fetch(url, {
-      ...init,
-      redirect: "error",
-      signal: AbortSignal.timeout(60_000),
-    });
+    const response = await fetchPds(
+      url,
+      {
+        ...init,
+        redirect: "error",
+        signal: AbortSignal.timeout(60_000),
+      },
+      limit,
+    );
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
       throw error(
@@ -339,7 +416,7 @@ export async function createAccountMigration({
       );
     if (
       normalized.services.atproto_pds?.endpoint !==
-      choose(operation.sourcePdsId).url
+      (await chooseSource(operation)).url
     )
       throw error(
         "IdentityChanged",
@@ -453,11 +530,15 @@ export async function createAccountMigration({
           return outcome;
         },
         send: async () => {
-          await xrpc(target.internalUrl, "com.atproto.server.createAccount", {
-            did: operation.did,
-            handle: operation.handle,
-            plcOp: operation.plcOp,
-          });
+          await pdsXrpc(
+            target.internalUrl,
+            "com.atproto.server.createAccount",
+            {
+              did: operation.did,
+              handle: operation.handle,
+              plcOp: operation.plcOp,
+            },
+          );
           return "created";
         },
         observe: async () => {
@@ -536,11 +617,97 @@ export async function createAccountMigration({
   };
   const resume = async (initial) => {
     let operation = initial;
-    const source = choose(operation.sourcePdsId);
-    const target = choose(operation.targetPdsId);
+    const source = await chooseSource(operation);
+    const reservation = placement
+      ? await placement.read(ownership.currentClaim)
+      : undefined;
+    const target = await chooseTarget(
+      operation.targetPdsId,
+      reservation?.revision,
+    );
     const before = (phase) =>
       PHASES.indexOf(operation.phase) < PHASES.indexOf(phase);
     try {
+      if (operation.placementRefused)
+        throw error(
+          "PdsLifecycleIneligible",
+          "The saved destination cannot accept a new migration",
+          409,
+        );
+      if (
+        placement &&
+        !operation.plcOp &&
+        reservation?.state !== "dispatched"
+      ) {
+        if (!reservation)
+          throw error(
+            "OperationRecoveryRequired",
+            "The saved destination reservation is unavailable",
+            409,
+          );
+        const result = await db.transact(async () => {
+          const disposition = await placement.preflight(
+            ownership.currentClaim,
+            reservation.id,
+          );
+          if (disposition === "refused")
+            operation = await journal(operation, { placementRefused: true });
+          return disposition;
+        });
+        if (result === "prior-dispatch")
+          throw error(
+            "OperationRecoveryRequired",
+            "A destination request may already have started",
+            409,
+          );
+        if (result === "refused")
+          throw error(
+            "PdsLifecycleIneligible",
+            "The saved destination cannot accept a new migration",
+            409,
+          );
+        const targetExists = await ownership.dispatch(
+          {
+            step: "probe-target",
+            target: target.url,
+            method: "com.atproto.admin.getAccountInfo",
+            intent: { did: operation.did },
+            authorizeFirst: (claim, descriptor) =>
+              db.transact(async () => {
+                const outcome = await placement.beginTargetRead(
+                  claim,
+                  reservation.id,
+                  descriptor,
+                );
+                if (outcome.kind === "refused")
+                  operation = await journal(operation, {
+                    placementRefused: true,
+                  });
+                return outcome;
+              }),
+          },
+          {
+            send: async () => Boolean(await probeTarget(operation, target)),
+            project: (value) => value,
+            resume: (value) => {
+              if (typeof value !== "boolean")
+                throw error(
+                  "OperationRecoveryRequired",
+                  "The saved target observation is invalid",
+                  409,
+                );
+              return value;
+            },
+            observe: async () => ({ state: "replay-safe" }),
+          },
+        );
+        if (targetExists)
+          throw error(
+            "TargetAccountExists",
+            "The target already contains this DID",
+            409,
+          );
+      }
       if (operation.plcOp) {
         const head = (
           await cidForCbor(await accounts.plcClient.getLastOp(operation.did))
@@ -922,6 +1089,7 @@ export async function createAccountMigration({
             ...row,
             pdsId: target.id,
             pdsUrl: target.url,
+            ...(reservation ? { pdsRevision: reservation.revision } : {}),
             status: "active",
             migratedAt: new Date().toISOString(),
           });
@@ -954,7 +1122,15 @@ export async function createAccountMigration({
     const row = await requireOwner(principal);
     if (row.pdsId === pdsId)
       throw error("InvalidPds", "Choose another configured PDS");
-    choose(pdsId);
+    if (placement) {
+      const target = await chooseTarget(pdsId);
+      if (!(await placement.eligible(pdsId, target.revision)))
+        throw error(
+          "PdsLifecycleIneligible",
+          "The destination cannot accept a new migration",
+          409,
+        );
+    } else choose(pdsId);
     return await issueProof(principal, { pdsId });
   };
   return {
@@ -977,8 +1153,14 @@ export async function createAccountMigration({
       return serial(input.did, input.pdsId, async () => {
         try {
           const row = await requireOwner(principal, input.did);
-          const target = choose(input.pdsId);
           let operation = await read(row.did);
+          const savedReservation = placement
+            ? await placement.read(ownership.currentClaim)
+            : undefined;
+          const target = await chooseTarget(
+            input.pdsId,
+            savedReservation?.revision,
+          );
           if (operation && operation.phase !== "complete") {
             if (
               operation.targetPdsId !== target.id ||
@@ -1004,6 +1186,70 @@ export async function createAccountMigration({
                 reauthenticationRequired: true,
               };
             throw error("InvalidPds", "Account is already on this PDS");
+          }
+          if (placement) {
+            const initial = {
+              id: operationKey(row.did),
+              did: row.did,
+              handle: row.handle,
+              sourcePdsId: row.pdsId,
+              sourcePdsRevision: row.pdsRevision,
+              sourcePdsUrl: row.pdsUrl,
+              targetPdsId: target.id,
+              phase: "authorized",
+              requestedPlcOp: input.plcOp,
+              authorizedAt: new Date(),
+              originalStatus: row.status,
+            };
+            const admission = await db.transact(async () => {
+              try {
+                await security.confirmMigrationProof(principal, {
+                  pdsId: target.id,
+                  token: input.token,
+                });
+              } catch (failure) {
+                if (
+                  [
+                    "InvalidToken",
+                    "ExpiredToken",
+                    "RateLimitExceeded",
+                  ].includes(failure.error ?? failure.code ?? failure.message)
+                )
+                  return { failure };
+                throw failure;
+              }
+              let refused = false;
+              try {
+                await placement.reserve(
+                  ownership.currentClaim,
+                  "managed-migration",
+                  ownership.currentClaim.requestDigest,
+                  ["managed-migration:v1"],
+                  target.id,
+                );
+              } catch (failure) {
+                if (failure.message !== "PdsLifecycleIneligible") throw failure;
+                refused = true;
+              }
+              const saved = await journal({
+                ...initial,
+                ...(refused ? { placementRefused: true } : {}),
+              });
+              await ownership.checkpoint(
+                "migration-admitted",
+                { did: row.did, targetPdsId: target.id },
+                true,
+              );
+              return { saved, refused };
+            });
+            if (admission.failure) throw admission.failure;
+            if (admission.refused)
+              throw error(
+                "PdsLifecycleIneligible",
+                "The destination cannot accept a new migration",
+                409,
+              );
+            return resume(admission.saved);
           }
           if (await probeTarget({ did: row.did }, target))
             throw error(

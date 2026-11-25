@@ -1146,6 +1146,7 @@ test("placement refusal stops before repository key allocation", async (t) => {
       steps = targetSteps;
       return {
         id: "reservation",
+        revision: 1,
         host_id: "pds1",
         public_target: "https://pds1.entryway.atmosbox.test",
         target: "http://pds1:3000",
@@ -1227,6 +1228,7 @@ test("a refused implicit registration retains its original intent and rejects an
     async reserve() {
       return {
         id: "reservation",
+        revision: 1,
         host_id: "pds1",
         public_target: "https://pds1.entryway.atmosbox.test",
         target: "http://pds1:3000",
@@ -1270,6 +1272,7 @@ test("reservation-time ineligibility keeps a stable pending refusal", async (t) 
       if (!eligible) throw new Error("PdsLifecycleIneligible");
       return {
         id: "reservation",
+        revision: 1,
         host_id: "pds1",
         public_target: "https://pds1.entryway.atmosbox.test",
         target: "http://pds1:3000",

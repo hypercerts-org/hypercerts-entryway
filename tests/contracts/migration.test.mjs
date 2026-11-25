@@ -18,14 +18,35 @@ import * as plc from "@did-plc/lib";
 import { Secp256k1MigrationPlcSigner } from "../../dist/src/plc/signing.js";
 import { Secp256k1Keypair } from "@atproto/crypto";
 import { cidForCbor } from "@atproto/common";
-import { openTestDatabase } from "../support/database-fixture.mjs";
+import {
+  openTestDatabase,
+  testDatabaseConfiguration,
+} from "../support/database-fixture.mjs";
+import { openDatabase } from "../../dist/src/database/connection.js";
 import { createCustodyInventoryStorage } from "../../dist/src/database/drizzle/migration-custody.js";
 import { createAccountMigration } from "../../dist/src/features/pds-migration/move-between-pds.mjs";
 
-async function fixture(t, { interruptCompletion = false } = {}) {
+async function fixture(
+  t,
+  {
+    interruptCompletion = false,
+    placementFactory,
+    registryMode = false,
+    drainAfterReserve = false,
+    drainAfterProbe = false,
+    drainAfterHint = false,
+  } = {},
+) {
   const directory = mkdtempSync(join(tmpdir(), "entryway-migration-"));
   const path = join(directory, "state.sqlite");
-  let db = await openTestDatabase(path);
+  const open = async () =>
+    registryMode
+      ? openDatabase(
+          await testDatabaseConfiguration(path),
+          "registry-bootstrap",
+        )
+      : openTestDatabase(path);
+  let db = await open();
   const rotation = await Secp256k1Keypair.create({ exportable: true });
   const sourceKey = await Secp256k1Keypair.create({ exportable: true });
   const targetKey = await Secp256k1Keypair.create({ exportable: true });
@@ -52,6 +73,138 @@ async function fixture(t, { interruptCompletion = false } = {}) {
       },
     ],
   };
+  let registryLifecycle, registryClient;
+  if (registryMode) {
+    for (const host of config.pds) {
+      host.url = `https://${host.id}.example/`;
+      host.internalUrl = `https://${host.id}.example/`;
+      host.did = `did:web:${host.id}.example`;
+    }
+    const { createPdsRegistry } =
+      await import("../../dist/src/database/drizzle/pds-registry.js");
+    const { createPdsOutboundCheckStore } =
+      await import("../../dist/src/database/drizzle/pds-registry-checks.js");
+    const { createPdsEnrollment } =
+      await import("../../dist/src/database/drizzle/pds-registry-enrollment.js");
+    const { createPdsHealthStore } =
+      await import("../../dist/src/database/drizzle/pds-health.js");
+    const { createPdsLifecycle } =
+      await import("../../dist/src/database/drizzle/pds-lifecycle.js");
+    const { createPdsPlacement } =
+      await import("../../dist/src/database/drizzle/pds-placement.js");
+    const { parsePdsRegistryKeyring } =
+      await import("../../dist/src/database/pds-registry-crypto.js");
+    const keyring = parsePdsRegistryKeyring({
+      activeKeyId: "key",
+      keys: { key: randomBytes(32).toString("base64") },
+    });
+    const trust = {
+      issuer: "https://entryway.example",
+      serviceDid: "did:web:entryway.example",
+      jwtPublicKeyHex: "public",
+      plcRotationKeyDid: "did:key:fixture",
+    };
+    const registry = createPdsRegistry(db, keyring, () => trust);
+    const checks = createPdsOutboundCheckStore(
+      db,
+      () => trust,
+      () => "policy",
+    );
+    const enrollment = createPdsEnrollment(db, registry, checks);
+    const health = createPdsHealthStore(db);
+    const lifecycle = createPdsLifecycle(
+      db,
+      registry,
+      health,
+      () => trust,
+      () => "policy",
+    );
+    for (const [order, host] of config.pds.entries()) {
+      await registry.stageHostWithCredentials(
+        {
+          host: {
+            hostId: host.id,
+            serviceDid: host.did,
+            publicUrl: host.url,
+            internalUrl: host.internalUrl,
+            order,
+          },
+          credentials: {
+            outboundPassword: host.adminPassword,
+            inboundToken: randomBytes(32).toString("base64url"),
+          },
+        },
+        0,
+        `stage-${host.id}`,
+      );
+      const attempt = await checks.begin(host.id, 1);
+      const receipt = await checks.complete(host.id, 1, attempt.attemptId, {
+        publicDidOk: true,
+        internalDidOk: true,
+        publicMetadataOk: true,
+        internalMetadataOk: true,
+        adminAttempted: true,
+        adminOk: true,
+        reason: "ok",
+      });
+      const attestation = await enrollment.attest(host.id, {
+        revision: 1,
+        receiptId: receipt.receiptId,
+        idempotencyKey: `attest-${host.id}`,
+        emptyStock: true,
+        manifestApplied: true,
+        callbackCredentialApplied: true,
+        restartedBeforeCheck: true,
+      });
+      await enrollment.associate(host.id, {
+        revision: 1,
+        attestationId: attestation.attestationId,
+        idempotencyKey: `associate-${host.id}`,
+      });
+      for (let count = 0; count < 2; count++)
+        await health.complete(
+          await health.claim(host.id, 1, 30000, 0, "policy"),
+          { publicOk: true, internalOk: true },
+        );
+      await lifecycle.transition(host.id, "enable", 1, 0, `enable-${host.id}`);
+    }
+    registryLifecycle = lifecycle;
+    registryClient = registry;
+    placementFactory = (connection) => {
+      const placement = createPdsPlacement(
+        connection,
+        () => trust,
+        () => "policy",
+        keyring,
+      );
+      if (drainAfterHint) {
+        const preflight = placement.preflight;
+        placement.preflight = async (...args) => {
+          const result = await preflight(...args);
+          await lifecycle.transition("pds2", "drain", 1, 1, "drain-after-hint");
+          drainAfterHint = false;
+          placement.preflight = preflight;
+          return result;
+        };
+      }
+      if (drainAfterReserve) {
+        const reserve = placement.reserve;
+        placement.reserve = async (...args) => {
+          const saved = await reserve(...args);
+          await lifecycle.transition(
+            "pds2",
+            "drain",
+            1,
+            1,
+            "drain-after-reserve",
+          );
+          drainAfterReserve = false;
+          return saved;
+        };
+      }
+      return placement;
+    };
+  }
   const genesis = await plc.createOp({
     signingKey: sourceKey.did(),
     rotationKeys: [rotation.did()],
@@ -65,6 +218,7 @@ async function fixture(t, { interruptCompletion = false } = {}) {
     handle: "alice.entryway.atmosbox.test",
     email: "alice@example.com",
     pdsId: "pds1",
+    ...(registryMode ? { pdsRevision: 1 } : {}),
     pdsUrl: config.pds[0].url,
     status: "active",
   };
@@ -200,6 +354,27 @@ async function fixture(t, { interruptCompletion = false } = {}) {
       assert.ok(node.exists);
       node.active = !body.deactivated.applied;
     } else if (method === "com.atproto.admin.getAccountInfo") {
+      if (registryMode && pds.id === "pds2") {
+        const attempts = await db.read("external_operation_attempts");
+        state.probeMarkedBeforeRequest = attempts.some(
+          (attempt) =>
+            attempt.step === "probe-target" && attempt.state === "dispatched",
+        );
+        if (state.failures.get("probe-loss")) {
+          state.failures.delete("probe-loss");
+          throw Error("fixture response lost");
+        }
+        if (drainAfterProbe) {
+          await registryLifecycle.transition(
+            "pds2",
+            "drain",
+            1,
+            1,
+            "drain-after-probe",
+          );
+          drainAfterProbe = false;
+        }
+      }
       if (!node.exists)
         return Response.json({ error: "NotFound" }, { status: 400 });
       result = { did: row.did, handle: row.handle };
@@ -316,6 +491,8 @@ async function fixture(t, { interruptCompletion = false } = {}) {
     security,
     rotation,
     targetKey,
+    registryLifecycle,
+    registryClient,
     actor: { did: row.did, kind: "legacy", authenticatedAt: new Date() },
     getCurrent: () => currentOp,
     setCurrent: (op) => {
@@ -346,12 +523,18 @@ async function fixture(t, { interruptCompletion = false } = {}) {
       config,
       accounts,
       security,
+      ...(placementFactory
+        ? {
+            placement: placementFactory(db, config),
+            registryTransport: (url, options) => fetch(url, options),
+          }
+        : {}),
       legacy: {},
     });
   };
   f.reopen = async () => {
     await db.close();
-    db = await openTestDatabase(path);
+    db = await open();
     ownership = newOwnership();
     await boot();
   };
@@ -817,4 +1000,326 @@ test("stale pending managed migration journal cannot create a new operation afte
   assert.deepEqual(f.state.calls, calls);
   assert.deepEqual(f.getCurrent(), head);
   assert.equal((await f.accounts.get(f.row.did)).pdsId, "pds2");
+});
+
+test("managed migration retains its journal and sends no target request when admission becomes ineligible", async (t) => {
+  let saved;
+  const placementFactory = (_db, config) => ({
+    async resolve(id) {
+      const host = config.pds.find((item) => item.id === id);
+      return host && { ...host, revision: 1 };
+    },
+    async resolveMigration(id) {
+      return config.pds.find((item) => item.id === id);
+    },
+    async read() {
+      return saved;
+    },
+    async eligible() {
+      return false;
+    },
+    async preflight() {
+      return "refused";
+    },
+    async reserve(claim, purpose, _intent, steps, hostId) {
+      assert.equal(purpose, "managed-migration");
+      assert.deepEqual(steps, ["managed-migration:v1"]);
+      return (saved = {
+        id: "reservation",
+        operation_id: claim.operationId,
+        host_id: hostId,
+        revision: 1,
+        state: "reserved",
+      });
+    },
+  });
+  const f = await fixture(t, { placementFactory });
+  f.row.pdsRevision = 1;
+  await f.db.set("accounts", f.row.did, f.row);
+  await assert.rejects(
+    f.migration.importAccount(f.actor, {
+      did: f.row.did,
+      pdsId: "pds2",
+      token: "migration-proof",
+    }),
+    { error: "PdsLifecycleIneligible" },
+  );
+  assert.ok(await f.db.get("migration:operations", `migrate:${f.row.did}`));
+  assert.equal(f.getProofUsed(), true);
+  assert.deepEqual(
+    f.state.calls.filter((call) => call.startsWith("pds2/")),
+    [],
+  );
+  assert.equal(f.state.source.active, true);
+});
+
+test("managed migration pins target and credentials across a recovered target-create response", async (t) => {
+  let reservation;
+  let admittedCredential;
+  const placementFactory = (db, config) => ({
+    async resolve(id) {
+      const host = config.pds.find((item) => item.id === id);
+      return host && { ...host, revision: 1 };
+    },
+    async resolveMigration(id, revision) {
+      assert.equal(revision, 1);
+      return config.pds.find((item) => item.id === id);
+    },
+    async read() {
+      return reservation;
+    },
+    async eligible() {
+      return true;
+    },
+    async preflight() {
+      return "eligible";
+    },
+    async reserve(claim, _purpose, _intent, _steps, hostId) {
+      admittedCredential = config.pds.find(
+        (item) => item.id === hostId,
+      ).adminPassword;
+      return (reservation ??= {
+        id: "reservation",
+        operation_id: claim.operationId,
+        host_id: hostId,
+        revision: 1,
+        state: "reserved",
+      });
+    },
+    async beginTargetRead(claim, _id, input) {
+      return {
+        kind: "dispatched",
+        attempt: await createOperationOwnershipStore(db).beginExternal(
+          claim,
+          input,
+        ),
+      };
+    },
+    async beginFirstDispatch(claim, _id, input) {
+      const attempt = await createOperationOwnershipStore(db).beginExternal(
+        claim,
+        input,
+      );
+      reservation.state = "dispatched";
+      return { kind: "dispatched", attempt };
+    },
+  });
+  const f = await fixture(t, { placementFactory });
+  f.row.pdsRevision = 1;
+  await f.db.set("accounts", f.row.did, f.row);
+  f.state.failures.set("target-create-after-plc", true);
+  await assert.rejects(
+    f.migration.importAccount(f.actor, {
+      did: f.row.did,
+      pdsId: "pds2",
+      token: "migration-proof",
+    }),
+  );
+  assert.equal(reservation.state, "dispatched");
+  const saved = await f.db.get("migration:operations", `migrate:${f.row.did}`);
+  assert.equal(saved.targetPdsId, "pds2");
+  assert.equal(saved.sourcePdsRevision, 1);
+  assert.equal(admittedCredential, f.config.pds[1].adminPassword);
+  await f.recover();
+  await f.reopen();
+  await f.migration.reconcile();
+  assert.equal((await f.db.get("accounts", f.row.did)).pdsId, "pds2");
+  assert.equal((await f.db.get("accounts", f.row.did)).pdsRevision, 1);
+  assert.equal(
+    f.state.calls.filter(
+      (call) => call === "pds2/com.atproto.server.reserveSigningKey",
+    ).length,
+    2,
+  );
+});
+
+test("managed migration uses real registry revisions and credentials through recovery", async (t) => {
+  const f = await fixture(t, { registryMode: true });
+  f.state.failures.set("target-create-after-plc", true);
+  await assert.rejects(
+    f.migration.importAccount(f.actor, {
+      did: f.row.did,
+      pdsId: "pds2",
+      token: "migration-proof",
+    }),
+  );
+  const saved = await f.db.get("migration:operations", `migrate:${f.row.did}`);
+  assert.equal(saved.targetPdsId, "pds2");
+  assert.equal(saved.sourcePdsRevision, 1);
+  assert.equal(
+    (await f.db.read("pds_placement_reservations"))[0].state,
+    "dispatched",
+  );
+  await assert.rejects(
+    f.registryClient.stageHostWithCredentials(
+      {
+        host: {
+          hostId: "pds2",
+          serviceDid: f.config.pds[1].did,
+          publicUrl: f.config.pds[1].url,
+          internalUrl: f.config.pds[1].internalUrl,
+          order: 1,
+        },
+        credentials: {
+          outboundPassword: randomBytes(32).toString("base64url"),
+          inboundToken: randomBytes(32).toString("base64url"),
+        },
+      },
+      1,
+      "rotate-candidate",
+    ),
+    /PdsEnrollmentAliasConflict/,
+  );
+  await f.registryLifecycle.transition(
+    "pds2",
+    "drain",
+    1,
+    1,
+    "drain-after-dispatch",
+  );
+  await f.recover();
+  await f.reopen();
+  const results = await f.migration.reconcile();
+  assert.equal(results[0].status, "complete");
+  const moved = await f.db.get("accounts", f.row.did);
+  assert.equal(moved.pdsId, "pds2");
+  assert.equal(moved.pdsRevision, 1);
+  assert.equal(f.state.source.active, false);
+  assert.equal(f.state.target.active, true);
+});
+
+test("real registry drain preserves move intent and refuses before target requests", async (t) => {
+  const f = await fixture(t, { registryMode: true, drainAfterReserve: true });
+  await assert.rejects(
+    f.migration.importAccount(f.actor, {
+      did: f.row.did,
+      pdsId: "pds2",
+      token: "migration-proof",
+    }),
+    { error: "PdsLifecycleIneligible" },
+  );
+  assert.equal(
+    f.state.calls.filter((call) => call.startsWith("pds2/")).length,
+    0,
+  );
+  assert.equal(f.state.source.active, true);
+  assert.equal(
+    (await f.db.read("pds_placement_reservations"))[0].state,
+    "refused",
+  );
+  const saved = await f.db.get("migration:operations", `migrate:${f.row.did}`);
+  assert.equal(saved.placementRefused, true);
+  await f.registryLifecycle.transition("pds2", "enable", 1, 2, "reenable");
+  await assert.rejects(
+    f.migration.importAccount(f.actor, {
+      did: f.row.did,
+      pdsId: "pds2",
+      token: "migration-proof",
+    }),
+    { error: "PdsLifecycleIneligible" },
+  );
+  assert.equal(
+    f.state.calls.filter((call) => call.startsWith("pds2/")).length,
+    0,
+  );
+});
+
+test("drain after admitted target read refuses key allocation without claiming zero reads", async (t) => {
+  const f = await fixture(t, { registryMode: true, drainAfterProbe: true });
+  await assert.rejects(
+    f.migration.importAccount(f.actor, {
+      did: f.row.did,
+      pdsId: "pds2",
+      token: "migration-proof",
+    }),
+    { code: "PdsLifecycleIneligible" },
+  );
+  assert.equal(f.state.probeMarkedBeforeRequest, true);
+  assert.equal(
+    f.state.calls.filter(
+      (call) => call === "pds2/com.atproto.admin.getAccountInfo",
+    ).length,
+    1,
+  );
+  assert.equal(
+    f.state.calls.filter(
+      (call) => call === "pds2/com.atproto.server.reserveSigningKey",
+    ).length,
+    0,
+  );
+  assert.equal(f.state.source.active, true);
+  const attempts = await f.db.read("external_operation_attempts");
+  assert.equal(
+    attempts.find((attempt) => attempt.step === "probe-target").state,
+    "acknowledged",
+  );
+  assert.equal(
+    (await f.db.read("pds_placement_reservations"))[0].state,
+    "refused",
+  );
+});
+
+test("lost target read remains uncertain and is recovered before drain refusal", async (t) => {
+  const f = await fixture(t, { registryMode: true });
+  f.state.failures.set("probe-loss", true);
+  const input = { did: f.row.did, pdsId: "pds2", token: "migration-proof" };
+  await assert.rejects(f.migration.importAccount(f.actor, input));
+  assert.equal(f.state.probeMarkedBeforeRequest, true);
+  await f.registryLifecycle.transition(
+    "pds2",
+    "drain",
+    1,
+    1,
+    "drain-after-lost-read",
+  );
+  await assert.rejects(f.migration.importAccount(f.actor, input));
+  assert.equal(
+    (await f.db.read("pds_placement_reservations"))[0].state,
+    "reserved",
+  );
+  await f.recover("retry-if-safe");
+  await f.reopen();
+  await f.migration.reconcile();
+  assert.equal(
+    (await f.db.read("pds_placement_reservations"))[0].state,
+    "refused",
+  );
+  assert.equal(
+    f.state.calls.filter(
+      (call) => call === "pds2/com.atproto.admin.getAccountInfo",
+    ).length,
+    2,
+  );
+  assert.equal(
+    f.state.calls.filter(
+      (call) => call === "pds2/com.atproto.server.reserveSigningKey",
+    ).length,
+    0,
+  );
+});
+
+test("drain between preflight and read admission prevents the target read", async (t) => {
+  const f = await fixture(t, { registryMode: true, drainAfterHint: true });
+  await assert.rejects(
+    f.migration.importAccount(f.actor, {
+      did: f.row.did,
+      pdsId: "pds2",
+      token: "migration-proof",
+    }),
+    { code: "PdsLifecycleIneligible" },
+  );
+  assert.equal(
+    f.state.calls.filter((call) => call.startsWith("pds2/")).length,
+    0,
+  );
+  assert.equal((await f.db.read("external_operation_attempts")).length, 0);
+  assert.equal(
+    (await f.db.read("pds_placement_reservations"))[0].state,
+    "refused",
+  );
+  assert.equal(
+    (await f.db.get("migration:operations", `migrate:${f.row.did}`))
+      .placementRefused,
+    true,
+  );
 });

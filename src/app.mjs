@@ -125,6 +125,8 @@ export async function createApp({
     db,
     config,
     accounts,
+    placement: accounts.placement,
+    registryVerifier: accounts.registryVerifier,
     legacy,
     security,
   });
