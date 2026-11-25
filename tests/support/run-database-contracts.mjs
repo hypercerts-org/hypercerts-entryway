@@ -36,6 +36,7 @@ const files = [
   "migration-boundary",
   "migration-custody",
   "incoming-arrival-storage",
+  "authority-mode",
   "pds-registry",
   "pds-registry-routes",
   "pds-registry-targets",
@@ -44,8 +45,12 @@ files.push(
   "src/features/email-login/routes.test.mjs",
   "src/features/account-settings/operation-recovery-routes.test.mjs",
 );
+const concurrency = process.env.DATABASE_CONTRACT_CONCURRENCY;
+if (concurrency !== undefined && !/^[1-9][0-9]*$/.test(concurrency))
+  throw Error("InvalidDatabaseContractConcurrency");
 const args = [
   "--test",
+  ...(concurrency ? [`--test-concurrency=${concurrency}`] : []),
   "--test-reporter=spec",
   "--test-reporter-destination=stdout",
   "--test-reporter=junit",

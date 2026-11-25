@@ -1,0 +1,49 @@
+x-bootstrap: &bootstrap
+  image: ${SANDBOX_PROJECT:-hypercerts-entryway}:local
+  init: true
+  command: node dist/src/main.mjs
+  networks: [atmosinabox]
+  environment: &bootstrap-env
+    AUTHORITY_MODE: registry-bootstrap
+    SERVICE_CONFIG_PATH: /config/bootstrap.json
+    DATABASE_BACKEND: postgresql
+    DATABASE_URL: postgresql://authority_owner@entryway-postgres/${REGISTRY_BOOTSTRAP_DATABASE}
+    DEPLOYMENT_MODE: multi-node
+    PDS_REGISTRY_KEYRING_FILE: /config/registry-keyring.json
+    PDS_REGISTRY_TARGETS_FILE: /config/registry-targets.json
+    PDS_REGISTRY_CA_FILE: /ca/root.crt
+    NODE_EXTRA_CA_CERTS: /ca/root.crt
+  volumes:
+    - entryway-config:/config:ro
+    - entryway-data:/data
+    - public-ca:/ca:ro
+  healthcheck:
+    test:
+      [
+        CMD,
+        node,
+        -e,
+        'fetch("http://localhost:3000/_readyz").then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))',
+      ]
+    interval: 1s
+    timeout: 3s
+    retries: 30
+services:
+  bootstrap-a:
+    <<: *bootstrap
+  bootstrap-b:
+    <<: *bootstrap
+    environment:
+      <<: *bootstrap-env
+      PDS_REGISTRY_TARGETS_FILE: /config/registry-targets-other.json
+  bootstrap-router:
+    image: ${SANDBOX_PROJECT:-hypercerts-entryway}:local
+    init: true
+    command: node tests/support/registry-bootstrap-router.mjs
+    networks: [atmosinabox]
+  entryway-ingress:
+    environment:
+      ENTRYWAY_UPSTREAM: bootstrap-router:3000
+  pds1:
+    environment:
+      SERVICE_CONFIG_PATH: /config/outbound-pds1.json

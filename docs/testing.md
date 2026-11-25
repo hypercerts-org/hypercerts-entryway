@@ -909,3 +909,5 @@ without former-host authority and checks exact directory CID/keys and source
 signer rejection. It uses neither SQL nor private fixture APIs. This is bounded
 identity qualification, not repository/blob migration or destination activation.
 The case is opt-in because ordinary test containers do not contain a browser.
+
+Operators and contributors can run `SANDBOX_PROJECT=hypercerts-entryway-registry-test ./tests/local.sh registry-bootstrap` after preparing and starting a dedicated sandbox. This exercises two bootstrap nodes through the sandbox's verified TLS gateway, restores the normal ingress and PDS afterward, and uses a new disposable PostgreSQL database. Never point this test at a shared sandbox.

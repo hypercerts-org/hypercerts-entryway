@@ -15,7 +15,7 @@ command=${1:-help}
 mkdir -p "$artifacts"
 # Phase identity comes from the controller, never from a command or request body.
 case "$command" in
-  fresh|fresh-group|prepare|up|_incoming-late-cutover-run|contracts|database-contracts|database-dialects|resilience-profiles|database-profile|browser|incoming-late-cutover|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-public-failures|incoming-two-node|account-lifecycle-two-node|incoming-goat-journey|incoming-moover-journey|incoming-arrival-live|migration|migration-resume|resilience|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|all|down|status|help) ;;
+  fresh|fresh-group|prepare|up|_incoming-late-cutover-run|contracts|database-contracts|database-dialects|registry-bootstrap|resilience-profiles|database-profile|browser|incoming-late-cutover|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-public-failures|incoming-two-node|account-lifecycle-two-node|incoming-goat-journey|incoming-moover-journey|incoming-arrival-live|migration|migration-resume|resilience|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|all|down|status|help) ;;
   *) echo 'code=UNKNOWN_PHASE'; exit 2 ;;
 esac
 printf 'phase=%s status=started\n' "$command"
@@ -227,11 +227,15 @@ case "$command" in
     # distinct report files. Output goes to per-backend logs so the two runs
     # cannot interleave; summaries print after both finish.
     pids=()
+    concurrency_env=()
+    if [[ -n "${DATABASE_CONTRACT_CONCURRENCY:-}" ]]; then
+      concurrency_env=(-e "DATABASE_CONTRACT_CONCURRENCY=$DATABASE_CONTRACT_CONCURRENCY")
+    fi
     backends=(sqlite postgresql)
     for backend in "${backends[@]}"; do
       (
         result=0
-        compose run --rm --no-deps -e "CONTRACT_DATABASE_BACKEND=$backend" -e CONTRACT_DATABASE_URL=postgresql://authority_owner@entryway-postgres/account_authority test node tests/support/run-database-contracts.mjs > "$artifacts/database-$backend.log" 2>&1 || result=$?
+        compose run --rm --no-deps "${concurrency_env[@]}" -e "CONTRACT_DATABASE_BACKEND=$backend" -e CONTRACT_DATABASE_URL=postgresql://authority_owner@entryway-postgres/account_authority test node tests/support/run-database-contracts.mjs > "$artifacts/database-$backend.log" 2>&1 || result=$?
         printf '%s\n' "$result" > "$artifacts/database-$backend.exit"
         exit "$result"
       ) &
@@ -248,6 +252,11 @@ case "$command" in
     done
     (( failed == 0 )) || exit "$failed"
     if [[ "$command" == database-contracts ]]; then bash "$root/tests/support/run-postgresql-profile.sh"; fi
+    ;;
+  registry-bootstrap)
+    require_state
+    [[ "$project" != hypercerts-entryway ]] || { echo 'Use a dedicated sandbox project for registry bootstrap' >&2; exit 2; }
+    bash "$root/tests/support/run-registry-bootstrap.sh"
     ;;
   resilience-profiles)
     bash "$root/tests/support/run-resilience-profiles.sh"

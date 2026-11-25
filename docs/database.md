@@ -184,3 +184,9 @@ Do not reuse another worker's runtime. Full baseline acceptance remains
 `./tests/local.sh fresh`, `./tests/local.sh database-contracts` and
 `./tests/local.sh resilience-profiles` after independent review, with the known
 raw interoperability moderation blocker reported separately.
+
+### Registry bootstrap authority
+
+Operators preparing a fresh authority can set `AUTHORITY_MODE=registry-bootstrap` with an empty `pds` array in the service configuration. This starts health, readiness and globally authenticated registry administration only; account routes, synthetic clients, mail and reconciliation workers are absent. Staging and outbound checks do not associate a host or enable placement.
+
+The authority mode is recorded when the fresh schema is created. Every process must use the same mode when opening that database; missing or mismatched markers fail startup. `AUTHORITY_MODE` defaults to `static`. Changing an existing static authority to registry bootstrap is not supported, and this mode does not provide a production cutover. Use a fresh database and consistent configuration for all participating processes.

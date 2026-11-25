@@ -9,6 +9,20 @@ export async function loadConfig() {
       "utf8",
     ),
   );
+  config.authorityMode = process.env.AUTHORITY_MODE ?? "static";
+  if (
+    !["static", "registry-bootstrap"].includes(config.authorityMode) ||
+    (config.authorityMode === "registry-bootstrap" &&
+      (!Array.isArray(config.pds) ||
+        config.pds.length !== 0 ||
+        typeof config.adminPassword !== "string" ||
+        !config.adminPassword.trim() ||
+        !config.adminPassword.isWellFormed()))
+  ) {
+    const error = new Error("Invalid authority mode configuration");
+    error.code = "InvalidAuthorityModeConfiguration";
+    throw error;
+  }
   if (process.env.BROWSER_CLIENT_METADATA_URL) {
     config.browserClientMetadataUrl = process.env.BROWSER_CLIENT_METADATA_URL;
   }
