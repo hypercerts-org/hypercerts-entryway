@@ -43,6 +43,14 @@ export function mountPdsRegistryRoutes({
             "Registry checking is not configured",
           ),
         );
+      if (error.message === "PdsEnrollmentReferencesUnmapped")
+        return next(
+          new HttpError(
+            409,
+            "OperationConflict",
+            "Retained records need reference reconciliation before changing this host",
+          ),
+        );
       if (
         [
           "PdsHostRevisionConflict",

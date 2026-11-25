@@ -13,7 +13,10 @@ import {
   pdsRegistryManifest,
   type PdsRegistryPublicTrust,
 } from "../pds-registry-manifest.js";
-import { assertNoPdsAuthorityReferences } from "./pds-registry-enrollment-guard.js";
+import {
+  assertNoPdsAuthorityReferences,
+  assertNoPdsHostReferences,
+} from "./pds-registry-enrollment-guard.js";
 
 export function createPdsLifecycle(
   db: DatabaseExecutor,
@@ -195,7 +198,21 @@ export function createPdsLifecycle(
         } else {
           if (!["disabled", "draining"].includes(host.lifecycle))
             throw new Error("PdsLifecycleConflict");
-          await assertNoPdsAuthorityReferences(db, true);
+          const phases = await db.read("authority_phase");
+          const phase = phases.length === 1 ? phases[0] : undefined;
+          if (
+            phase?.id === 1 &&
+            phase.phase === "bootstrap" &&
+            phase.generation === 1
+          )
+            await assertNoPdsAuthorityReferences(db, true);
+          else if (
+            phase?.id === 1 &&
+            phase.phase === "registry-serving" &&
+            phase.generation === 2
+          )
+            await assertNoPdsHostReferences(db, hostId);
+          else throw new Error("PdsLifecycleModeConflict");
           next = "retired";
         }
         const changed = await db.update(

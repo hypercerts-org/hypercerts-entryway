@@ -1964,7 +1964,11 @@ test("a serving phase fences new fresh-only enrollment across connections", asyn
   const { db, peer, first, second } = await fixture(t);
   await onboard(first, "original");
   await createAuthorityPhase(db, first.lifecycle).activate(1, "activate");
-  await assert.rejects(onboard(second, "later"), /PdsEnrollmentModeConflict/);
+  await db.set("unclassified-workflow", "entry", { value: "opaque" });
+  await assert.rejects(
+    onboard(second, "later"),
+    /PdsEnrollmentReferencesUnmapped/,
+  );
   assert.equal(
     (await peer.read("pds_host_enrollment_events")).filter(
       (event) => event.host_id === "later",
@@ -1973,4 +1977,185 @@ test("a serving phase fences new fresh-only enrollment across connections", asyn
   );
   const host = await second.registry.readHost("later");
   assert.equal(host.association, "unassociated");
+});
+
+test("unconnected host proof distinguishes a mapped other account and fails closed on opaque journals", async (t) => {
+  const { assertNoPdsHostReferences } =
+    await import("../../dist/src/database/drizzle/pds-registry-enrollment-guard.js");
+  const { createAccountStorage } =
+    await import("../../dist/src/database/drizzle/account-storage.js");
+  const { db, first } = await fixture(t);
+  await onboard(first, "other");
+  await onboard(first, "candidate");
+  const storage = createAccountStorage(db, [
+    { id: "other", url: "https://other.example/" },
+  ]);
+  const row = {
+    did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
+    email: "other@example.test",
+    handle: "other.example",
+    pdsId: "other",
+    pdsUrl: "https://other.example/",
+    pdsRevision: 1,
+    status: "active",
+  };
+  await storage.insertAccount(row);
+  await db.transact(() => assertNoPdsHostReferences(db, "candidate"));
+  await assert.rejects(
+    db.transact(() => assertNoPdsHostReferences(db, "other")),
+    /PdsEnrollmentReferencesExist/,
+  );
+  await db.set("unclassified-workflow", "entry", { value: "opaque" });
+  await assert.rejects(
+    db.transact(() => assertNoPdsHostReferences(db, "candidate")),
+    /PdsEnrollmentReferencesUnmapped/,
+  );
+});
+
+test("serving authority permits an unrelated mapped account and refuses its host", async (t) => {
+  const { createAuthorityPhase } =
+    await import("../../dist/src/database/drizzle/authority-phase.js");
+  const { createAccountStorage } =
+    await import("../../dist/src/database/drizzle/account-storage.js");
+  const { db, first, second } = await fixture(t);
+  await onboard(first, "other");
+  await createAuthorityPhase(db, first.lifecycle).activate(1, "activate");
+  const storage = createAccountStorage(db, [
+    { id: "other", url: "https://other.example/" },
+  ]);
+  await storage.insertAccount({
+    did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
+    email: "other@example.test",
+    handle: "other.example",
+    pdsId: "other",
+    pdsUrl: "https://other.example/",
+    pdsRevision: 1,
+    status: "active",
+  });
+  await onboard(second, "later");
+  await assert.rejects(
+    first.lifecycle.transition("other", "retire", 1, 0, "retire-other"),
+    /PdsEnrollmentReferencesExist/,
+  );
+  const retired = await second.lifecycle.transition(
+    "later",
+    "retire",
+    1,
+    0,
+    "retire-later",
+  );
+  assert.equal(retired.lifecycle, "retired");
+});
+
+test("retirement observes a concurrently committed account writer under the authority lock", async (t) => {
+  const { createAuthorityPhase } =
+    await import("../../dist/src/database/drizzle/authority-phase.js");
+  const { createAccountStorage } =
+    await import("../../dist/src/database/drizzle/account-storage.js");
+  const { db, first, second } = await fixture(t);
+  await onboard(first, "host");
+  await createAuthorityPhase(db, first.lifecycle).activate(1, "activate");
+  const storage = createAccountStorage(db, [
+    { id: "host", url: "https://host.example/" },
+  ]);
+  let release, entered;
+  const waiting = new Promise((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise((resolve) => {
+    entered = resolve;
+  });
+  const writer = db.transact(async () => {
+    await storage.insertAccount({
+      did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
+      email: "host@example.test",
+      handle: "host.example",
+      pdsId: "host",
+      pdsUrl: "https://host.example/",
+      pdsRevision: 1,
+      status: "active",
+    });
+    entered();
+    await waiting;
+  });
+  await started;
+  const retirement = second.lifecycle.transition(
+    "host",
+    "retire",
+    1,
+    0,
+    "retire",
+  );
+  release();
+  await writer;
+  await assert.rejects(retirement, /PdsEnrollmentReferencesExist/);
+  assert.equal((await second.registry.readHost("host")).lifecycle, "disabled");
+});
+
+test("host proof refuses staged account revision and a historical internal endpoint alias", async (t) => {
+  const { assertNoPdsHostReferences } =
+    await import("../../dist/src/database/drizzle/pds-registry-enrollment-guard.js");
+  const { createAccountStorage } =
+    await import("../../dist/src/database/drizzle/account-storage.js");
+  const { db, first } = await fixture(t);
+  await onboard(first, "other");
+  await onboard(first, "candidate");
+  const revision = await first.registry.stageHost(
+    {
+      hostId: "staged",
+      serviceDid: "did:web:staged.example",
+      publicUrl: "https://staged.example",
+      internalUrl: "https://staged-internal.example",
+      order: 1,
+    },
+    0,
+    "stage-only",
+  );
+  const storage = createAccountStorage(db, [
+    { id: "staged", url: revision.publicUrl },
+  ]);
+  await storage.insertAccount({
+    did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa",
+    email: "other@example.test",
+    handle: "other.example",
+    pdsId: "staged",
+    pdsUrl: revision.publicUrl,
+    pdsRevision: revision.revision,
+    status: "active",
+  });
+  await assert.rejects(
+    db.transact(() => assertNoPdsHostReferences(db, "candidate")),
+    /PdsEnrollmentReferencesUnmapped/,
+  );
+  await db.execute(
+    sql`UPDATE accounts SET pds_id = 'other', data = ${JSON.stringify({ did: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa", email: "other@example.test", handle: "other.example", pdsId: "other", pdsUrl: "https://other.example/", pdsRevision: 1, status: "active" })} WHERE pds_id = 'staged'`,
+    "run",
+  );
+  await db.execute(
+    sql`UPDATE pds_host_revisions SET internal_url = 'https://candidate.example/' WHERE host_id = 'other' AND revision = 1`,
+    "run",
+  );
+  await assert.rejects(
+    db.transact(() => assertNoPdsHostReferences(db, "candidate")),
+    /PdsEnrollmentReferencesExist/,
+  );
+});
+
+test("retirement rejects a conflicting extra authority phase marker", async (t) => {
+  const { createAuthorityPhase } =
+    await import("../../dist/src/database/drizzle/authority-phase.js");
+  const { db, first } = await fixture(t);
+  await onboard(first, "host");
+  await createAuthorityPhase(db, first.lifecycle).activate(1, "activate");
+  await db.insert("authority_phase", {
+    id: 2,
+    phase: "registry-serving",
+    generation: 2,
+  });
+  await assert.rejects(
+    first.lifecycle.transition("host", "retire", 1, 0, "retire"),
+    /PdsLifecycleModeConflict/,
+  );
+  assert.equal((await first.registry.readHost("host")).lifecycle, "disabled");
+  assert.equal((await db.read("pds_host_lifecycle_events")).length, 0);
 });

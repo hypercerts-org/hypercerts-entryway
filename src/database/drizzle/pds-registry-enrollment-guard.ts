@@ -1,4 +1,4 @@
-import { eq, ne, or } from "drizzle-orm";
+import { and, eq, ne, or } from "drizzle-orm";
 import { isValidDid } from "@atproto/syntax";
 import type { DatabaseExecutor, TableName } from "../executor.js";
 import type {
@@ -178,14 +178,13 @@ export async function assertFreshPdsEnrollment(
   )
     throw new Error("PdsEnrollmentModeConflict");
   const phases = await db.read("authority_phase");
-  if (
-    phases.length !== 1 ||
-    phases[0]?.id !== 1 ||
-    phases[0].phase !== "bootstrap" ||
-    phases[0].generation !== 1
-  )
+  if (phases.length !== 1 || phases[0]?.id !== 1)
     throw new Error("PdsEnrollmentModeConflict");
-  await assertNoPdsAuthorityReferences(db);
+  if (phases[0].phase === "bootstrap" && phases[0].generation === 1)
+    await assertNoPdsAuthorityReferences(db);
+  else if (phases[0].phase === "registry-serving" && phases[0].generation === 2)
+    await assertNoPdsHostReferences(db, candidate.hostId);
+  else throw new Error("PdsEnrollmentModeConflict");
   const did = canonicalDid(candidate.serviceDid);
   const endpoints = new Set([
     canonicalEndpoint(candidate.publicUrl),
@@ -227,4 +226,113 @@ export async function assertNoAssociatedPdsAlias(
     )
       throw new Error("PdsEnrollmentAliasConflict");
   }
+}
+
+/**
+ * Conservative host proof. A record whose host authority is not yet decoded
+ * blocks the operation; callers must hold the physical authority transaction.
+ */
+export async function assertNoPdsHostReferences(
+  db: DatabaseExecutor,
+  hostId: string,
+): Promise<void> {
+  const revisions = (await db.read("pds_host_revisions")).filter(
+    (revision) => revision.host_id === hostId,
+  );
+  if (!revisions.length) throw new Error("PdsEnrollmentIdentityInvalid");
+  const identities = new Set(
+    revisions.map((revision) => canonicalDid(revision.service_did)),
+  );
+  const endpoints = new Set(
+    revisions.flatMap((revision) => [
+      canonicalEndpoint(revision.public_url),
+      canonicalEndpoint(revision.internal_url),
+    ]),
+  );
+  for (const account of await db.read("accounts")) {
+    let data: unknown;
+    try {
+      data = JSON.parse(account.data);
+    } catch {
+      throw new Error("PdsEnrollmentReferencesUnmapped");
+    }
+    if (!data || typeof data !== "object" || Array.isArray(data))
+      throw new Error("PdsEnrollmentReferencesUnmapped");
+    const record = data as Record<string, unknown>;
+    if (
+      record.pdsId !== account.pds_id ||
+      typeof record.pdsUrl !== "string" ||
+      typeof record.pdsRevision !== "number" ||
+      !Number.isSafeInteger(record.pdsRevision) ||
+      record.pdsRevision < 1
+    )
+      throw new Error("PdsEnrollmentReferencesUnmapped");
+    const url = canonicalEndpoint(record.pdsUrl);
+    if (
+      account.pds_id === hostId ||
+      endpoints.has(url) ||
+      identities.has(canonicalDid(account.did))
+    )
+      throw new Error("PdsEnrollmentReferencesExist");
+    const [revision] = await db.read("pds_host_revisions", {
+      where: and(
+        eq(db.tables.pds_host_revisions.host_id, account.pds_id),
+        eq(db.tables.pds_host_revisions.revision, record.pdsRevision),
+      ),
+    });
+    const [host] = await db.read("pds_hosts", {
+      where: eq(db.tables.pds_hosts.id, account.pds_id),
+    });
+    const [association] = await db.read("pds_host_enrollment_events", {
+      where: and(
+        eq(db.tables.pds_host_enrollment_events.host_id, account.pds_id),
+        eq(db.tables.pds_host_enrollment_events.revision, record.pdsRevision),
+        eq(db.tables.pds_host_enrollment_events.kind, "associate"),
+      ),
+    });
+    if (
+      !revision ||
+      !host ||
+      host.association !== "associated" ||
+      !association ||
+      canonicalEndpoint(revision.public_url) !== url
+    )
+      throw new Error("PdsEnrollmentReferencesUnmapped");
+    if (
+      identities.has(canonicalDid(revision.service_did)) ||
+      endpoints.has(canonicalEndpoint(revision.public_url)) ||
+      endpoints.has(canonicalEndpoint(revision.internal_url))
+    )
+      throw new Error("PdsEnrollmentReferencesExist");
+  }
+  // These tables contain identity and authentication state only; the account
+  // rows above own their DID-to-host mapping. Every other product table remains
+  // fail-closed until its retained host references have an explicit decoder.
+  const accountOnly = new Set<TableName>([
+    "user",
+    "session",
+    "account",
+    "verification",
+    "accounts",
+    "handle_claims",
+    "email_claims",
+    "account_bindings",
+    "backup_emails",
+  ]);
+  for (const table of productTables) {
+    if (!accountOnly.has(table) && (await db.read(table, { limit: 1 })).length)
+      throw new Error("PdsEnrollmentReferencesUnmapped");
+  }
+  if (
+    (
+      await db.read("mail_outbox", {
+        where: or(
+          ne(db.tables.mail_outbox.purpose, "pds-health"),
+          ne(db.tables.mail_outbox.message_kind, "admin"),
+        ),
+        limit: 1,
+      })
+    ).length
+  )
+    throw new Error("PdsEnrollmentReferencesUnmapped");
 }
