@@ -31,7 +31,7 @@ export function createOAuthStores(db, accounts, config) {
     if (!row || row.status === "deleted")
       throw new InvalidRequestError("Unknown account");
     const pds = accounts.placement
-      ? await accounts.pdsFor(row)
+      ? await accounts.resourceFor(row)
       : config.pds.find((candidate) => candidate.id === row.pdsId);
     if (!pds) throw new InvalidRequestError("Unknown account PDS");
     return {

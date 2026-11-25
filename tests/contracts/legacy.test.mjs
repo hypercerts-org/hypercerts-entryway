@@ -594,3 +594,33 @@ test("synchronous verified-access recheck still enforces expiry after an awaited
     Date.now = realNow;
   }
 });
+
+test("registry legacy sessions use only the account's associated PDS and recheck it", async (t) => {
+  const f = await fixture(t);
+  const associated = new Map([
+    ["pds1", f.config.pds[0]],
+    ["pds2", f.config.pds[1]],
+  ]);
+  f.accounts.associatedPds = async () => [...associated.values()];
+  f.accounts.resourceFor = async (account) => associated.get(account.pdsId);
+  await f.legacy.setPassword(f.alice.did, PASSWORD);
+  const session = await f.legacy.createSession({
+    identifier: f.alice.handle,
+    password: PASSWORD,
+  });
+  assert.equal(decodeJwt(session.accessJwt).aud, f.config.pds[0].did);
+  const mismatched = await f.resign(session.accessJwt, {
+    aud: f.config.pds[1].did,
+  });
+  await assert.rejects(f.legacy.verifyAccess(mismatched));
+  await assert.rejects(
+    f.legacy.arrivalSessions.prepare({ did: f.alice.did, pdsId: "pds2" }),
+    { error: "AccountUnavailable" },
+  );
+  associated.delete("pds1");
+  await assert.rejects(f.legacy.verifyAccess(session.accessJwt));
+  await assert.rejects(
+    f.legacy.createSession({ identifier: f.alice.handle, password: PASSWORD }),
+    { error: "AccountUnavailable" },
+  );
+});

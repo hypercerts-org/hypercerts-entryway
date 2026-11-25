@@ -1545,3 +1545,156 @@ test("unbound key policy refusal after marker retains uncertainty and blocks ret
     /PdsEnrollmentReferencesExist/,
   );
 });
+
+test("associated resource readers exclude staged hosts and preserve drained historical revisions across nodes", async (t) => {
+  const { createPdsPlacement } =
+    await import("../../dist/src/database/drizzle/pds-placement.js");
+  const { db, peer, first, trust } = await fixture(t);
+  await onboard(first, "host");
+  await sample(first, "host", true);
+  await sample(first, "host", true);
+  await first.lifecycle.transition("host", "enable", 1, 0, "enable");
+  await first.registry.stageHostWithCredentials(
+    {
+      host: {
+        hostId: "staged",
+        serviceDid: "did:web:staged.example",
+        publicUrl: "https://staged.example",
+        internalUrl: "https://staged.example",
+        order: 2,
+      },
+      credentials: {
+        outboundPassword: randomBytes(32).toString("base64url"),
+        inboundToken: randomBytes(32).toString("base64url"),
+      },
+    },
+    0,
+    "staged",
+  );
+  const nodeA = createPdsPlacement(
+    db,
+    () => trust,
+    () => "policy",
+  );
+  const nodeB = createPdsPlacement(
+    peer,
+    () => trust,
+    () => "policy",
+  );
+  const { mountAssociatedResourceMetadata } =
+    await import("../../dist/src/features/oauth-authorization/provider.mjs");
+  const handlers = [];
+  for (const node of [nodeA, nodeB])
+    mountAssociatedResourceMetadata(
+      { get: (_path, handler) => handlers.push(handler) },
+      { metadata: { issuer: "https://entryway.example" } },
+      { associatedPds: () => node.associatedResources() },
+    );
+  const metadata = async (handler) => {
+    const headers = {};
+    let body;
+    await handler(
+      {},
+      {
+        set: (key, value) => {
+          headers[key] = value;
+        },
+        json: (value) => {
+          body = value;
+        },
+      },
+      (error) => {
+        throw error;
+      },
+    );
+    assert.equal(headers["Cache-Control"], "no-store");
+    return body;
+  };
+  assert.deepEqual((await metadata(handlers[0])).protected_resources, [
+    "https://host.example/",
+  ]);
+  assert.deepEqual(
+    (await nodeA.associatedResources()).map((host) => host.id),
+    ["host"],
+  );
+  assert.equal(await nodeB.resolveAssociated("staged", 1), undefined);
+  assert.equal(await nodeB.resolveAssociated("host", 2), undefined);
+  await first.lifecycle.transition("host", "drain", 1, 1, "drain");
+  assert.equal(
+    (await nodeB.resolveAssociated("host", 1)).did,
+    "did:web:host.example",
+  );
+  assert.deepEqual(
+    (await nodeB.associatedResources()).map((host) => host.id),
+    ["host"],
+  );
+  assert.deepEqual((await metadata(handlers[1])).protected_resources, [
+    "https://host.example/",
+  ]);
+  const check = await first.checks.begin("staged", 1);
+  const receipt = await first.checks.complete("staged", 1, check.attemptId, {
+    publicDidOk: true,
+    internalDidOk: true,
+    publicMetadataOk: true,
+    internalMetadataOk: true,
+    adminAttempted: true,
+    adminOk: true,
+    reason: "ok",
+  });
+  const attestation = await first.enrollment.attest("staged", {
+    revision: 1,
+    receiptId: receipt.receiptId,
+    idempotencyKey: "attest-staged",
+    emptyStock: true,
+    manifestApplied: true,
+    callbackCredentialApplied: true,
+    restartedBeforeCheck: true,
+  });
+  await first.enrollment.associate("staged", {
+    revision: 1,
+    attestationId: attestation.attestationId,
+    idempotencyKey: "associate-staged",
+  });
+  for (const handler of handlers)
+    assert.deepEqual((await metadata(handler)).protected_resources, [
+      "https://host.example/",
+      "https://staged.example/",
+    ]);
+  const { createAccounts } =
+    await import("../../dist/src/compose-accounts.mjs");
+  const { Secp256k1Keypair } = await import("@atproto/crypto");
+  const signer = await Secp256k1Keypair.create({ exportable: true });
+  const offline = await Secp256k1Keypair.create();
+  const accounts = await createAccounts({
+    db,
+    placement: nodeA,
+    config: {
+      plcRecoveryKeyDid: offline.did(),
+      plcRotationKeyHex: Buffer.from(await signer.export()).toString("hex"),
+      plcUrl: "https://plc.example",
+      handleDomains: [".example"],
+      pds: [],
+    },
+  });
+  const purportedAccount = {
+    pdsId: "host",
+    pdsRevision: 1,
+    pdsUrl: "https://host.example/",
+  };
+  assert.equal(
+    (await accounts.resourceFor(purportedAccount)).did,
+    "did:web:host.example",
+  );
+  await first.lifecycle.transition("host", "retire", 1, 2, "retire");
+  for (const handler of handlers)
+    assert.deepEqual((await metadata(handler)).protected_resources, [
+      "https://staged.example/",
+    ]);
+  assert.equal(
+    (await nodeB.resolveAssociated("host", 1)).did,
+    "did:web:host.example",
+  );
+  assert.equal(await nodeB.resolveLiveAssociated("host", 1), undefined);
+  assert.equal(await nodeA.resolveLiveAssociated("host", 1), undefined);
+  assert.equal(await accounts.resourceFor(purportedAccount), undefined);
+});

@@ -136,7 +136,17 @@ export async function createProtocolRouting({
           req.method,
           new URL(req.originalUrl, config.issuer),
           req.headers,
-          { audience: config.pds.map((p) => p.did), scope: ["atproto"] },
+          {
+            audience: [
+              ...new Set(
+                (accounts.associatedPds
+                  ? await accounts.associatedPds()
+                  : config.pds
+                ).map((p) => p.did),
+              ),
+            ],
+            scope: ["atproto"],
+          },
         );
       } catch (error) {
         if (error.wwwAuthenticateHeader)
@@ -152,6 +162,20 @@ export async function createProtocolRouting({
       const account = await accounts.get(payload.sub);
       if (!account || ["deleted", "provisioning"].includes(account.status))
         throw new HttpError(403, "AccountUnavailable", "Account unavailable");
+      if (accounts.placement && accounts.resourceFor) {
+        const resource = await accounts.resourceFor(account);
+        if (
+          !resource ||
+          !(Array.isArray(payload.aud)
+            ? payload.aud.includes(resource.did)
+            : payload.aud === resource.did)
+        )
+          throw new HttpError(
+            401,
+            "InvalidToken",
+            "Token audience does not match the account PDS",
+          );
+      }
       if (req.body?.did && req.body.did !== account.did)
         throw new HttpError(
           403,

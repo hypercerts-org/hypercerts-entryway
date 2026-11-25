@@ -26,6 +26,7 @@ compose up -d --no-deps bootstrap-router
 compose up -d --no-deps --wait entryway-ingress
 compose run --rm --no-deps test node tests/atmosphere/pds-health-network.mjs
 compose run --rm --no-deps test node tests/atmosphere/registry-bootstrap-startup.mjs
+compose run --rm --no-deps test node --experimental-test-module-mocks --test tests/atmosphere/registry-liveness.test.mjs
 compose run --rm --no-deps test node tests/atmosphere/registry-bootstrap.mjs
 # Stop the processes that were sampling, then restart without a verifier so only
 # the independent sweep can advance; restore the verifier for recovery.
