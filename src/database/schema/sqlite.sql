@@ -380,6 +380,23 @@ CREATE TABLE `pds_host_enrollment_events` (
 	CONSTRAINT `fk_pds_host_enrollment_events_host_id_pds_hosts_id_fk` FOREIGN KEY (`host_id`) REFERENCES `pds_hosts`(`id`)
 );
 --> statement-breakpoint
+CREATE TABLE `pds_host_health` (
+	`host_id` text PRIMARY KEY,
+	`revision` integer NOT NULL,
+	`generation` integer NOT NULL,
+	`claim_id` text,
+	`claim_expires_at` integer,
+	`claim_started_at` integer,
+	`observed_at` integer,
+	`completed_at` integer,
+	`public_ok` integer,
+	`internal_ok` integer,
+	`failures` integer NOT NULL,
+	`successes` integer NOT NULL,
+	`state` text NOT NULL,
+	CONSTRAINT `fk_pds_host_health_host_id_pds_hosts_id_fk` FOREIGN KEY (`host_id`) REFERENCES `pds_hosts`(`id`)
+);
+--> statement-breakpoint
 CREATE TABLE `pds_host_manifests` (
 	`host_id` text NOT NULL,
 	`revision` integer NOT NULL,

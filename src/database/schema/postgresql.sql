@@ -360,6 +360,22 @@ CREATE TABLE "pds_host_enrollment_events" (
 	"result" text NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "pds_host_health" (
+	"host_id" text PRIMARY KEY,
+	"revision" bigint NOT NULL,
+	"generation" bigint NOT NULL,
+	"claim_id" text,
+	"claim_expires_at" bigint,
+	"claim_started_at" bigint,
+	"observed_at" bigint,
+	"completed_at" bigint,
+	"public_ok" boolean,
+	"internal_ok" boolean,
+	"failures" bigint NOT NULL,
+	"successes" bigint NOT NULL,
+	"state" text NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "pds_host_manifests" (
 	"host_id" text,
 	"revision" bigint,
@@ -490,6 +506,7 @@ ALTER TABLE "pds_host_checks" ADD CONSTRAINT "pds_host_checks_host_id_pds_hosts_
 ALTER TABLE "pds_host_credential_requests" ADD CONSTRAINT "pds_host_credential_requests_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_credentials" ADD CONSTRAINT "pds_host_credentials_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_enrollment_events" ADD CONSTRAINT "pds_host_enrollment_events_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
+ALTER TABLE "pds_host_health" ADD CONSTRAINT "pds_host_health_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_manifests" ADD CONSTRAINT "pds_host_manifests_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_revisions" ADD CONSTRAINT "pds_host_revisions_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_host_stage_requests" ADD CONSTRAINT "pds_host_stage_requests_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
