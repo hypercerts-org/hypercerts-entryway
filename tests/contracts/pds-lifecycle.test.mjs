@@ -779,9 +779,13 @@ test("registration uses real registry reservation and pinned host for both targe
   };
   const placement = createPdsPlacement(db, () => trust, policyFor);
   const calls = [];
+  const bodies = [];
   t.mock.method(https, "request", (url, _options, respond) => {
     const request = new EventEmitter();
-    request.write = () => true;
+    request.write = (chunk) => {
+      bodies.push(String(chunk));
+      return true;
+    };
     request.end = () =>
       queueMicrotask(() => {
         const parsed = new URL(url);
@@ -822,6 +826,10 @@ test("registration uses real registry reservation and pinned host for both targe
     ],
   );
   assert.ok(calls.every((url) => url.origin === "https://host.example"));
+  assert.equal(
+    JSON.parse(bodies[1]).plcOp.services.atproto_pds.endpoint,
+    "https://host.example",
+  );
   assert.equal(
     (await db.read("pds_placement_reservations"))[0].state,
     "dispatched",
@@ -949,9 +957,17 @@ test("incoming offer pins revision and capability and refuses stale replacement 
   const saved = await arrivals.createArrival(input);
   assert.equal(saved.pdsRevision, 1);
   assert.equal(saved.stagedIncomingMigration, false);
+  assert.equal(saved.plcEndpoint, "https://host.example");
   await second.lifecycle.transition("host", "drain", 1, 1, "drain");
   assert.deepEqual(await placement.choices(), []);
   assert.deepEqual(await arrivals.createArrival(input), saved);
+  await db.execute(
+    sql`UPDATE arrivals SET plc_endpoint = NULL WHERE operation_id = 'offer-one'`,
+    "run",
+  );
+  const legacyOffer = await arrivals.createArrival(input);
+  assert.equal(legacyOffer.plcEndpoint, undefined);
+  assert.equal(legacyOffer.endpoint, saved.endpoint);
   await assert.rejects(
     arrivals.createArrival({
       ...input,
@@ -1825,8 +1841,8 @@ test("fresh serving phase requires intact association and records a single repla
   const { createAuthorityPhase } =
     await import("../../dist/src/database/drizzle/authority-phase.js");
   const { first, second, db, peer } = await fixture(t);
-  const phase = createAuthorityPhase(db, first.lifecycle);
-  const other = createAuthorityPhase(peer, second.lifecycle);
+  const phase = createAuthorityPhase(db, first.lifecycle, async () => {});
+  const other = createAuthorityPhase(peer, second.lifecycle, async () => {});
   assert.deepEqual(await phase.read(), { phase: "bootstrap", generation: 1 });
   await assert.rejects(
     phase.activate(1, "empty"),
@@ -1863,7 +1879,10 @@ test("serving phase refuses superseded association policy and static authority",
   await onboard(first, "host");
   policy = "other";
   await assert.rejects(
-    createAuthorityPhase(db, first.lifecycle).activate(1, "stale"),
+    createAuthorityPhase(db, first.lifecycle, async () => {}).activate(
+      1,
+      "stale",
+    ),
     /AuthorityPhaseEnrollmentRequired/,
   );
   assert.equal((await db.read("authority_phase_events")).length, 0);
@@ -1872,6 +1891,7 @@ test("serving phase refuses superseded association policy and static authority",
     createAuthorityPhase(
       staticFixture.db,
       staticFixture.first.lifecycle,
+      async () => {},
     ).activate(1, "static"),
     /AuthorityPhaseConflict/,
   );
@@ -1882,7 +1902,7 @@ test("phase audit failure rolls back the serving transition", async (t) => {
     await import("../../dist/src/database/drizzle/authority-phase.js");
   const { db, first } = await fixture(t);
   await onboard(first, "host");
-  const phase = createAuthorityPhase(db, first.lifecycle);
+  const phase = createAuthorityPhase(db, first.lifecycle, async () => {});
   await failureTrigger(
     db,
     "phase_failure",
@@ -1924,7 +1944,7 @@ test("a suppressed phase update cannot create a success event", async (t) => {
       "run",
     );
   }
-  const phase = createAuthorityPhase(db, first.lifecycle);
+  const phase = createAuthorityPhase(db, first.lifecycle, async () => {});
   await assert.rejects(
     phase.activate(1, "suppressed"),
     /AuthorityPhaseConflict/,
@@ -1938,12 +1958,19 @@ test("completed phase and command replay survive a connection restart", async (t
     await import("../../dist/src/database/drizzle/authority-phase.js");
   const { db, first, configuration } = await fixture(t);
   await onboard(first, "host");
-  await createAuthorityPhase(db, first.lifecycle).activate(1, "restart");
+  await createAuthorityPhase(db, first.lifecycle, async () => {}).activate(
+    1,
+    "restart",
+  );
   const before = await openDatabase(configuration, "registry-bootstrap");
   await before.close();
   const reopened = await openDatabase(configuration, "registry-bootstrap");
   try {
-    const phase = createAuthorityPhase(reopened, first.lifecycle);
+    const phase = createAuthorityPhase(
+      reopened,
+      first.lifecycle,
+      async () => {},
+    );
     assert.deepEqual(await phase.read(), {
       phase: "registry-serving",
       generation: 2,
@@ -1963,7 +1990,10 @@ test("a serving phase fences new fresh-only enrollment across connections", asyn
     await import("../../dist/src/database/drizzle/authority-phase.js");
   const { db, peer, first, second } = await fixture(t);
   await onboard(first, "original");
-  await createAuthorityPhase(db, first.lifecycle).activate(1, "activate");
+  await createAuthorityPhase(db, first.lifecycle, async () => {}).activate(
+    1,
+    "activate",
+  );
   await db.set("unclassified-workflow", "entry", { value: "opaque" });
   await assert.rejects(
     onboard(second, "later"),
@@ -2019,7 +2049,10 @@ test("serving authority permits an unrelated mapped account and refuses its host
     await import("../../dist/src/database/drizzle/account-storage.js");
   const { db, first, second } = await fixture(t);
   await onboard(first, "other");
-  await createAuthorityPhase(db, first.lifecycle).activate(1, "activate");
+  await createAuthorityPhase(db, first.lifecycle, async () => {}).activate(
+    1,
+    "activate",
+  );
   const storage = createAccountStorage(db, [
     { id: "other", url: "https://other.example/" },
   ]);
@@ -2054,7 +2087,10 @@ test("retirement observes a concurrently committed account writer under the auth
     await import("../../dist/src/database/drizzle/account-storage.js");
   const { db, first, second } = await fixture(t);
   await onboard(first, "host");
-  await createAuthorityPhase(db, first.lifecycle).activate(1, "activate");
+  await createAuthorityPhase(db, first.lifecycle, async () => {}).activate(
+    1,
+    "activate",
+  );
   const storage = createAccountStorage(db, [
     { id: "host", url: "https://host.example/" },
   ]);
@@ -2146,7 +2182,10 @@ test("retirement rejects a conflicting extra authority phase marker", async (t) 
     await import("../../dist/src/database/drizzle/authority-phase.js");
   const { db, first } = await fixture(t);
   await onboard(first, "host");
-  await createAuthorityPhase(db, first.lifecycle).activate(1, "activate");
+  await createAuthorityPhase(db, first.lifecycle, async () => {}).activate(
+    1,
+    "activate",
+  );
   await db.insert("authority_phase", {
     id: 2,
     phase: "registry-serving",

@@ -151,6 +151,7 @@ export function createPdsPlacement(
               url: saved.publicUrl,
               internalUrl: saved.internalUrl,
               revision: saved.revision,
+              stagedIncomingMigration: saved.stagedIncomingMigration,
             }
           : undefined;
       });

@@ -1,0 +1,4 @@
+services:
+  bootstrap-b:
+    environment:
+      PDS_REGISTRY_TARGETS_FILE: /config/registry-targets.json

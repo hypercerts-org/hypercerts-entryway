@@ -5,7 +5,11 @@ import type {
   BrowserRequest,
 } from "../../authentication/port.js";
 import { createFreshArrivalProof } from "./fresh-proof.js";
-import { incomingRotationKeys, stagedRotationKeys } from "../../plc/policy.js";
+import {
+  incomingRotationKeys,
+  stagedRotationKeys,
+  registryPlcEndpoint,
+} from "../../plc/policy.js";
 import { readIncomingObservation } from "../../plc/incoming-observation.js";
 import type * as plc from "@did-plc/lib";
 import { HttpError } from "../../http/http-error.mjs";
@@ -195,6 +199,9 @@ export function createIncomingPreparation({
             stagedIncomingMigration: pds.stagedIncomingMigration === true,
           }),
       endpoint: pds.url,
+      ...(pds.revision !== undefined && pds.stagedIncomingMigration !== true
+        ? { plcEndpoint: registryPlcEndpoint(pds.url, false) }
+        : {}),
       sourcePredecessor: observed.sourcePredecessor,
       sourcePlcHead: observed.sourcePlcHead,
       source: observed.source,
@@ -210,7 +217,7 @@ export function createIncomingPreparation({
       expiresAt: saved.codeExpiresAt,
       entrywayDid,
       sourceEndpoint: observed.source.services.atproto_pds!.endpoint,
-      destinationEndpoint: saved.endpoint,
+      destinationEndpoint: saved.plcEndpoint ?? saved.endpoint,
       expectedPlcHead: saved.sourcePlcHead,
       ...(staged
         ? { migrationMode: "staged", approvedRotationKeys }

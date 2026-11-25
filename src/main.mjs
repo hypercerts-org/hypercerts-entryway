@@ -38,16 +38,33 @@ const lifecycle = createLifecycle({
 });
 let app, reconcile, mail, sampleHealth, processHealthNotices, sweepHealth;
 if (config.authorityMode === "registry-bootstrap") {
-  ({ app, sampleHealth, processHealthNotices, sweepHealth } =
-    createRegistryBootstrap({
+  const runtime = createRegistryBootstrap({
+    config,
+    db,
+    lifecycle,
+    registryKeyring,
+    registryTargets,
+    healthContacts,
+    workerId: lifecycle.instanceId,
+  });
+  ({ sampleHealth, processHealthNotices, sweepHealth } = runtime);
+  if ((await runtime.phase.read()).phase === "bootstrap") app = runtime.app;
+  else {
+    mail = createMailFeature({
+      workerId: lifecycle.instanceId,
+      outbox: createMailOutbox(db),
+      transport: createSmtpMailTransport(config.mail),
+    });
+    ({ app, reconcile } = await createApp({
       config,
       db,
+      mail,
       lifecycle,
       registryKeyring,
       registryTargets,
-      healthContacts,
-      workerId: lifecycle.instanceId,
+      registryRuntime: runtime,
     }));
+  }
 } else {
   mail = createMailFeature({
     workerId: lifecycle.instanceId,

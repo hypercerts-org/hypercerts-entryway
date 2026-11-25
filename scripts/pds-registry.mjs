@@ -31,6 +31,9 @@ function argumentsFor(argv) {
   if (
     ![
       "stage",
+      "phase",
+      "activate",
+      "lifecycle",
       "status",
       "list",
       "check",
@@ -72,12 +75,14 @@ function argumentsFor(argv) {
     "attest",
     "associate",
     "revoke-callback",
+    "lifecycle",
   ].includes(command);
   if (
     !options["--url"] ||
     !options["--auth-file"] ||
-    ["stage", "attest", "associate"].includes(command) !==
-      Boolean(options["--request-file"]) ||
+    ["stage", "attest", "associate", "activate", "lifecycle"].includes(
+      command,
+    ) !== Boolean(options["--request-file"]) ||
     hostCommand !== Boolean(options["--host"]) ||
     ["check", "policy", "revoke-callback"].includes(command) !==
       Boolean(options["--revision"]) ||
@@ -115,7 +120,13 @@ try {
     "",
   );
   if (!password) throw Error("InvalidProtectedInput");
-  const body = ["stage", "attest", "associate"].includes(command)
+  const body = [
+    "stage",
+    "attest",
+    "associate",
+    "activate",
+    "lifecycle",
+  ].includes(command)
     ? JSON.parse(await protectedFile(options["--request-file"]))
     : command === "check"
       ? { expectedRevision: Number(options["--revision"]) }
@@ -129,22 +140,30 @@ try {
             }
           : undefined;
   const path =
-    command === "status"
-      ? "/admin/pds-registry/status"
-      : command === "trust"
-        ? "/admin/pds-registry/trust"
-        : command === "revoke-callback"
-          ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}/callback/revoke`
-          : ["show", "attest", "associate"].includes(command)
-            ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}${command === "show" ? "" : `/${command}`}`
-            : command === "check"
-              ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}/check`
-              : command === "policy" || command === "policy-status"
-                ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}/policy`
-                : "/admin/pds-registry/hosts";
+    command === "phase"
+      ? "/admin/pds-registry/phase"
+      : command === "activate"
+        ? "/admin/pds-registry/activate"
+        : command === "lifecycle"
+          ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}/lifecycle`
+          : command === "status"
+            ? "/admin/pds-registry/status"
+            : command === "trust"
+              ? "/admin/pds-registry/trust"
+              : command === "revoke-callback"
+                ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}/callback/revoke`
+                : ["show", "attest", "associate"].includes(command)
+                  ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}${command === "show" ? "" : `/${command}`}`
+                  : command === "check"
+                    ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}/check`
+                    : command === "policy" || command === "policy-status"
+                      ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}/policy`
+                      : "/admin/pds-registry/hosts";
   const response = await fetch(new URL(path, base), {
     method: [
       "stage",
+      "activate",
+      "lifecycle",
       "check",
       "policy",
       "attest",
@@ -166,7 +185,33 @@ try {
     process.exitCode = 1;
   } else {
     const result = await response.json();
-    if (command === "revoke-callback") {
+    if (command === "phase" || command === "activate") {
+      if (
+        !["bootstrap", "registry-serving"].includes(result.phase) ||
+        !Number.isSafeInteger(result.generation)
+      )
+        throw Error("UnexpectedPhaseResult");
+      console.log(
+        JSON.stringify({ phase: result.phase, generation: result.generation }),
+      );
+    } else if (command === "lifecycle") {
+      if (
+        result.hostId !== options["--host"] ||
+        !["disabled", "enabled", "draining", "retired"].includes(
+          result.lifecycle,
+        ) ||
+        !Number.isSafeInteger(result.lifecycleVersion)
+      )
+        throw Error("UnexpectedLifecycleResult");
+      console.log(
+        JSON.stringify({
+          hostId: result.hostId,
+          lifecycle: result.lifecycle,
+          lifecycleVersion: result.lifecycleVersion,
+          activeRevision: result.activeRevision,
+        }),
+      );
+    } else if (command === "revoke-callback") {
       if (result.revoked !== true) throw Error("UnexpectedRevocationResult");
       console.log(JSON.stringify({ revoked: true }));
     } else if (command === "status")

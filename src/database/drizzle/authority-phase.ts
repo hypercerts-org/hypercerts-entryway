@@ -6,6 +6,7 @@ import type { PdsLifecycleStore } from "../pds-lifecycle.port.js";
 export function createAuthorityPhase(
   db: DatabaseExecutor,
   lifecycle: PdsLifecycleStore,
+  validateServing: () => Promise<void>,
 ) {
   const events = db.tables.authority_phase_events;
   async function read() {
@@ -55,6 +56,7 @@ export function createAuthorityPhase(
           throw new Error("AuthorityPhaseConflict");
         if (!(await lifecycle.hasTrustedAssociation()))
           throw new Error("AuthorityPhaseEnrollmentRequired");
+        await validateServing();
         const changed = await db.update(
           "authority_phase",
           { phase: "registry-serving", generation: 2 },

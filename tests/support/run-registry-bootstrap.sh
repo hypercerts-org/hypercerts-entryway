@@ -38,3 +38,16 @@ compose run --rm --no-deps test node tests/atmosphere/registry-stale.mjs stale
 compose stop bootstrap-a bootstrap-b
 compose up -d --no-deps --wait bootstrap-a bootstrap-b
 compose run --rm --no-deps test node tests/atmosphere/registry-stale.mjs recovery
+# Use a second fresh authority because the earlier test deliberately supersedes
+# the consumed verification policy. Both serving nodes use the same policy.
+compose stop bootstrap-a bootstrap-b
+export REGISTRY_BOOTSTRAP_DATABASE="registry_serving_$(date +%s)_$$"
+compose exec -T entryway-postgres createdb -U authority_owner "$REGISTRY_BOOTSTRAP_DATABASE"
+serving_compose() { docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" "${base[@]}" "${registry[@]}" -f "$root/tests/atmosphere/stacks/registry-serving.yaml" "$@"; }
+serving_compose up -d --no-deps --wait bootstrap-a bootstrap-b
+serving_compose run --rm --no-deps -e "REGISTRY_TEST_DATABASE_URL=postgresql://authority_owner@entryway-postgres/$REGISTRY_BOOTSTRAP_DATABASE" test node tests/atmosphere/registry-serving.mjs activate
+serving_compose stop bootstrap-a bootstrap-b
+serving_compose up -d --no-deps --wait bootstrap-a bootstrap-b
+serving_compose run --rm --no-deps test node tests/atmosphere/registry-serving.mjs verify
+serving_compose build browser
+serving_compose run --rm --no-deps browser node tests/atmosphere/registry-serving-browser.mjs

@@ -116,6 +116,7 @@ CREATE TABLE `arrivals` (
 	`pds_revision` integer,
 	`staged_incoming_migration` integer DEFAULT false NOT NULL,
 	`endpoint` text NOT NULL,
+	`plc_endpoint` text,
 	`source_plc_head` text NOT NULL,
 	`source_endpoint` text,
 	`canonical_handoff_cid` text,

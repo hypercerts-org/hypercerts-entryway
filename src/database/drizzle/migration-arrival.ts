@@ -39,6 +39,7 @@ import {
   stagedRotationKeys,
   publicRotationKey,
   assertRotationKeysPreserved,
+  registryPlcEndpoint,
 } from "../../plc/policy.js";
 
 type CutoverReceipt = StoredRow<"external_operation_attempts">;
@@ -257,6 +258,7 @@ function arrivalRecord(
           stagedIncomingMigration: row.staged_incoming_migration,
         }),
     endpoint: row.endpoint,
+    ...(row.plc_endpoint === null ? {} : { plcEndpoint: row.plc_endpoint }),
     sourcePlcHead: row.source_plc_head,
     sourcePredecessor: JSON.parse(row.source_predecessor),
     source: JSON.parse(row.source_facts),
@@ -835,6 +837,16 @@ export function createArrivalStorage(
       )
         throw immutableTuple();
       assertCodeLifetime(input.codeLifetimeMs);
+      const plcEndpoint =
+        input.pdsRevision !== undefined &&
+        input.stagedIncomingMigration !== true
+          ? registryPlcEndpoint(input.endpoint, false)
+          : undefined;
+      if (
+        input.plcEndpoint !== undefined &&
+        input.plcEndpoint !== (plcEndpoint ?? input.endpoint)
+      )
+        throw immutableTuple();
       const saved = await row(input.operationId);
       if (saved) {
         if (
@@ -844,6 +856,7 @@ export function createArrivalStorage(
           saved.handle !== input.handle ||
           saved.pds_id !== input.pdsId ||
           saved.endpoint !== input.endpoint ||
+          (saved.plc_endpoint !== null && saved.plc_endpoint !== plcEndpoint) ||
           saved.pds_revision !== (input.pdsRevision ?? null) ||
           (input.pdsRevision !== undefined &&
             saved.staged_incoming_migration !==
@@ -933,6 +946,7 @@ export function createArrivalStorage(
             staged_incoming_migration:
               input.stagedIncomingMigration ?? Boolean(input.staged),
             endpoint: input.endpoint,
+            plc_endpoint: plcEndpoint ?? null,
             source_plc_head: input.sourcePlcHead,
             source_endpoint: input.source.services.atproto_pds?.endpoint,
             source_predecessor: JSON.stringify(input.sourcePredecessor),
@@ -1427,7 +1441,7 @@ export function createArrivalStorage(
                 operation: signedOperation,
                 predecessor: JSON.parse(saved.source_predecessor),
                 repositoryKey: input.repositoryKey,
-                endpoint: saved.endpoint,
+                endpoint: saved.plc_endpoint ?? saved.endpoint,
                 handle: saved.handle,
                 rotationKeys: destinationRotationKeys({
                   ...custody,
@@ -1459,7 +1473,8 @@ export function createArrivalStorage(
             if (
               move.verificationMethods.atproto !== input.repositoryKey ||
               move.prev !== handoff.cid ||
-              move.services.atproto_pds?.endpoint !== saved.endpoint ||
+              move.services.atproto_pds?.endpoint !==
+                (saved.plc_endpoint ?? saved.endpoint) ||
               move.services.atproto_pds?.type !== "AtprotoPersonalDataServer" ||
               !move.alsoKnownAs.includes(`at://${saved.handle}`) ||
               canonicalJson(move.rotationKeys) !==

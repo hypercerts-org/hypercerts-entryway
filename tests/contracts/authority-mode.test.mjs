@@ -64,3 +64,41 @@ test("a registry authority without its phase marker fails closed", async (t) => 
     /authority phase/,
   );
 });
+
+test("bootstrap probe is bounded, reads through a writer and rejects a stale phase", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "entryway-phase-probe-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const config = await testDatabaseConfiguration(
+    join(directory, "authority.sqlite"),
+  );
+  const db = await openDatabase(config, "registry-bootstrap");
+  const peer = await openDatabase(config, "registry-bootstrap");
+  t.after(async () => {
+    await peer.close();
+    await db.close();
+  });
+  let entered, release;
+  const started = new Promise((resolve) => {
+    entered = resolve;
+  });
+  const wait = new Promise((resolve) => {
+    release = resolve;
+  });
+  const writer = peer.transact(async () => {
+    entered();
+    await wait;
+  });
+  await started;
+  try {
+    assert.equal(await db.probeBootstrap(1000), true);
+  } finally {
+    release();
+    await writer;
+  }
+  await db.execute(
+    sql`UPDATE authority_phase SET phase = 'registry-serving', generation = 2 WHERE id = 1`,
+    "run",
+  );
+  assert.equal(await db.probeBootstrap(1000), false);
+  assert.equal(await db.probe(1000), true);
+});
