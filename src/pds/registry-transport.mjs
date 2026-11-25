@@ -5,7 +5,7 @@ import { Readable, Transform } from "node:stream";
 /** Registry operation transport: exact approved origin and dial address, verified
  * TLS hostname, no proxy, connection reuse or redirects. The caller supplies the
  * response bound appropriate to the operation. */
-export function registryPdsFetch(input, options, verifier, maxBytes) {
+export function registryPdsTarget(input, verifier, maxBytes) {
   const url = new URL(input);
   const approved = verifier?.targets?.get(url.origin);
   const hostname = url.hostname.replace(/^\[|\]$/g, "");
@@ -20,7 +20,17 @@ export function registryPdsFetch(input, options, verifier, maxBytes) {
     !Number.isSafeInteger(maxBytes) ||
     maxBytes < 1
   )
-    return Promise.reject(new Error("PdsTargetNotAllowed"));
+    throw new Error("PdsTargetNotAllowed");
+  return { url, address };
+}
+
+export function registryPdsFetch(input, options, verifier, maxBytes) {
+  let url, address;
+  try {
+    ({ url, address } = registryPdsTarget(input, verifier, maxBytes));
+  } catch (error) {
+    return Promise.reject(error);
+  }
   return new Promise((resolve, reject) => {
     const request = https.request(
       url,
