@@ -25,6 +25,13 @@ Prerequisite: `prepare` and `up` have succeeded.
 6. Script `verify` checks identity/data/custody and old-credential denial.
 7. Browser signs in and performs OAuth write/refresh with the same DID.
 
+Run `./tests/local.sh fresh-group migration-empty` in a disposable project to
+exercise the same synthetic workflow with a signed, record-free and blob-free
+source repository. The verification reads the active target CAR and blob list
+through public endpoints and checks the unchanged source-signed commit and empty inventory before the later
+browser write.
+This fixture does not establish independent public-source migration support.
+
 The source is the fixture-owned ordinary PDS `pds3`; destination is managed
 `pds1`/cluster1. Neither PDS implementation is patched. The source fixture holds
 its synthetic source credentials and exposes private fixture-only commands.
@@ -37,4 +44,8 @@ stop and inspect the saved public error/checkpoint evidence. The inherited
 explicit diagnosis and its ownership/PLC/source invariants must hold.
 
 `reverify` checks the existing completed fixture; it does not create another
-identity or count as a fresh migration.
+identity or count as a fresh migration. For an empty migration it checks the
+saved cutover receipt and source snapshot, then verifies the browser-written
+record and current target repository independently. Contributors can exercise
+both on one disposable deployment with `./tests/local.sh fresh-group
+migration-empty reverify`.

@@ -421,6 +421,7 @@ export class ExternalMigrationService {
               workflowId: w.id,
               expectedPlcHead: w.moveOperationCid ?? "",
               expectedRepositoryKey: w.targetRepositoryKey ?? "",
+              sourceRepositoryKey: w.authority.sourceRepositoryKey,
             });
             {
               const n = advance(w, "repo-imported");
@@ -450,6 +451,7 @@ export class ExternalMigrationService {
                 workflowId: w.id,
                 expectedPlcHead: w.moveOperationCid ?? "",
                 expectedRepositoryKey: w.targetRepositoryKey ?? "",
+                sourceRepositoryKey: w.authority.sourceRepositoryKey,
               });
               const n = advance(w, "target-ready");
               await this.transition(w, n, "verify-target");

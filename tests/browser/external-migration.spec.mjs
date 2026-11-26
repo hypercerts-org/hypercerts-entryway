@@ -58,7 +58,8 @@ test("external account verifies its destination email, then uses OAuth on the cl
     data: { client: "primary", text: "OAuth write after external migration" },
   });
   expect(write.ok(), await write.text()).toBe(true);
-  expect((await write.json()).uri).toContain(`at://${identity.did}/`);
+  const written = await write.json();
+  expect(written.uri).toContain(`at://${identity.did}/`);
   const refresh = await page.request.post(
     `${config.clientUrl}/client/refresh`,
     { headers, data: { client: "primary" } },
@@ -77,6 +78,8 @@ test("external account verifies its destination email, then uses OAuth on the cl
     sameDid: true,
     audience: report.target,
     oauthWrite: true,
+    recordUri: written.uri,
+    recordCid: written.cid,
     refresh: true,
     at: new Date().toISOString(),
   };

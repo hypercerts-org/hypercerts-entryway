@@ -15,6 +15,7 @@ import { MigrationPayloadStore } from "../../src/database/drizzle/migration-payl
 
 export interface SourceFixtureStatus {
   did: string;
+  empty: boolean;
   email: string;
   sourceHandle: string;
   sourcePdsUrl: string;
@@ -24,9 +25,9 @@ export interface SourceFixtureStatus {
   sourceRepositoryKey: string;
   sourcePlcHead: string;
   head: string;
-  record: { uri: string; cid: string; commit: { cid: string } };
-  blobCid: string;
-  blobSha256: string;
+  record?: { uri: string; cid: string; commit: { cid: string } };
+  blobCid?: string;
+  blobSha256?: string;
   frozen: boolean;
   sourceCommit?: string;
 }
@@ -52,16 +53,22 @@ function fixtureStatus(value: unknown): SourceFixtureStatus {
     !isDidKey(value.sourceRepositoryKey) ||
     !isCid(value.sourcePlcHead) ||
     (value.head !== undefined && !isCid(value.head)) ||
-    !isCid(value.blobCid) ||
-    !isDigest(value.blobSha256) ||
+    typeof value.empty !== "boolean" ||
+    (!value.empty &&
+      (!isCid(value.blobCid) ||
+        !isDigest(value.blobSha256) ||
+        !isRecord(value.record) ||
+        typeof value.record.uri !== "string" ||
+        !value.record.uri.startsWith(`at://${value.did}/`) ||
+        !isCid(value.record.cid) ||
+        !isRecord(value.record.commit) ||
+        !isCid(value.record.commit.cid))) ||
+    (value.empty &&
+      (value.blobCid !== undefined ||
+        value.blobSha256 !== undefined ||
+        value.record !== undefined)) ||
     typeof value.frozen !== "boolean" ||
-    (value.sourceCommit !== undefined && !isCid(value.sourceCommit)) ||
-    !isRecord(value.record) ||
-    typeof value.record.uri !== "string" ||
-    !value.record.uri.startsWith(`at://${value.did}/`) ||
-    !isCid(value.record.cid) ||
-    !isRecord(value.record.commit) ||
-    !isCid(value.record.commit.cid)
+    (value.sourceCommit !== undefined && !isCid(value.sourceCommit))
   )
     return invalid();
   return {
@@ -75,13 +82,14 @@ function fixtureStatus(value: unknown): SourceFixtureStatus {
     sourceRepositoryKey: value.sourceRepositoryKey,
     sourcePlcHead: value.sourcePlcHead,
     head: typeof value.head === "string" ? value.head : value.sourcePlcHead,
-    record: {
-      uri: value.record.uri,
-      cid: value.record.cid,
-      commit: { cid: value.record.commit.cid },
-    },
-    blobCid: value.blobCid,
-    blobSha256: value.blobSha256,
+    empty: value.empty,
+    ...(value.empty
+      ? {}
+      : {
+          record: value.record as NonNullable<SourceFixtureStatus["record"]>,
+          blobCid: value.blobCid as string,
+          blobSha256: value.blobSha256 as string,
+        }),
     frozen: value.frozen,
     ...(typeof value.sourceCommit === "string"
       ? { sourceCommit: value.sourceCommit }
@@ -138,8 +146,8 @@ export class SourceFixtureClient {
       "SourceChanged",
     );
   }
-  public async initialize(): Promise<SourceFixtureStatus> {
-    return fixtureStatus(await this.call("/initialize", {}));
+  public async initialize(empty = false): Promise<SourceFixtureStatus> {
+    return fixtureStatus(await this.call("/initialize", { empty }));
   }
   public async status(): Promise<SourceFixtureStatus> {
     return fixtureStatus(await this.call("/status"));
