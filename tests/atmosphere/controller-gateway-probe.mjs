@@ -103,6 +103,10 @@ try {
       "x-controller-nonce": nonce,
     });
     assert.deepEqual(JSON.parse(challenge.body), { identity, nonce });
+    assert.equal(
+      (await managed("/xrpc/com.atproto.server.createAccount", "POST")).status,
+      403,
+    );
     const read = await managed(
       "/xrpc/com.atproto.server.describeServer",
       "GET",

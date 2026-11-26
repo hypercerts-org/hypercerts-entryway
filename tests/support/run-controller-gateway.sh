@@ -37,7 +37,8 @@ owned() {
   [[ "$actual" == "$project $role" ]] || { echo 'Controller gateway resource ownership mismatch' >&2; return 1; }
 }
 cleanup() {
-  status=$?
+  test_status=$?
+  cleanup_status=0
   trap - EXIT
   if [[ ! -f "$private/project" || -L "$private/project" || "$(<"$private/project")" != "$project" ]]; then
     echo 'Controller gateway recovery identity is unavailable' >&2
@@ -52,25 +53,25 @@ cleanup() {
     if docker --context "$DOCKER_CONTEXT" volume inspect "$volume" >/dev/null 2>&1; then owned volume "$volume" gateway-test || exit 1; fi
   done
   if [[ -f "$private/Caddyfile.original" ]]; then
-    cp -- "$private/Caddyfile.original" "$caddyfile" || status=1
-    docker --context "$DOCKER_CONTEXT" restart "$caddy" >/dev/null || status=1
+    cp -- "$private/Caddyfile.original" "$caddyfile" || cleanup_status=1
+    docker --context "$DOCKER_CONTEXT" restart "$caddy" >/dev/null || cleanup_status=1
   fi
   rm -f -- "$cert"
   for container in "$tunnel" "$sidecar" "$replacement"; do
-    if docker --context "$DOCKER_CONTEXT" container inspect "$container" >/dev/null 2>&1; then docker --context "$DOCKER_CONTEXT" rm --force "$container" >/dev/null || status=1; fi
+    if docker --context "$DOCKER_CONTEXT" container inspect "$container" >/dev/null 2>&1; then docker --context "$DOCKER_CONTEXT" rm --force "$container" >/dev/null || cleanup_status=1; fi
   done
   unset ENTRYWAY_TEST_GATEWAY_NETWORK_OVERLAY
-  if ! node "$helper" cleanup "$project" "$sandbox"; then status=1; fi
+  if ! node "$helper" cleanup "$project" "$sandbox"; then cleanup_status=1; fi
   if docker --context "$DOCKER_CONTEXT" network inspect "$network" >/dev/null 2>&1; then
     for container in "$caddy" "$dns"; do docker --context "$DOCKER_CONTEXT" network disconnect "$network" "$container" >/dev/null 2>&1 || true; done
-    docker --context "$DOCKER_CONTEXT" network rm "$network" >/dev/null || status=1
+    docker --context "$DOCKER_CONTEXT" network rm "$network" >/dev/null || cleanup_status=1
   fi
   for volume in "$key_volume" "$replacement_key"; do
-    if docker --context "$DOCKER_CONTEXT" volume inspect "$volume" >/dev/null 2>&1; then docker --context "$DOCKER_CONTEXT" volume rm "$volume" >/dev/null || status=1; fi
+    if docker --context "$DOCKER_CONTEXT" volume inspect "$volume" >/dev/null 2>&1; then docker --context "$DOCKER_CONTEXT" volume rm "$volume" >/dev/null || cleanup_status=1; fi
   done
-  if [[ "$status" == 0 ]]; then rm -f -- "$private/Caddyfile.original" "$private/network.yaml" "$private/project" "$private/replacement.crt"; rmdir "$private" || status=1; fi
-  if [[ "$status" != 0 ]]; then echo 'Controller gateway cleanup failed; rerun controller-gateway cleanup for this sandbox' >&2; fi
-  exit "$status"
+  if [[ "$cleanup_status" == 0 ]]; then rm -f -- "$private/Caddyfile.original" "$private/network.yaml" "$private/project" "$private/replacement.crt"; rmdir "$private" || cleanup_status=1; fi
+  if [[ "$cleanup_status" != 0 ]]; then echo 'Controller gateway cleanup failed; rerun controller-gateway cleanup for this sandbox' >&2; exit 1; fi
+  exit "$test_status"
 }
 if [[ "$mode" == cleanup ]]; then
   if [[ -d "$private" ]]; then cleanup; fi
@@ -103,6 +104,7 @@ export ENTRYWAY_TEST_GATEWAY_NETWORK_OVERLAY="$private/network.yaml"
 node "$helper" launch "$project" "$sandbox"
 node "$helper" verify "$project" "$sandbox"
 image=$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1])).toolImage' "$launch/state.json")
+docker --context "$DOCKER_CONTEXT" run --rm --network none --mount "type=bind,src=$root/tests/atmosphere,dst=/app/tests/atmosphere,readonly" --mount "type=bind,src=$root/dist/src/pds/deployment-controller-contract.js,dst=/app/dist/src/pds/deployment-controller-contract.js,readonly" --workdir /app --entrypoint node "$image" --test tests/atmosphere/controller-gate-store.test.mjs
 origin=$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1])).containerId' "$launch/state.json")
 address=$(docker --context "$DOCKER_CONTEXT" inspect --format "{{(index .NetworkSettings.Networks \"$network\").IPAddress}}" "$origin")
 count=$(docker --context "$DOCKER_CONTEXT" inspect --format '{{len .NetworkSettings.Networks}}' "$origin")
@@ -130,6 +132,7 @@ docker --context "$DOCKER_CONTEXT" restart "$caddy" >/dev/null
 new_caddy_ip=$(docker --context "$DOCKER_CONTEXT" inspect --format "{{(index .NetworkSettings.Networks \"$network\").IPAddress}}" "$caddy")
 [[ "$new_caddy_ip" == "$caddy_ip" ]] || { echo 'Ingress address changed during restart' >&2; exit 1; }
 if [[ "${CONTROLLER_GATEWAY_TEST_INTERRUPT:-}" == after-route ]]; then kill -KILL "$$"; fi
+if [[ "${CONTROLLER_GATEWAY_TEST_FAIL:-}" == after-route ]]; then echo 'Injected test assertion failure' >&2; exit 1; fi
 probe() {
   docker --context "$DOCKER_CONTEXT" run --rm --network "$main_network" --dns "$main_dns" --mount "type=bind,src=$cert,dst=/gateway.crt,readonly" --mount "type=bind,src=$root/tests/atmosphere/controller-gateway-probe.mjs,dst=/probe.mjs,readonly" --mount "type=volume,src=${project}_public-ca,dst=/ca,readonly" --entrypoint node "$image" /probe.mjs "$tunnel_ip" /gateway.crt "$identity" /ca/root.crt "${1:-live}"
 }
