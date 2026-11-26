@@ -79,6 +79,17 @@ export const controllerBindingExpectationSchema = controllerBindingSchema.pick({
 });
 
 /** Stable authority identifies the fleet, not a particular rotating worker credential. */
+export const controllerDescribeRequestSchema = z.strictObject({
+  version: z.literal(CONTROLLER_VERSION),
+  authorityId: id,
+  callerId: id,
+  deploymentId: id,
+  hostId: id,
+  revision: z.number().int().safe().positive(),
+  controllerEpoch: id,
+  purpose: z.literal("describe-binding"),
+  nonce: challenge,
+});
 export const controllerRouteRequestSchema = z.strictObject({
   version: z.literal(CONTROLLER_VERSION),
   authorityId: id,
