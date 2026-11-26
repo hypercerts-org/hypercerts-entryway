@@ -863,3 +863,51 @@ test("unresolved external dispatch prevents releasing the workflow claim and rol
     "dispatched",
   );
 });
+
+test("completed replay returns the exact saved workflow without touching a successor or the current PLC head", async (t) => {
+  const f = await fixture();
+  t.after(async () => await f.sqlite.close());
+  const initial = await f.make().start(f.input);
+  const completed = await f.make().resume(initial.id, f.actor);
+  const completedHistory = structuredClone(completed);
+  f.input.workflowId = "successor-workflow";
+  f.input.targetPdsUrl = "https://next-target.test";
+  f.state.head = heads.initial;
+  f.state.active = false;
+  const successor = await f.make().start(f.input);
+  const attemptsBefore = await f.sqlite.read("external_operation_attempts");
+  const authoritiesBefore = await f.sqlite.read("authority_operations");
+  const reservationsBefore = await f.sqlite.read("migration_reservations");
+  const callsBefore = [...f.calls];
+  f.state.head = heads.foreign;
+  assert.deepEqual(
+    await f.make().resume(initial.id, f.actor),
+    completedHistory,
+  );
+  assert.deepEqual(await f.workflows.getById(successor.id), successor);
+  assert.equal(
+    (await f.workflows.getActiveByDid(initial.did)).id,
+    successor.id,
+  );
+  assert.deepEqual(
+    await f.sqlite.read("external_operation_attempts"),
+    attemptsBefore,
+  );
+  assert.deepEqual(
+    await f.sqlite.read("authority_operations"),
+    authoritiesBefore,
+  );
+  assert.deepEqual(
+    await f.sqlite.read("migration_reservations"),
+    reservationsBefore,
+  );
+  assert.deepEqual(f.calls, callsBefore);
+  await assert.rejects(
+    f.make().resume(initial.id, { ...f.actor, userId: "other-owner" }),
+    { code: "OwnerBindingChanged" },
+  );
+  f.state.owner = false;
+  await assert.rejects(f.make().resume(initial.id, f.actor), {
+    code: "OwnerBindingChanged",
+  });
+});
