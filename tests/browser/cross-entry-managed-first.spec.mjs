@@ -194,7 +194,7 @@ test("pending managed migration refuses incoming preparation on the replica", as
         `${config.issuer}/incoming/prepare`,
         {
           headers: { origin: config.issuer, ...nodes.headers(1) },
-          form: {
+          data: {
             csrf: incomingCsrf,
             otp: incomingCode,
             did,
@@ -204,30 +204,16 @@ test("pending managed migration refuses incoming preparation on the replica", as
         },
       );
       nodes.expectServed(response, "incoming/prepare");
-      // The previously verified owner must reverify after the managed freeze.
-      // Do not expose a response body on failure.
-      const text = await response.text();
-      const labels = [
-        ["Identity already hosted", "IdentityConflict"],
-        ["Verify the destination email again", "ArrivalProofRequired"],
-        [
-          "The selected account is not linked to this verified identity",
-          "AccountMismatch",
-        ],
-        ["A verified saved browser owner is required", "AccountMismatch"],
-        ["Verify your email before signing in", "AccountMismatch"],
-      ];
-      const code =
-        labels.find(([message]) => text.includes(message))?.[1] ?? "other";
-      expect({
-        route: "/incoming/prepare",
-        status: response.status(),
-        code,
-      }).toEqual({
-        route: "/incoming/prepare",
-        status: 403,
-        code: "ArrivalProofRequired",
-      });
+      // Assert only safe values; neither a body nor an unexpected error is logged.
+      expect(response.status()).toBe(403);
+      let arrivalProofRequired = false;
+      try {
+        const body = await response.json();
+        arrivalProofRequired = body?.error === "ArrivalProofRequired";
+      } catch {
+        // A non-JSON response cannot satisfy the structured error contract.
+      }
+      expect(arrivalProofRequired).toBe(true);
     });
     expect(await snapshot()).toEqual(before);
     expect(
