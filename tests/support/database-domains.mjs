@@ -32,6 +32,7 @@ export const databaseDomains = {
     "xrpc-security",
   ],
   migration: [
+    "active-did-transfer",
     "repository-verification",
     "migration",
     "migration-payload",

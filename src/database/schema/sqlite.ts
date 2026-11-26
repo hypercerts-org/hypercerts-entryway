@@ -879,3 +879,9 @@ export const controller_challenges = table(
   },
   (t) => [index("controller_challenge_expiry").on(t.expires_at)],
 );
+
+export const active_did_transfers = table("active_did_transfers", {
+  did: text("did").primaryKey(),
+  operation_id: text("operation_id").notNull(),
+  transfer_kind: text("transfer_kind").notNull(),
+});
