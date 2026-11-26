@@ -45,6 +45,14 @@ export function mountPdsRegistryRoutes({
             "Registry checking is not configured",
           ),
         );
+      if (error.message === "PdsAssociatedHostRestageUnsupported")
+        return next(
+          new HttpError(
+            409,
+            "OperationConflict",
+            "Associated PDS hosts cannot be restaged",
+          ),
+        );
       if (error.message === "PdsEnrollmentReferencesUnmapped")
         return next(
           new HttpError(
@@ -71,7 +79,6 @@ export function mountPdsRegistryRoutes({
           "PdsEnrollmentAliasConflict",
           "PdsEnrollmentModeConflict",
           "PdsEnrollmentReferencesExist",
-          "PdsEnrollmentIdentityInvalid",
         ].includes(error.message)
       )
         return next(
@@ -89,6 +96,7 @@ export function mountPdsRegistryRoutes({
           "InvalidPdsHostUrl",
           "InvalidPdsHostRequest",
           "InvalidPdsRegistryCredential",
+          "PdsEnrollmentIdentityInvalid",
         ].includes(error.message)
       )
         return next(invalid());
