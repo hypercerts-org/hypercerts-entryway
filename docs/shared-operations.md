@@ -333,3 +333,19 @@ record/blob and session/write assertions. Desktop/narrow pending and completion
 outputs support visual inspection; focused diagnostics alone do not replace full
 acceptance. See [implementation limits](implementation-assessment.md#known-limits)
 for the unresolved moderation and credential-lifetime defects.
+
+Managed migration admission also claims the shared active DID transfer fence in
+the proof and journal transaction. Incoming admissions conflict with this claim.
+The challenge binds a distinct server-side move ID; snapshots and retained move
+journals use that ID. A pending move retains the claim and terminal placement
+refusal or verified local cutover releases only its matching owner. Authenticated
+retries may select the saved challenge; an ambiguous tokenless retry is refused.
+Previously retained repositories are not automatically eligible for reuse. Repository
+and blob snapshots and move journals are retained in the database by operation ID;
+there is no automatic expiry or garbage collection. They can contain account data
+and consume storage proportional to transferred data and repeated moves. Protect
+and capacity-plan database storage and backups accordingly; do not delete snapshots
+needed for recovery. A lifecycle refusal at initial admission releases the claim
+before remote work. A later preflight or target-read refusal keeps the claim: an
+earlier source action or recovery obligation may already exist, and placement's
+target-dispatch checks alone do not prove it is safe to release.

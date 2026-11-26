@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { fail } from "../../accounts/security-primitives.mjs";
 
 export function createMigrationProof({ proofs, config, accounts }) {
@@ -17,7 +18,7 @@ export function createMigrationProof({ proofs, config, accounts }) {
       "account-migrate",
       row,
       row.email,
-      { pdsId },
+      { pdsId, operationId: randomUUID() },
       { exposeChallengeId },
     );
   };
@@ -42,7 +43,12 @@ export function createMigrationProof({ proofs, config, accounts }) {
           "InvalidToken",
           "Migration proof was issued for a different PDS",
         );
-      return { did: row.did, email: row.email, verifiedAt: new Date() };
+      return {
+        did: row.did,
+        email: row.email,
+        verifiedAt: new Date(),
+        operationId: proof.data.operationId,
+      };
     },
   };
   return operations;
