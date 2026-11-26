@@ -71,6 +71,13 @@ if (!validContext) throw Error("Unexpected Entryway Docker endpoint");
 const stateDir = join(sandbox, ".controller-launch");
 const statePath = join(stateDir, "state.json");
 const overlay = join(stateDir, "compose.json");
+const networkOverlay = process.env.ENTRYWAY_TEST_GATEWAY_NETWORK_OVERLAY;
+if (
+  networkOverlay &&
+  (networkOverlay !== join(sandbox, ".controller-gateway", "network.yaml") ||
+    realpathSync(networkOverlay) !== networkOverlay)
+)
+  throw Error("Invalid gateway network overlay");
 const compose = (args, includeOverlay = true) =>
   run(
     [
@@ -80,6 +87,7 @@ const compose = (args, includeOverlay = true) =>
       "-f",
       join(sandbox, "compose.yaml"),
       ...(includeOverlay ? ["-f", overlay] : []),
+      ...(includeOverlay && networkOverlay ? ["-f", networkOverlay] : []),
       ...args,
     ],
     { stdio: ["ignore", "ignore", "pipe"] },
@@ -178,6 +186,7 @@ function privatePath(path, directory = false) {
   )
     throw Error("Unsafe controller launch state");
 }
+if (networkOverlay) privatePath(networkOverlay);
 function volume(name, role) {
   const info = JSON.parse(run(["volume", "inspect", name]))[0];
   if (
