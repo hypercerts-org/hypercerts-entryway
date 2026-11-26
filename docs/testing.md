@@ -53,6 +53,7 @@ and requires no host dependency install:
 | `./tests/local.sh incoming-public-shapes`     | The same journey for empty, blob-free, blob-bearing and multi-collection repositories after up; run by hand, not in CI; see below                                                                          |
 | `./tests/local.sh incoming-public-failures`   | Public incoming failure cases after up, then a restart of Entryway between two admitted steps of a separate move; see below                                                                                |
 | `./tests/local.sh incoming-two-node`          | The public incoming journey on the two-node PostgreSQL profile, once per node order; run it as `fresh-group incoming-two-node`. One-off evidence, not a CI gate; see below                                 |
+| `./tests/local.sh cross-entry-incoming-first` | Pending incoming arrival followed by managed console refusal on the other node; run as `fresh-group cross-entry-incoming-first`. One-off evidence, not a CI gate; see below                                |
 | `./tests/local.sh account-lifecycle-two-node` | Cross-node grant revocation and access-token expiry on PostgreSQL; run `fresh-group account-lifecycle-two-node`. One-off evidence, not a CI gate; see below                                                |
 | `./tests/local.sh incoming-goat-journey`      | Second incoming client after up: the public goat CLI, patched to the Entryway incoming contract, migrates a fresh stock source account; see below                                                          |
 | `./tests/local.sh incoming-moover-journey`    | Third incoming client after up: a fork of the PDS MOOver web UI carrying the unmerged Entryway mode, driven in Chromium through the sandbox CORS ingress, migrates a fresh stock source account; see below |
@@ -239,6 +240,15 @@ one node, refresh refusal on the other, a surviving control, and the same
 DPoP-bound access token before and after its actual expiry. It is one-off
 evidence, not a CI gate. The phase log is `account-lifecycle-two-node.log` in
 the report directory; record the revision and result with the change.
+
+### Cross-entry incoming-first check
+
+Run `./tests/local.sh fresh-group cross-entry-incoming-first` in a fresh owned
+project. On the two-node PostgreSQL profile, this creates a pending incoming
+arrival on one node and checks that the authenticated managed console on the
+other refuses it. It checks the incoming claim and saved arrival, PLC audit and
+destination repository status remain unchanged. This one-off check does not
+complete the incoming move or exercise a managed-first race, and is not a CI gate.
 
 ### Public incoming journey on two nodes
 

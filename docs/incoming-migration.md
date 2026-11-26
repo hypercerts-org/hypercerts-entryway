@@ -304,8 +304,10 @@ only live claimed arrival for the DID. Stock handoff and staged creation also
 acquire the shared active-transfer claim in that transaction. An existing claim
 from another transfer refuses admission; pending and uncertain arrivals retain
 it until verified activation completes, when the exact arrival releases it in
-the account-activation transaction. Managed-move admission is not yet wired to
-this shared claim, so this is not yet a cross-entry exclusion guarantee.
+the account-activation transaction. Managed-move admission also acquires this
+shared claim in its admission transaction. Account-state and proof checks can
+refuse a competing route before it reaches the shared claim; live cross-entry
+qualification is separate from the transactional exclusion guarantee.
 Handoff admission refuses:
 
 - another claimed arrival for the DID, or a lease held elsewhere on this arrival,
