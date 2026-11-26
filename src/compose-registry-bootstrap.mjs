@@ -48,7 +48,7 @@ export function createRegistryBootstrap({
     lifecycle.readinessWithProbe((timeout) => db.probeBootstrap(timeout)),
   );
   app.use(lifecycle.admission);
-  app.use(express.json({ limit: "64kb" }));
+  app.use("/admin/pds-registry", express.json({ limit: "64kb" }));
   app.use("/admin/pds-registry", (error, _req, _res, next) => {
     if (error.type === "entity.parse.failed")
       return next(
