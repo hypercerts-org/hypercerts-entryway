@@ -447,6 +447,12 @@ export async function createAccountMigration({
         "Cannot migrate a tombstoned identity",
       );
     const normalized = plc.normalizeOp(current);
+    if (typeof normalized.verificationMethods.atproto !== "string")
+      throw error(
+        "IdentityChanged",
+        "The source PLC head has no repository signing key",
+        409,
+      );
     if (!normalized.rotationKeys.includes(accounts.plcSigner.publicKey()))
       throw error(
         "AuthorityNotManaged",
@@ -507,7 +513,10 @@ export async function createAccountMigration({
           signed,
           facts,
           String(await cidForCbor(signed)),
-          { signingKey: reservedKey },
+          {
+            signingKey: reservedKey,
+            sourceSigningKey: normalized.verificationMethods.atproto,
+          },
           authorize,
         );
       },
@@ -531,6 +540,7 @@ export async function createAccountMigration({
       plcOp: signed,
       plcOpCid: (await cidForCbor(signed)).toString(),
       signingKey: reservedKey,
+      sourceSigningKey: normalized.verificationMethods.atproto,
     };
   };
   const probeTarget = async (operation, target) => {
@@ -644,7 +654,14 @@ export async function createAccountMigration({
       getUrl(target, "com.atproto.sync.getRepo", { did: operation.did }),
       { headers: { authorization: basic(target) } },
     );
+    if (typeof operation.sourceSigningKey !== "string")
+      throw error(
+        "OperationRecoveryRequired",
+        "The original source signing key is unavailable; operator inspection is required",
+        409,
+      );
     const verified = await verifyRepositorySnapshot({
+      sourceSigningKey: operation.sourceSigningKey,
       sourceCar: Buffer.from(source.base64, "base64"),
       targetCar: targetRepo.bytes,
       did: operation.did,

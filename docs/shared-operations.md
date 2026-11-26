@@ -179,10 +179,13 @@ Recovery observations are operation-specific:
   later third-party publication; the protocol's PLC previous-CID rule remains.
 - Status/deletion observations follow verified old-request drain and compare the
   affected target account. They do not prove drain themselves.
-- Managed migration retains original DID, target key and every journaled PLC
-  operation. Only the existing exact-head/absent-target partial-create repair is
-  allowed; a foreign head is divergence. Snapshot recovery verifies full CAR
-  record-CID inventories and every blob's bytes, not counts alone. Empty
+- Managed migration retains the original DID, the repository key from the PLC
+  predecessor, the target key and every journaled PLC operation. The source key
+  remains the original even after a partial-create repair changes the PLC head.
+  Only the existing exact-head/absent-target partial-create repair is allowed; a
+  foreign head is divergence. Snapshot recovery verifies the source CAR signature
+  against that retained key, full record-CID inventories and every blob's bytes,
+  not counts alone. Missing source-key evidence requires operator inspection. Empty
   `applyWrites` uses `swapCommit` against the observed root. A safe repeated empty
   write may create a new signed commit/revision; it does not mutate records or
   blobs and is not exactly-once execution.
