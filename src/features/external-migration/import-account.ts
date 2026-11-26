@@ -173,6 +173,7 @@ export class ExternalMigrationService {
         "OwnerBindingChanged",
         "Recent verified destination ownership changed",
       );
+    if (workflow.phase === "complete") return workflow;
     return this.d.ownership.run(
       workflow.did,
       this.intent(workflow),
