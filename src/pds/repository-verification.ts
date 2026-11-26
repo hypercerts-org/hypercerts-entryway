@@ -16,7 +16,12 @@ export async function verifyRepositorySnapshot(input: {
   did: string;
   sourceCommit: string;
   targetSigningKey: string;
-}): Promise<{ targetCommit: string; targetSignatureValid: boolean }> {
+  sourceSigningKey?: string;
+}): Promise<{
+  targetCommit: string;
+  targetSignatureValid: boolean;
+  recordCount: number;
+}> {
   try {
     const source = await verifyRepoCar(input.sourceCar, input.did);
     const target = await verifyRepoCar(input.targetCar, input.did);
@@ -33,6 +38,17 @@ export async function verifyRepositorySnapshot(input: {
         JSON.stringify(inventory(target.creates))
     )
       throw Error("SnapshotDiverged");
+    if (input.sourceSigningKey !== undefined) {
+      const sourceCar = await readCarWithRoot(input.sourceCar);
+      const sourceCommit = ensureV3Commit(
+        await new MemoryBlockstore(sourceCar.blocks).readObj(
+          sourceCar.root,
+          def.versionedCommit,
+        ),
+      );
+      if (!(await verifyCommitSig(sourceCommit, input.sourceSigningKey)))
+        throw Error("InvalidSourceSignature");
+    }
     const car = await readCarWithRoot(input.targetCar);
     const commit = ensureV3Commit(
       await new MemoryBlockstore(car.blocks).readObj(
@@ -42,6 +58,7 @@ export async function verifyRepositorySnapshot(input: {
     );
     return {
       targetCommit: target.commit.cid.toString(),
+      recordCount: source.creates.length,
       targetSignatureValid: await verifyCommitSig(
         commit,
         input.targetSigningKey,

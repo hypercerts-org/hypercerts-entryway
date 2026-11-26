@@ -345,6 +345,7 @@ export class PdsMigrationClient {
     workflowId: string;
     expectedPlcHead: string;
     expectedRepositoryKey: string;
+    sourceRepositoryKey: string;
   }): Promise<void> {
     const payload = await this.payload(input.workflowId);
     await this.options.ownership.dispatch(
@@ -390,6 +391,7 @@ export class PdsMigrationClient {
             input.did,
             input.workflowId,
             input.expectedRepositoryKey,
+            input.sourceRepositoryKey,
           );
           return verified.targetCommit === payload.manifest.sourceCommit
             ? { state: "applied", result: undefined }
@@ -473,7 +475,12 @@ export class PdsMigrationClient {
       );
     }
   }
-  private async verifyRepository(did: string, workflowId: string, key: string) {
+  private async verifyRepository(
+    did: string,
+    workflowId: string,
+    key: string,
+    sourceKey: string,
+  ) {
     const payload = await this.payload(workflowId);
     const response = await this.requestForDid(did, "com.atproto.sync.getRepo", {
       params: { did },
@@ -489,6 +496,7 @@ export class PdsMigrationClient {
       did,
       sourceCommit: payload.manifest.sourceCommit,
       targetSigningKey: key,
+      sourceSigningKey: sourceKey,
     });
   }
   public async verifyInactiveTarget(input: {
@@ -497,6 +505,7 @@ export class PdsMigrationClient {
     workflowId: string;
     expectedPlcHead: string;
     expectedRepositoryKey: string;
+    sourceRepositoryKey: string;
   }): Promise<void> {
     const status = accountStatus(
       await this.didJson(
@@ -514,7 +523,6 @@ export class PdsMigrationClient {
       status.repoCommit !== input.manifest.sourceCommit ||
       status.expectedBlobs !== input.manifest.blobs.length ||
       status.importedBlobs !== input.manifest.blobs.length ||
-      !status.indexedRecords ||
       operation.verificationMethods.atproto !== input.expectedRepositoryKey ||
       String(await cidForCbor(lastOperation)) !== input.expectedPlcHead
     )
@@ -526,8 +534,12 @@ export class PdsMigrationClient {
       input.did,
       input.workflowId,
       input.expectedRepositoryKey,
+      input.sourceRepositoryKey,
     );
-    if (verified.targetCommit !== input.manifest.sourceCommit)
+    if (
+      status.indexedRecords !== verified.recordCount ||
+      verified.targetCommit !== input.manifest.sourceCommit
+    )
       throw new MigrationError(
         "TargetConflict",
         "Target commit differs from saved snapshot",

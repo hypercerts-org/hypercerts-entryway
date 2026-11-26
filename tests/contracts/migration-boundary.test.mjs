@@ -228,3 +228,100 @@ test("target PDS transport rejects malformed signing key and account status", as
     },
   );
 });
+
+test("inactive target verifies indexed inventory and saved blob bytes", async (t) => {
+  const { Secp256k1Keypair } = await import("@atproto/crypto");
+  const { Repo, MemoryBlockstore, blocksToCarFile } =
+    await import("@atproto/repo");
+  const { cidForCbor } = await import("@atproto/common");
+  const sourceKey = await Secp256k1Keypair.create();
+  const targetKey = await Secp256k1Keypair.create();
+  const operation = {
+    type: "plc_operation",
+    rotationKeys: [targetKey.did()],
+    verificationMethods: { atproto: targetKey.did() },
+    alsoKnownAs: [],
+    services: {},
+    prev: null,
+    sig: "signature",
+  };
+  const expectedPlcHead = String(await cidForCbor(operation));
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  for (const count of [0, 1]) {
+    const storage = new MemoryBlockstore();
+    const records = count
+      ? [
+          {
+            action: "create",
+            collection: "app.bsky.feed.post",
+            rkey: "one",
+            record: {
+              $type: "app.bsky.feed.post",
+              text: "one",
+              createdAt: "2026-10-06T00:00:00Z",
+            },
+          },
+        ]
+      : [];
+    const repo = await Repo.create(storage, workflow.did, sourceKey, records);
+    const car = await blocksToCarFile(repo.cid, storage.blocks);
+    const blob = { cid: cid("c"), bytes: new Uint8Array([1, 2, 3]) };
+    const blobs = count ? [blob] : [];
+    const saved = {
+      sourceCommit: String(repo.cid),
+      blobs: blobs.map(({ cid: blobCid }) => ({ cid: blobCid })),
+    };
+    let status = {
+      activated: false,
+      repoCommit: saved.sourceCommit,
+      expectedBlobs: count,
+      importedBlobs: count,
+      indexedRecords: count,
+    };
+    let observedBlob = blob.bytes;
+    const adapter = new PdsMigrationClient({
+      ownership: {},
+      origin: "https://target.test",
+      plcUrl: "https://plc.test",
+      token: async () => "test-token",
+      adminAuthorization: "Basic test",
+      snapshots: { getManifest: async () => saved },
+      payloads: { read: async () => ({ manifest: saved, car, blobs }) },
+    });
+    adapter.plcClient.getLastOp = async () => operation;
+    globalThis.fetch = async (url) => {
+      const method = new URL(url).pathname;
+      if (method.endsWith("checkAccountStatus")) return Response.json(status);
+      if (method.endsWith("getRepo")) return new Response(car);
+      if (method.endsWith("getBlob")) return new Response(observedBlob);
+      throw Error(`Unexpected method ${method}`);
+    };
+    const input = {
+      did: workflow.did,
+      manifest: saved,
+      workflowId: "test",
+      expectedPlcHead,
+      expectedRepositoryKey: targetKey.did(),
+      sourceRepositoryKey: sourceKey.did(),
+    };
+    await adapter.verifyInactiveTarget(input);
+    for (const indexedRecords of [undefined, -1, 0.5, count + 1]) {
+      status = { ...status, indexedRecords };
+      await assert.rejects(adapter.verifyInactiveTarget(input));
+    }
+    status = { ...status, indexedRecords: count };
+    if (count) {
+      observedBlob = new Uint8Array([1, 2, 4]);
+      await assert.rejects(adapter.verifyInactiveTarget(input), {
+        code: "SnapshotDigestMismatch",
+      });
+      observedBlob = null;
+      await assert.rejects(adapter.verifyInactiveTarget(input), {
+        code: "SnapshotDigestMismatch",
+      });
+    }
+  }
+});
