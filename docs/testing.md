@@ -54,6 +54,7 @@ and requires no host dependency install:
 | `./tests/local.sh incoming-public-failures`   | Public incoming failure cases after up, then a restart of Entryway between two admitted steps of a separate move; see below                                                                                |
 | `./tests/local.sh incoming-two-node`          | The public incoming journey on the two-node PostgreSQL profile, once per node order; run it as `fresh-group incoming-two-node`. One-off evidence, not a CI gate; see below                                 |
 | `./tests/local.sh cross-entry-incoming-first` | Pending incoming arrival followed by managed console refusal on the other node; run as `fresh-group cross-entry-incoming-first`. One-off evidence, not a CI gate; see below                                |
+| `./tests/local.sh cross-entry-managed-first`  | Held managed migration followed by incoming refusal on the other node; run as `fresh-group cross-entry-managed-first`. One-off evidence, not a CI gate; see below                                             |
 | `./tests/local.sh account-lifecycle-two-node` | Cross-node grant revocation and access-token expiry on PostgreSQL; run `fresh-group account-lifecycle-two-node`. One-off evidence, not a CI gate; see below                                                |
 | `./tests/local.sh incoming-goat-journey`      | Second incoming client after up: the public goat CLI, patched to the Entryway incoming contract, migrates a fresh stock source account; see below                                                          |
 | `./tests/local.sh incoming-moover-journey`    | Third incoming client after up: a fork of the PDS MOOver web UI carrying the unmerged Entryway mode, driven in Chromium through the sandbox CORS ingress, migrates a fresh stock source account; see below |
@@ -935,3 +936,12 @@ The case is opt-in because ordinary test containers do not contain a browser.
 Operators and contributors can run `SANDBOX_PROJECT=hypercerts-entryway-registry-test ./tests/local.sh registry-bootstrap` after preparing and starting a dedicated sandbox. This exercises two bootstrap nodes through the sandbox's verified TLS gateway, restores the normal ingress and PDS afterward, and uses a new disposable PostgreSQL database. Never point this test at a shared sandbox.
 
 The stock-PDS sandbox gives each PDS a separate configuration volume containing only its own runtime secrets and a distinct inbound callback token. The Entryway global administrator secret is not mounted into a PDS container. The pinned PDS constructs an Entryway admin client, but the inspected runtime does not establish an initiating admin callback; supplying a token does not demonstrate that it is sent or accepted.
+
+`./tests/local.sh fresh-group cross-entry-managed-first` runs a one-off
+managed-first cross-node admission test on a disposable two-node PostgreSQL
+profile. It recreates the primary with a test-only barrier, so it must run alone;
+the wrapper restores the primary on exit. The signup is on pds2 and the managed
+destination must be pds1, the only origin intercepted by the barrier. After the
+managed freeze, the previously verified owner receives 403 `ArrivalProofRequired`
+on incoming preparation from the replica. The test checks that the pending managed
+owner and surrounding state remain unchanged before release, then checks the winner.
