@@ -1,4 +1,4 @@
-// Controller-local AiaB state. This module does not authenticate callers or grant leases.
+// Controller-local AiaB state. Fixture leases do not authenticate callers or establish real qualification.
 import {
   createHash,
   createHmac,

@@ -1,4 +1,9 @@
-import { createPublicKey, verify, type KeyObject } from "node:crypto";
+import {
+  createHash,
+  createPublicKey,
+  verify,
+  type KeyObject,
+} from "node:crypto";
 import { z } from "zod";
 import { isValidDid } from "@atproto/syntax";
 
@@ -161,6 +166,229 @@ export const controllerQualificationResultSchema = z.strictObject({
   testPlanVersion: id,
   cases: z.array(controllerQualificationCaseSchema).min(1).max(128),
 });
+/** A signature proves the controller's statement only; durable import and live route checks remain mandatory. */
+export const controllerQualificationCompletionSchema = controllerBindingSchema
+  .pick({
+    version: true,
+    issuer: true,
+    keyId: true,
+    audience: true,
+    controllerEpoch: true,
+    deploymentId: true,
+    hostId: true,
+    revision: true,
+    serviceDid: true,
+    publicEndpoint: true,
+    routeId: true,
+    generation: true,
+    imageDigest: true,
+    configDigest: true,
+    launcherDigest: true,
+    incarnation: true,
+  })
+  .extend({
+    purpose: z.literal("qualification-complete"),
+    runId: id,
+    runnerId: id,
+    runnerDigest: digest,
+    fixtureDigest: digest,
+    entrywayDigest: digest,
+    manifestDigest: digest,
+    credentialRefsDigest: digest,
+    publicIngressDigest: digest,
+    testPlanVersion: id,
+    challengeCommitment: digest,
+    resultDigest: digest,
+    startedAt: timestamp,
+    deadline: timestamp,
+    finishedAt: timestamp,
+    expiresAt: timestamp,
+    signature,
+  });
+export type ControllerQualificationCompletion = z.infer<
+  typeof controllerQualificationCompletionSchema
+>;
+export const controllerQualificationExpectationSchema =
+  controllerQualificationCompletionSchema.omit({
+    signature: true,
+    startedAt: true,
+    finishedAt: true,
+    expiresAt: true,
+  });
+export type ControllerQualificationExpectation = z.infer<
+  typeof controllerQualificationExpectationSchema
+>;
+
+/** Fixed field order is part of the versioned signature contract. */
+export function controllerQualificationCompletionBytes(
+  value: Omit<ControllerQualificationCompletion, "signature">,
+): Buffer {
+  return Buffer.from(
+    JSON.stringify([
+      "entryway-controller-qualification",
+      value.version,
+      value.issuer,
+      value.keyId,
+      value.audience,
+      value.purpose,
+      value.controllerEpoch,
+      value.deploymentId,
+      value.hostId,
+      value.revision,
+      value.serviceDid,
+      value.publicEndpoint,
+      value.routeId,
+      value.generation,
+      value.imageDigest,
+      value.configDigest,
+      value.launcherDigest,
+      value.incarnation,
+      value.runId,
+      value.runnerId,
+      value.runnerDigest,
+      value.fixtureDigest,
+      value.entrywayDigest,
+      value.manifestDigest,
+      value.credentialRefsDigest,
+      value.publicIngressDigest,
+      value.testPlanVersion,
+      value.challengeCommitment,
+      value.resultDigest,
+      value.startedAt,
+      value.deadline,
+      value.finishedAt,
+      value.expiresAt,
+    ]),
+  );
+}
+
+/** Validate the controller-pinned required cases before hashing a runner result. */
+export function controllerQualificationResultDigest(
+  value: unknown,
+  required: readonly Pick<
+    z.infer<typeof controllerQualificationCaseSchema>,
+    "project" | "caseId" | "count"
+  >[],
+): string {
+  const result = controllerQualificationResultSchema.safeParse(value);
+  const requiredCase = controllerQualificationCaseSchema.pick({
+    project: true,
+    caseId: true,
+    count: true,
+  });
+  if (!result.success || !required.length || required.length > 128)
+    return invalid();
+  const expected = new Map<string, number>();
+  for (const entry of required) {
+    const item = requiredCase.safeParse(entry);
+    if (!item.success || item.data.count < 1) return invalid();
+    const key = JSON.stringify([item.data.project, item.data.caseId]);
+    if (expected.has(key)) return invalid();
+    expected.set(key, item.data.count);
+  }
+  if (result.data.cases.length !== expected.size) return invalid();
+  const seen = new Set<string>();
+  const cases = result.data.cases
+    .map((item) => {
+      const key = JSON.stringify([item.project, item.caseId]);
+      if (
+        seen.has(key) ||
+        item.status !== "passed" ||
+        expected.get(key) !== item.count
+      )
+        return invalid();
+      seen.add(key);
+      return [
+        item.project,
+        item.caseId,
+        item.status,
+        item.count,
+        item.artifactDigest,
+      ] as const;
+    })
+    .sort((left, right) => {
+      const a = JSON.stringify(left);
+      const b = JSON.stringify(right);
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
+  return `sha256:${createHash("sha256")
+    .update(
+      JSON.stringify([
+        "entryway-controller-result",
+        result.data.version,
+        result.data.runId,
+        result.data.runnerId,
+        result.data.challengeCommitment,
+        result.data.testPlanVersion,
+        cases,
+      ]),
+    )
+    .digest("hex")}`;
+}
+
+/** Verify a completion against independently established context. This does not consume its run ID. */
+export function verifyControllerQualificationCompletion(
+  raw: string,
+  expected: ControllerQualificationExpectation,
+  keys: ReadonlyMap<string, ReadonlyMap<string, string | Buffer | KeyObject>>,
+  now: number,
+  maximumAgeMs: number,
+): ControllerQualificationCompletion {
+  const result = controllerQualificationCompletionSchema.safeParse(
+    parseControllerJson(raw),
+  );
+  const context = controllerQualificationExpectationSchema.safeParse(expected);
+  if (!result.success || !context.success) return invalid();
+  const completion = result.data;
+  let key: KeyObject;
+  try {
+    const configured = keys.get(completion.issuer)?.get(completion.keyId);
+    if (!configured) throw Error();
+    key =
+      configured instanceof Object && "type" in configured
+        ? (configured as KeyObject)
+        : createPublicKey(configured);
+    if (key.type !== "public" || key.asymmetricKeyType !== "ed25519")
+      throw Error();
+    if (
+      Buffer.from(completion.signature, "base64url").toString("base64url") !==
+        completion.signature ||
+      !verify(
+        null,
+        controllerQualificationCompletionBytes(completion),
+        key,
+        Buffer.from(completion.signature, "base64url"),
+      )
+    )
+      throw Error();
+  } catch {
+    throw new ControllerContractError("ControllerIdentityMismatch");
+  }
+  if (
+    Object.keys(context.data).some(
+      (field) =>
+        completion[field as keyof ControllerQualificationExpectation] !==
+        context.data[field as keyof ControllerQualificationExpectation],
+    )
+  )
+    throw new ControllerContractError("ControllerIdentityMismatch");
+  if (
+    !Number.isSafeInteger(now) ||
+    !Number.isSafeInteger(maximumAgeMs) ||
+    maximumAgeMs < 1 ||
+    completion.startedAt >= completion.deadline ||
+    completion.finishedAt < completion.startedAt ||
+    completion.finishedAt >= completion.deadline ||
+    completion.finishedAt > now ||
+    completion.expiresAt <= completion.finishedAt ||
+    completion.expiresAt <= now ||
+    completion.expiresAt - completion.finishedAt > maximumAgeMs ||
+    now - completion.finishedAt > maximumAgeMs
+  )
+    throw new ControllerContractError("ControllerExpired");
+  return completion;
+}
+
 export const controllerFreezeStatusSchema = z.strictObject({
   version: z.literal(CONTROLLER_VERSION),
   deploymentId: id,

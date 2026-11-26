@@ -436,3 +436,260 @@ test("one trusted controller cannot sign as another trusted issuer", async () =>
     { code: "ControllerIdentityMismatch" },
   );
 });
+
+test("qualification result digest requires every distinct pinned passing case", async () => {
+  const { controllerQualificationResultDigest } =
+    await import("../../dist/src/pds/deployment-controller-contract.js");
+  const required = [
+    { project: "cutover-at-entryway", caseId: "migration", count: 1 },
+    { project: "cutover-at-destination", caseId: "migration", count: 1 },
+    { project: "cutover-at-entryway", caseId: "signup", count: 1 },
+  ];
+  const cases = required.map((item) => ({
+    ...item,
+    status: "passed",
+    artifactDigest: digest,
+  }));
+  const result = {
+    version: 1,
+    runId: "run",
+    runnerId: "runner",
+    challengeCommitment: digest,
+    testPlanVersion: "plan",
+    cases,
+  };
+  const actual = controllerQualificationResultDigest(result, required);
+  assert.match(actual, /^sha256:[a-f0-9]{64}$/);
+  assert.equal(
+    controllerQualificationResultDigest(
+      { ...result, cases: [...cases].reverse() },
+      required,
+    ),
+    actual,
+  );
+  assert.notEqual(
+    controllerQualificationResultDigest(
+      { ...result, runId: "different" },
+      required,
+    ),
+    actual,
+  );
+  assert.notEqual(
+    controllerQualificationResultDigest(
+      {
+        ...result,
+        cases: cases.map((item, index) =>
+          index === 0
+            ? { ...item, artifactDigest: `sha256:${"b".repeat(64)}` }
+            : item,
+        ),
+      },
+      required,
+    ),
+    actual,
+  );
+  for (const invalid of [
+    { ...result, cases: cases.slice(1) },
+    { ...result, cases: [cases[0], cases[0], cases[2]] },
+    {
+      ...result,
+      cases: cases.map((item, index) =>
+        index === 0 ? { ...item, status: "skipped" } : item,
+      ),
+    },
+    {
+      ...result,
+      cases: cases.map((item, index) =>
+        index === 0 ? { ...item, count: 0 } : item,
+      ),
+    },
+    {
+      ...result,
+      cases: cases.map((item, index) =>
+        index === 0 ? { ...item, injected: true } : item,
+      ),
+    },
+  ])
+    assert.throws(
+      () => controllerQualificationResultDigest(invalid, required),
+      { code: "ControllerInvalidResponse" },
+    );
+  assert.throws(
+    () =>
+      controllerQualificationResultDigest(result, [...required, required[0]]),
+    { code: "ControllerInvalidResponse" },
+  );
+});
+
+test("qualification completion signature is bound to exact run, deployment, runner and time", async () => {
+  const {
+    controllerQualificationCompletionBytes,
+    verifyControllerQualificationCompletion,
+  } = await import("../../dist/src/pds/deployment-controller-contract.js");
+  const unsigned = {
+    version: 1,
+    issuer: "controller",
+    keyId: "key-a",
+    audience: "fleet",
+    purpose: "qualification-complete",
+    controllerEpoch: "epoch-a",
+    deploymentId: "deployment",
+    hostId: "host",
+    revision: 1,
+    serviceDid: "did:web:host.example",
+    publicEndpoint: "https://host.example/",
+    routeId: "route",
+    generation: 3,
+    imageDigest: digest,
+    configDigest: digest,
+    launcherDigest: digest,
+    incarnation: "process-a",
+    runId: "run",
+    runnerId: "runner",
+    runnerDigest: digest,
+    fixtureDigest: digest,
+    entrywayDigest: digest,
+    manifestDigest: digest,
+    credentialRefsDigest: digest,
+    publicIngressDigest: digest,
+    testPlanVersion: "plan",
+    challengeCommitment: digest,
+    resultDigest: digest,
+    startedAt: 1000,
+    deadline: 4000,
+    finishedAt: 2000,
+    expiresAt: 5000,
+  };
+  const {
+    startedAt: _started,
+    finishedAt: _finished,
+    expiresAt: _expires,
+    ...context
+  } = unsigned;
+  const keys = new Map([["controller", new Map([["key-a", publicKey]])]]);
+  const make = (value = unsigned, key = privateKey) =>
+    JSON.stringify({
+      ...value,
+      signature: sign(
+        null,
+        controllerQualificationCompletionBytes(value),
+        key,
+      ).toString("base64url"),
+    });
+  assert.equal(
+    verifyControllerQualificationCompletion(make(), context, keys, 3000, 4000)
+      .runId,
+    "run",
+  );
+  for (const field of [
+    "runId",
+    "runnerId",
+    "hostId",
+    "controllerEpoch",
+    "routeId",
+    "incarnation",
+    "testPlanVersion",
+  ]) {
+    const changed = { ...unsigned, [field]: "other" };
+    assert.throws(
+      () =>
+        verifyControllerQualificationCompletion(
+          make(changed),
+          context,
+          keys,
+          3000,
+          4000,
+        ),
+      { code: "ControllerIdentityMismatch" },
+    );
+  }
+  for (const field of [
+    "runnerDigest",
+    "imageDigest",
+    "configDigest",
+    "launcherDigest",
+    "manifestDigest",
+    "credentialRefsDigest",
+    "publicIngressDigest",
+    "challengeCommitment",
+    "resultDigest",
+  ]) {
+    const changed = { ...unsigned, [field]: `sha256:${"b".repeat(64)}` };
+    assert.throws(
+      () =>
+        verifyControllerQualificationCompletion(
+          make(changed),
+          context,
+          keys,
+          3000,
+          4000,
+        ),
+      { code: "ControllerIdentityMismatch" },
+    );
+  }
+  const other = generateKeyPairSync("ed25519");
+  assert.throws(
+    () =>
+      verifyControllerQualificationCompletion(
+        make(unsigned, other.privateKey),
+        context,
+        new Map([
+          ["controller", new Map([["key-a", publicKey]])],
+          ["other", new Map([["key-a", other.publicKey]])],
+        ]),
+        3000,
+        4000,
+      ),
+    { code: "ControllerIdentityMismatch" },
+  );
+  for (const changed of [
+    { finishedAt: 4000 },
+    { finishedAt: 4001 },
+    { finishedAt: 999 },
+    { expiresAt: 1999 },
+  ])
+    assert.throws(
+      () =>
+        verifyControllerQualificationCompletion(
+          make({ ...unsigned, ...changed }),
+          context,
+          keys,
+          3000,
+          4000,
+        ),
+      { code: "ControllerExpired" },
+    );
+  assert.throws(
+    () =>
+      verifyControllerQualificationCompletion(
+        make(),
+        context,
+        keys,
+        5000,
+        4000,
+      ),
+    { code: "ControllerExpired" },
+  );
+  assert.throws(
+    () =>
+      verifyControllerQualificationCompletion(
+        make(),
+        context,
+        keys,
+        3000,
+        2999,
+      ),
+    { code: "ControllerExpired" },
+  );
+  assert.throws(
+    () =>
+      verifyControllerQualificationCompletion(
+        make({ ...unsigned, version: 2 }),
+        context,
+        keys,
+        3000,
+        4000,
+      ),
+    { code: "ControllerInvalidResponse" },
+  );
+});
