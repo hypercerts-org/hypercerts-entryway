@@ -6,7 +6,13 @@ import { openTestDatabase } from "./database-fixture.mjs";
 export async function fixture(
   t,
   reply,
-  { path = ":memory:", ownershipFactory, placement, placementFactory } = {},
+  {
+    path = ":memory:",
+    ownershipFactory,
+    placement,
+    placementFactory,
+    registryVerifier,
+  } = {},
 ) {
   const rotation = await Secp256k1Keypair.create({ exportable: true });
   const offline = await Secp256k1Keypair.create();
@@ -94,6 +100,7 @@ export async function fixture(
     accounts = await createAccounts({
       db,
       config,
+      registryVerifier,
       ...(placementFactory
         ? { placement: placementFactory(db) }
         : placement

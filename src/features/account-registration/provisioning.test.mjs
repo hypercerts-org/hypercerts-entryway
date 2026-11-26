@@ -1,3 +1,6 @@
+import https from "node:https";
+import { EventEmitter } from "node:events";
+import { Readable } from "node:stream";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1122,16 +1125,26 @@ test("crash after signed row commit reuses acknowledged repository key and saved
   );
 });
 
+const fixtureRegistryHost = {
+  id: "pds1",
+  url: "https://pds1.entryway.atmosbox.test",
+  internalUrl: "https://pds1.internal",
+  revision: 1,
+};
 const placementFixtureView = {
   async select() {
-    return "pds1";
+    return fixtureRegistryHost.id;
   },
-  async resolve() {
-    return {
-      id: "pds1",
-      url: "https://pds1.entryway.atmosbox.test",
-      internalUrl: "http://pds1:3000",
-    };
+  async resolve(hostId, revision = fixtureRegistryHost.revision) {
+    if (
+      hostId === fixtureRegistryHost.id &&
+      revision === fixtureRegistryHost.revision
+    )
+      return fixtureRegistryHost;
+  },
+  async resolveAuthenticated(hostId, revision) {
+    if (revision === fixtureRegistryHost.revision)
+      return this.resolve(hostId, revision);
   },
   async read() {
     return undefined;
@@ -1148,8 +1161,8 @@ test("placement refusal stops before repository key allocation", async (t) => {
         id: "reservation",
         revision: 1,
         host_id: "pds1",
-        public_target: "https://pds1.entryway.atmosbox.test",
-        target: "http://pds1:3000",
+        public_target: fixtureRegistryHost.url,
+        target: fixtureRegistryHost.internalUrl,
       };
     },
     async beginFirstDispatch() {
@@ -1175,15 +1188,38 @@ test("placement authorizes the first key allocation before target requests", asy
   const { createOperationOwnershipStore } =
     await import("../../../dist/src/database/drizzle/operation-ownership.js");
   let authorizations = 0;
+  t.mock.method(https, "request", (url, options, respond) => {
+    assert.equal(authorizations, 1);
+    assert.equal(url.origin, fixtureRegistryHost.internalUrl);
+    const request = new EventEmitter();
+    let body;
+    request.write = (chunk) => {
+      body = chunk;
+    };
+    request.end = () => {
+      void (async () => {
+        const result = await fetch(url, { ...options, body });
+        const response = Readable.fromWeb(result.body);
+        response.statusCode = result.status;
+        response.headers = Object.fromEntries(result.headers);
+        respond(response);
+      })().catch((error) => request.emit("error", error));
+    };
+    return request;
+  });
   const f = await fixture(t, undefined, {
+    registryVerifier: {
+      targets: new Map([[fixtureRegistryHost.internalUrl, ["192.0.2.1"]]]),
+      ca: Buffer.from("fixture CA"),
+    },
     placementFactory: (db) => ({
       ...placementFixtureView,
       async read() {
         return authorizations
           ? {
               host_id: "pds1",
-              public_target: "https://pds1.entryway.atmosbox.test",
-              target: "http://pds1:3000",
+              public_target: fixtureRegistryHost.url,
+              target: fixtureRegistryHost.internalUrl,
               revision: 1,
               state: "dispatched",
             }
@@ -1192,9 +1228,10 @@ test("placement authorizes the first key allocation before target requests", asy
       async reserve() {
         return {
           id: "reservation",
+          revision: 1,
           host_id: "pds1",
-          public_target: "https://pds1.entryway.atmosbox.test",
-          target: "http://pds1:3000",
+          public_target: fixtureRegistryHost.url,
+          target: fixtureRegistryHost.internalUrl,
         };
       },
       async beginFirstDispatch(claim, _reservationId, input) {
@@ -1230,8 +1267,8 @@ test("a refused implicit registration retains its original intent and rejects an
         id: "reservation",
         revision: 1,
         host_id: "pds1",
-        public_target: "https://pds1.entryway.atmosbox.test",
-        target: "http://pds1:3000",
+        public_target: fixtureRegistryHost.url,
+        target: fixtureRegistryHost.internalUrl,
       };
     },
     async beginFirstDispatch(claim) {
@@ -1274,8 +1311,8 @@ test("reservation-time ineligibility keeps a stable pending refusal", async (t) 
         id: "reservation",
         revision: 1,
         host_id: "pds1",
-        public_target: "https://pds1.entryway.atmosbox.test",
-        target: "http://pds1:3000",
+        public_target: fixtureRegistryHost.url,
+        target: fixtureRegistryHost.internalUrl,
       };
     },
     async beginFirstDispatch() {
