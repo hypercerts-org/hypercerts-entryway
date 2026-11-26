@@ -14,6 +14,8 @@ import test from "node:test";
 import { openTestDatabase } from "../support/database-fixture.mjs";
 import { createAccountStorage } from "../../dist/src/database/drizzle/account-storage.js";
 import { createAccountAccess } from "../../dist/src/accounts/account-access.mjs";
+import { createOperationOwnership } from "../../dist/src/accounts/operation-ownership.js";
+import { createOperationOwnershipStore } from "../../dist/src/database/drizzle/operation-ownership.js";
 import { createMigrationStartTransactor } from "../../dist/src/database/drizzle/migration-workflow.js";
 import { ExternalMigrationService } from "../../dist/src/features/external-migration/import-account.js";
 
@@ -354,9 +356,13 @@ test("authorized migration can share an email with an unbound DID and roll back 
       ownership: {
         run: async (_did, _intent, operation) => operation(),
         checkpoint: async () => {},
+        currentClaim: { operationId: "fixture" },
       },
       transact: (operation) => db.transact(operation),
-      workflows: { getByDid: async () => null },
+      workflows: {
+        getActiveByDid: async () => null,
+        getById: async () => null,
+      },
       start: {
         createReservedWorkflow: async ({ reservation }) =>
           storage.reserveExternalMigration(reservation),
@@ -903,16 +909,38 @@ test("failed workflow insert rolls back identity reservation and permits retry",
       createdAt: timestamp,
       updatedAt: timestamp,
     };
+    const ownership = createOperationOwnership({
+      store: createOperationOwnershipStore(db),
+    });
+    const startOwned = () =>
+      ownership.run(
+        reservation.did,
+        {
+          kind: "external-migration",
+          request: {
+            workflowId: workflow.id,
+            targetPdsUrl: workflow.targetPdsUrl,
+          },
+        },
+        () =>
+          db.transact(async () => {
+            await start.createReservedWorkflow({
+              reservation,
+              workflow,
+              owner: ownership.currentClaim,
+            });
+            await ownership.checkpoint(workflow.phase, {
+              workflowId: workflow.id,
+            });
+          }),
+      );
     await failureTrigger(
       db,
       "reject_journal",
       "migration_workflow",
       "synthetic journal failure",
     );
-    await assert.rejects(
-      start.createReservedWorkflow({ reservation, workflow }),
-      hasFailure("synthetic journal failure"),
-    );
+    await assert.rejects(startOwned(), hasFailure("synthetic journal failure"));
     assert.equal(
       (
         await query(
@@ -938,7 +966,7 @@ test("failed workflow insert rolls back identity reservation and permits retry",
     assert.equal(await accounts.getEmailClaim(alice.email), null);
     assert.equal(await accounts.getHandleClaim(alice.handle), null);
     await removeFailureTrigger(db, "reject_journal", "migration_workflow");
-    await start.createReservedWorkflow({ reservation, workflow });
+    await startOwned();
     assert.equal(
       (
         await query(

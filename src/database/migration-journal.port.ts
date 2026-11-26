@@ -28,24 +28,33 @@ export interface MigrationStartTransactor {
   createReservedWorkflow(input: {
     reservation: ExternalMigrationReservation;
     workflow: MigrationWorkflow;
+    owner: OperationClaim;
   }): Promise<void>;
 }
 
 export interface MigrationWorkflowReader {
-  getByDid(did: string): Promise<MigrationWorkflow | null>;
+  getActiveByDid(did: string): Promise<MigrationWorkflow | null>;
+  getAuthorityOperationId(id: string): Promise<string | null>;
   getById(id: string): Promise<MigrationWorkflow | null>;
 }
 export interface MigrationWorkflowTransactor {
-  create(workflow: MigrationWorkflow): Promise<void>;
   /** Atomically replace the expected version and add its checkpoint. */
   transition(
+    owner: OperationClaim,
     previous: MigrationWorkflow,
     next: MigrationWorkflow,
     commandId: string,
   ): Promise<void>;
-  markRetryable(workflow: MigrationWorkflow): Promise<void>;
-  markManualRecovery(workflow: MigrationWorkflow): Promise<void>;
+  markRetryable(
+    owner: OperationClaim,
+    workflow: MigrationWorkflow,
+  ): Promise<void>;
+  markManualRecovery(
+    owner: OperationClaim,
+    workflow: MigrationWorkflow,
+  ): Promise<void>;
   recoverVerifiedSourceFreeze(
+    owner: OperationClaim,
     workflow: MigrationWorkflow,
   ): Promise<MigrationWorkflow>;
 }

@@ -146,6 +146,8 @@ async function actorFor(email) {
       return { userId: user.id, sessionId: session.id };
   throw new Error("A recent live verified destination session is required");
 }
+const workflowIdFor = (did) =>
+  `external-${createHash("sha256").update(did).digest("hex").slice(0, 32)}`;
 async function publicEvidence(status, requireUnhosted) {
   assert.equal(status.sourcePdsUrl, "https://pds3.atmosbox.test");
   assert.equal(status.targetPdsUrl, target.url);
@@ -157,7 +159,9 @@ async function publicEvidence(status, requireUnhosted) {
 try {
   if (mode === "prepare") {
     const status = await source.initialize(process.argv.includes("--empty"));
-    const existing = await workflows.getByDid(status.did);
+    const existing =
+      (await workflows.getById(workflowIdFor(status.did))) ??
+      (await workflows.getActiveByDid(status.did));
     await publicEvidence(status, !existing);
     const handle = `ext-${createHash("sha256").update(status.did).digest("hex").slice(0, 12)}${config.handleDomains[0]}`;
     await report({
@@ -200,7 +204,9 @@ try {
     const status = await source.status();
     await publicEvidence(
       status,
-      mode === "run" && !(await workflows.getByDid(status.did)),
+      mode === "run" &&
+        !(await workflows.getById(workflowIdFor(status.did))) &&
+        !(await workflows.getActiveByDid(status.did)),
     );
     const identity = {
       did: status.did,
@@ -211,7 +217,7 @@ try {
     const actor = ["verify", "reverify"].includes(mode)
       ? null
       : await actorFor(status.email);
-    const id = `external-${createHash("sha256").update(status.did).digest("hex").slice(0, 32)}`;
+    const id = workflowIdFor(status.did);
     if (mode === "recover-source-freeze") {
       const workflow = await workflows.getById(id);
       assert.equal(workflow?.phase, "manual-recovery-required");
@@ -238,7 +244,30 @@ try {
       assert.equal(recoveredSnapshot.sourceCommit, frozen.sourceCommit);
       if (!status.empty)
         assert.equal(recoveredSnapshot.blobs[0]?.digest, status.blobSha256);
-      const recovered = await workflows.recoverVerifiedSourceFreeze(workflow);
+      const authorityId = await workflows.getAuthorityOperationId(id);
+      assert.ok(authorityId);
+      const recovered = await accounts.ownership.resumePending(
+        status.did,
+        authorityId,
+        {
+          kind: "external-migration",
+          request: { workflowId: id, targetPdsUrl: workflow.targetPdsUrl },
+        },
+        async () => {
+          const owner = accounts.ownership.currentClaim;
+          assert.ok(owner);
+          return db.transact(async () => {
+            const repaired = await workflows.recoverVerifiedSourceFreeze(
+              owner,
+              workflow,
+            );
+            await accounts.ownership.checkpoint(repaired.phase, {
+              workflowId: repaired.id,
+            });
+            return repaired;
+          });
+        },
+      );
       await report({
         status: "paused",
         identity,

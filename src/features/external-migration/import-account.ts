@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   noExternalResult,
   type OperationOwnership,
@@ -95,7 +96,10 @@ export class ExternalMigrationService {
         "OwnerBindingChanged",
         "A recent verified destination session is required",
       );
-    if (await this.d.workflows.getByDid(input.did))
+    if (
+      (await this.d.workflows.getActiveByDid(input.did)) ||
+      (await this.d.workflows.getById(input.workflowId))
+    )
       throw new MigrationError(
         "ManualRecoveryRequired",
         "A migration workflow already exists for this DID",
@@ -135,7 +139,11 @@ export class ExternalMigrationService {
     };
     await this.d.ownership.run(workflow.did, this.intent(workflow), () =>
       this.d.transact(async () => {
-        await this.d.start.createReservedWorkflow({ reservation, workflow });
+        await this.d.start.createReservedWorkflow({
+          reservation,
+          workflow,
+          owner: this.owner(),
+        });
         await this.d.ownership.checkpoint(workflow.phase, {
           workflowId: workflow.id,
         });
@@ -180,6 +188,16 @@ export class ExternalMigrationService {
       },
     );
   }
+  private owner() {
+    const owner = this.d.ownership.currentClaim;
+    if (!owner)
+      throw new DomainError(
+        "OperationLeaseLost",
+        409,
+        "Migration owner unavailable",
+      );
+    return owner;
+  }
   private intent(w: MigrationWorkflow) {
     return {
       kind: "external-migration",
@@ -221,7 +239,7 @@ export class ExternalMigrationService {
           at: after.updatedAt,
         });
       }
-      await this.d.workflows.transition(before, after, id);
+      await this.d.workflows.transition(this.owner(), before, after, id);
       await this.d.ownership.checkpoint(after.phase, { workflowId: after.id });
     });
     this.audit(after, id);
@@ -377,6 +395,7 @@ export class ExternalMigrationService {
                       targetRepositoryKey: k,
                     });
                     await this.d.workflows.transition(
+                      this.owner(),
                       w,
                       next,
                       "journal-entryway-move",
@@ -387,11 +406,18 @@ export class ExternalMigrationService {
                   });
                 },
               );
-              const n = advance(w, "move-journaled", {
-                moveOperation: s.operation,
-                moveOperationCid: s.cid,
-                targetRepositoryKey: k,
-              });
+              const n = await this.d.workflows.getById(w.id);
+              if (
+                !n ||
+                n.phase !== "move-journaled" ||
+                n.moveOperationCid !== s.cid ||
+                n.targetRepositoryKey !== k ||
+                !isDeepStrictEqual(n.moveOperation, s.operation)
+              )
+                throw new MigrationError(
+                  "ManualRecoveryRequired",
+                  "Signed move differs from its committed journal",
+                );
               // The signed operation and custody event already committed together.
               this.audit(n, "journal-entryway-move");
               await this.d.checkpointObserver?.(n);
@@ -474,6 +500,7 @@ export class ExternalMigrationService {
                   pdsUrl: w.targetPdsUrl,
                 });
                 await this.d.workflows.transition(
+                  this.owner(),
                   w,
                   n,
                   "finalize-account-binding",
@@ -499,7 +526,12 @@ export class ExternalMigrationService {
                   did: w.did,
                   userId: w.ownerUserId,
                 });
-                await this.d.workflows.transition(w, n, "activate-target");
+                await this.d.workflows.transition(
+                  this.owner(),
+                  w,
+                  n,
+                  "activate-target",
+                );
                 await this.d.ownership.checkpoint(
                   "complete",
                   { workflowId: n.id },
@@ -526,7 +558,7 @@ export class ExternalMigrationService {
       // stable code is a migration error. Keep the saved command reachable so
       // verified operator recovery can invoke its operation-specific observer.
       if (await this.d.ownership.pendingExternal(w.did)) {
-        await this.d.workflows.markRetryable({
+        await this.d.workflows.markRetryable(this.owner(), {
           ...w,
           stableErrorCode: "RetryPending",
         });
@@ -537,7 +569,7 @@ export class ExternalMigrationService {
         );
       }
       if (!(error instanceof MigrationError)) {
-        await this.d.workflows.markRetryable({
+        await this.d.workflows.markRetryable(this.owner(), {
           ...w,
           stableErrorCode: "RetryPending",
         });
@@ -551,7 +583,7 @@ export class ExternalMigrationService {
         version: w.version + 1,
         updatedAt: new Date().toISOString(),
       };
-      await this.d.workflows.markManualRecovery(blocked);
+      await this.d.workflows.markManualRecovery(this.owner(), blocked);
       this.audit(blocked, "manual-recovery-required");
       throw error;
     }

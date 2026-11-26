@@ -306,7 +306,7 @@ CREATE TABLE `migration_custody_inventory` (
 --> statement-breakpoint
 CREATE TABLE `migration_reservations` (
 	`workflow_id` text PRIMARY KEY,
-	`did` text NOT NULL UNIQUE,
+	`did` text NOT NULL,
 	`handle` text NOT NULL,
 	`email` text NOT NULL,
 	`user_id` text NOT NULL,
@@ -326,9 +326,13 @@ CREATE TABLE `migration_snapshot_manifest` (
 --> statement-breakpoint
 CREATE TABLE `migration_workflow` (
 	`id` text PRIMARY KEY,
-	`did` text NOT NULL UNIQUE,
+	`did` text NOT NULL,
+	`active_did` text UNIQUE,
+	`authority_operation_id` text NOT NULL UNIQUE,
 	`version` integer NOT NULL,
-	`value` text NOT NULL
+	`value` text NOT NULL,
+	CONSTRAINT `fk_migration_workflow_authority_operation_id_authority_operations_id_fk` FOREIGN KEY (`authority_operation_id`) REFERENCES `authority_operations`(`id`),
+	CONSTRAINT "migration_workflow_active_did" CHECK("active_did" IS NULL OR "active_did" = "did")
 );
 --> statement-breakpoint
 CREATE TABLE `operation_admissions` (
@@ -598,7 +602,8 @@ CREATE UNIQUE INDEX `migration_checkpoint_command` ON `migration_checkpoint` (`w
 CREATE INDEX `migration_checkpoint_workflow_idx` ON `migration_checkpoint` (`workflow_id`,`id`);--> statement-breakpoint
 CREATE INDEX `migration_email_ci` ON `migration_reservations` (lower("email"));--> statement-breakpoint
 CREATE INDEX `migration_user_id` ON `migration_reservations` (`user_id`);--> statement-breakpoint
-CREATE UNIQUE INDEX `migration_handle_ci` ON `migration_reservations` (lower("handle"));--> statement-breakpoint
+CREATE UNIQUE INDEX `migration_active_did` ON `migration_reservations` (`did`) WHERE "migration_reservations"."state" <> 'complete';--> statement-breakpoint
+CREATE UNIQUE INDEX `migration_handle_ci` ON `migration_reservations` (lower("handle")) WHERE "migration_reservations"."state" <> 'complete';--> statement-breakpoint
 CREATE INDEX `operation_admission_id` ON `operation_admissions` (`operation_id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `pds_health_incident_generation` ON `pds_health_incidents` (`host_id`,`generation`);--> statement-breakpoint
 CREATE UNIQUE INDEX `pds_health_open_incident` ON `pds_health_incidents` (`host_id`) WHERE "pds_health_incidents"."state" = 'open';--> statement-breakpoint

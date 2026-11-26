@@ -27,7 +27,10 @@ const signed = (prev) => ({
 });
 import test from "node:test";
 import { openTestDatabase } from "../support/database-fixture.mjs";
-import { createMigrationWorkflowStorage } from "../../dist/src/database/drizzle/migration-workflow.js";
+import {
+  createMigrationStartTransactor,
+  createMigrationWorkflowStorage,
+} from "../../dist/src/database/drizzle/migration-workflow.js";
 import { createSnapshotManifestStorage } from "../../dist/src/database/drizzle/migration-snapshot.js";
 import {
   ExternalMigrationService,
@@ -60,13 +63,37 @@ async function fixture() {
     async reserveExternalMigration(input) {
       assert.equal(input.handle, "moved.entryway.test");
       calls.push("reserve");
+      await sqlite.insert("migration_reservations", {
+        workflow_id: input.workflowId,
+        did: input.did,
+        handle: input.handle,
+        email: "owner@example.test",
+        user_id: input.userId,
+        session_id: input.sessionId,
+        target_pds_id: input.targetPdsId,
+        target_pds_url: input.targetPdsUrl,
+        state: "reserved",
+        created_at: new Date().toISOString(),
+      });
     },
-    async finalizeImportedAccount() {
+    async finalizeImportedAccount(input) {
       calls.push("bind");
+      await query(
+        sqlite,
+        "UPDATE migration_reservations SET state=? WHERE workflow_id=?",
+        ["placed", input.workflowId],
+        "run",
+      );
     },
-    async activateImportedAccount() {
+    async activateImportedAccount(input) {
       assert.equal(state.active, true);
       calls.push("local-active");
+      await query(
+        sqlite,
+        "UPDATE migration_reservations SET state=? WHERE workflow_id=?",
+        ["complete", input.workflowId],
+        "run",
+      );
     },
   };
   const source = {
@@ -167,12 +194,7 @@ async function fixture() {
     fingerprint: `sha256:${"a".repeat(64)}`,
     lifecycle: "active",
   };
-  const start = {
-    async createReservedWorkflow({ reservation, workflow }) {
-      await accounts.reserveExternalMigration(reservation);
-      await workflows.create(workflow);
-    },
-  };
+  const start = createMigrationStartTransactor(sqlite, accounts);
   const make = (stopAt, targetOverride = target) =>
     new ExternalMigrationService({
       ownership,
@@ -216,6 +238,23 @@ async function fixture() {
     custodyEvents,
     target,
     ownership,
+    async withOwner(work) {
+      const operationId = await workflows.getAuthorityOperationId(
+        input.workflowId,
+      );
+      return ownership.resumePending(
+        input.did,
+        operationId,
+        {
+          kind: "external-migration",
+          request: {
+            workflowId: input.workflowId,
+            targetPdsUrl: input.targetPdsUrl,
+          },
+        },
+        () => work(ownership.currentClaim),
+      );
+    },
     async recover() {
       const pending = await ownership.pendingExternal(input.did);
       assert.ok(pending);
@@ -378,9 +417,33 @@ test("stale journal CAS rejects second transition", async (t) => {
   t.after(async () => await f.sqlite.close());
   const old = await f.make().start(f.input),
     next = { ...old, phase: "source-frozen", version: 1 };
-  await f.workflows.transition(old, next, "freeze");
   await assert.rejects(
-    f.workflows.transition(old, next, "freeze"),
+    f.withOwner((owner) =>
+      f.workflows.transition(
+        owner,
+        old,
+        { ...next, targetPdsUrl: "https://foreign.test" },
+        "tamper",
+      ),
+    ),
+    /MigrationIntentMismatch/,
+  );
+  await assert.rejects(
+    f.withOwner((owner) =>
+      f.workflows.transition(
+        owner,
+        { ...old, handle: "other.entryway.test" },
+        next,
+        "forged-prior",
+      ),
+    ),
+    /StaleMigrationWorkflow/,
+  );
+  await f.withOwner((owner) =>
+    f.workflows.transition(owner, old, next, "freeze"),
+  );
+  await assert.rejects(
+    f.withOwner((owner) => f.workflows.transition(owner, old, next, "freeze")),
     /StaleMigrationWorkflow/,
   );
 });
@@ -419,14 +482,18 @@ test("verified source freeze repair keeps original journal identity and resumes"
   const f = await fixture();
   t.after(async () => await f.sqlite.close());
   const started = await f.make().start(f.input);
-  await f.workflows.markManualRecovery({
-    ...started,
-    phase: "manual-recovery-required",
-    stableErrorCode: "SourceChanged",
-    version: 1,
-  });
+  await f.withOwner((owner) =>
+    f.workflows.markManualRecovery(owner, {
+      ...started,
+      phase: "manual-recovery-required",
+      stableErrorCode: "SourceChanged",
+      version: 1,
+    }),
+  );
   const blocked = await f.workflows.getById(started.id);
-  const repaired = await f.workflows.recoverVerifiedSourceFreeze(blocked);
+  const repaired = await f.withOwner((owner) =>
+    f.workflows.recoverVerifiedSourceFreeze(owner, blocked),
+  );
   assert.equal(repaired.id, started.id);
   assert.equal(repaired.ownerUserId, started.ownerUserId);
   assert.equal(repaired.handle, started.handle);
@@ -439,17 +506,20 @@ test("manual repair refuses workflows with a published or journaled handoff", as
   const f = await fixture();
   t.after(async () => await f.sqlite.close());
   const started = await f.make().start(f.input);
-  await f.workflows.markManualRecovery({
-    ...started,
-    phase: "manual-recovery-required",
-    stableErrorCode: "SourceChanged",
-    handoffOperation: signed(heads.initial),
-    handoffOperationCid: heads.handoff,
-    version: 1,
-  });
+  await f.withOwner((owner) =>
+    f.workflows.markManualRecovery(owner, {
+      ...started,
+      phase: "manual-recovery-required",
+      stableErrorCode: "SourceChanged",
+      handoffOperation: signed(heads.initial),
+      handoffOperationCid: heads.handoff,
+      version: 1,
+    }),
+  );
+  const blocked = await f.workflows.getById(started.id);
   await assert.rejects(
-    f.workflows.recoverVerifiedSourceFreeze(
-      await f.workflows.getById(started.id),
+    f.withOwner((owner) =>
+      f.workflows.recoverVerifiedSourceFreeze(owner, blocked),
     ),
     /InvalidManualRecovery/,
   );
@@ -510,4 +580,286 @@ test("concrete target status error retains the saved phase for verified recovery
     "complete",
   );
   assert.equal(writes, 1);
+});
+
+test("completed workflows retain history while later admissions have distinct owners", async (t) => {
+  const f = await fixture();
+  t.after(async () => await f.sqlite.close());
+  const histories = [];
+  let staleOwner, staleBound;
+  for (const [index, target] of [
+    "https://b.test",
+    "https://c.test",
+    "https://a.test",
+    "https://b.test",
+  ].entries()) {
+    f.input.workflowId = `workflow-history-${index}`;
+    f.input.targetPdsUrl = target;
+    f.state.head = heads.initial;
+    f.state.active = false;
+    const started = await f.make().start(f.input);
+    assert.equal(
+      (await f.workflows.getActiveByDid(f.input.did)).id,
+      started.id,
+    );
+    if (index === 0) {
+      await assert.rejects(
+        f.make("account-bound").resume(started.id, f.actor),
+        FixtureCheckpointPause,
+      );
+      staleBound = await f.workflows.getById(started.id);
+      assert.equal(staleBound.phase, "account-bound");
+      staleOwner = await f.withOwner((owner) => ({ ...owner }));
+    }
+    if (index === 1) {
+      const successorBefore = await f.workflows.getById(started.id);
+      const reservationsBefore = await f.sqlite.read("migration_reservations");
+      await assert.rejects(
+        f.workflows.transition(
+          staleOwner,
+          staleBound,
+          { ...staleBound, phase: "complete", version: staleBound.version + 1 },
+          "stale",
+        ),
+        { code: "OperationLeaseLost" },
+      );
+      assert.deepEqual(
+        await f.workflows.getById(histories[0].id),
+        histories[0],
+      );
+      assert.deepEqual(await f.workflows.getById(started.id), successorBefore);
+      assert.deepEqual(
+        await f.sqlite.read("migration_reservations"),
+        reservationsBefore,
+      );
+      assert.equal(
+        (await f.workflows.getActiveByDid(f.input.did)).id,
+        started.id,
+      );
+    }
+    const completed = await f.make().resume(started.id, f.actor);
+    if (index === 0) {
+      const authority = (await f.sqlite.read("authority_operations")).find(
+        (row) => row.id === staleOwner.operationId,
+      );
+      assert.ok(authority.fence > staleOwner.fence);
+      assert.equal(authority.state, "complete");
+    }
+    assert.equal(completed.phase, "complete");
+    assert.equal(await f.workflows.getActiveByDid(f.input.did), null);
+    histories.push(structuredClone(completed));
+    for (const prior of histories)
+      assert.deepEqual(await f.workflows.getById(prior.id), prior);
+  }
+  assert.equal(
+    new Set(
+      await Promise.all(
+        histories.map((w) => f.workflows.getAuthorityOperationId(w.id)),
+      ),
+    ).size,
+    histories.length,
+  );
+  f.input.workflowId = histories[0].id;
+  await assert.rejects(f.make().start(f.input), {
+    code: "ManualRecoveryRequired",
+  });
+});
+
+test("two database clients cannot admit competing external workflows for one DID", async (t) => {
+  const { mkdirSync, mkdtempSync, rmSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  mkdirSync(".runtime", { recursive: true });
+  const directory = mkdtempSync(
+    join(process.cwd(), ".runtime", "migration-race-"),
+  );
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  for (const sameIntent of [true, false]) {
+    const path = join(
+      directory,
+      sameIntent ? "same.sqlite" : "different.sqlite",
+    );
+    const firstDb = await openTestDatabase(path);
+    const secondDb = await openTestDatabase(path);
+    try {
+      const expectedBackend = process.env.CONTRACT_DATABASE_BACKEND ?? "sqlite";
+      assert.equal(firstDb.backend, expectedBackend);
+      assert.equal(secondDb.backend, expectedBackend);
+      if (expectedBackend === "postgresql") {
+        const [firstConnection, secondConnection] = await Promise.all([
+          query(firstDb, "SELECT pg_backend_pid() AS pid", [], "get"),
+          query(secondDb, "SELECT pg_backend_pid() AS pid", [], "get"),
+        ]);
+        assert.notEqual(firstConnection.pid, secondConnection.pid);
+        t.diagnostic(
+          "PostgreSQL race uses two independent backend connections",
+        );
+      }
+      const did = `did:plc:${"b".repeat(24)}`;
+      const now = new Date().toISOString();
+      const prepare = (id, targetPdsUrl) => ({
+        id,
+        did,
+        ownerUserId: "race-owner",
+        ownerEmail: "owner@example.test",
+        ownerSessionReference: "race-session",
+        sourcePdsUrl: "https://source.test",
+        targetPdsId: "pds1",
+        targetPdsUrl,
+        handle: "race.entryway.test",
+        authority: {
+          sourceRecoveryKey: didKey("a"),
+          rotationAuthorityKey: didKey("b"),
+          sourceRepositoryKey: didKey("c"),
+          sourcePlcHead: heads.initial,
+        },
+        phase: "owner-confirmed",
+        expectedPlcHead: heads.initial,
+        version: 0,
+        createdAt: now,
+        updatedAt: now,
+      });
+      const run = (db, worker, workflow) => {
+        const ownership = createOperationOwnership({
+          store: createOperationOwnershipStore(db),
+          workerId: worker,
+          heartbeatMs: 0,
+        });
+        const start = createMigrationStartTransactor(db, {
+          reserveExternalMigration: async (reservation) =>
+            db.insert("migration_reservations", {
+              workflow_id: reservation.workflowId,
+              did: reservation.did,
+              handle: reservation.handle,
+              email: "owner@example.test",
+              user_id: reservation.userId,
+              session_id: reservation.sessionId,
+              target_pds_id: reservation.targetPdsId,
+              target_pds_url: reservation.targetPdsUrl,
+              state: "reserved",
+              created_at: now,
+            }),
+        });
+        const reservation = {
+          workflowId: workflow.id,
+          did,
+          handle: workflow.handle,
+          userId: workflow.ownerUserId,
+          sessionId: workflow.ownerSessionReference,
+          targetPdsId: workflow.targetPdsId,
+          targetPdsUrl: workflow.targetPdsUrl,
+        };
+        return ownership.run(
+          did,
+          {
+            kind: "external-migration",
+            request: {
+              workflowId: workflow.id,
+              targetPdsUrl: workflow.targetPdsUrl,
+            },
+          },
+          () =>
+            db.transact(async () => {
+              await start.createReservedWorkflow({
+                owner: ownership.currentClaim,
+                workflow,
+                reservation,
+              });
+              await ownership.checkpoint(workflow.phase, {
+                workflowId: workflow.id,
+              });
+            }),
+        );
+      };
+      const first = prepare("race-first", "https://target.test");
+      const second = sameIntent
+        ? first
+        : prepare("race-second", "https://other.test");
+      const results = await Promise.allSettled([
+        run(firstDb, "worker-first", first),
+        run(secondDb, "worker-second", second),
+      ]);
+      assert.equal(
+        results.filter((result) => result.status === "fulfilled").length,
+        1,
+      );
+      assert.equal(
+        results.filter((result) => result.status === "rejected").length,
+        1,
+      );
+      const workflows = await firstDb.read("migration_workflow");
+      const reservations = await firstDb.read("migration_reservations");
+      assert.equal(workflows.length, 1);
+      assert.equal(reservations.length, 1);
+      assert.equal(workflows[0].id, reservations[0].workflow_id);
+      assert.equal(workflows[0].active_did, did);
+      assert.equal(
+        (await firstDb.read("operation_admissions")).filter(
+          (entry) => entry.resource === did,
+        ).length,
+        1,
+      );
+    } finally {
+      await firstDb.close();
+      await secondDb.close();
+    }
+  }
+});
+
+test("unresolved external dispatch prevents releasing the workflow claim and rolls back completion", async (t) => {
+  const f = await fixture();
+  t.after(async () => await f.sqlite.close());
+  const started = await f.make().start(f.input);
+  await assert.rejects(
+    f.make("account-bound").resume(started.id, f.actor),
+    FixtureCheckpointPause,
+  );
+  const bound = await f.workflows.getById(started.id);
+  await f.withOwner(async (owner) => {
+    const now = await f.sqlite.databaseTime();
+    await f.sqlite.insert("external_operation_attempts", {
+      id: "unresolved-fixture",
+      operation_id: owner.operationId,
+      execution_attempt_id: owner.attemptId,
+      worker_id: owner.workerId,
+      fence: owner.fence,
+      step: "fixture-pending",
+      target: f.input.targetPdsUrl,
+      method: "fixture.test",
+      intent_digest: "a".repeat(64),
+      state: "dispatched",
+      result: null,
+      recovery: null,
+      created_at: now,
+      updated_at: now,
+    });
+    await assert.rejects(
+      f.sqlite.transact(async () => {
+        await query(
+          f.sqlite,
+          "UPDATE migration_reservations SET state=? WHERE workflow_id=?",
+          ["complete", started.id],
+          "run",
+        );
+        await f.workflows.transition(
+          owner,
+          bound,
+          { ...bound, phase: "complete", version: bound.version + 1 },
+          "finish",
+        );
+      }),
+      /MigrationCompletionUnverified/,
+    );
+  });
+  assert.equal((await f.workflows.getActiveByDid(f.input.did)).id, started.id);
+  assert.equal((await f.workflows.getById(started.id)).phase, "account-bound");
+  assert.equal(
+    (await f.sqlite.read("migration_reservations"))[0].state,
+    "placed",
+  );
+  assert.equal(
+    (await f.sqlite.read("external_operation_attempts")).find(
+      (attempt) => attempt.id === "unresolved-fixture",
+    ).state,
+    "dispatched",
+  );
 });
