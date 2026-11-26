@@ -40,7 +40,8 @@ export function createMigrationActions({
       const continuing =
         saved &&
         saved.targetPdsId === requestedId &&
-        (saved.phase !== "complete" || account.pdsId === requestedId);
+        (!["complete", "refused"].includes(saved.phase) ||
+          (saved.phase === "complete" && account.pdsId === requestedId));
       const choices = accounts?.placement
         ? await accounts.placement.choices()
         : config.pds;
@@ -75,15 +76,31 @@ export function createMigrationActions({
           accountContext,
         });
       }
+      const operationId = value("operationId");
       try {
-        await migration.importAccount(principal, {
-          did: account.did,
-          pdsId: target.id,
-          token: `${value("challengeId")}.${token()}`,
-        });
+        if (operationId)
+          await migration.resumeForBrowser(principal, {
+            did: account.did,
+            pdsId: target.id,
+            operationId,
+          });
+        else
+          await migration.importAccount(principal, {
+            did: account.did,
+            pdsId: target.id,
+            token: value("challengeId")
+              ? `${value("challengeId")}.${token()}`
+              : undefined,
+          });
       } catch (failure) {
         const saved = await migration.status(principal, { did: account.did });
-        if (!saved || saved.phase === "complete") throw failure;
+        if (
+          !saved ||
+          ["complete", "refused"].includes(saved.phase) ||
+          (operationId &&
+            (saved.id !== operationId || saved.targetPdsId !== target.id))
+        )
+          throw failure;
         const savedTarget =
           !accounts?.placement &&
           config.pds.find((pds) => pds.id === saved.targetPdsId);
@@ -94,7 +111,8 @@ export function createMigrationActions({
           : form(
               "migration-confirm",
               browser.csrf,
-              hidden("pdsId", saved.targetPdsId),
+              hidden("pdsId", saved.targetPdsId) +
+                hidden("operationId", saved.id),
               "Continue saved migration",
               accountContext,
             );

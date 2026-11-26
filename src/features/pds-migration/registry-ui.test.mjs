@@ -170,3 +170,51 @@ test("static forms retain their default and completed move can be replayed", asy
   await actions["migration-confirm"](input);
   assert.equal(calls, 1);
 });
+
+test("migration challenges bind distinct server-side operation IDs", async () => {
+  const data = [];
+  const proof = createMigrationProof({
+    config: { pds: [{ id: "target" }] },
+    proofs: {
+      principal: async () => ({
+        did: "did:plc:test",
+        pdsId: "source",
+        email: "x",
+      }),
+      issue: async (_purpose, _row, _email, binding) => {
+        data.push(binding);
+        return {};
+      },
+      consume: async () => ({ data: data[0] }),
+    },
+  });
+  await proof.requestMigrationProof({}, { pdsId: "target" });
+  await proof.requestMigrationProof({}, { pdsId: "target" });
+  assert.notEqual(data[0].operationId, data[1].operationId);
+  assert.equal(
+    (await proof.confirmMigrationProof({}, { pdsId: "target", token: "proof" }))
+      .operationId,
+    data[0].operationId,
+  );
+});
+
+test("refused migration is not described as completed", () => {
+  const panel = renderMigrationPanel({
+    config: { pds: [] },
+    a: { pdsId: "source" },
+    csrf: "x",
+    accountContext: { did: "did:plc:test" },
+    migration: {},
+    migrationState: {
+      id: "refused-id",
+      targetPdsId: "target",
+      phase: "refused",
+      updatedAt: new Date(),
+    },
+  });
+  assert.match(panel, /migration to target was refused/);
+  assert.doesNotMatch(
+    panel,
+    /migration completed|Resume data server migration/,
+  );
+});

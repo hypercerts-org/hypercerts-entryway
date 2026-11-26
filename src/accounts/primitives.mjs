@@ -161,7 +161,10 @@ export function createAccountPrimitives({
   const assertNoMigration = async (did) => {
     const operation = await db.get("migration:operations", `migrate:${did}`);
     const external = await storage.hasPendingExternalMigration(did);
-    if ((operation && operation.phase !== "complete") || external)
+    if (
+      (operation && !["complete", "refused"].includes(operation.phase)) ||
+      external
+    )
       throw new HttpError(
         409,
         "MigrationPending",

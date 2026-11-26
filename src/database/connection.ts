@@ -806,8 +806,10 @@ async function connectDatabase(
         account: (await list("operations")).filter((row) =>
           phasePending(row.value),
         ).length,
-        managedMigration: (await list("migration:operations")).filter((row) =>
-          phasePending(row.value),
+        managedMigration: (await list("migration:operations")).filter(
+          (row) =>
+            phasePending(row.value) &&
+            (row.value as { phase?: string }).phase !== "refused",
         ).length,
         externalMigration: (
           await executor.read("migration_reservations", {

@@ -14,7 +14,7 @@ export function renderMigrationPanel({
 }) {
   const destinations = available.filter((pds) => pds.id !== a.pdsId);
   const migrationPending =
-    migrationState && migrationState.phase !== "complete";
+    migrationState && !["complete", "refused"].includes(migrationState.phase);
   const migrationTarget = migrationState
     ? registry
       ? null
@@ -26,6 +26,8 @@ export function renderMigrationPanel({
   if (migrationState) {
     const target = esc(migrationTarget?.url ?? migrationState.targetPdsId);
     let description = `Last migration completed to ${target}.`;
+    if (migrationState.phase === "refused")
+      description = `The migration to ${target} was refused.`;
     if (migrationPending) {
       const guidance = recoveryRequired
         ? "Contact the service operator; retrying alone cannot settle the uncertain server request."
@@ -41,7 +43,8 @@ export function renderMigrationPanel({
       : form(
           "migration-confirm",
           csrf,
-          hidden("pdsId", migrationState.targetPdsId),
+          hidden("pdsId", migrationState.targetPdsId) +
+            hidden("operationId", migrationState.id),
           "Resume data server migration",
           accountContext,
         );

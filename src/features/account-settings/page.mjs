@@ -280,7 +280,8 @@ export function mountAccountSettingsPage({
           : config.pds,
         registry: Boolean(accounts?.placement),
         migrationRecovery:
-          migrationState && migrationState.phase !== "complete"
+          migrationState &&
+          !["complete", "refused"].includes(migrationState.phase)
             ? await migration.pendingRecovery(a.did)
             : null,
         migration,

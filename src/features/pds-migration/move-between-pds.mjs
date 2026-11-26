@@ -48,6 +48,7 @@ export async function createAccountMigration({
   accounts,
   custody,
   security,
+  transfers,
   placement,
   registryVerifier,
   registryTransport = registryPdsFetch,
@@ -63,8 +64,56 @@ export async function createAccountMigration({
       request: { targetPdsId },
     });
   const operationKey = (did) => `migrate:${did}`;
+  const browserSelection = Symbol("browser migration selection");
+  const transferOwner = (operation) => ({
+    did: operation.did,
+    operationId: operation.id,
+    transferKind: "managed",
+  });
+  const history = async (did) =>
+    (await db.list("migration:history"))
+      .map(({ value }) => value)
+      .filter((value) => value.did === did);
   const read = async (did) =>
     await db.get("migration:operations", operationKey(did));
+  const selectorMatches = async (token, operation) => {
+    const [selector, , excess] = String(token ?? "").split(".");
+    if (!selector || excess || !String(token).includes(".")) return false;
+    const challenge = await db.get("security:challenges", selector);
+    return Boolean(
+      challenge?.consumedAt &&
+      challenge.purpose === "account-migrate" &&
+      challenge.did === operation.did &&
+      challenge.data?.operationId === operation.id,
+    );
+  };
+  const assertRetrySelector = async (operation, input) => {
+    if (input[browserSelection] !== undefined) {
+      if (
+        !operation ||
+        ["complete", "refused"].includes(operation.phase) ||
+        operation.did !== input.did ||
+        operation.targetPdsId !== input.pdsId ||
+        operation.id !== input[browserSelection]
+      )
+        throw error("OperationConflict", "Saved migration changed", 409);
+      return;
+    }
+    const matches =
+      input.token && (await selectorMatches(input.token, operation));
+    if (
+      (input.token && !matches) ||
+      (!matches &&
+        (await history(operation.did)).filter(
+          (item) => item.targetPdsId === input.pdsId,
+        ).length > 1)
+    )
+      throw error(
+        "OperationConflict",
+        "Retry requires an unambiguous saved migration",
+        409,
+      );
+  };
   const journal = async (operation, changes = {}) => {
     const updated = {
       ...operation,
@@ -72,7 +121,16 @@ export async function createAccountMigration({
       updatedAt: new Date(),
       authorityOperationId: ownership.currentClaim.operationId,
     };
-    await db.set("migration:operations", operation.id, updated);
+    await db.transact(async () => {
+      await db.set("migration:history", operation.id, updated);
+      const current = await read(operation.did);
+      if (current?.id === operation.id)
+        await db.set(
+          "migration:operations",
+          operationKey(operation.did),
+          updated,
+        );
+    });
     return updated;
   };
   const choose = (pdsId) => {
@@ -403,7 +461,7 @@ export async function createAccountMigration({
           throw error_;
         }
       } else {
-        const saved = await read(operation.did);
+        const saved = await db.get("migration:history", operation.id);
         if (
           !saved ||
           saved.authorityOperationId !== ownership.currentClaim.operationId ||
@@ -769,6 +827,8 @@ export async function createAccountMigration({
                   reservation.id,
                   descriptor,
                 );
+                // A prior source action may have run before a retry reached this
+                // read. Keep the transfer claim until those obligations are settled.
                 if (outcome.kind === "refused")
                   operation = await journal(operation, {
                     placementRefused: true,
@@ -798,6 +858,17 @@ export async function createAccountMigration({
             409,
           );
       }
+      if (
+        !placement &&
+        !operation.plcOp &&
+        operation.phase === "authorized" &&
+        (await probeTarget(operation, target))
+      )
+        throw error(
+          "TargetAccountExists",
+          "The target already contains this DID; a reviewed restore or reverse-migration workflow is required",
+          409,
+        );
       if (operation.plcOp) {
         const head = (
           await cidForCbor(await accounts.plcClient.getLastOp(operation.did))
@@ -1221,6 +1292,8 @@ export async function createAccountMigration({
             completedAt: new Date(),
             lastError: null,
           });
+          if (!(await transfers.release(transferOwner(operation))))
+            throw error("OperationConflict", "Migration claim changed", 409);
         });
       }
       return {
@@ -1234,10 +1307,13 @@ export async function createAccountMigration({
     } catch (error_) {
       // A signer callback may have committed exact bytes before return failed.
       // Read that committed journal rather than erasing it with our older object.
-      await journal((await read(operation.did)) ?? operation, {
-        lastError: error_.error ?? error_.name,
-        lastErrorMessage: error_.message,
-      });
+      await journal(
+        (await db.get("migration:history", operation.id)) ?? operation,
+        {
+          lastError: error_.error ?? error_.name,
+          lastErrorMessage: error_.message,
+        },
+      );
       throw error_;
     }
   };
@@ -1272,11 +1348,32 @@ export async function createAccountMigration({
         security.requestMigrationProofForBrowser,
       );
     },
-    importAccount(principal, input) {
+    async resumeForBrowser(principal, { did, pdsId, operationId }) {
+      if (typeof operationId !== "string" || !operationId)
+        throw error("OperationConflict", "Saved migration changed", 409);
+      return this.importAccount(principal, {
+        did,
+        pdsId,
+        [browserSelection]: operationId,
+      });
+    },
+    async importAccount(principal, input) {
+      await requireOwner(principal, input.did);
+      const current = await read(input.did);
+      if (input[browserSelection] !== undefined)
+        await assertRetrySelector(current, input);
+      if (
+        current &&
+        current.targetPdsId === input.pdsId &&
+        current.phase !== "refused"
+      )
+        await assertRetrySelector(current, input);
       return serial(input.did, input.pdsId, async () => {
         try {
           const row = await requireOwner(principal, input.did);
           let operation = await read(row.did);
+          if (input[browserSelection] !== undefined)
+            await assertRetrySelector(operation, input);
           const savedReservation = placement
             ? await placement.read(ownership.currentClaim)
             : undefined;
@@ -1284,7 +1381,8 @@ export async function createAccountMigration({
             input.pdsId,
             savedReservation?.revision,
           );
-          if (operation && operation.phase !== "complete") {
+          if (operation && !["complete", "refused"].includes(operation.phase)) {
+            await assertRetrySelector(operation, input);
             if (
               operation.targetPdsId !== target.id ||
               (input.plcOp &&
@@ -1310,42 +1408,56 @@ export async function createAccountMigration({
               };
             throw error("InvalidPds", "Account is already on this PDS");
           }
-          if (placement) {
+          const admission = await db.transact(async () => {
+            let proof;
+            try {
+              proof = await security.confirmMigrationProof(principal, {
+                pdsId: target.id,
+                token: input.token,
+              });
+            } catch (failure) {
+              if (
+                ["InvalidToken", "ExpiredToken", "RateLimitExceeded"].includes(
+                  failure.error ?? failure.code ?? failure.message,
+                )
+              )
+                return { failure };
+              throw failure;
+            }
+            if (typeof proof?.operationId !== "string" || !proof.operationId)
+              throw error(
+                "InvalidToken",
+                "Migration proof has no operation binding",
+              );
             const initial = {
-              id: operationKey(row.did),
+              id: proof.operationId,
               did: row.did,
               handle: row.handle,
               sourcePdsId: row.pdsId,
-              sourcePdsRevision: row.pdsRevision,
-              sourcePdsUrl: row.pdsUrl,
+              ...(placement
+                ? {
+                    sourcePdsRevision: row.pdsRevision,
+                    sourcePdsUrl: row.pdsUrl,
+                    targetPlcEndpoint: registryPlcEndpoint(
+                      target.url,
+                      target.stagedIncomingMigration === true,
+                    ),
+                  }
+                : {}),
               targetPdsId: target.id,
-              targetPlcEndpoint: registryPlcEndpoint(
-                target.url,
-                target.stagedIncomingMigration === true,
-              ),
               phase: "authorized",
               requestedPlcOp: input.plcOp,
               authorizedAt: new Date(),
               originalStatus: row.status,
             };
-            const admission = await db.transact(async () => {
-              try {
-                await security.confirmMigrationProof(principal, {
-                  pdsId: target.id,
-                  token: input.token,
-                });
-              } catch (failure) {
-                if (
-                  [
-                    "InvalidToken",
-                    "ExpiredToken",
-                    "RateLimitExceeded",
-                  ].includes(failure.error ?? failure.code ?? failure.message)
-                )
-                  return { failure };
-                throw failure;
-              }
-              let refused = false;
+            if (!(await transfers.claim(transferOwner(initial))))
+              throw error(
+                "OperationConflict",
+                "Another transfer already claims this DID",
+                409,
+              );
+            let refused = false;
+            if (placement) {
               try {
                 await placement.reserve(
                   ownership.currentClaim,
@@ -1358,75 +1470,38 @@ export async function createAccountMigration({
                 if (failure.message !== "PdsLifecycleIneligible") throw failure;
                 refused = true;
               }
-              const saved = await journal({
-                ...initial,
-                ...(refused ? { placementRefused: true } : {}),
-              });
-              await ownership.checkpoint(
-                "migration-admitted",
-                { did: row.did, targetPdsId: target.id },
-                true,
-              );
-              return { saved, refused };
-            });
-            if (admission.failure) throw admission.failure;
-            if (admission.refused)
-              throw error(
-                "PdsLifecycleIneligible",
-                "The destination cannot accept a new migration",
-                409,
-              );
-            return resume(admission.saved);
-          }
-          if (await probeTarget({ did: row.did }, target))
+            }
+            if (refused) {
+              initial.phase = "refused";
+              initial.placementRefused = true;
+            }
+            await db.set(
+              "migration:operations",
+              operationKey(row.did),
+              initial,
+            );
+            const saved = await journal(initial);
+            if (refused && !(await transfers.release(transferOwner(initial))))
+              throw error("OperationConflict", "Migration claim changed", 409);
+            await ownership.checkpoint(
+              "migration-admitted",
+              { did: row.did, targetPdsId: target.id },
+              !refused,
+            );
+            return { saved, refused };
+          });
+          if (admission.failure) throw admission.failure;
+          if (admission.refused)
             throw error(
-              "TargetAccountExists",
-              "The target already contains this DID; a reviewed restore or reverse-migration workflow is required",
+              "PdsLifecycleIneligible",
+              "The destination cannot accept a new migration",
               409,
             );
-          const prepared = await prepareOperation(
-            {
-              id: operationKey(row.did),
-              did: row.did,
-              handle: row.handle,
-              sourcePdsId: row.pdsId,
-              targetPdsId: target.id,
-              phase: "authorized",
-              requestedPlcOp: input.plcOp,
-              authorizedAt: new Date(),
-              originalStatus: row.status,
-            },
-            target,
-            async () => {
-              await requireOwner(principal, row.did);
-              const confirmed = await db.transact(async () => {
-                try {
-                  await security.confirmMigrationProof(principal, {
-                    pdsId: target.id,
-                    token: input.token,
-                  });
-                } catch (error_) {
-                  if (
-                    ![
-                      "InvalidToken",
-                      "ExpiredToken",
-                      "RateLimitExceeded",
-                    ].includes(error_.error ?? error_.code ?? error_.message)
-                  )
-                    throw error_;
-                  return { failure: error_ };
-                }
-                return { failure: null };
-              });
-              if (confirmed.failure) throw confirmed.failure;
-            },
-          );
-          operation = await journal(prepared);
-          return await resume(operation);
+          return await resume(admission.saved);
         } catch (error_) {
           const saved = await read(input.did);
           if (
-            (!saved || saved.phase === "complete") &&
+            (!saved || ["complete", "refused"].includes(saved.phase)) &&
             !(await ownership.pendingExternal(input.did))
           ) {
             // Only an acknowledged unbound key may have been allocated. No
@@ -1452,6 +1527,7 @@ export async function createAccountMigration({
     async reconcile() {
       const results = [];
       for (const { value } of await db.list("migration:operations")) {
+        if (value.phase === "refused") continue;
         const intent = {
           kind: "managed-migration",
           request: { targetPdsId: value.targetPdsId },

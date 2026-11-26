@@ -1,3 +1,4 @@
+import { createActiveDidTransferStore } from "./database/drizzle/active-did-transfer.js";
 import { HttpError } from "./http/http-error.mjs";
 import { mountOperationRecoveryRoutes } from "./features/account-settings/operation-recovery-routes.js";
 import { randomUUID, timingSafeEqual } from "node:crypto";
@@ -151,6 +152,7 @@ export async function createApp({
   });
   const migration = await createAccountMigration({
     custody: accounts.custody,
+    transfers: createActiveDidTransferStore(db),
     db,
     config,
     accounts,

@@ -25,6 +25,7 @@ import {
 import { openDatabase } from "../../dist/src/database/connection.js";
 import { createCustodyInventoryStorage } from "../../dist/src/database/drizzle/migration-custody.js";
 import { pdsVerifierPolicy } from "../../dist/src/pds/registry-targets.mjs";
+import { createActiveDidTransferStore } from "../../dist/src/database/drizzle/active-did-transfer.js";
 import { createAccountMigration } from "../../dist/src/features/pds-migration/move-between-pds.mjs";
 
 async function fixture(
@@ -283,6 +284,7 @@ async function fixture(
       )
         throw new Error("InvalidToken");
       proofUsed = true;
+      return { operationId: crypto.randomUUID() };
     },
     async revokeAccount(did) {
       await db.set(
@@ -545,6 +547,7 @@ async function fixture(
     f.db = db;
     f.migration = await createAccountMigration({
       custody: createCustodyInventoryStorage(db),
+      transfers: createActiveDidTransferStore(db),
       db,
       config,
       accounts,
@@ -664,7 +667,12 @@ test("same-entryway migration preserves DID, snapshots before cutover, imports d
   assert.equal(await f.targetSignatureValid(), true);
   assert.equal(f.getCurrent().verificationMethods.atproto, f.targetKey.did());
   assert.equal(await f.db.get("revocation", f.row.did), 2);
-  assert.ok(await f.db.get("migration:snapshots", `migrate:${f.row.did}/repo`));
+  const operation = await f.db.get(
+    "migration:operations",
+    `migrate:${f.row.did}`,
+  );
+  assert.ok(await f.db.get("migration:snapshots", `${operation.id}/repo`));
+  assert.deepEqual(await f.db.read("active_did_transfers"), []);
   assert.ok(!f.state.calls.some((call) => call.includes("deleteAccount")));
 });
 
@@ -781,7 +789,7 @@ test("unknown or foreign DIDs, invalid target and missing email proof cannot sta
   assert.equal(await f.migration.status(f.actor), null);
 });
 
-test("an existing destination account is rejected before source freeze or proof consumption", async (t) => {
+test("an existing destination account is rejected after admission before source freeze", async (t) => {
   const f = await fixture(t);
   f.state.target.exists = true;
   await assert.rejects(
@@ -792,9 +800,9 @@ test("an existing destination account is rejected before source freeze or proof 
     }),
     { error: "TargetAccountExists" },
   );
-  assert.equal(f.getProofUsed(), false);
+  assert.equal(f.getProofUsed(), true);
   assert.equal(f.state.source.active, true);
-  assert.equal(await f.migration.status(f.actor), null);
+  assert.equal((await f.migration.status(f.actor)).phase, "authorized");
 });
 
 test("lost PLC authority and arbitrary signed operation are rejected before source deactivation", async (t) => {
@@ -816,7 +824,7 @@ test("lost PLC authority and arbitrary signed operation are rejected before sour
     }),
     { error: "InvalidPlcOperation" },
   );
-  assert.equal(f.getProofUsed(), false);
+  assert.equal(f.getProofUsed(), true);
   const foreign = await Secp256k1Keypair.create({ exportable: true });
   f.setCurrent(
     await plc.createUpdateOp(f.getCurrent(), f.rotation, (op) => ({
@@ -828,7 +836,7 @@ test("lost PLC authority and arbitrary signed operation are rejected before sour
     f.migration.importAccount(f.actor, {
       did: f.row.did,
       pdsId: "pds2",
-      token: "migration-proof",
+      plcOp: incorrect,
     }),
     { error: "AuthorityNotManaged" },
   );
@@ -927,6 +935,10 @@ test("recovery refuses a snapshot when its saved predecessor key does not verify
   const journal = await f.db.get("migration:operations", id);
   assert.equal(journal.sourceSigningKey, f.sourceKey.did());
   await f.db.set("migration:operations", id, {
+    ...journal,
+    sourceSigningKey: f.targetKey.did(),
+  });
+  await f.db.set("migration:history", journal.id, {
     ...journal,
     sourceSigningKey: f.targetKey.did(),
   });
@@ -1036,7 +1048,7 @@ test("stale pending managed migration journal cannot create a new operation afte
   const scheduler = f.migration.reconcile();
   await captured.promise;
   await f.recover();
-  await f.migration.importAccount(f.actor, input);
+  await f.migration.importAccount(f.actor, { did: f.row.did, pdsId: "pds2" });
   await f.accounts.ownership.accountStep(
     f.row.did,
     { kind: "newer-local-authority", request: {} },
@@ -1266,6 +1278,10 @@ test("real registry drain preserves move intent and refuses before target reques
   );
   const saved = await f.db.get("migration:operations", `migrate:${f.row.did}`);
   assert.equal(saved.placementRefused, true);
+  assert.equal(
+    (await f.db.read("active_did_transfers"))[0].operation_id,
+    saved.id,
+  );
   await f.registryLifecycle.transition("pds2", "enable", 1, 2, "reenable");
   await assert.rejects(
     f.migration.importAccount(f.actor, {
@@ -1273,7 +1289,7 @@ test("real registry drain preserves move intent and refuses before target reques
       pdsId: "pds2",
       token: "migration-proof",
     }),
-    { error: "PdsLifecycleIneligible" },
+    { error: "OperationConflict" },
   );
   assert.equal(
     f.state.calls.filter((call) => call.startsWith("pds2/")).length,
@@ -1370,6 +1386,11 @@ test("drain between preflight and read admission prevents the target read", asyn
     0,
   );
   assert.equal((await f.db.read("external_operation_attempts")).length, 0);
+  const saved = await f.db.get("migration:operations", `migrate:${f.row.did}`);
+  assert.equal(
+    (await f.db.read("active_did_transfers"))[0].operation_id,
+    saved.id,
+  );
   assert.equal(
     (await f.db.read("pds_placement_reservations"))[0].state,
     "refused",
@@ -1473,3 +1494,221 @@ for (const lifecycle of ["draining", "retired"])
       lifecycle,
     );
   });
+
+test("incoming DID claim blocks managed admission without remote writes or journal", async (t) => {
+  const f = await fixture(t);
+  const transfers = createActiveDidTransferStore(f.db);
+  const incoming = {
+    did: f.row.did,
+    operationId: "incoming-owner",
+    transferKind: "incoming",
+  };
+  assert.equal(await transfers.claim(incoming), true);
+  await assert.rejects(
+    f.migration.importAccount(f.actor, {
+      did: f.row.did,
+      pdsId: "pds2",
+      token: "migration-proof",
+    }),
+    { error: "OperationConflict" },
+  );
+  assert.equal(await f.migration.status(f.actor), null);
+  assert.deepEqual(f.state.calls, []);
+  assert.equal(await transfers.release(incoming), true);
+});
+
+test("pending managed admission excludes incoming and exact owner survives stale release", async (t) => {
+  const f = await fixture(t);
+  f.state.failures.set("pds2/com.atproto.server.createAccount", true);
+  await assert.rejects(
+    f.migration.importAccount(f.actor, {
+      did: f.row.did,
+      pdsId: "pds2",
+      token: "migration-proof",
+    }),
+  );
+  const operation = await f.db.get(
+    "migration:operations",
+    `migrate:${f.row.did}`,
+  );
+  const transfers = createActiveDidTransferStore(f.db);
+  assert.equal(
+    await transfers.claim({
+      did: f.row.did,
+      operationId: "incoming-owner",
+      transferKind: "incoming",
+    }),
+    false,
+  );
+  assert.equal(
+    await transfers.release({
+      did: f.row.did,
+      operationId: "stale-owner",
+      transferKind: "managed",
+    }),
+    false,
+  );
+  assert.equal(
+    (await f.db.read("active_did_transfers"))[0].operation_id,
+    operation.id,
+  );
+  assert.equal(
+    (await f.db.get("migration:history", operation.id)).id,
+    operation.id,
+  );
+});
+
+test("ambiguous tokenless retry does not mutate and saved challenge selects the pending operation", async (t) => {
+  const f = await fixture(t);
+  f.state.failures.set("pds2/com.atproto.server.createAccount", true);
+  await assert.rejects(
+    f.migration.importAccount(f.actor, {
+      did: f.row.did,
+      pdsId: "pds2",
+      token: "migration-proof",
+    }),
+  );
+  const current = await f.db.get(
+    "migration:operations",
+    `migrate:${f.row.did}`,
+  );
+  await f.db.set("migration:history", "prior", {
+    ...current,
+    id: "prior",
+    phase: "complete",
+  });
+  await f.db.set("security:challenges", "selected", {
+    did: f.row.did,
+    purpose: "account-migrate",
+    consumedAt: Date.now(),
+    data: { operationId: current.id },
+  });
+  await f.db.set("security:challenges", "stale", {
+    did: f.row.did,
+    purpose: "account-migrate",
+    consumedAt: Date.now(),
+    data: { operationId: "prior" },
+  });
+  const before = await f.db.read("authority_operations");
+  const calls = [...f.state.calls];
+  await assert.rejects(
+    f.migration.importAccount(f.actor, { did: f.row.did, pdsId: "pds2" }),
+    { error: "OperationConflict" },
+  );
+  await assert.rejects(
+    f.migration.importAccount(f.actor, {
+      did: f.row.did,
+      pdsId: "pds2",
+      token: "stale.",
+    }),
+    { error: "OperationConflict" },
+  );
+  assert.deepEqual(await f.db.read("authority_operations"), before);
+  assert.deepEqual(f.state.calls, calls);
+  await f.recover();
+  assert.equal(
+    (
+      await f.migration.importAccount(f.actor, {
+        did: f.row.did,
+        pdsId: "pds2",
+        token: "selected.",
+      })
+    ).status,
+    "complete",
+  );
+});
+
+test("browser panel resumes the exact interrupted second move and rejects stale selection", async (t) => {
+  const f = await fixture(t);
+  f.state.failures.set("pds2/com.atproto.server.createAccount", true);
+  await assert.rejects(
+    f.migration.importAccount(f.actor, {
+      did: f.row.did,
+      pdsId: "pds2",
+      token: "migration-proof",
+    }),
+  );
+  const current = await f.migration.status(f.actor, { did: f.row.did });
+  await f.db.set("migration:history", "prior", {
+    ...current,
+    id: "prior",
+    phase: "complete",
+  });
+  const { renderMigrationPanel } =
+    await import("../../dist/src/features/pds-migration/page.mjs");
+  const { createMigrationActions } =
+    await import("../../dist/src/features/pds-migration/actions.mjs");
+  const panel = renderMigrationPanel({
+    config: f.config,
+    a: f.row,
+    csrf: "csrf-value",
+    accountContext: { did: f.row.did },
+    migrationState: current,
+    migration: f.migration,
+  });
+  assert.match(panel, /action="\/account\/migration-confirm"/);
+  assert.match(panel, /name="csrf" value="csrf-value"/);
+  assert.ok(panel.includes(`name="did" value="${f.row.did}"`));
+  assert.ok(panel.includes(`name="operationId" value="${current.id}"`));
+  assert.doesNotMatch(panel, /migration-proof|challengeId|name="token"/);
+  const selection = panel.match(/name="operationId" value="([^"]+)"/)[1];
+  const actions = createMigrationActions({
+    config: f.config,
+    migration: f.migration,
+    accounts: f.accounts,
+    console: { needed() {} },
+  });
+  const res = {
+    set() {},
+    status() {
+      return this;
+    },
+    type() {
+      return this;
+    },
+    send(html) {
+      return html;
+    },
+  };
+  const action = (operationId, principal = f.actor) =>
+    actions["migration-confirm"]({
+      res,
+      account: f.row,
+      browser: { csrf: "csrf-value" },
+      principal,
+      accountContext: { did: f.row.did },
+      value: (key) => ({ pdsId: "pds2", operationId })[key] ?? "",
+      token: () => {
+        throw Error("OTP must not be read");
+      },
+    });
+  const before = await f.db.read("authority_operations");
+  const calls = [...f.state.calls];
+  await assert.rejects(action("prior"), { error: "OperationConflict" });
+  await assert.rejects(action(selection, { ...f.actor, did: "did:plc:other" }));
+  assert.deepEqual(await f.db.read("authority_operations"), before);
+  assert.deepEqual(f.state.calls, calls);
+  await f.recover();
+  assert.match(await action(selection), /migration complete/i);
+  const successor = { ...current, id: "successor", phase: "authorized" };
+  await f.db.set("migration:operations", `migrate:${f.row.did}`, successor);
+  await f.db.set("migration:history", successor.id, successor);
+  const transfers = createActiveDidTransferStore(f.db);
+  assert.equal(
+    await transfers.claim({
+      did: f.row.did,
+      operationId: successor.id,
+      transferKind: "managed",
+    }),
+    true,
+  );
+  const successorCalls = [...f.state.calls];
+  const successorAuthority = await f.db.read("authority_operations");
+  await assert.rejects(action(selection), { error: "OperationConflict" });
+  assert.deepEqual(
+    await f.db.get("migration:operations", `migrate:${f.row.did}`),
+    successor,
+  );
+  assert.deepEqual(await f.db.read("authority_operations"), successorAuthority);
+  assert.deepEqual(f.state.calls, successorCalls);
+});
