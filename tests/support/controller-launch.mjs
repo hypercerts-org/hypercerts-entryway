@@ -11,6 +11,7 @@ import {
   mkdirSync,
   readFileSync,
   realpathSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -39,9 +40,12 @@ if (
 const env = { ...process.env };
 delete env.DOCKER_HOST;
 delete env.DOCKER_CONTEXT;
+const context = process.env.ENTRYWAY_DOCKER_CONTEXT ?? "rootless";
+if (!["rootless", "default"].includes(context))
+  throw Error("Unsupported Entryway Docker context");
 const run = (args, options = {}) =>
   (
-    execFileSync("docker", ["--context", "rootless", ...args], {
+    execFileSync("docker", ["--context", context, ...args], {
       encoding: "utf8",
       env,
       ...options,
@@ -50,23 +54,24 @@ const run = (args, options = {}) =>
 const endpoint = run([
   "context",
   "inspect",
-  "rootless",
+  context,
   "--format",
   "{{.Endpoints.docker.Host}}",
 ]);
 const security = JSON.parse(
   run(["info", "--format", "{{json .SecurityOptions}}"]),
 );
-if (
-  !/^unix:\/\/\/run\/user\/[^/]+\/docker\.sock$/.test(endpoint) ||
-  !Array.isArray(security) ||
-  !security.includes("name=rootless")
-)
-  throw Error("Expected the rootless Docker endpoint");
+const validContext =
+  context === "rootless"
+    ? /^unix:\/\/\/run\/user\/[^/]+\/docker\.sock$/.test(endpoint) &&
+      Array.isArray(security) &&
+      security.includes("name=rootless")
+    : endpoint === "unix:///var/run/docker.sock";
+if (!validContext) throw Error("Unexpected Entryway Docker endpoint");
 const stateDir = join(sandbox, ".controller-launch");
 const statePath = join(stateDir, "state.json");
 const overlay = join(stateDir, "compose.json");
-const compose = (args) =>
+const compose = (args, includeOverlay = true) =>
   run(
     [
       "compose",
@@ -74,8 +79,7 @@ const compose = (args) =>
       project,
       "-f",
       join(sandbox, "compose.yaml"),
-      "-f",
-      overlay,
+      ...(includeOverlay ? ["-f", overlay] : []),
       ...args,
     ],
     { stdio: ["ignore", "ignore", "pipe"] },
@@ -251,6 +255,16 @@ function inspectBinding(state) {
     throw Error("Launch mount changed");
 }
 if (action === "cleanup") {
+  const directories = [stateDir, `${stateDir}-retired`].filter((directory) => {
+    try {
+      privatePath(directory, true);
+      return true;
+    } catch (error) {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    }
+  });
+  const volumes = [];
   for (const role of ["inputs", "key"]) {
     const prefix = `${project}-sealed-${role === "inputs" ? "input" : "key"}-`;
     const names = run([
@@ -271,9 +285,29 @@ if (action === "cleanup") {
       )
         throw Error("Unexpected labelled controller volume");
       volume(name, role);
-      run(["volume", "rm", name]);
+      volumes.push(name);
     }
   }
+  const sealedDestination = volumes.some((name) =>
+    run([
+      "ps",
+      "--all",
+      "--quiet",
+      "--filter",
+      `label=com.docker.compose.project=${project}`,
+      "--filter",
+      "label=com.docker.compose.service=pds1",
+      "--filter",
+      `volume=${name}`,
+    ]),
+  );
+  if (sealedDestination)
+    compose(
+      ["up", "-d", "--no-deps", "--force-recreate", "--wait", "pds1"],
+      false,
+    );
+  for (const name of volumes) run(["volume", "rm", name]);
+  for (const directory of directories) rmSync(directory, { recursive: true });
 } else if (action === "launch" || action === "probe") {
   mkdirSync(stateDir, { mode: 0o700 });
   const before = current(["node", "/app/services/pds/start-pds.mjs"]);
