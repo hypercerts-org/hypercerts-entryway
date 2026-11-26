@@ -144,7 +144,7 @@ export function createPdsRegistry(
         await db.read("pds_hosts", { where: eq(hosts.id, value.hostId) })
       )[0];
       if (existingHost?.association === "associated")
-        throw new Error("PdsEnrollmentAliasConflict");
+        throw new Error("PdsAssociatedHostRestageUnsupported");
       await assertNoAssociatedPdsAlias(db, value);
       if (expectedRevision === 0)
         await db.insert(

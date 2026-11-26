@@ -207,17 +207,17 @@ export async function assertNoAssociatedPdsAlias(
   db: DatabaseExecutor,
   candidate: PdsHostConfiguration,
 ): Promise<void> {
+  const did = canonicalDid(candidate.serviceDid);
+  const endpoints = new Set([
+    canonicalEndpoint(candidate.publicUrl),
+    canonicalEndpoint(candidate.internalUrl),
+  ]);
   const associated = new Set(
     (await db.read("pds_hosts"))
       .filter((host) => host.association === "associated")
       .map((host) => host.id),
   );
   if (!associated.size) return;
-  const did = canonicalDid(candidate.serviceDid);
-  const endpoints = new Set([
-    canonicalEndpoint(candidate.publicUrl),
-    canonicalEndpoint(candidate.internalUrl),
-  ]);
   for (const revision of await db.read("pds_host_revisions")) {
     if (!associated.has(revision.host_id)) continue;
     if (

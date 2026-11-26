@@ -91,27 +91,26 @@ test("fresh enrollment refuses static mode and any retained product journal", as
   await db.set("registration:intents", "retained", { pdsId: "unknown" });
   await assert.rejects(guard(db, candidate), /PdsEnrollmentReferencesExist/);
 });
-test("fresh enrollment fails closed on unknown DID methods and unsafe endpoints", async (t) => {
+test("invalid staged identities cannot block enrollment of an unrelated host", async (t) => {
   const db = await fixture(t),
     registry = createPdsRegistry(db);
-  const unknown = await registry.stageHost(
+  for (const invalid of [
     host("unknown", "did:example:unknown", "https://one.example"),
-    0,
-    "a",
-  );
-  await assert.rejects(guard(db, unknown), /PdsEnrollmentIdentityInvalid/);
-  const unsafe = await registry.stageHost(
     host("unsafe", "did:web:unsafe.example", "http://unsafe.example"),
-    0,
-    "b",
-  );
-  await assert.rejects(guard(db, unsafe), /PdsEnrollmentIdentityInvalid/);
-  const encoded = await registry.stageHost(
     host("encoded", "did:web:encoded.example", "https://encoded.example/%61"),
+  ]) {
+    await assert.rejects(
+      registry.stageHost(invalid, 0, invalid.hostId),
+      /PdsEnrollmentIdentityInvalid/,
+    );
+    assert.equal(await registry.readHost(invalid.hostId), undefined);
+  }
+  const unrelated = await registry.stageHost(
+    host("unrelated", "did:web:unrelated.example", "https://unrelated.example"),
     0,
-    "c",
+    "unrelated",
   );
-  await assert.rejects(guard(db, encoded), /PdsEnrollmentIdentityInvalid/);
+  await guard(db, unrelated);
 });
 
 test("attestation and association consume exact fresh receipt once and preserve idempotent retries", async (t) => {
@@ -245,7 +244,7 @@ test("attestation and association consume exact fresh receipt once and preserve 
   );
   await assert.rejects(
     registry.stageHost(candidate, 1, "edit"),
-    /PdsEnrollmentAliasConflict/,
+    /PdsAssociatedHostRestageUnsupported/,
   );
 });
 

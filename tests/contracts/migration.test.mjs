@@ -1200,7 +1200,7 @@ test("managed migration uses real registry revisions and credentials through rec
       1,
       "rotate-candidate",
     ),
-    /PdsEnrollmentAliasConflict/,
+    /PdsAssociatedHostRestageUnsupported/,
   );
   await f.registryLifecycle.transition(
     "pds2",

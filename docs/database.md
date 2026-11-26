@@ -27,7 +27,7 @@ For operators preparing a host, staging records its configuration and credential
 without associating it or making it eligible for placement. Existing static host
 routing remains in effect. A fresh registry-bootstrap authority also supports
 explicit operator-attested association for an empty stock PDS. Inbound pairing
-remains unobserved. For the stock PDS profile, the public URL must be an HTTPS origin with no path. Entryway uses the canonical URL for transport and OAuth resources and its origin without a trailing slash as the exact PLC service endpoint required by the reference PDS. Previously saved offers and signed operations keep their recorded endpoint.
+remains unobserved. Stage requires a supported `did:plc` or `did:web` service identity and HTTPS public and internal URLs. Associated hosts cannot be restaged. For the stock PDS profile, the public URL must be an HTTPS origin with no path. Entryway uses the canonical URL for transport and OAuth resources and its origin without a trailing slash as the exact PLC service endpoint required by the reference PDS. Previously saved offers and signed operations keep their recorded endpoint.
 
 Mount a protected JSON keyring on every Entryway node and set
 `PDS_REGISTRY_KEYRING_FILE` to its path before starting the nodes. The file must
@@ -232,7 +232,7 @@ For operators, a standalone `reserveSigningKey` request without a DID creates an
 
 For operators, registry-backed outbound calls authorize the saved host revision against the database verifier-policy generation and the consumed association evidence immediately before dispatch. Each process uses a startup snapshot of its approved target addresses and CA bytes; changing those files takes effect only after restart. The authorization check is the linearization point: a later policy transition prevents new authorizations but does not cancel a request already authorized under the previous generation.
 
-For operators, `scripts/pds-registry.mjs revoke-callback --url <entryway-origin> --auth-file <operator-secret-file> --host <host-id> --revision <revision>` permanently revokes the stored inbound verifier for that exact revision. The command uses global administrator authentication and is safe to repeat. Revocation does not change the outbound PDS password, prove an inbound callback, or grant the host access to administrator routes. The current bootstrap profile provides no host callback authorization route and no live token rotation, overlap, or reactivation command; staging another revision does not activate it. Keep the global operator credential separate from each host's inbound and outbound secrets.
+For operators, `scripts/pds-registry.mjs revoke-callback --url <entryway-origin> --auth-file <operator-secret-file> --host <host-id> --revision <revision>` permanently revokes the stored inbound verifier for that exact revision. The command uses global administrator authentication and is safe to repeat. Revocation does not change the outbound PDS password, prove an inbound callback, or grant the host access to administrator routes. The current bootstrap profile provides no host callback authorization route and no live token rotation, overlap, or reactivation command. Associated hosts cannot be restaged after revocation. Keep the global operator credential separate from each host's inbound and outbound secrets.
 
 ## Activating a fresh registry authority
 
