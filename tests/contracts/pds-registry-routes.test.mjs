@@ -48,6 +48,10 @@ test("global admin alone can stage and staged credentials grant no normal author
     config,
     registry,
     keyring,
+    enrollment: {
+      reauthorize: async (hostId, body) => ({ hostId, ...body }),
+      status: async () => null,
+    },
     keyStatus: () => pdsRegistryKeyStatus(db, keyring),
     admin,
   });
@@ -87,6 +91,40 @@ test("global admin alone can stage and staged credentials grant no normal author
     (await call("/admin/pds-registry/status", "host-fixture")).status,
     401,
   );
+  const reauthorizePath = "/admin/pds-registry/hosts/candidate/reauthorize";
+  const reauthorization = {
+    revision: 1,
+    policyGeneration: 2,
+    receiptId: "e90eb775-2c4e-4e87-b954-e7bafbe48a61",
+    idempotencyKey: "reauthorize-one",
+  };
+  assert.equal(
+    (await call(reauthorizePath, "host-fixture", reauthorization)).status,
+    401,
+  );
+  assert.equal(
+    (await call(reauthorizePath, token, reauthorization)).status,
+    401,
+  );
+  assert.equal(
+    (
+      await call(reauthorizePath, "global-fixture", {
+        ...reauthorization,
+        policyGeneration: 0,
+      })
+    ).status,
+    400,
+  );
+  const reauthorized = await call(
+    reauthorizePath,
+    "global-fixture",
+    reauthorization,
+  );
+  assert.equal(reauthorized.status, 200);
+  assert.deepEqual(await reauthorized.json(), {
+    hostId: "candidate",
+    ...reauthorization,
+  });
   const trust = await call("/admin/pds-registry/trust", "global-fixture");
   assert.deepEqual(await trust.json(), {
     issuer: config.issuer,

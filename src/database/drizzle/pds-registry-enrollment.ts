@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import type { DatabaseExecutor } from "../executor.js";
 import type { PdsCredentialRegistryStore } from "../pds-registry.port.js";
 import type {
@@ -52,6 +52,57 @@ function receiptSnapshot(receipt: PdsOutboundReceipt) {
     reason,
   };
 }
+/** Shared live trust check for placement and outbound authentication. */
+export async function hasPdsPolicyEvidence(
+  db: DatabaseExecutor,
+  hostId: string,
+  revision: number,
+  manifestFingerprint: string,
+  policy: { generation: number; fingerprint: string },
+): Promise<boolean> {
+  const events = db.tables.pds_host_enrollment_events;
+  const evidence = await db.read("pds_host_enrollment_events", {
+    where: and(
+      eq(events.host_id, hostId),
+      eq(events.revision, revision),
+      eq(events.policy_generation, policy.generation),
+      or(eq(events.kind, "associate"), eq(events.kind, "reauthorize")),
+    ),
+    limit: 2,
+  });
+  const [event] = evidence;
+  if (
+    evidence.length !== 1 ||
+    !event ||
+    event.manifest_fingerprint !== manifestFingerprint
+  )
+    return false;
+  try {
+    const parsed: unknown = JSON.parse(event.receipt_snapshot);
+    if (!parsed || typeof parsed !== "object") return false;
+    const receipt = parsed as Record<string, unknown>;
+    return (
+      receipt.receiptId === event.receipt_id &&
+      receipt.direction === "entryway-to-pds" &&
+      receipt.verifierVersion === 1 &&
+      receipt.generation === event.generation &&
+      receipt.revision === revision &&
+      receipt.manifestFingerprint === manifestFingerprint &&
+      receipt.verifierPolicyGeneration === policy.generation &&
+      receipt.verifierPolicyFingerprint === policy.fingerprint &&
+      receipt.reason === "ok" &&
+      receipt.publicDidOk === true &&
+      receipt.internalDidOk === true &&
+      receipt.publicMetadataOk === true &&
+      receipt.internalMetadataOk === true &&
+      receipt.adminAttempted === true &&
+      receipt.adminOk === true
+    );
+  } catch {
+    return false;
+  }
+}
+
 type AttestInput = {
   revision: number;
   receiptId: string;
@@ -64,6 +115,12 @@ type AttestInput = {
 type AssociateInput = {
   revision: number;
   attestationId: string;
+  idempotencyKey: string;
+};
+type ReauthorizeInput = {
+  revision: number;
+  policyGeneration: number;
+  receiptId: string;
   idempotencyKey: string;
 };
 export function createPdsEnrollment(
@@ -90,20 +147,14 @@ export function createPdsEnrollment(
     if (row.request !== request) throw new Error("PdsEnrollmentConflict");
     return JSON.parse(row.result) as Record<string, unknown>;
   }
-  async function current(hostId: string, revision: number, receiptId: string) {
-    const [host] = await db.read("pds_hosts", { where: eq(hosts.id, hostId) });
-    if (
-      !host ||
-      host.association !== "unassociated" ||
-      host.active_revision !== null ||
-      host.revision !== revision ||
-      host.staged_revision !== revision
-    )
-      throw new Error("PdsEnrollmentConflict");
+  async function currentReceipt(
+    hostId: string,
+    revision: number,
+    receiptId: string,
+  ) {
     const manifest = await registry.readManifest(hostId, revision);
     if (!manifest || manifest.manifest.stagedIncomingMigration)
       throw new Error("PdsEnrollmentConflict");
-    const revisionValue = manifest.manifest;
     const receipt = (await checks.status(hostId)).last;
     const now = await db.databaseTime();
     if (
@@ -122,6 +173,24 @@ export function createPdsEnrollment(
       !receipt.adminOk
     )
       throw new Error("PdsEnrollmentConflict");
+    return { manifest, receipt, now };
+  }
+  async function current(hostId: string, revision: number, receiptId: string) {
+    const [host] = await db.read("pds_hosts", { where: eq(hosts.id, hostId) });
+    if (
+      !host ||
+      host.association !== "unassociated" ||
+      host.active_revision !== null ||
+      host.revision !== revision ||
+      host.staged_revision !== revision
+    )
+      throw new Error("PdsEnrollmentConflict");
+    const { manifest, receipt, now } = await currentReceipt(
+      hostId,
+      revision,
+      receiptId,
+    );
+    const revisionValue = manifest.manifest;
     await assertFreshPdsEnrollment(db, {
       hostId,
       revision,
@@ -237,6 +306,85 @@ export function createPdsEnrollment(
           generation: receipt.generation,
           policy_generation: receipt.verifierPolicyGeneration,
           manifest_fingerprint: receipt.manifestFingerprint,
+          receipt_snapshot: JSON.stringify(receiptSnapshot(receipt)),
+          expires_at: receipt.expiresAt,
+          created_at: now,
+          result: JSON.stringify(result),
+        });
+        return result;
+      });
+    },
+    async reauthorize(hostId: string, input: ReauthorizeInput) {
+      const { revision, policyGeneration, receiptId, idempotencyKey } = input;
+      const request = JSON.stringify([revision, policyGeneration, receiptId]);
+      return db.transact(async () => {
+        const previous = await replay(
+          hostId,
+          "reauthorize",
+          idempotencyKey,
+          request,
+        );
+        if (previous) return previous;
+        const modes = await db.read("authority_mode", { limit: 2 });
+        if (
+          modes.length !== 1 ||
+          modes[0]?.id !== 1 ||
+          modes[0].mode !== "registry-bootstrap"
+        )
+          throw new Error("PdsEnrollmentModeConflict");
+        const [host] = await db.read("pds_hosts", {
+          where: eq(hosts.id, hostId),
+        });
+        if (
+          !host ||
+          host.association !== "associated" ||
+          host.lifecycle === "retired" ||
+          host.revision !== revision ||
+          host.active_revision !== revision ||
+          host.staged_revision !== revision
+        )
+          throw new Error("PdsEnrollmentConflict");
+        const { manifest, receipt, now } = await currentReceipt(
+          hostId,
+          revision,
+          receiptId,
+        );
+        const scope = and(
+          eq(events.host_id, hostId),
+          eq(events.revision, revision),
+        )!;
+        const [association] = await db.read("pds_host_enrollment_events", {
+          where: and(scope, eq(events.kind, "associate")),
+        });
+        if (
+          !association ||
+          association.manifest_fingerprint !== manifest.fingerprint ||
+          receipt.verifierPolicyGeneration !== policyGeneration ||
+          association.policy_generation >= policyGeneration
+        )
+          throw new Error("PdsEnrollmentConflict");
+        const [existing] = await db.read("pds_host_enrollment_events", {
+          where: and(
+            scope,
+            eq(events.kind, "reauthorize"),
+            eq(events.policy_generation, policyGeneration),
+          ),
+        });
+        if (existing) throw new Error("PdsEnrollmentConflict");
+        const result = { hostId, revision, policyGeneration, receiptId };
+        await db.insert("pds_host_enrollment_events", {
+          id: randomUUID(),
+          host_id: hostId,
+          revision,
+          kind: "reauthorize",
+          principal_class: "global-admin",
+          idempotency_key: idempotencyKey,
+          request,
+          receipt_id: receiptId,
+          attestation_id: association.attestation_id,
+          generation: receipt.generation,
+          policy_generation: policyGeneration,
+          manifest_fingerprint: manifest.fingerprint,
           receipt_snapshot: JSON.stringify(receiptSnapshot(receipt)),
           expires_at: receipt.expiresAt,
           created_at: now,

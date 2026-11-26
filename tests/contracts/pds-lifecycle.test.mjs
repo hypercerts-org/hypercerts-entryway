@@ -146,6 +146,143 @@ async function sample(node, id, publicOk, internalOk = publicOk) {
     { publicOk, internalOk },
   );
 }
+test("reauthorization restores the pinned revision only for the current verified policy", async (t) => {
+  const { createPdsPlacement } =
+    await import("../../dist/src/database/drizzle/pds-placement.js");
+  let fingerprint = "original-policy";
+  const policyFor = () => fingerprint;
+  const { db, first, second, trust } = await fixture(
+    t,
+    "registry-bootstrap",
+    policyFor,
+  );
+  await onboard(first, "host");
+  await sample(first, "host", true);
+  await sample(first, "host", true);
+  await first.lifecycle.transition("host", "enable", 1, 0, "enable");
+  const placement = createPdsPlacement(db, () => trust, policyFor);
+  const associated = await placement.resolveAuthenticated("host", 1, policyFor);
+  assert.ok(associated);
+  const originalReceipt = (await first.checks.status("host")).last;
+  const originalEvents = await db.read("pds_host_enrollment_events");
+  const originalHost = await first.registry.readHost("host");
+  const request = {
+    revision: 1,
+    policyGeneration: 2,
+    receiptId: originalReceipt.receiptId,
+    idempotencyKey: "reauthorize-policy-two",
+  };
+
+  fingerprint = "replacement-policy";
+  await second.checks.transitionPolicy("host", 1, 1, fingerprint);
+  assert.equal(
+    await placement.resolveAuthenticated("host", 1, policyFor),
+    undefined,
+  );
+  assert.deepEqual(await placement.choices(), []);
+  await assert.rejects(
+    first.enrollment.reauthorize("host", request),
+    /PdsEnrollmentConflict/,
+  );
+  const check = async () => {
+    const { attemptId } = await first.checks.begin("host", 1);
+    return first.checks.complete("host", 1, attemptId, {
+      publicDidOk: true,
+      internalDidOk: true,
+      publicMetadataOk: true,
+      internalMetadataOk: true,
+      adminAttempted: true,
+      adminOk: true,
+      reason: "ok",
+    });
+  };
+  const expiredReceipt = await check();
+  await db.update(
+    "pds_host_checks",
+    { receipt_expires_at: 0 },
+    eq(db.tables.pds_host_checks.host_id, "host"),
+  );
+  await assert.rejects(
+    first.enrollment.reauthorize("host", {
+      ...request,
+      receiptId: expiredReceipt.receiptId,
+    }),
+    /PdsEnrollmentConflict/,
+  );
+  const freshReceipt = await check();
+  request.receiptId = freshReceipt.receiptId;
+  await assert.rejects(
+    first.enrollment.reauthorize("host", { ...request, policyGeneration: 1 }),
+    /PdsEnrollmentConflict/,
+  );
+  const results = await Promise.allSettled([
+    first.enrollment.reauthorize("host", request),
+    second.enrollment.reauthorize("host", {
+      ...request,
+      idempotencyKey: "competing-command",
+    }),
+  ]);
+  assert.equal(
+    results.filter(({ status }) => status === "fulfilled").length,
+    1,
+  );
+  const winningRequest =
+    results[0].status === "fulfilled"
+      ? request
+      : { ...request, idempotencyKey: "competing-command" };
+  const replayed = await first.enrollment.reauthorize("host", winningRequest);
+  assert.deepEqual(replayed, {
+    hostId: "host",
+    revision: 1,
+    policyGeneration: 2,
+    receiptId: request.receiptId,
+  });
+  assert.deepEqual(
+    await placement.resolveAuthenticated("host", 1, policyFor),
+    associated,
+  );
+  assert.equal(
+    await placement.resolveAuthenticated("host", 1, () => "original-policy"),
+    undefined,
+  );
+  assert.deepEqual(await placement.choices(), []);
+  await sample(first, "host", true);
+  await sample(first, "host", true);
+  assert.deepEqual(await placement.choices(), [
+    { id: associated.id, url: associated.url },
+  ]);
+  assert.deepEqual(await first.registry.readHost("host"), originalHost);
+  const appended = await db.read("pds_host_enrollment_events");
+  assert.deepEqual(
+    appended.filter((event) => event.kind !== "reauthorize"),
+    originalEvents,
+  );
+  assert.equal(
+    appended.filter((event) => event.kind === "reauthorize").length,
+    1,
+  );
+
+  const competingReceipt = await check();
+  fingerprint = "next-policy";
+  await second.checks.transitionPolicy("host", 1, 2, fingerprint);
+  await assert.rejects(
+    first.enrollment.reauthorize("host", {
+      ...request,
+      receiptId: competingReceipt.receiptId,
+      idempotencyKey: "uncommitted-earlier-generation",
+    }),
+    /PdsEnrollmentConflict/,
+  );
+  assert.deepEqual(
+    await first.enrollment.reauthorize("host", winningRequest),
+    replayed,
+  );
+  assert.equal(
+    await placement.resolveAuthenticated("host", 1, policyFor),
+    undefined,
+  );
+});
+
 test("enable, grace, drain and guarded retirement retain audited CAS semantics", async (t) => {
   const { db, first } = await fixture(t);
   await onboard(first, "host");

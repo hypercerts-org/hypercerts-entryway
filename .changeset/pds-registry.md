@@ -14,6 +14,8 @@ An independent database-fenced sweep opens monitoring-stale incidents when a reg
 
 After associating a verified host, a global administrator can activate fresh registry serving and restart all nodes. Global-only lifecycle commands enable, drain and retire hosts; retirement refuses unresolved references. Staged hosts and host callback tokens do not gain administrator authority.
 
+After a verifier policy change for an associated host, global administrators can restore outbound authorization for the same revision with a fresh passing check and `scripts/pds-registry.mjs reauthorize`. The original association and account targets remain recorded. New placement requires health observations under the current policy.
+
 Global administrators can permanently revoke a stored inbound callback verifier for a specific host revision with `scripts/pds-registry.mjs revoke-callback`. Registry callback tokens do not yet authorize administrator routes.
 
 For an unchanged stock PDS, use a root HTTPS public URL. Entryway retains its canonical transport URL and signs the reference PDS origin as the exact PLC service endpoint. Existing saved offers and signed attempts retain their recorded facts.

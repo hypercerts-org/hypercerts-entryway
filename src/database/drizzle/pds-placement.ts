@@ -6,6 +6,7 @@ import type { DatabaseExecutor } from "../executor.js";
 import type { PdsHostRevision } from "../pds-registry.port.js";
 import type { PdsRegistryKeyring } from "../pds-registry-crypto.js";
 import type { PdsRegistryPublicTrust } from "../pds-registry-manifest.js";
+import { hasPdsPolicyEvidence } from "./pds-registry-enrollment.js";
 import { createPdsRegistry } from "./pds-registry.js";
 import { createPdsHealthStore } from "./pds-health.js";
 import { createPdsLifecycle } from "./pds-lifecycle.js";
@@ -260,13 +261,6 @@ export function createPdsPlacement(
         const [policy] = await db.read("pds_host_verifier_policies", {
           where: eq(db.tables.pds_host_verifier_policies.host_id, hostId),
         });
-        const [event] = await db.read("pds_host_enrollment_events", {
-          where: and(
-            eq(db.tables.pds_host_enrollment_events.host_id, hostId),
-            eq(db.tables.pds_host_enrollment_events.revision, version),
-            eq(db.tables.pds_host_enrollment_events.kind, "associate"),
-          ),
-        });
         if (
           !host ||
           host.association !== "associated" ||
@@ -274,39 +268,20 @@ export function createPdsPlacement(
           !revision ||
           !policy ||
           policy.revision !== version ||
-          !event ||
-          event.policy_generation !== policy.generation ||
           policy.fingerprint !== verifierPolicy(revision) ||
           policy.fingerprint !== actualPolicy(revision)
         )
           return undefined;
         const manifest = await registry.readManifest(hostId, version);
-        if (!manifest || manifest.fingerprint !== event.manifest_fingerprint)
-          return undefined;
-        let receipt: unknown;
-        try {
-          receipt = JSON.parse(event.receipt_snapshot);
-        } catch {
-          return undefined;
-        }
-        if (!receipt || typeof receipt !== "object") return undefined;
-        const evidence = receipt as Record<string, unknown>;
         if (
-          evidence.receiptId !== event.receipt_id ||
-          evidence.direction !== "entryway-to-pds" ||
-          evidence.verifierVersion !== 1 ||
-          evidence.publicDidOk !== true ||
-          evidence.internalDidOk !== true ||
-          evidence.publicMetadataOk !== true ||
-          evidence.internalMetadataOk !== true ||
-          evidence.adminAttempted !== true ||
-          evidence.adminOk !== true ||
-          evidence.revision !== version ||
-          evidence.verifierPolicyGeneration !== policy.generation ||
-          evidence.verifierPolicyFingerprint !== policy.fingerprint ||
-          evidence.manifestFingerprint !== event.manifest_fingerprint ||
-          evidence.generation !== event.generation ||
-          evidence.reason !== "ok"
+          !manifest ||
+          !(await hasPdsPolicyEvidence(
+            db,
+            hostId,
+            version,
+            manifest.fingerprint,
+            policy,
+          ))
         )
           return undefined;
         return {
