@@ -1369,3 +1369,82 @@ test("managed migration refuses changed verifier policy before contacting a PDS"
   );
   assert.deepEqual(f.state.calls, []);
 });
+
+for (const lifecycle of ["draining", "retired"])
+  test(`independent PLC signing stays available for a ${lifecycle} target while managed move refuses`, async (t) => {
+    const { createProtocolOperations } =
+      await import("../../dist/src/compose-protocol-operations.mjs");
+    const f = await fixture(t, { registryMode: true });
+    await f.registryLifecycle.transition(
+      "pds2",
+      "drain",
+      1,
+      1,
+      "drain-independent",
+    );
+    if (lifecycle === "retired") {
+      // The fixture keeps its synthetic account in key-value state. Remove it
+      // while establishing an otherwise empty target, then restore it for signing.
+      await f.db.delete("accounts", f.row.did);
+      await f.registryLifecycle.transition(
+        "pds2",
+        "retire",
+        1,
+        2,
+        "retire-independent",
+      );
+      await f.db.set("accounts", f.row.did, f.row);
+    }
+    f.config.betterAuthSecret = "fixture-secret-at-least-32-characters-long";
+    f.accounts.custody = createCustodyInventoryStorage(f.db);
+    let code;
+    const protocol = await createProtocolOperations({
+      db: f.db,
+      config: f.config,
+      accounts: f.accounts,
+      plcMail: {
+        async queueOtp(request) {
+          return {
+            async deliver() {
+              code = request.otp;
+            },
+          };
+        },
+      },
+    });
+    await protocol.requestPlcOperationSignature(f.row);
+    const { operation } = await protocol.signPlcOperation(f.row, {
+      token: code,
+      services: {
+        atproto_pds: {
+          type: "AtprotoPersonalDataServer",
+          endpoint: f.config.pds[1].url,
+        },
+      },
+    });
+    assert.equal(operation.services.atproto_pds.endpoint, f.config.pds[1].url);
+    assert.equal(
+      (await f.db.read("custody_history")).filter(
+        (event) => event.kind === "signed",
+      ).length,
+      1,
+    );
+    await assert.rejects(
+      f.migration.importAccount(f.actor, {
+        did: f.row.did,
+        pdsId: "pds2",
+        token: "migration-proof",
+      }),
+      lifecycle === "draining"
+        ? { error: "PdsLifecycleIneligible" }
+        : /PdsVerifierPolicyConflict/,
+    );
+    assert.equal(
+      f.state.calls.filter((call) => call.startsWith("pds2/")).length,
+      0,
+    );
+    assert.equal(
+      (await f.registryClient.readHost("pds2")).lifecycle,
+      lifecycle,
+    );
+  });

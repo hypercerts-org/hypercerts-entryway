@@ -50,6 +50,9 @@ await writeFile("/pds1-config/outbound-pds1.json", JSON.stringify(pdsRuntime), {
   mode: 0o600,
 });
 const origin = new URL(pds.url).origin;
+const second = pdsConfig.pds.find((item) => item.id === "pds2");
+if (!second) throw new Error("MissingSecondSandboxPds");
+const secondOrigin = new URL(second.url).origin;
 for (const [name, contents] of Object.entries({
   "bootstrap.json": config,
   "health-contacts.json": {
@@ -60,7 +63,7 @@ for (const [name, contents] of Object.entries({
   },
   "outbound-pds1.json": pdsConfig,
   "registry-keyring.json": keyring,
-  "registry-targets.json": { [origin]: [address] },
+  "registry-targets.json": { [origin]: [address], [secondOrigin]: [address] },
   "registry-targets-other.json": { [origin]: ["127.0.0.2"] },
 }))
   await writeFile(`/config/${name}`, JSON.stringify(contents), { mode: 0o600 });

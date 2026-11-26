@@ -19,3 +19,5 @@ Global administrators can permanently revoke a stored inbound callback verifier 
 For an unchanged stock PDS, use a root HTTPS public URL. Entryway retains its canonical transport URL and signs the reference PDS origin as the exact PLC service endpoint. Existing saved offers and signed attempts retain their recorded facts.
 
 Registry OAuth discovery advertises the exact checked protected-resource identifier for each associated host, including a staged profile's path where applicable. Staged profiles still require separate qualification before association.
+
+A newly completed registry signup no longer prevents associating or retiring an unrelated empty host when its retained signed genesis, placement and custody records can be mapped safely. Older signup records without the signed evidence remain blocked. Unrecognized or inconsistent records continue to block these operations.

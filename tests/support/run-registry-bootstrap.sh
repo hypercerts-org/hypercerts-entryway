@@ -23,7 +23,7 @@ compose build test
 compose run --rm --no-deps configure
 compose exec -T entryway-postgres createdb -U authority_owner "$REGISTRY_BOOTSTRAP_DATABASE"
 compose run --rm --no-deps --entrypoint node -e "REGISTRY_TEST_GATEWAY_IP=$gateway" configure tests/support/prepare-registry-bootstrap.mjs
-compose up -d --no-deps --wait bootstrap-a bootstrap-b pds1
+compose up -d --no-deps --wait bootstrap-a bootstrap-b pds1 pds2
 compose exec -T pds1 node tests/support/check-pds-config.mjs
 compose up -d --no-deps bootstrap-router
 compose up -d --no-deps --wait entryway-ingress
@@ -52,4 +52,4 @@ serving_compose up -d --no-deps --wait bootstrap-a bootstrap-b
 serving_compose run --rm --no-deps test node tests/atmosphere/registry-serving.mjs verify
 serving_compose up -d --no-deps --wait entryway-browser-client
 serving_compose build browser
-serving_compose run --rm --no-deps browser node tests/atmosphere/registry-serving-browser.mjs
+serving_compose run --rm --no-deps -e "REGISTRY_TEST_DATABASE_URL=postgresql://authority_owner@entryway-postgres/$REGISTRY_BOOTSTRAP_DATABASE" browser node tests/atmosphere/registry-serving-browser.mjs

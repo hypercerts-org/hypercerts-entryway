@@ -1,6 +1,7 @@
 import { and, eq, ne, or } from "drizzle-orm";
 import { isValidDid } from "@atproto/syntax";
 import type { DatabaseExecutor, TableName } from "../executor.js";
+import { assertCompletedSignupReferences } from "./pds-signup-reference-proof.js";
 import type {
   PdsHostConfiguration,
   PdsHostRevision,
@@ -305,6 +306,14 @@ export async function assertNoPdsHostReferences(
     )
       throw new Error("PdsEnrollmentReferencesExist");
   }
+  await assertCompletedSignupReferences(
+    db,
+    hostId,
+    identities,
+    endpoints,
+    canonicalDid,
+    canonicalEndpoint,
+  );
   // These tables contain identity and authentication state only; the account
   // rows above own their DID-to-host mapping. Every other product table remains
   // fail-closed until its retained host references have an explicit decoder.
@@ -318,21 +327,28 @@ export async function assertNoPdsHostReferences(
     "email_claims",
     "account_bindings",
     "backup_emails",
+    "key_value_state",
+    "pds_placement_reservations",
+    "authority_operations",
+    "operation_admissions",
+    "external_operation_attempts",
+    "custody_operations",
+    "custody_history",
+    "custody_observations",
+    "migration_custody_inventory",
   ]);
   for (const table of productTables) {
     if (!accountOnly.has(table) && (await db.read(table, { limit: 1 })).length)
       throw new Error("PdsEnrollmentReferencesUnmapped");
   }
-  if (
-    (
-      await db.read("mail_outbox", {
-        where: or(
-          ne(db.tables.mail_outbox.purpose, "pds-health"),
-          ne(db.tables.mail_outbox.message_kind, "admin"),
-        ),
-        limit: 1,
-      })
-    ).length
-  )
+  // Sign-in OTP mail belongs to the browser identity, independently of any
+  // PDS. Unknown mail purposes remain a conservative reference blocker.
+  for (const message of await db.read("mail_outbox")) {
+    if (
+      (message.purpose === "pds-health" && message.message_kind === "admin") ||
+      (message.purpose === "sign-in" && message.message_kind === "otp")
+    )
+      continue;
     throw new Error("PdsEnrollmentReferencesUnmapped");
+  }
 }
