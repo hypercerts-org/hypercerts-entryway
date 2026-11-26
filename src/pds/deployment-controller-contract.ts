@@ -66,6 +66,17 @@ export const controllerBindingSchema = z.strictObject({
   signature,
 });
 export type ControllerBinding = z.infer<typeof controllerBindingSchema>;
+export const controllerBindingExpectationSchema = controllerBindingSchema.pick({
+  issuer: true,
+  audience: true,
+  nonce: true,
+  controllerEpoch: true,
+  deploymentId: true,
+  hostId: true,
+  revision: true,
+  serviceDid: true,
+  publicEndpoint: true,
+});
 
 /** Stable authority identifies the fleet, not a particular rotating worker credential. */
 export const controllerRouteRequestSchema = z.strictObject({
