@@ -754,11 +754,14 @@ test("registration uses real registry reservation and pinned host for both targe
     await import("../../dist/src/database/drizzle/pds-placement.js");
   const { Secp256k1Keypair } = await import("@atproto/crypto");
   const verifier = {
-    targets: new Map([["https://host.example", ["127.0.0.1"]]]),
+    targets: new Map([
+      ["https://host.example", ["127.0.0.1"]],
+      ["https://second.example", ["127.0.0.1"]],
+    ]),
     ca: Buffer.from("fixture"),
   };
   const policyFor = (revision) => pdsVerifierPolicy(revision, verifier);
-  const { db, first, trust } = await fixture(
+  const { db, first, second, trust } = await fixture(
     t,
     "registry-bootstrap",
     policyFor,
@@ -833,6 +836,91 @@ test("registration uses real registry reservation and pinned host for both targe
   assert.equal(
     (await db.read("pds_placement_reservations"))[0].state,
     "dispatched",
+  );
+  const { createAuthorityPhase } =
+    await import("../../dist/src/database/drizzle/authority-phase.js");
+  const { assertNoPdsHostReferences } =
+    await import("../../dist/src/database/drizzle/pds-registry-enrollment-guard.js");
+  await createAuthorityPhase(db, first.lifecycle, async () => {}).activate(
+    1,
+    "serve-after-signup",
+  );
+  await onboard(second, "second");
+  await db.transact(() => assertNoPdsHostReferences(db, "second"));
+  const [accountRow] = await db.read("accounts");
+  const accountData = JSON.parse(accountRow.data);
+  for (const changed of [
+    { ...accountData, op: { conflicting: true } },
+    { ...accountData, pdsRevision: 2 },
+    { ...accountData, pdsUrl: "https://other.example/" },
+  ]) {
+    await assert.rejects(
+      db.transact(async () => {
+        await db.update(
+          "accounts",
+          { data: JSON.stringify(changed) },
+          eq(db.tables.accounts.did, row.did),
+        );
+        await assert.rejects(
+          assertNoPdsHostReferences(db, "second"),
+          /PdsEnrollmentReferencesUnmapped/,
+        );
+        throw Error("rollback-account-corruption");
+      }),
+      /rollback-account-corruption/,
+    );
+  }
+  await assert.rejects(
+    db.transact(async () => {
+      await db.delete("registration:host-references", row.did);
+      await assert.rejects(
+        assertNoPdsHostReferences(db, "second"),
+        /PdsEnrollmentReferencesUnmapped/,
+      );
+      throw Error("rollback-missing-reference");
+    }),
+    /rollback-missing-reference/,
+  );
+  await assert.rejects(
+    db.transact(() => assertNoPdsHostReferences(db, "host")),
+    /PdsEnrollmentReferencesExist/,
+  );
+  await assert.rejects(
+    db.transact(async () => {
+      await db.set("unclassified-workflow", "unknown", {});
+      await assert.rejects(
+        assertNoPdsHostReferences(db, "second"),
+        /PdsEnrollmentReferencesUnmapped/,
+      );
+      throw Error("rollback-unknown");
+    }),
+    /rollback-unknown/,
+  );
+  await assert.rejects(
+    db.transact(async () => {
+      await db.execute(
+        sql`UPDATE custody_operations SET operation = '{}'`,
+        "run",
+      );
+      await assert.rejects(
+        assertNoPdsHostReferences(db, "second"),
+        /PdsEnrollmentReferencesUnmapped/,
+      );
+      throw Error("rollback-corruption");
+    }),
+    /rollback-corruption/,
+  );
+  assert.equal(
+    (
+      await second.lifecycle.transition(
+        "second",
+        "retire",
+        1,
+        0,
+        "retire-second",
+      )
+    ).lifecycle,
+    "retired",
   );
 });
 
@@ -2197,4 +2285,31 @@ test("retirement rejects a conflicting extra authority phase marker", async (t) 
   );
   assert.equal((await first.registry.readHost("host")).lifecycle, "disabled");
   assert.equal((await db.read("pds_host_lifecycle_events")).length, 0);
+});
+
+test("host proof ignores only browser sign-in OTP delivery", async (t) => {
+  const { assertNoPdsHostReferences } =
+    await import("../../dist/src/database/drizzle/pds-registry-enrollment-guard.js");
+  const { db, first } = await fixture(t);
+  await onboard(first, "candidate");
+  await db.insert("mail_outbox", {
+    id: "browser-otp",
+    recipient: "fixture@example.test",
+    purpose: "sign-in",
+    message_kind: "otp",
+    code: "fixture",
+    state: "queued",
+    created_at: 1,
+    expires_at: 100,
+    attempt_count: 0,
+    next_attempt_at: 1,
+    claim_version: 0,
+    delivery_uncertain: false,
+  });
+  await db.transact(() => assertNoPdsHostReferences(db, "candidate"));
+  await db.update("mail_outbox", { purpose: "unknown" });
+  await assert.rejects(
+    db.transact(() => assertNoPdsHostReferences(db, "candidate")),
+    /PdsEnrollmentReferencesUnmapped/,
+  );
 });

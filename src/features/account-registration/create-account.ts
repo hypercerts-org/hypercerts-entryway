@@ -604,6 +604,21 @@ export function createRegistration({
       await db.transact(async () => {
         await storage.insertAccount(row!);
         await ownership.bindResource(row!.did);
+        if (reservation) {
+          // Preserve the original public signed genesis and exact placement for
+          // later host-reference proofs. Never overwrite existing evidence.
+          if (await db.get("registration:host-references", row!.did))
+            throw new Error("RegistrationReferenceConflict");
+          await db.set("registration:host-references", row!.did, {
+            operationId,
+            did: row!.did,
+            hostId: reservation.host_id,
+            revision: reservation.revision,
+            publicTarget: reservation.public_target,
+            internalTarget: reservation.target,
+            signedGenesis: op,
+          });
+        }
         // Persist genesis and its authorization history before dispatch so a
         // retry keeps the same DID and signed operation.
         await custody.recordSigned({
