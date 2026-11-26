@@ -104,7 +104,7 @@ export ENTRYWAY_TEST_GATEWAY_NETWORK_OVERLAY="$private/network.yaml"
 node "$helper" launch "$project" "$sandbox"
 node "$helper" verify "$project" "$sandbox"
 image=$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1])).toolImage' "$launch/state.json")
-docker --context "$DOCKER_CONTEXT" run --rm --network none --mount "type=bind,src=$root/tests/atmosphere,dst=/app/tests/atmosphere,readonly" --mount "type=bind,src=$root/dist/src/pds/deployment-controller-contract.js,dst=/app/dist/src/pds/deployment-controller-contract.js,readonly" --workdir /app --entrypoint node "$image" --test tests/atmosphere/controller-gate-store.test.mjs
+docker --context "$DOCKER_CONTEXT" run --rm --network none --mount "type=bind,src=$root/tests/atmosphere,dst=/app/tests/atmosphere,readonly" --mount "type=bind,src=$root/dist/src/pds/deployment-controller-contract.js,dst=/app/dist/src/pds/deployment-controller-contract.js,readonly" --workdir /app --entrypoint node "$image" --test tests/atmosphere/controller-gate-store.test.mjs tests/atmosphere/controller-lease-fixture.test.mjs
 origin=$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1])).containerId' "$launch/state.json")
 address=$(docker --context "$DOCKER_CONTEXT" inspect --format "{{(index .NetworkSettings.Networks \"$network\").IPAddress}}" "$origin")
 count=$(docker --context "$DOCKER_CONTEXT" inspect --format '{{len .NetworkSettings.Networks}}' "$origin")

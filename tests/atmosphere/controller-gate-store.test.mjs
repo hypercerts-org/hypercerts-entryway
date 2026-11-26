@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +8,7 @@ import test from "node:test";
 import { Worker } from "node:worker_threads";
 import { openControllerGate } from "./controller-gate-store.mjs";
 
+const qualified = () => true;
 const digest = (character) => `sha256:${character.repeat(64)}`;
 const binding = {
   deploymentId: "deployment",
@@ -406,6 +408,172 @@ test("concurrent different attempts for one operation have one admission", async
     assert.equal(Atomics.load(shared, 2), 1);
   } finally {
     await Promise.all(workers.map((worker) => worker.terminate()));
+    gate.close();
+    item.cleanup();
+  }
+});
+
+test("fixture leases are idempotent, request-bound and stored only as digests", () => {
+  const item = fixture();
+  let monotonic = 1_000_000_000n;
+  const gate = openControllerGate(item.path, {
+    binding,
+    monotonic: () => monotonic,
+    wallClock: () => 10_000,
+  });
+  const peer = openControllerGate(item.path, { monotonic: () => monotonic });
+  try {
+    const input = request(gate.snapshot());
+    assert.throws(() => gate.acquire(input, 1000), /ControllerUnqualified/);
+    assert.throws(
+      () => gate.acquire(input, 30_001, qualified),
+      /InvalidControllerLease/,
+    );
+    const lease = gate.acquire(input, 1000, qualified);
+    assert.throws(
+      () => gate.admitLeased(input, lease.capability, 0),
+      /ControllerUnqualified/,
+    );
+    assert.deepEqual(gate.acquire(input, 1000, qualified), lease);
+    assert.throws(
+      () => gate.acquire(input, 999, qualified),
+      /ControllerLeaseConflict/,
+    );
+    assert.throws(
+      () =>
+        gate.acquire({ ...input, intentDigest: digest("c") }, 1000, qualified),
+      /ControllerLeaseConflict/,
+    );
+    assert.throws(
+      () => peer.admitLeased(input, "A".repeat(43), 0, qualified),
+      /ControllerLeaseMismatch/,
+    );
+    assert.throws(
+      () =>
+        peer.admitLeased(
+          { ...input, callerId: "other" },
+          lease.capability,
+          0,
+          qualified,
+        ),
+      /ControllerLeaseMismatch/,
+    );
+    assert.throws(
+      () =>
+        peer.admitLeased(
+          { ...input, hostId: "other" },
+          lease.capability,
+          0,
+          qualified,
+        ),
+      /ControllerBindingChanged/,
+    );
+    monotonic += 100_000_000n;
+    assert.deepEqual(peer.admitLeased(input, lease.capability, 0, qualified), {
+      state: "admitted",
+    });
+    assert.deepEqual(peer.admitLeased(input, lease.capability, 0, qualified), {
+      state: "hold",
+    });
+    const inspect = new DatabaseSync(item.path, { readOnly: true });
+    try {
+      assert.equal(
+        JSON.stringify(
+          inspect.prepare("SELECT * FROM route_leases").all(),
+        ).includes(lease.capability),
+        false,
+      );
+    } finally {
+      inspect.close();
+    }
+  } finally {
+    peer.close();
+    gate.close();
+    item.cleanup();
+  }
+});
+
+test("fixture lease expiry uses monotonic time and release is idempotent after freeze", () => {
+  const item = fixture();
+  let monotonic = 1_000_000_000n;
+  let wall = 10_000;
+  const gate = openControllerGate(item.path, {
+    binding,
+    monotonic: () => monotonic,
+    wallClock: () => wall,
+  });
+  try {
+    const input = request(gate.snapshot());
+    const lease = gate.acquire(input, 1000, qualified);
+    wall -= 5000;
+    monotonic += 999_000_000n;
+    assert.throws(
+      () => gate.admitLeased(input, lease.capability, 2, qualified),
+      /ControllerLeaseExpired/,
+    );
+    monotonic += 1_000_000n;
+    assert.throws(
+      () => gate.admitLeased(input, lease.capability, 0, qualified),
+      /ControllerLeaseExpired/,
+    );
+    const second = { ...input, operationId: "other", requestKey: "other" };
+    const secondLease = gate.acquire(second, 1000, qualified);
+    gate.freeze(gate.snapshot().generation, gate.snapshot().epoch);
+    assert.throws(
+      () => gate.admitLeased(second, secondLease.capability, 0, qualified),
+      /ControllerAdmissionClosed/,
+    );
+    gate.release(second, secondLease.capability);
+    gate.release(second, secondLease.capability);
+  } finally {
+    gate.close();
+    item.cleanup();
+  }
+});
+
+test("restart invalidates fixture leases even when the binding is unchanged", () => {
+  const item = fixture();
+  let gate = openControllerGate(item.path, { binding });
+  try {
+    const input = request(gate.snapshot());
+    const lease = gate.acquire(input, 1000, qualified);
+    gate.close();
+    gate = openControllerGate(item.path, { binding });
+    assert.throws(
+      () => gate.admitLeased(input, lease.capability, 0, qualified),
+      /ControllerBindingChanged/,
+    );
+    assert.throws(
+      () => gate.release(input, lease.capability),
+      /ControllerBindingChanged/,
+    );
+    const next = { ...input, controllerEpoch: gate.snapshot().epoch };
+    assert.throws(
+      () => gate.admitLeased(next, lease.capability, 0, qualified),
+      /ControllerLeaseMismatch/,
+    );
+  } finally {
+    gate.close();
+    item.cleanup();
+  }
+});
+
+test("fixture lease accepts exactly the required monotonic admission budget", () => {
+  const item = fixture();
+  let monotonic = 1_000_000_000n;
+  const gate = openControllerGate(item.path, {
+    binding,
+    monotonic: () => monotonic,
+    wallClock: () => 10_000,
+  });
+  try {
+    const input = request(gate.snapshot());
+    const lease = gate.acquire(input, 1000, qualified);
+    monotonic += 998_000_000n;
+    assert.deepEqual(gate.admitLeased(input, lease.capability, 2, qualified), {
+      state: "admitted",
+    });
+  } finally {
     gate.close();
     item.cleanup();
   }

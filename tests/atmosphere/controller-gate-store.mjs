@@ -1,5 +1,11 @@
 // Controller-local AiaB state. This module does not authenticate callers or grant leases.
-import { randomUUID } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
   controllerBindingSchema,
@@ -65,7 +71,11 @@ export function openControllerGate(path, options = {}) {
   const db = new DatabaseSync(path, { timeout: 10_000 });
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=10000;
     CREATE TABLE IF NOT EXISTS controller_state (id INTEGER PRIMARY KEY CHECK(id=1), generation INTEGER NOT NULL, epoch TEXT NOT NULL, binding TEXT NOT NULL, frozen INTEGER NOT NULL, recovery INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS dispatch_attempts (authority TEXT NOT NULL, operation TEXT NOT NULL, attempt TEXT NOT NULL, immutable TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('pending','uncertain','completed')), result_digest TEXT, PRIMARY KEY(authority,operation,attempt));`);
+    CREATE TABLE IF NOT EXISTS dispatch_attempts (authority TEXT NOT NULL, operation TEXT NOT NULL, attempt TEXT NOT NULL, immutable TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('pending','uncertain','completed')), result_digest TEXT, PRIMARY KEY(authority,operation,attempt));
+    CREATE TABLE IF NOT EXISTS route_leases (authority TEXT NOT NULL, caller TEXT NOT NULL, request_key TEXT NOT NULL, request TEXT NOT NULL, token_hash TEXT NOT NULL, expires_mono TEXT NOT NULL, issued_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, released INTEGER NOT NULL, PRIMARY KEY(authority,caller,request_key));`);
+  const epochSecret = options.binding ? randomBytes(32) : null;
+  const monotonic = options.monotonic ?? (() => process.hrtime.bigint());
+  const wallClock = options.wallClock ?? Date.now;
   const state = () =>
     db.prepare("SELECT * FROM controller_state WHERE id=1").get();
   const lookup = (request) =>
@@ -114,6 +124,89 @@ export function openControllerGate(path, options = {}) {
       throw error;
     }
   }
+  const assertBinding = (request, requireOpen = true) => {
+    const current = state();
+    if (!current || (requireOpen && (current.frozen || current.recovery)))
+      throw Error("ControllerAdmissionClosed");
+    const [deployment, host, revision, incarnation] = JSON.parse(
+      current.binding,
+    );
+    if (
+      request.controllerEpoch !== current.epoch ||
+      request.generation !== current.generation ||
+      request.deploymentId !== deployment ||
+      request.hostId !== host ||
+      request.revision !== revision ||
+      request.incarnation !== incarnation
+    )
+      throw Error("ControllerBindingChanged");
+  };
+  const leaseRow = (request) =>
+    db
+      .prepare(
+        "SELECT * FROM route_leases WHERE authority=? AND caller=? AND request_key=?",
+      )
+      .get(request.authorityId, request.callerId, request.requestKey);
+  const requestBytes = (request) => JSON.stringify(request);
+  const tokenHash = (token) => createHash("sha256").update(token).digest();
+  const tokenFor = (request) =>
+    createHmac("sha256", epochSecret)
+      .update(requestBytes(request))
+      .digest("base64url");
+  const authorizeLease = (
+    request,
+    token,
+    minimumBudgetMs,
+    allowExpired = false,
+  ) => {
+    const row = leaseRow(request);
+    if (
+      !row ||
+      row.request !== requestBytes(request) ||
+      typeof token !== "string" ||
+      !/^[A-Za-z0-9_-]{43}$/.test(token)
+    )
+      throw Error("ControllerLeaseMismatch");
+    const expected = Buffer.from(row.token_hash, "hex");
+    const actual = tokenHash(token);
+    if (expected.length !== actual.length || !timingSafeEqual(expected, actual))
+      throw Error("ControllerLeaseMismatch");
+    if (
+      !allowExpired &&
+      (row.released ||
+        BigInt(row.expires_mono) - monotonic() <
+          BigInt(minimumBudgetMs) * 1_000_000n ||
+        BigInt(row.expires_mono) <= monotonic())
+    )
+      throw Error("ControllerLeaseExpired");
+    return row;
+  };
+  const admitWithin = (request) => {
+    const prior = lookup(request);
+    if (prior) {
+      if (prior.immutable !== immutable(request))
+        throw Error("ControllerAttemptConflict");
+      return prior.state === "completed"
+        ? { state: "completed", resultDigest: prior.result_digest }
+        : { state: "hold" };
+    }
+    const unresolved = db
+      .prepare(
+        "SELECT 1 FROM dispatch_attempts WHERE authority=? AND operation=? AND (state != 'completed' OR immutable=?) LIMIT 1",
+      )
+      .get(request.authorityId, request.operationId, immutable(request));
+    if (unresolved) return { state: "hold" };
+    assertBinding(request);
+    db.prepare(
+      "INSERT INTO dispatch_attempts(authority,operation,attempt,immutable,state) VALUES(?,?,?,?, 'pending')",
+    ).run(
+      request.authorityId,
+      request.operationId,
+      request.attemptId,
+      immutable(request),
+    );
+    return { state: "admitted" };
+  };
   return {
     snapshot() {
       const current = state();
@@ -125,49 +218,102 @@ export function openControllerGate(path, options = {}) {
         recoveryRequired: Boolean(current.recovery),
       };
     },
-    // The caller must authenticate the caller and validate a live, incarnation-bound lease before invoking this method.
-    admit(value) {
+    // Test-only primitive: the surrounding controller must authenticate and qualify the caller.
+    acquire(value, lifetimeMs, qualificationCheck) {
       const request = controllerRouteRequestSchema.parse(value);
+      if (
+        !epochSecret ||
+        !Number.isSafeInteger(lifetimeMs) ||
+        lifetimeMs < 1 ||
+        lifetimeMs > 30_000
+      )
+        throw Error("InvalidControllerLease");
       return transaction(db, () => {
-        const prior = lookup(request);
-        if (prior) {
-          if (prior.immutable !== immutable(request))
-            throw Error("ControllerAttemptConflict");
-          return prior.state === "completed"
-            ? { state: "completed", resultDigest: prior.result_digest }
-            : { state: "hold" };
-        }
-        const unresolved = db
-          .prepare(
-            "SELECT 1 FROM dispatch_attempts WHERE authority=? AND operation=? AND (state != 'completed' OR immutable=?) LIMIT 1",
-          )
-          .get(request.authorityId, request.operationId, immutable(request));
-        if (unresolved) return { state: "hold" };
-        const current = state();
-        if (!current || current.frozen || current.recovery)
-          throw Error("ControllerAdmissionClosed");
-        const [deployment, host, revision, incarnation] = JSON.parse(
-          current.binding,
-        );
+        assertBinding(request);
         if (
-          request.controllerEpoch !== current.epoch ||
-          request.generation !== current.generation ||
-          request.deploymentId !== deployment ||
-          request.hostId !== host ||
-          request.revision !== revision ||
-          request.incarnation !== incarnation
+          typeof qualificationCheck !== "function" ||
+          qualificationCheck(request) !== true
         )
-          throw Error("ControllerBindingChanged");
+          throw Error("ControllerUnqualified");
+        const existing = leaseRow(request);
+        const token = tokenFor(request);
+        if (existing) {
+          if (
+            existing.request !== requestBytes(request) ||
+            existing.expires_at - existing.issued_at !== lifetimeMs ||
+            existing.token_hash !== tokenHash(token).toString("hex")
+          )
+            throw Error("ControllerLeaseConflict");
+          if (existing.released || BigInt(existing.expires_mono) <= monotonic())
+            throw Error("ControllerLeaseExpired");
+          return {
+            ...request,
+            capability: token,
+            issuedAt: existing.issued_at,
+            expiresAt: existing.expires_at,
+          };
+        }
+        const issuedAt = wallClock();
+        if (
+          !Number.isSafeInteger(issuedAt) ||
+          issuedAt < 0 ||
+          !Number.isSafeInteger(issuedAt + lifetimeMs)
+        )
+          throw Error("InvalidControllerClock");
+        const expiresMono = monotonic() + BigInt(lifetimeMs) * 1_000_000n;
         db.prepare(
-          "INSERT INTO dispatch_attempts(authority,operation,attempt,immutable,state) VALUES(?,?,?,?, 'pending')",
+          "INSERT INTO route_leases(authority,caller,request_key,request,token_hash,expires_mono,issued_at,expires_at,released) VALUES(?,?,?,?,?,?,?,?,0)",
         ).run(
           request.authorityId,
-          request.operationId,
-          request.attemptId,
-          immutable(request),
+          request.callerId,
+          request.requestKey,
+          requestBytes(request),
+          tokenHash(token).toString("hex"),
+          expiresMono.toString(),
+          issuedAt,
+          issuedAt + lifetimeMs,
         );
-        return { state: "admitted" };
+        return {
+          ...request,
+          capability: token,
+          issuedAt,
+          expiresAt: issuedAt + lifetimeMs,
+        };
       });
+    },
+    release(value, capability) {
+      const request = controllerRouteRequestSchema.parse(value);
+      return transaction(db, () => {
+        assertBinding(request, false);
+        authorizeLease(request, capability, 0, true);
+        db.prepare(
+          "UPDATE route_leases SET released=1 WHERE authority=? AND caller=? AND request_key=?",
+        ).run(request.authorityId, request.callerId, request.requestKey);
+      });
+    },
+    admitLeased(value, capability, minimumBudgetMs, qualificationCheck) {
+      const request = controllerRouteRequestSchema.parse(value);
+      if (
+        !Number.isSafeInteger(minimumBudgetMs) ||
+        minimumBudgetMs < 0 ||
+        minimumBudgetMs > 30_000
+      )
+        throw Error("InvalidControllerLease");
+      return transaction(db, () => {
+        assertBinding(request);
+        if (
+          typeof qualificationCheck !== "function" ||
+          qualificationCheck(request) !== true
+        )
+          throw Error("ControllerUnqualified");
+        authorizeLease(request, capability, minimumBudgetMs);
+        return admitWithin(request);
+      });
+    },
+    // This primitive remains internal to the fixture; production callers must validate a lease.
+    admit(value) {
+      const request = controllerRouteRequestSchema.parse(value);
+      return transaction(db, () => admitWithin(request));
     },
     uncertain(value) {
       const request = controllerRouteRequestSchema.parse(value);
