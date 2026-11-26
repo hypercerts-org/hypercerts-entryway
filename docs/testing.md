@@ -144,6 +144,10 @@ suite does not establish.
 
 Run `./tests/local.sh incoming-late-cutover` to create and remove a disposable project. Its first managed PDS is built from the pinned #5831 upstream source. The standalone source runs the normal sandbox image. The browser verifies the destination email and uses the public Entryway and PDS endpoints to migrate two new accounts. Both check the source DID and PLC history during import, a source write caught up by revision, the single final migration operation, destination sign-in and write, and source deactivation. One account changes its handle at the source, reapproves the new PLC head, and retires its source keys through Entryway. The other submits through the destination PDS and keeps its original keys. A separate signup checks ordinary registration on the same PDS. The phase log is under `tests/artifacts/`.
 
+Contributors testing controller-owned launch inputs can use a separate disposable staged sandbox. Set `SANDBOX_PROJECT` to a unique `hypercerts-entryway-...` name, set `SANDBOX_CHECKOUT` to its own directory under `tests/.runtime/`, and export `ENTRYWAY_LATE_CUTOVER=1`. Run `./tests/local.sh prepare`, `./tests/local.sh up`, and `./tests/local.sh controller-launch` in that order. The test recreates the staged PDS and checks that it refuses a configuration changed between the host check and startup. It also checks for stale inputs, restart, and replacement. Staged migration qualification and gateway continuity have separate gates.
+
+The controller launch test recreates the original destination and removes its private credential-bearing input and MAC key volumes on exit. If interrupted, release the overlay mount by recreating the original destination using only the sandbox's base Compose file or by running `./tests/local.sh down` for that project. Then run `node tests/support/controller-launch.mjs cleanup "$SANDBOX_PROJECT" "$SANDBOX_CHECKOUT"`. Cleanup checks each volume's exact project label, controller role, and generated name before removing it.
+
 ### Incoming migration targets
 
 Four `tests/local.sh` targets run incoming migration through Entryway's public
