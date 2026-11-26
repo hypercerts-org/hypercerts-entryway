@@ -11,6 +11,7 @@ const lateCutover = process.env.INCOMING_LATE_CUTOVER === "1";
 // The same journey on the two-node PostgreSQL profile, once per node order, is
 // selected only by `./tests/local.sh incoming-two-node`. One-off evidence, not
 // a CI gate.
+const crossEntryIncomingFirst = process.env.CROSS_ENTRY_INCOMING_FIRST === "1";
 const twoNode = process.env.INCOMING_TWO_NODE === "1";
 const lifecycleTwoNode = process.env.ACCOUNT_LIFECYCLE_TWO_NODE === "1";
 // The goat journey is selected only by `./tests/local.sh incoming-goat-journey`.
@@ -49,6 +50,7 @@ if (
 // Every preparation flow displays the one-time arrival code. Do not copy
 // their DOM into failure reports.
 if (
+  crossEntryIncomingFirst ||
   lateCutover ||
   incomingJourney ||
   twoNode ||
@@ -81,6 +83,11 @@ const selected = [
     lifecycleTwoNode,
     "account-lifecycle-two-node",
     "account-lifecycle-two-node.spec.mjs",
+  ],
+  [
+    crossEntryIncomingFirst,
+    "cross-entry-incoming-first",
+    "cross-entry-incoming-first.spec.mjs",
   ],
   [twoNode, "incoming-two-node", "incoming-public-journey.spec.mjs"],
   [
