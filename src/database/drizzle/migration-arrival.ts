@@ -15,6 +15,7 @@ import {
   sql,
 } from "drizzle-orm";
 import { DomainError } from "../../accounts/errors.js";
+import { createActiveDidTransferStore } from "./active-did-transfer.js";
 import { normalizeEmail } from "../../accounts/rules.js";
 import type { ArrivalTransactor } from "../migration-journal.port.js";
 import type { OperationClaim } from "../operation-ownership.port.js";
@@ -302,6 +303,17 @@ export function createArrivalStorage(
     stagedIncomingMigration: boolean;
   }>,
 ): ArrivalTransactor {
+  const transfers = createActiveDidTransferStore(db);
+  const claimTransfer = async (did: string, operationId: string) => {
+    if (
+      !(await transfers.claim({ did, operationId, transferKind: "incoming" }))
+    )
+      throw new DomainError(
+        "OperationConflict",
+        409,
+        "Another transfer already claims this DID",
+      );
+  };
   const table = db.tables.arrivals;
   const codeTable = db.tables.arrival_code;
   const reservationTable = db.tables.arrival_reservations;
@@ -1210,6 +1222,7 @@ export function createArrivalStorage(
             if (saved.claim_operation_id === owner.operationId) {
               // A retry is settled only for the current fence and admission.
               await assertAdmission(owner, saved.did);
+              await claimTransfer(saved.did, saved.operation_id);
               return {
                 kind: "already-settled" as const,
                 version: saved.version,
@@ -1232,6 +1245,7 @@ export function createArrivalStorage(
             saved.handle,
             saved.operation_id,
           );
+          await claimTransfer(saved.did, saved.operation_id);
           try {
             return {
               kind: "applied" as const,
@@ -1991,7 +2005,16 @@ export function createArrivalStorage(
             "Activation requires observed backend evidence for this arrival",
           );
         return db.withOperationFence(input.owner, async () => {
-          if ((await reservation(input.operationId))?.uncertain_reason)
+          const attempts = await db.read("arrival_attempts", {
+            where: eq(
+              db.tables.arrival_attempts.operation_id,
+              input.operationId,
+            ),
+          });
+          if (
+            (await reservation(input.operationId))?.uncertain_reason ||
+            attempts.some((attempt) => attempt.reason.startsWith("external:"))
+          )
             throw recoveryRequired();
           const account = (await authority.readAccount(input.did)) as {
             email?: unknown;
@@ -2028,6 +2051,14 @@ export function createArrivalStorage(
           // After the arrival is no longer active, so the authority's pending
           // arrival guard passes; any failure rolls back the whole completion.
           await authority.activatePlacedAccount(input.did);
+          if (
+            !(await transfers.release({
+              did: saved.did,
+              operationId: saved.operation_id,
+              transferKind: "incoming",
+            }))
+          )
+            throw versionConflict();
           return { kind: "applied" as const, version: saved.version + 1 };
         });
       });
