@@ -505,6 +505,7 @@ async function fixture(
     state,
     security,
     rotation,
+    sourceKey,
     targetKey,
     registryLifecycle,
     registryClient,
@@ -616,6 +617,7 @@ for (const method of ["signManagedMove", "signManagedRepair"])
       `migrate:${f.row.did}`,
     );
     assert.deepEqual(journal.plcOp, retained);
+    assert.equal(journal.sourceSigningKey, f.sourceKey.did());
     assert.equal(journal.plcOpCid, String(await cidForCbor(retained)));
     assert.equal(
       f.state.calls.filter(
@@ -909,6 +911,29 @@ test("lost empty-write response is acknowledged only after complete snapshot and
     1,
   );
   assert.equal(await f.targetSignatureValid(), true);
+});
+
+test("recovery refuses a snapshot when its saved predecessor key does not verify it", async (t) => {
+  const f = await fixture(t);
+  f.state.failures.set("before-empty-write", true);
+  await assert.rejects(
+    f.migration.importAccount(f.actor, {
+      did: f.row.did,
+      pdsId: "pds2",
+      token: "migration-proof",
+    }),
+  );
+  const id = `migrate:${f.row.did}`;
+  const journal = await f.db.get("migration:operations", id);
+  assert.equal(journal.sourceSigningKey, f.sourceKey.did());
+  await f.db.set("migration:operations", id, {
+    ...journal,
+    sourceSigningKey: f.targetKey.did(),
+  });
+  await f.reopen();
+  await f.recover("retry-if-safe");
+  assert.equal((await f.migration.reconcile())[0].status, "pending");
+  assert.equal((await f.accounts.get(f.row.did)).pdsId, "pds1");
 });
 
 test("verified empty-write replay records replay-safe history and signs the unchanged saved snapshot", async (t) => {
