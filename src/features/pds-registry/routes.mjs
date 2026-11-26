@@ -336,6 +336,37 @@ export function mountPdsRegistryRoutes({
     );
   }
   app.post(
+    "/admin/pds-registry/hosts/:hostId/reauthorize",
+    guarded(async (req, res) => {
+      if (!enrollment)
+        throw new HttpError(
+          409,
+          "OperationConflict",
+          "Registry enrollment is not available in this authority mode",
+        );
+      const body = req.body;
+      if (
+        !record(body, [
+          "revision",
+          "policyGeneration",
+          "receiptId",
+          "idempotencyKey",
+        ]) ||
+        !Number.isSafeInteger(body.revision) ||
+        body.revision < 1 ||
+        !Number.isSafeInteger(body.policyGeneration) ||
+        body.policyGeneration < 1 ||
+        typeof body.receiptId !== "string" ||
+        !/^[0-9a-f-]{36}$/.test(body.receiptId) ||
+        typeof body.idempotencyKey !== "string" ||
+        !body.idempotencyKey ||
+        body.idempotencyKey.length > 128
+      )
+        throw invalid();
+      res.json(await enrollment.reauthorize(req.params.hostId, body));
+    }),
+  );
+  app.post(
     "/admin/pds-registry/hosts",
     guarded(async (req, res) => {
       if (!keyring)

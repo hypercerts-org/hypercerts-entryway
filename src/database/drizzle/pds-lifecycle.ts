@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, eq } from "drizzle-orm";
+import { hasPdsPolicyEvidence } from "./pds-registry-enrollment.js";
 import type { DatabaseExecutor, StoredRow } from "../executor.js";
 import type { PdsLifecycleStore } from "../pds-lifecycle.port.js";
 import type { PdsHealthStore } from "../pds-health.port.js";
@@ -27,7 +28,6 @@ export function createPdsLifecycle(
 ): PdsLifecycleStore {
   const hosts = db.tables.pds_hosts,
     policies = db.tables.pds_host_verifier_policies,
-    enrollment = db.tables.pds_host_enrollment_events,
     commands = db.tables.pds_host_lifecycle_events;
   async function requireMode() {
     const modes = await db.read("authority_mode");
@@ -66,44 +66,13 @@ export function createPdsLifecycle(
       policy.fingerprint !== verifierPolicy(revision)
     )
       return false;
-    const [association] = await db.read("pds_host_enrollment_events", {
-      where: and(
-        eq(enrollment.host_id, row.id),
-        eq(enrollment.kind, "associate"),
-        eq(enrollment.revision, row.active_revision),
-      ),
-      limit: 1,
-    });
-    if (
-      !association ||
-      association.manifest_fingerprint !== saved.fingerprint ||
-      association.policy_generation !== policy.generation
-    )
-      return false;
-    try {
-      const receipt: unknown = JSON.parse(association.receipt_snapshot);
-      if (!receipt || typeof receipt !== "object") return false;
-      const evidence = receipt as Record<string, unknown>;
-      return (
-        evidence.receiptId === association.receipt_id &&
-        evidence.direction === "entryway-to-pds" &&
-        evidence.verifierVersion === 1 &&
-        evidence.generation === association.generation &&
-        evidence.revision === row.active_revision &&
-        evidence.manifestFingerprint === saved.fingerprint &&
-        evidence.verifierPolicyGeneration === policy.generation &&
-        evidence.verifierPolicyFingerprint === policy.fingerprint &&
-        evidence.reason === "ok" &&
-        evidence.publicDidOk === true &&
-        evidence.internalDidOk === true &&
-        evidence.publicMetadataOk === true &&
-        evidence.internalMetadataOk === true &&
-        evidence.adminAttempted === true &&
-        evidence.adminOk === true
-      );
-    } catch {
-      return false;
-    }
+    return hasPdsPolicyEvidence(
+      db,
+      row.id,
+      row.active_revision,
+      saved.fingerprint,
+      policy,
+    );
   }
   async function eligible(
     row: StoredRow<"pds_hosts">,

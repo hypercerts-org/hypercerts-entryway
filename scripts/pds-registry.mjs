@@ -43,6 +43,7 @@ function argumentsFor(argv) {
       "show",
       "attest",
       "associate",
+      "reauthorize",
       "revoke-callback",
     ].includes(command) ||
     rest.length % 2
@@ -74,15 +75,21 @@ function argumentsFor(argv) {
     "show",
     "attest",
     "associate",
+    "reauthorize",
     "revoke-callback",
     "lifecycle",
   ].includes(command);
   if (
     !options["--url"] ||
     !options["--auth-file"] ||
-    ["stage", "attest", "associate", "activate", "lifecycle"].includes(
-      command,
-    ) !== Boolean(options["--request-file"]) ||
+    [
+      "stage",
+      "attest",
+      "associate",
+      "reauthorize",
+      "activate",
+      "lifecycle",
+    ].includes(command) !== Boolean(options["--request-file"]) ||
     hostCommand !== Boolean(options["--host"]) ||
     ["check", "policy", "revoke-callback"].includes(command) !==
       Boolean(options["--revision"]) ||
@@ -124,6 +131,7 @@ try {
     "stage",
     "attest",
     "associate",
+    "reauthorize",
     "activate",
     "lifecycle",
   ].includes(command)
@@ -152,7 +160,9 @@ try {
               ? "/admin/pds-registry/trust"
               : command === "revoke-callback"
                 ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}/callback/revoke`
-                : ["show", "attest", "associate"].includes(command)
+                : ["show", "attest", "associate", "reauthorize"].includes(
+                      command,
+                    )
                   ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}${command === "show" ? "" : `/${command}`}`
                   : command === "check"
                     ? `/admin/pds-registry/hosts/${encodeURIComponent(options["--host"])}/check`
@@ -168,6 +178,7 @@ try {
       "policy",
       "attest",
       "associate",
+      "reauthorize",
       "revoke-callback",
     ].includes(command)
       ? "POST"
@@ -292,7 +303,9 @@ try {
         }),
       );
       if (!last || last.reason !== "ok") process.exitCode = 1;
-    } else if (["show", "attest", "associate"].includes(command)) {
+    } else if (
+      ["show", "attest", "associate", "reauthorize"].includes(command)
+    ) {
       console.log(JSON.stringify(result));
     } else if (command === "stage") {
       const {
