@@ -292,7 +292,10 @@ export function createAccountStorage(
         throw new DomainError("HandleNotAvailable", 409, "Handle is reserved");
       const external = await one(
         "migration_reservations",
-        eq(t.migration_reservations.handle, handle),
+        and(
+          eq(sql`lower(${t.migration_reservations.handle})`, handle),
+          ne(t.migration_reservations.state, "complete"),
+        )!,
       );
       const existing = await one(
         "handle_claims",
@@ -416,7 +419,13 @@ export function createAccountStorage(
         const handle = await getHandleClaim(row.handle);
         const external = await one(
           "migration_reservations",
-          eq(t.migration_reservations.handle, row.handle),
+          and(
+            eq(
+              sql`lower(${t.migration_reservations.handle})`,
+              row.handle.toLowerCase(),
+            ),
+            ne(t.migration_reservations.state, "complete"),
+          )!,
         );
         if (
           (handle && handle !== row.did) ||

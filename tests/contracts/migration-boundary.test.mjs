@@ -105,12 +105,32 @@ test("SQLite readers validate stored workflow and snapshot JSON on reopen", asyn
 
   const workflows = createMigrationWorkflowStorage(sqlite);
   const snapshots = createSnapshotManifestStorage(sqlite);
+  const now = await sqlite.databaseTime();
+  await sqlite.insert("authority_operations", {
+    id: "fixture-authority",
+    kind: "external-migration",
+    request_digest: "a".repeat(64),
+    state: "pending",
+    worker_id: null,
+    attempt_id: null,
+    fence: 1,
+    attempt_count: 1,
+    lease_expires_at: null,
+    pending: true,
+    phase: "owner-confirmed",
+    expected_state: null,
+    last_error_code: null,
+    created_at: now,
+    updated_at: now,
+  });
   await query(
     sqlite,
-    "INSERT INTO migration_workflow(id,did,version,value) VALUES (?,?,?,?)",
+    "INSERT INTO migration_workflow(id,did,active_did,authority_operation_id,version,value) VALUES (?,?,?,?,?,?)",
     [
       workflow.id,
       workflow.did,
+      workflow.did,
+      "fixture-authority",
       0,
       JSON.stringify({ ...workflow, phase: "secret-phase" }),
     ],
@@ -126,7 +146,7 @@ test("SQLite readers validate stored workflow and snapshot JSON on reopen", asyn
     "run",
   );
   assert.equal(
-    (await workflows.getByDid(workflow.did)).phase,
+    (await workflows.getActiveByDid(workflow.did)).phase,
     "owner-confirmed",
   );
   await query(

@@ -292,7 +292,7 @@ CREATE TABLE "migration_custody_inventory" (
 --> statement-breakpoint
 CREATE TABLE "migration_reservations" (
 	"workflow_id" text PRIMARY KEY,
-	"did" text NOT NULL UNIQUE,
+	"did" text NOT NULL,
 	"handle" text NOT NULL,
 	"email" text NOT NULL,
 	"user_id" text NOT NULL,
@@ -311,9 +311,12 @@ CREATE TABLE "migration_snapshot_manifest" (
 --> statement-breakpoint
 CREATE TABLE "migration_workflow" (
 	"id" text PRIMARY KEY,
-	"did" text NOT NULL UNIQUE,
+	"did" text NOT NULL,
+	"active_did" text UNIQUE,
+	"authority_operation_id" text NOT NULL UNIQUE,
 	"version" integer NOT NULL,
-	"value" text NOT NULL
+	"value" text NOT NULL,
+	CONSTRAINT "migration_workflow_active_did" CHECK ("active_did" IS NULL OR "active_did" = "did")
 );
 --> statement-breakpoint
 CREATE TABLE "operation_admissions" (
@@ -568,7 +571,8 @@ CREATE UNIQUE INDEX "migration_checkpoint_command" ON "migration_checkpoint" ("w
 CREATE INDEX "migration_checkpoint_workflow_idx" ON "migration_checkpoint" ("workflow_id","id");--> statement-breakpoint
 CREATE INDEX "migration_email_ci" ON "migration_reservations" (lower("email"));--> statement-breakpoint
 CREATE INDEX "migration_user_id" ON "migration_reservations" ("user_id");--> statement-breakpoint
-CREATE UNIQUE INDEX "migration_handle_ci" ON "migration_reservations" (lower("handle"));--> statement-breakpoint
+CREATE UNIQUE INDEX "migration_active_did" ON "migration_reservations" ("did") WHERE "state" <> 'complete';--> statement-breakpoint
+CREATE UNIQUE INDEX "migration_handle_ci" ON "migration_reservations" (lower("handle")) WHERE "state" <> 'complete';--> statement-breakpoint
 CREATE INDEX "operation_admission_id" ON "operation_admissions" ("operation_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "pds_health_incident_generation" ON "pds_health_incidents" ("host_id","generation");--> statement-breakpoint
 CREATE UNIQUE INDEX "pds_health_open_incident" ON "pds_health_incidents" ("host_id") WHERE "state" = 'open';--> statement-breakpoint
@@ -594,6 +598,7 @@ ALTER TABLE "external_operation_attempts" ADD CONSTRAINT "external_operation_att
 ALTER TABLE "handle_claims" ADD CONSTRAINT "handle_claims_did_accounts_did_fkey" FOREIGN KEY ("did") REFERENCES "accounts"("did");--> statement-breakpoint
 ALTER TABLE "migration_checkpoint" ADD CONSTRAINT "migration_checkpoint_workflow_id_migration_workflow_id_fkey" FOREIGN KEY ("workflow_id") REFERENCES "migration_workflow"("id");--> statement-breakpoint
 ALTER TABLE "migration_snapshot_manifest" ADD CONSTRAINT "migration_snapshot_manifest_MV6jDrceH3um_fkey" FOREIGN KEY ("workflow_id") REFERENCES "migration_workflow"("id");--> statement-breakpoint
+ALTER TABLE "migration_workflow" ADD CONSTRAINT "migration_workflow_LnmUuHX2epdb_fkey" FOREIGN KEY ("authority_operation_id") REFERENCES "authority_operations"("id");--> statement-breakpoint
 ALTER TABLE "operation_admissions" ADD CONSTRAINT "operation_admissions_operation_id_authority_operations_id_fkey" FOREIGN KEY ("operation_id") REFERENCES "authority_operations"("id");--> statement-breakpoint
 ALTER TABLE "pds_health_incidents" ADD CONSTRAINT "pds_health_incidents_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "pds_health_notices" ADD CONSTRAINT "pds_health_notices_incident_id_pds_health_incidents_id_fkey" FOREIGN KEY ("incident_id") REFERENCES "pds_health_incidents"("id");--> statement-breakpoint

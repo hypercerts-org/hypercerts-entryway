@@ -165,7 +165,7 @@ export const migration_reservations = table(
   "migration_reservations",
   {
     workflow_id: text("workflow_id").notNull().primaryKey(),
-    did: text("did").notNull().unique(),
+    did: text("did").notNull(),
     handle: text("handle").notNull(),
     email: text("email").notNull(),
     user_id: text("user_id").notNull(),
@@ -178,7 +178,12 @@ export const migration_reservations = table(
   (t) => [
     index("migration_email_ci").on(sql`lower(${t.email})`),
     index("migration_user_id").on(t.user_id),
-    uniqueIndex("migration_handle_ci").on(sql`lower(${t.handle})`),
+    uniqueIndex("migration_active_did")
+      .on(t.did)
+      .where(sql`${t.state} <> 'complete'`),
+    uniqueIndex("migration_handle_ci")
+      .on(sql`lower(${t.handle})`)
+      .where(sql`${t.state} <> 'complete'`),
     check(
       "migration_reservation_state",
       sql`${t.state} IN ('reserved','placed','complete')`,
@@ -401,11 +406,21 @@ export const migration_workflow = table(
   "migration_workflow",
   {
     id: text("id").primaryKey(),
-    did: text("did").notNull().unique(),
+    did: text("did").notNull(),
+    active_did: text("active_did").unique(),
+    authority_operation_id: text("authority_operation_id")
+      .notNull()
+      .unique()
+      .references(() => authority_operations.id),
     version: integer("version").notNull(),
     value: text("value").notNull(),
   },
-  () => [],
+  (t) => [
+    check(
+      "migration_workflow_active_did",
+      sql`${t.active_did} IS NULL OR ${t.active_did} = ${t.did}`,
+    ),
+  ],
 );
 export const migration_checkpoint = table(
   "migration_checkpoint",
