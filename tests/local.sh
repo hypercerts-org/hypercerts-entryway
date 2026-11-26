@@ -206,7 +206,9 @@ case "$command" in
   controller-launch)
     require_state
     [[ "${ENTRYWAY_LATE_CUTOVER:-0}" == 1 ]] || { echo 'Controller launch test requires a disposable staged sandbox' >&2; exit 2; }
-    "$root/tests/support/run-controller-launch.sh" "$root" "$sandbox" "$project"
+    mode=${2:-test}
+    [[ $# -le 2 && ( "$mode" == test || "$mode" == cleanup ) ]] || { echo 'Usage: ./tests/local.sh controller-launch [cleanup]' >&2; exit 2; }
+    "$root/tests/support/run-controller-launch.sh" "$root" "$sandbox" "$project" "$mode"
     ;;
   incoming-late-cutover)
     exec "$root/tests/local.sh" fresh-group incoming-late-cutover
