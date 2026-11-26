@@ -8,7 +8,7 @@ Fresh empty authorities can start with `AUTHORITY_MODE=registry-bootstrap` and a
 
 For a fresh registry-bootstrap authority, a global administrator may explicitly attest an empty stock host and associate its checked revision with placement disabled. The operator confirmation does not prove a callback or enable account serving.
 
-Registry-bootstrap nodes now sample registered hosts using `PDS_HEALTH_INTERVAL_MS` and `PDS_HEALTH_TIMEOUT_MS`; status shows bounded health observations. Sampling does not enable placement. Operators can configure `PDS_HEALTH_CONTACTS_FILE` for durable incident and recovery email; missing contacts and permanent delivery failures remain visible in status.
+Registry-bootstrap nodes now sample registered hosts using `PDS_HEALTH_INTERVAL_MS` and `PDS_HEALTH_TIMEOUT_MS`; status shows bounded health observations. Sampling does not enable placement. Each process logs a policy or revision conflict once while it persists, with the affected host ID and revision. Operators can configure `PDS_HEALTH_CONTACTS_FILE` for durable incident and recovery email; missing contacts and permanent delivery failures remain visible in status.
 
 An independent database-fenced sweep opens monitoring-stale incidents when a registered host has not produced a health sample within 45 seconds, including hosts that have never been sampled.
 

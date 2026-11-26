@@ -17,7 +17,9 @@ const request = async (node, path, body, authenticated = true) => {
       ...(authenticated ? { authorization: auth } : {}),
       ...(body ? { "content-type": "application/json" } : {}),
     },
-    ...(body ? { body: JSON.stringify(body) } : {}),
+    ...(body
+      ? { body: typeof body === "string" ? body : JSON.stringify(body) }
+      : {}),
   });
   return { status: response.status, body: await response.json() };
 };
@@ -36,6 +38,16 @@ for (const node of ["bootstrap-a", "bootstrap-b"]) {
     "/.well-known/did.json",
   ])
     assert.equal((await request(node, path)).status, 404);
+  const absent = await request(
+    node,
+    "/xrpc/com.atproto.server.createAccount",
+    "{",
+  );
+  assert.equal(absent.status, 404);
+  assert.equal(absent.body.error, "NotFound");
+  const malformed = await request(node, "/admin/pds-registry/hosts", "{");
+  assert.equal(malformed.status, 400);
+  assert.equal(malformed.body.error, "InvalidRequest");
 }
 const id = "pds-monitor";
 const base = `/admin/pds-registry/hosts/${id}`;

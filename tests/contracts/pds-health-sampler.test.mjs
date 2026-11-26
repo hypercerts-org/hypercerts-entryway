@@ -186,3 +186,53 @@ test("retired hosts are not probed", async () => {
   await sampler();
   assert.equal(claims, 0);
 });
+
+test("configuration conflicts are reported once while a retirement race stays quiet", async () => {
+  const hosts = ["policy", "missing", "retiring"].map((hostId) => ({
+    hostId,
+    association: "associated",
+    activeRevision: 1,
+  }));
+  const reports = [];
+  let currentPolicyMatches = false;
+  const sampler = createPdsHealthSampler({
+    registry: {
+      listHosts: async () => hosts,
+      readHost: async (id) =>
+        id === "retiring"
+          ? { ...hosts[2], lifecycle: "retired" }
+          : hosts.find((host) => host.hostId === id),
+      readHostRevision: async (hostId) =>
+        hostId === "missing" ? undefined : { hostId, revision: 1 },
+    },
+    verifier: { policyFor: () => "configured" },
+    intervalMs: 1000,
+    timeoutMs: 500,
+    health: {
+      claim: async (id) => {
+        if (id === "retiring") throw Error("PdsHealthRevisionConflict");
+        if (!currentPolicyMatches) throw Error("PdsHealthPolicyConflict");
+        return { hostId: id };
+      },
+      complete: async () => {},
+    },
+    probe: async () => ({ publicOk: true, internalOk: true }),
+    onError: (report) => reports.push(report),
+  });
+  await sampler();
+  await sampler();
+  const expected = [
+    { code: "PdsHealthRevisionConflict", hostId: "missing", revision: 1 },
+    { code: "PdsHealthPolicyConflict", hostId: "policy", revision: 1 },
+  ];
+  assert.deepEqual(
+    reports.toSorted((a, b) => a.hostId.localeCompare(b.hostId)),
+    expected,
+  );
+  currentPolicyMatches = true;
+  await sampler();
+  currentPolicyMatches = false;
+  await sampler();
+  assert.equal(reports.length, 3);
+  assert.deepEqual(reports.at(-1), expected[1]);
+});
