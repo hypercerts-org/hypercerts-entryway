@@ -19,6 +19,7 @@ const productTables: TableName[] = [
   "email_claims",
   "account_bindings",
   "backup_emails",
+  "active_did_transfers",
   "migration_reservations",
   "arrivals",
   "arrival_code",

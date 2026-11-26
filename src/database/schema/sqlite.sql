@@ -32,6 +32,12 @@ CREATE TABLE `accounts` (
 	`sequence` integer NOT NULL UNIQUE
 );
 --> statement-breakpoint
+CREATE TABLE `active_did_transfers` (
+	`did` text PRIMARY KEY,
+	`operation_id` text NOT NULL,
+	`transfer_kind` text NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE `arrival_attempts` (
 	`attempt_binding` text PRIMARY KEY,
 	`ownership_operation_id` text NOT NULL,

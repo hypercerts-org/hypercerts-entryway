@@ -40,6 +40,7 @@ const files = [
   "controller-challenges",
   "pds-registry",
   "pds-registry-enrollment",
+  "active-did-transfer",
   "pds-health",
   "pds-health-incidents",
   "pds-health-sweep",
