@@ -853,3 +853,14 @@ export const pds_placement_reservations = table(
   },
   (t) => [uniqueIndex("pds_placement_operation").on(t.operation_id)],
 );
+
+export const controller_challenges = table(
+  "controller_challenges",
+  {
+    nonce: text("nonce").primaryKey(),
+    context: text("context").notNull(),
+    expires_at: count("expires_at").notNull(),
+    consumed_at: count("consumed_at"),
+  },
+  (t) => [index("controller_challenge_expiry").on(t.expires_at)],
+);

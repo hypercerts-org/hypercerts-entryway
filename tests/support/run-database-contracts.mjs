@@ -37,6 +37,7 @@ const files = [
   "migration-custody",
   "incoming-arrival-storage",
   "authority-mode",
+  "controller-challenges",
   "pds-registry",
   "pds-registry-enrollment",
   "pds-health",

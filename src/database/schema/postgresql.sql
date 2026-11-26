@@ -179,6 +179,13 @@ CREATE TABLE "backup_emails" (
 	"created_at" text NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "controller_challenges" (
+	"nonce" text PRIMARY KEY,
+	"context" text NOT NULL,
+	"expires_at" bigint NOT NULL,
+	"consumed_at" bigint
+);
+--> statement-breakpoint
 CREATE TABLE "custody_history" (
 	"id" text PRIMARY KEY,
 	"did" text NOT NULL,
@@ -548,6 +555,7 @@ CREATE UNIQUE INDEX "arrivals_handle_active" ON "arrivals" (lower("handle")) WHE
 CREATE INDEX "arrivals_handle" ON "arrivals" (lower("handle"),"created_at");--> statement-breakpoint
 CREATE INDEX "authority_operation_lease" ON "authority_operations" ("state","lease_expires_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "backup_emails_ci" ON "backup_emails" (lower("email"));--> statement-breakpoint
+CREATE INDEX "controller_challenge_expiry" ON "controller_challenges" ("expires_at");--> statement-breakpoint
 CREATE INDEX "custody_history_did" ON "custody_history" ("did");--> statement-breakpoint
 CREATE UNIQUE INDEX "email_claims_exclusive_ci" ON "email_claims" (lower("email")) WHERE "purpose" IN ('backup','pending');--> statement-breakpoint
 CREATE INDEX "external_operation_step" ON "external_operation_attempts" ("operation_id","step","created_at");--> statement-breakpoint

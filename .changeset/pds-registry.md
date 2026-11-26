@@ -21,3 +21,5 @@ For an unchanged stock PDS, use a root HTTPS public URL. Entryway retains its ca
 Registry OAuth discovery advertises the exact checked protected-resource identifier for each associated host, including a staged profile's path where applicable. Staged profiles still require separate qualification before association.
 
 A newly completed registry signup no longer prevents associating or retiring an unrelated empty host when its retained signed genesis, placement and custody records can be mapped safely. Older signup records without the signed evidence remain blocked. Unrecognized or inconsistent records continue to block these operations.
+
+Fresh registry schemas include shared single-use controller challenges for future staged qualification. This does not enable a deployment controller or staged arrivals; databases with an older schema are refused and require a separately designed migration.
