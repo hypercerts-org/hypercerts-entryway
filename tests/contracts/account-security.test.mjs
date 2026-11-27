@@ -2286,6 +2286,8 @@ test("sending a new confirmation code replaces the earlier one and keeps its pag
 
 test("new confirmation codes share the mailbox request limit", async (t) => {
   const f = await fixture(t);
+  // The limit is a fixed time bucket; keep all requests in the same bucket.
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const stale = staleActor(f.actor);
   let { challengeId } = await beginConfirmation(f, stale);
   for (let sent = 1; sent < 5; sent++)
@@ -2296,6 +2298,29 @@ test("new confirmation codes share the mailbox request limit", async (t) => {
     error: "RateLimitExceeded",
   });
   // The refused request left the latest code usable.
+  const token = (await f.db.get("outbox", f.alice.email)).token;
+  assert.equal(token.split(".")[0], challengeId);
+  assert.deepEqual(
+    await f.security.completeReconfirm(stale, token),
+    completed(stale),
+  );
+});
+
+test("confirmation mailbox request limit resets at the fixed bucket boundary", async (t) => {
+  const f = await fixture(t);
+  const interval = 600_000;
+  const boundary = (Math.floor(Date.now() / interval) + 1) * interval;
+  t.mock.timers.enable({ apis: ["Date"], now: boundary - 1 });
+  const stale = staleActor(f.actor);
+  let { challengeId } = await beginConfirmation(f, stale);
+  t.mock.timers.setTime(boundary);
+  for (let sent = 0; sent < 5; sent++)
+    challengeId = (await f.security.resendReconfirm(stale, challengeId))
+      .challengeId;
+  await assert.rejects(f.security.resendReconfirm(stale, challengeId), {
+    status: 429,
+    error: "RateLimitExceeded",
+  });
   const token = (await f.db.get("outbox", f.alice.email)).token;
   assert.equal(token.split(".")[0], challengeId);
   assert.deepEqual(
