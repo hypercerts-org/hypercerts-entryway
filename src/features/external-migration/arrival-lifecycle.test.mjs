@@ -176,8 +176,10 @@ test("a lost reservation response retains the saved intent and cannot be re-plac
   );
 });
 
-test("incoming authorization is scope-, audience-, issuer- and time-bound and consumes nothing", async () => {
+test("incoming authorization is scope-, audience-, issuer- and time-bound and consumes nothing", async (t) => {
   const { authority } = await fixture();
+  // Keep the 60-second issued-at boundary independent of scheduler delays.
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const now = Math.floor(Date.now() / 1000);
   const verify = createIncomingAuthorization({
     serviceDid,
@@ -204,11 +206,14 @@ test("incoming authorization is scope-, audience-, issuer- and time-bound and co
       keypair: authority.source,
       ...overrides,
     })}`;
-  for (const overrides of [
-    { exp: now + 365 * 86400 },
-    { iat: now + 61, exp: now + 180 },
-    { iss: `${did}#arbitrary` },
-    { keypair: await Secp256k1Keypair.create() },
+  for (const [reason, overrides] of [
+    ["excessive lifetime", { exp: now + 365 * 86400 }],
+    [
+      "issued more than 60 seconds in the future",
+      { iat: now + 61, exp: now + 180 },
+    ],
+    ["invalid issuer fragment", { iss: `${did}#arbitrary` }],
+    ["wrong signing key", { keypair: await Secp256k1Keypair.create() }],
   ])
     await assert.rejects(
       verify({
@@ -219,7 +224,16 @@ test("incoming authorization is scope-, audience-, issuer- and time-bound and co
         expectedDid: did,
       }),
       { code: "AccountMismatch" },
+      reason,
     );
+  const atClockSkewLimit = await verify({
+    presentation: await token({ iat: now + 60, exp: now + 180 }),
+    method: "com.atproto.server.createAccount",
+    operationId: "op-1",
+    requestDigest: hash("d"),
+    expectedDid: did,
+  });
+  assert.equal(atClockSkewLimit.did, did);
   for (const mutation of ["id", "controller", "method"]) {
     const document = {
       id: did,
