@@ -1276,6 +1276,20 @@ export async function createAccountMigration({
           );
         // Source remains deactivated, including on retried completion.
         await setActive(operation.did, source, false, "source-retain");
+        const retained = await userCall(
+          operation.did,
+          source,
+          "com.atproto.server.checkAccountStatus",
+        );
+        if (
+          retained.activated !== false ||
+          retained.repoCommit !== operation.snapshot.status.repoCommit
+        )
+          throw error(
+            "SourceChanged",
+            "The retained source is not inactive at the saved repository head; operator reconciliation is required",
+            409,
+          );
         await db.transact(async () => {
           await security.revokeAccount(operation.did, { credentials: true });
           const row = await accounts.get(operation.did);
@@ -1290,6 +1304,10 @@ export async function createAccountMigration({
           operation = await journal(operation, {
             phase: "complete",
             completedAt: new Date(),
+            retainedSource: {
+              activated: false,
+              repoCommit: retained.repoCommit,
+            },
             lastError: null,
           });
           if (!(await transfers.release(transferOwner(operation))))

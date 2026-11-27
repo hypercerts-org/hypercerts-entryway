@@ -368,6 +368,11 @@ async function fixture(
       );
       assert.ok(node.exists);
       node.active = !body.deactivated.applied;
+      if (pds.id === "pds1" && state.target.active) {
+        if (state.failures.get("retained-source-active")) node.active = true;
+        if (state.failures.get("retained-source-changed"))
+          node.commit = "unexpected-retained-commit";
+      }
     } else if (method === "com.atproto.admin.getAccountInfo") {
       if (registryMode && pds.id === "pds2") {
         const attempts = await db.read("external_operation_attempts");
@@ -672,9 +677,36 @@ test("same-entryway migration preserves DID, snapshots before cutover, imports d
     `migrate:${f.row.did}`,
   );
   assert.ok(await f.db.get("migration:snapshots", `${operation.id}/repo`));
+  assert.deepEqual(operation.retainedSource, {
+    activated: false,
+    repoCommit: operation.snapshot.status.repoCommit,
+  });
+  assert.equal(operation.sourceSigningKey, f.sourceKey.did());
   assert.deepEqual(await f.db.read("active_did_transfers"), []);
   assert.ok(!f.state.calls.some((call) => call.includes("deleteAccount")));
 });
+
+for (const fault of ["retained-source-active", "retained-source-changed"])
+  test(`retained source observation ${fault} prevents placement completion`, async (t) => {
+    const f = await fixture(t);
+    f.state.failures.set(fault, true);
+    await assert.rejects(
+      f.migration.importAccount(f.actor, {
+        did: f.row.did,
+        pdsId: "pds2",
+        token: "migration-proof",
+      }),
+      { error: "SourceChanged" },
+    );
+    assert.equal((await f.accounts.get(f.row.did)).pdsId, "pds1");
+    const operation = await f.db.get(
+      "migration:operations",
+      `migrate:${f.row.did}`,
+    );
+    assert.equal(operation.phase, "target-ready");
+    assert.equal(operation.retainedSource, undefined);
+    assert.equal((await f.db.read("active_did_transfers")).length, 1);
+  });
 
 test("lost target-create response converges after database reopen without issuing a second PLC operation", async (t) => {
   const f = await fixture(t);
