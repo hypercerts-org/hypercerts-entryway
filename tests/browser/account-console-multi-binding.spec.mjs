@@ -1,7 +1,17 @@
+import {
+  openAccountSection,
+  openAccountView,
+} from "./support/account-navigation.mjs";
 import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
 import { createSharedEmailPair } from "./support/email-chooser-fixture.mjs";
+import { captureGallery } from "./support/visual-gallery.mjs";
+import { assertChooserStyle } from "./support/chooser-style.mjs";
+import {
+  assertCenteredMonospace,
+  assertIdentityLayout,
+} from "./support/visual-layout.mjs";
 
 const config = JSON.parse(
   readFileSync(
@@ -105,6 +115,12 @@ for (const which of ["first", "second"]) {
           submissions.push({ path, status: response.status() });
       });
       await page.goto(new URL("/login", config.issuer).href);
+      if (which === "first")
+        await captureGallery(page, {
+          name: "standalone-email",
+          description: "Shared pair standalone email entry",
+          heading: "Sign in",
+        });
       for (const account of [shared.first, shared.second]) {
         expect(await page.content()).not.toContain(account.did);
         expect(await page.content()).not.toContain(account.handle);
@@ -118,6 +134,15 @@ for (const which of ["first", "second"]) {
         expect(await page.content()).not.toContain(account.did);
         expect(await page.content()).not.toContain(account.handle);
       }
+      if (which === "first")
+        await captureGallery(page, {
+          name: "standalone-code",
+          description: "Shared pair standalone empty code entry",
+          heading: "Check your email",
+        });
+      await assertCenteredMonospace(
+        page.getByLabel("Sign-in code", { exact: true }),
+      );
       const message = await waitForMailpitCode({
         recipient: shared.email,
         since,
@@ -149,9 +174,24 @@ for (const which of ["first", "second"]) {
       expect(bounds.x + bounds.width).toBeLessThanOrEqual(
         page.viewportSize().width,
       );
-      await expect(
-        page.getByText(selected.did, { exact: false }),
-      ).toBeVisible();
+      await assertIdentityLayout(button, {
+        handle: selected.handle,
+        did: selected.did,
+      });
+      const didText = button.locator("small");
+      await expect(didText).toContainText(selected.did);
+      const didFits = await didText.evaluate((element) => {
+        const text = document.createRange();
+        text.selectNodeContents(element);
+        return (
+          [...text.getClientRects()].every(
+            (rect) =>
+              rect.left >= 0 &&
+              rect.right <= document.documentElement.clientWidth,
+          ) && element.scrollWidth <= element.clientWidth
+        );
+      });
+      expect(didFits).toBe(true);
       for (
         let tab = 0;
         tab < 20 &&
@@ -162,6 +202,17 @@ for (const which of ["first", "second"]) {
       )
         await page.keyboard.press("Tab");
       await expect(button).toBeFocused();
+      await assertChooserStyle(page, button, {
+        foreground: "rgb(26, 19, 15)",
+        background: "rgb(247, 247, 247)",
+        focus: "rgb(26, 19, 15)",
+      });
+      await captureGallery(page, {
+        name: `standalone-chooser-${which}`,
+        description: `Shared pair chooser with ${which} account focused`,
+        heading: "Choose an account",
+        did: selected.did,
+      });
       await page.keyboard.press("Enter");
       await page.waitForURL((url) => url.pathname === "/account");
       expect(submissions).toEqual([
@@ -172,10 +223,110 @@ for (const which of ["first", "second"]) {
       expect(new URL(page.url()).pathname).toBe("/account");
       expect(new URL(page.url()).searchParams.get("did")).toBe(selected.did);
       await expect(page.getByTestId("account-did")).toHaveText(selected.did);
+      await captureGallery(page, {
+        name: `settings-${which}`,
+        description: `Shared pair ${which} account settings and sections`,
+        heading: "Home",
+        did: selected.did,
+      });
       await page.reload();
       expect(new URL(page.url()).searchParams.get("did")).toBe(selected.did);
       await expect(page.getByTestId("account-did")).toHaveText(selected.did);
+      for (const [view, heading] of [
+        ["home", "Home"],
+        ["account", "Account"],
+        ["devices", "Devices"],
+        ["apps", "Apps"],
+        ["about", "About"],
+      ]) {
+        if (view !== "home") await openAccountView(page, heading);
+        await expect(
+          page.getByRole("heading", { name: heading, exact: true }),
+        ).toBeVisible();
+        expect(new URL(page.url()).searchParams.get("did")).toBe(selected.did);
+        const active = page
+          .locator(
+            'nav[aria-label="Account navigation"] a[aria-current="page"]',
+          )
+          .first();
+        await expect(active).toHaveText(heading);
+        if (which === "first")
+          await captureGallery(page, {
+            name: `settings-${view}`,
+            description: `Account navigation ${heading} screen`,
+            heading,
+            did: selected.did,
+          });
+      }
+      const accountLink = new URL("/account", config.issuer);
+      accountLink.searchParams.set("did", selected.did);
+      accountLink.searchParams.set("view", "account");
+      accountLink.hash = "passwords";
+      await page.goto(accountLink.href);
+      const passwordSection = page.locator("#passwords");
+      await expect(passwordSection).toBeVisible();
+      await expect(
+        passwordSection.locator("xpath=ancestor::details"),
+      ).toHaveAttribute("open", "");
+      await page.reload();
+      await expect(passwordSection).toBeVisible();
+      await expect(
+        passwordSection.locator("xpath=ancestor::details"),
+      ).toHaveAttribute("open", "");
+      expect(new URL(page.url()).searchParams.get("did")).toBe(selected.did);
+
+      const mobileBack = page
+        .locator(".account-mobile-header")
+        .getByRole("link", { name: "Home", exact: true });
+      if (await mobileBack.isVisible()) {
+        await mobileBack.focus();
+        await page.keyboard.press("Enter");
+        const mobileMenu = page.locator(".account-mobile-header details");
+        await mobileMenu.locator("summary").focus();
+        await page.keyboard.press("Enter");
+        await expect(mobileMenu).toHaveAttribute("open", "");
+        await captureGallery(page, {
+          name: "settings-mobile-menu",
+          description: "Account navigation mobile menu open",
+          heading: "Home",
+          did: selected.did,
+        });
+        await mobileMenu
+          .getByRole("link", { name: "Apps", exact: true })
+          .focus();
+        await page.keyboard.press("Enter");
+      } else {
+        await openAccountView(page, "Apps");
+      }
       await page.getByRole("link", { name: "Create app password" }).click();
+      const accountPosts = [];
+      page.on("request", (request) => {
+        if (
+          request.method() === "POST" &&
+          new URL(request.url()).pathname.startsWith("/account/")
+        )
+          accountPosts.push(new URL(request.url()).pathname);
+      });
+      const checkbox = page.getByRole("checkbox", {
+        name: "Allow direct-message access",
+      });
+      const checkboxSize = await checkbox.evaluate((element) => {
+        const { width, height } = element.getBoundingClientRect();
+        return { width, height };
+      });
+      expect(checkboxSize).toEqual({ width: 16, height: 16 });
+      await expect(checkbox).not.toBeChecked();
+      await page
+        .getByText("Allow direct-message access", { exact: true })
+        .click();
+      await expect(checkbox).toBeChecked();
+      await checkbox.focus();
+      await page.keyboard.press("Space");
+      await expect(checkbox).not.toBeChecked();
+      expect(accountPosts).toEqual([]);
+      await expect(
+        page.locator('form[action="/account/app-password-create"]'),
+      ).toBeVisible();
       await expect(page.getByText(selected.did, { exact: true })).toBeVisible();
       await expect(
         page.getByText(selected.handle, { exact: true }),
@@ -203,6 +354,12 @@ test("shared verified email keeps each tab and account action bound to its selec
 
     const accountUrl = new URL("/account", config.issuer).href;
     await firstTab.goto(accountUrl);
+    await captureGallery(firstTab, {
+      name: "settings-account-switcher",
+      description: "Shared pair independent settings account switcher",
+      heading: "Choose an account",
+      did: first.did,
+    });
     await chooseAccount(firstTab, first.did, sharedEmail);
     // The OTP rotates the browser session, so the second tab opens its chooser afterwards.
     await secondTab.goto(accountUrl);
@@ -212,8 +369,16 @@ test("shared verified email keeps each tab and account action bound to its selec
     await expect(secondTab.getByTestId("account-did")).toHaveText(second.did);
 
     // Deactivation is a protected page; its link and form keep the tab's DID.
+    await openAccountView(secondTab, "Account");
+    await openAccountSection(secondTab, "Account status and deletion");
     await secondTab.getByRole("link", { name: "Deactivate account" }).click();
     expect(new URL(secondTab.url()).searchParams.get("did")).toBe(second.did);
+    await captureGallery(secondTab, {
+      name: "settings-status-form",
+      description: "Shared pair second account deactivation confirmation form",
+      heading: "Deactivate account",
+      did: second.did,
+    });
     const secondForm = statusForm(secondTab);
     await expect(secondForm).toHaveCount(1);
     const secondAction = await secondForm.getAttribute("action");
@@ -244,8 +409,33 @@ test("shared verified email keeps each tab and account action bound to its selec
     await expect(
       secondTab.getByText("Status: deactivated", { exact: true }),
     ).toBeVisible();
+    await captureGallery(secondTab, {
+      name: "settings-deactivated-result",
+      description: "Shared pair second account deactivated settings",
+      heading: "Account",
+      did: second.did,
+    });
+    await secondTab.getByRole("link", { name: "Reactivate account" }).click();
+    await captureGallery(secondTab, {
+      name: "settings-reactivate-form",
+      description: "Shared pair second account reactivation form",
+      heading: "Reactivate account",
+      did: second.did,
+    });
+    await secondTab.getByRole("button", { name: "Reactivate account" }).click();
+    await expect(
+      secondTab.getByText("Status: active", { exact: true }),
+    ).toBeVisible();
+    await captureGallery(secondTab, {
+      name: "settings-reactivation-result",
+      description: "Shared pair second account reactivated settings",
+      heading: "Account",
+      did: second.did,
+    });
     await firstTab.reload();
     await expect(firstTab.getByTestId("account-did")).toHaveText(first.did);
+    await openAccountView(firstTab, "Account");
+    await openAccountSection(firstTab, "Account status and deletion");
     await expect(
       firstTab.getByText("Status: active", { exact: true }),
     ).toBeVisible();
@@ -273,7 +463,14 @@ test("an open app-password form stays bound to the account after a mailbox chang
       })
       .getByRole("button")
       .click();
+    await openAccountView(stale, "Apps");
     await stale.getByRole("link", { name: "Create app password" }).click();
+    await captureGallery(stale, {
+      name: "stale-app-password-form",
+      description: "Pair stale first account app password form",
+      heading: "Create app password",
+      did: pair.first.did,
+    });
     await stale.getByLabel("App password name").fill(name);
 
     const change = await context.newPage();
@@ -284,7 +481,17 @@ test("an open app-password form stays bound to the account after a mailbox chang
       ).href,
     );
     const oldSince = Date.now();
+    await openAccountView(change, "Account");
+    await openAccountSection(change, "Email and identity");
     await change.getByRole("button", { name: "Start email change" }).click();
+    await captureGallery(change, {
+      name: "email-change-current",
+      description: "Pair stale first account current email verification",
+      heading: "Verify current email",
+    });
+    await assertCenteredMonospace(
+      change.getByLabel("Current email verification code"),
+    );
     const oldCode = await waitForMailpitCode({
       recipient: pair.email,
       since: oldSince,
@@ -299,6 +506,14 @@ test("an open app-password form stays bound to the account after a mailbox chang
     await change
       .getByRole("button", { name: "Verify current email and continue" })
       .click();
+    await captureGallery(change, {
+      name: "email-change-new",
+      description: "Pair stale first account new email verification",
+      heading: "Verify new email",
+    });
+    await assertCenteredMonospace(
+      change.getByLabel("New email verification code"),
+    );
     const newCode = await waitForMailpitCode({
       recipient: nextEmail,
       since: newSince,
@@ -309,6 +524,11 @@ test("an open app-password form stays bound to the account after a mailbox chang
       change.getByRole("heading", { name: "Primary email updated" }),
     ).toBeVisible();
 
+    await captureGallery(change, {
+      name: "email-change-result",
+      description: "Pair stale first account email updated",
+      heading: "Primary email updated",
+    });
     const staleResponse = stale.waitForResponse(
       (response) =>
         response.request().method() === "POST" &&
@@ -320,6 +540,11 @@ test("an open app-password form stays bound to the account after a mailbox chang
       "The selected account is not linked to this verified identity",
     );
     await expect(stale.getByTestId("app-password")).toHaveCount(0);
+    await captureGallery(stale, {
+      name: "stale-form-rejected",
+      description: "Pair stale first account form rejected with recovery link",
+      heading: "Account operation could not be completed",
+    });
     await expect(
       stale.getByRole("link", { name: "Return to account settings" }),
     ).toHaveAttribute("href", "/account");
@@ -327,6 +552,10 @@ test("an open app-password form stays bound to the account after a mailbox chang
       .getByRole("link", { name: "Return to account settings" })
       .click();
     await expect(stale).toHaveURL(/\/(account|login)(?:\?|$)/);
+    await captureGallery(stale, {
+      name: "stale-recovery",
+      description: "Pair stale form recovery destination",
+    });
 
     const sibling = await context.newPage();
     await signInSharedEmail(sibling, pair.email);
@@ -334,10 +563,17 @@ test("an open app-password form stays bound to the account after a mailbox chang
       pair.second.did,
     );
     await expect(sibling.getByText(name, { exact: true })).toHaveCount(0);
+    await openAccountView(sibling, "Apps");
     await sibling.getByRole("link", { name: "Create app password" }).click();
     await sibling.getByLabel("App password name").fill(`sibling-${runId}`);
     await sibling.getByRole("button", { name: "Create app password" }).click();
     await expect(sibling.getByTestId("app-password")).toBeVisible();
+    await captureGallery(sibling, {
+      name: "stale-second-action-result",
+      description:
+        "Pair stale second account app password created secret masked",
+      heading: "App password created",
+    });
     await sibling
       .getByRole("link", { name: "Return to account settings" })
       .click();
@@ -351,6 +587,7 @@ test("an open app-password form stays bound to the account after a mailbox chang
     await expect(
       owner.getByText(`sibling-${runId}`, { exact: true }),
     ).toHaveCount(0);
+    await openAccountView(owner, "Apps");
     await owner.getByRole("link", { name: "Create app password" }).click();
     await owner.getByLabel("App password name").fill(`owner-${runId}`);
     await owner.getByRole("button", { name: "Create app password" }).click();
@@ -368,5 +605,71 @@ test("an open app-password form stays bound to the account after a mailbox chang
   } finally {
     await context.close();
     await freshContext.close();
+  }
+});
+
+test("standalone chooser can restart with another email", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    ignoreHTTPSErrors: false,
+    javaScriptEnabled: false,
+  });
+  try {
+    const page = await context.newPage();
+    await signInSharedEmail(page, shared.email);
+    await expect(
+      page.getByRole("heading", { name: "Choose an account" }),
+    ).toBeVisible();
+    await page
+      .getByRole("button", { name: "Use another email address" })
+      .click();
+    await expect(
+      page.getByRole("heading", { name: "Sign in", exact: true }),
+    ).toBeVisible();
+    await expect(page.locator('form[action="/auth/select"]')).toHaveCount(0);
+    await captureGallery(page, {
+      name: "standalone-another-email",
+      description: "Shared pair standalone chooser returned to email entry",
+      heading: "Sign in",
+    });
+  } finally {
+    await context.close();
+  }
+});
+
+test("standalone invalid code can be retried", async ({ browser }) => {
+  const context = await browser.newContext({
+    ignoreHTTPSErrors: false,
+    javaScriptEnabled: false,
+  });
+  try {
+    const page = await context.newPage();
+    await page.goto(new URL("/login", config.issuer).href);
+    const since = Date.now();
+    await page.getByLabel("Email address", { exact: true }).fill(shared.email);
+    await page.getByRole("button", { name: "Send sign-in code" }).click();
+    const message = await waitForMailpitCode({
+      recipient: shared.email,
+      since,
+    });
+    const wrong = message.code === "00000000" ? "11111111" : "00000000";
+    await page.getByLabel("Sign-in code").fill(wrong);
+    await page.getByRole("button", { name: "Verify code" }).click();
+    await expect(page.getByRole("alert")).toContainText(
+      "Invalid or expired code",
+    );
+    await captureGallery(page, {
+      name: "standalone-invalid-code",
+      description: "Shared pair invalid code with retry",
+      heading: "Check your email",
+    });
+    await page.getByLabel("Sign-in code").fill(message.code);
+    await page.getByRole("button", { name: "Verify code" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Choose an account" }),
+    ).toBeVisible();
+  } finally {
+    await context.close();
   }
 });

@@ -1,3 +1,7 @@
+import {
+  openAccountSection,
+  openAccountView,
+} from "./support/account-navigation.mjs";
 import { test, expect } from "@playwright/test";
 import {
   NoMailpitMessageError,
@@ -30,6 +34,8 @@ async function createAccountInNewContext(browser, label, { withPassword }) {
     const page = await context.newPage();
     const account = await createAccount(page, label);
     if (withPassword) {
+      await openAccountView(page, "Account");
+      await openAccountSection(page, "Account password");
       await page.locator('a[href^="/account/manage/password?"]').click();
       await setAccountPassword(page, password);
     }

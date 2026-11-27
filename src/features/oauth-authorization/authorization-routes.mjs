@@ -1,8 +1,8 @@
+import { renderRememberedAccount } from "#entryway-ssr/oauth-authorization";
 import { approvalVersion } from "../../database/oauth-approval.mjs";
 import { InvalidRequestError } from "@atproto/oauth-provider/errors";
 import { FLOW_LIFETIME } from "../../http/browser-flow.mjs";
 import { escapeHtml } from "../../ui/html.mjs";
-import { hidden } from "../../ui/forms.mjs";
 import { authorizationRedirect } from "./redirect.mjs";
 import {
   completeAuthorization,
@@ -65,14 +65,18 @@ export function mountAuthorizationRoutes({
     newFlow,
     getFlow,
     loadBrowser,
-    fields,
     checkCsrf,
     pageForFlow,
     guarded,
     form,
   } = flows;
   const rememberedLoginForm = (flow, browser, account) =>
-    `<div class="account"><strong>${escapeHtml(account.handle ?? account.did)}</strong><br><small>${escapeHtml(account.did)}</small><form method="post" action="/auth/remembered-login">${fields(flow, browser)}${hidden("did", account.did)}<button>Sign in with an email code</button></form></div>`;
+    renderRememberedAccount({
+      flow: flow.id,
+      csrf: browser.csrf,
+      did: account.did,
+      handle: account.handle ?? account.did,
+    }).body;
   // The remembered accounts this authorization may offer: usable and matching
   // every account constraint (the selected account and the PAR login_hint).
   const offeredSessions = (flow, result) =>

@@ -1,115 +1,49 @@
-import { page, escapeHtml as esc } from "../../ui/html.mjs";
 import {
-  codeField,
-  field,
-  hidden,
-  form,
-  manageLink,
-  stamp,
-  section,
-  rows,
-  settingsLink,
-} from "../../ui/account-forms.mjs";
+  renderAccountShell,
+  renderManagementRows,
+  renderIdentity,
+  renderRecoveryPanel,
+  renderPasswordPanel,
+  renderProtectedPage,
+} from "#entryway-ssr/account-settings";
+import { page, escapeHtml as esc } from "../../ui/html.mjs";
 
-/** Fields for the second step of an email change: the code sent to the new address. */
-export const newEmailConfirmFields = (challengeId, email) =>
-  hidden("challengeId", challengeId ?? "") +
-  hidden("email", email) +
-  codeField("New email verification code");
-
-function renderEmailChange({ security, state, csrf, accountContext }) {
-  if (!security) return "";
-  let confirmation = "";
-  if (state.pendingEmail) {
-    const email =
-      typeof state.pendingEmail === "string"
-        ? state.pendingEmail
-        : state.pendingEmail.email;
-    confirmation = `<p>Awaiting verification of ${esc(email)}.</p>${form("email-confirm", csrf, newEmailConfirmFields(state.pendingEmailChallengeId, email), "Confirm new email", accountContext)}`;
-  }
-  return `<h3>Change primary email</h3><p>Verify your current email, then your new email. Your browser sessions will stay signed in for any other linked accounts. Sign in with your new email to access this account after the change.</p>${form("email-request", csrf, "", "Start email change", accountContext)}${confirmation}`;
+function renderIdentityPanel({ a, csrf, security, state, canSwitchAccount }) {
+  return renderIdentity({
+    account: a,
+    csrf,
+    security: Boolean(security),
+    canSwitchAccount,
+    pendingEmail: state.pendingEmail,
+    pendingEmailChallengeId: state.pendingEmailChallengeId,
+  }).body;
 }
 
-function renderIdentityPanel({
-  a,
-  csrf,
-  security,
-  state,
-  renderHandle,
-  accountContext,
-  canSwitchAccount,
-}) {
-  return section(
-    "identity",
-    "Identity and email",
-    `
-      <div class="account-context" aria-label="Current account and data host"><strong data-testid="account-handle">${esc(a.handle)}</strong><span>Signed in as ${esc(a.email)}</span><span>Repository hosted at ${esc(a.pdsUrl)}</span><span>Account DID <code data-testid="account-did">${esc(a.did)}</code></span></div>
-      <dl class="identity"><dt>Handle</dt><dd>${esc(a.handle)}</dd><dt>Account DID</dt><dd><code>${esc(a.did)}</code></dd><dt>Personal data server</dt><dd>${esc(a.pdsUrl)}</dd><dt>Primary email</dt><dd data-testid="primary-email">${esc(a.email)} (verified)</dd><dt>Created</dt><dd>${esc(stamp(a.createdAt))}</dd><dt>Account status</dt><dd>Status: ${esc(a.status)}</dd></dl>
-      <p class="muted">These settings apply only to the selected DID. ${canSwitchAccount ? '<a href="/account">Switch linked account</a>' : ""}</p>
-      ${renderHandle({ a, csrf, accountContext })}
-      ${renderEmailChange({ security, state, csrf, accountContext })}
-    `,
-  );
-}
-
-const recoveryStatus = (item) =>
-  `<strong>${esc(item.email)}</strong><span>${item.verified ? "Verified" : "Awaiting verification"}</span>`;
-
-// Settings changes that need a recent session are a button here. The button
-// opens a protected page, which asks a stale session to confirm it's you before
-// it shows the form.
-function renderRecoveryPanel({ security, state, accountContext }) {
-  return section(
-    "recovery",
-    "Recovery email",
-    security
-      ? `
-      <p>Add an email you can still access if your primary mailbox is lost. Each recovery address must be verified before it can restore access.</p>
-      ${rows(state.backupEmails ?? [], recoveryStatus, "No verified recovery email.")}
-      ${manageLink("recovery", "Manage recovery email", accountContext)}
-      <p><a href="/recover">Recover an account using a verified recovery email</a></p>
-    `
-      : "<p>Recovery email setup is not available yet.</p>",
-  );
+function renderRecoveryPanelHtml({ security, state, accountContext }) {
+  return renderRecoveryPanel({
+    security: Boolean(security),
+    backupEmails: state.backupEmails ?? [],
+    did: accountContext.did,
+  }).body;
 }
 
 const passwordLabel = (state) =>
   state.passwordEnabled ? "Change account password" : "Set account password";
-
-function renderPasswordPanel({
-  security,
-  legacy,
-  state,
-  csrf,
-  appPasswords,
-  renderAppPasswords,
-  accountContext,
-}) {
-  if (!(security && legacy))
-    return section(
-      "passwords",
-      "Passwords",
-      "<p>Password management is not available yet.</p>",
-    );
-  const passwordStatus = state.passwordEnabled
-    ? "Optional account password is enabled."
-    : "This account has no account password. Email sign-in remains available.";
-  return section(
-    "passwords",
-    "Passwords",
-    `
-      <p>${passwordStatus} Passwords here support apps that use the legacy AT Protocol sign-in API. Changing or removing a password ends all sessions and removes existing app passwords.</p>
-      ${manageLink("password", passwordLabel(state), accountContext)}
-      ${renderAppPasswords({ appPasswords, csrf, accountContext })}
-    `,
+function renderPasswordPanelHtml({ security, legacy, state, accountContext }) {
+  return (
+    `<section id="passwords" aria-labelledby="passwords-title">` +
+    renderPasswordPanel({
+      security: Boolean(security),
+      legacy: Boolean(legacy),
+      passwordEnabled: state.passwordEnabled,
+      did: accountContext.did,
+    }).body +
+    "</section>"
   );
 }
 
 const selectedIdentity = (account) =>
   `<p>Selected account: <strong>${esc(account.handle)}</strong> (<code>${esc(account.did)}</code>)</p>`;
-
-const backLink = (accountContext) =>
-  `<p>${settingsLink(accountContext.did)}</p>`;
 
 const renderPasswordPage = async ({
   res,
@@ -120,13 +54,18 @@ const renderPasswordPage = async ({
   account,
 }) => {
   const state = await security.summary(principal);
-  const removeForm = state.passwordEnabled
-    ? `<h2>Remove account password</h2><p>Email sign-in remains available after the password is removed.</p>${form("password-remove", browser.csrf, "", "Remove account password", accountContext)}`
-    : "";
   page(
     res,
     passwordLabel(state),
-    `${selectedIdentity(account)}<p>Changing or removing the password ends all sessions and removes existing app passwords.</p>${form("password-set", browser.csrf, field("password", "New account password", "password", 'autocomplete="new-password" minlength="12" maxlength="256"'), passwordLabel(state), accountContext)}${removeForm}${backLink(accountContext)}`,
+    renderProtectedPage({
+      kind: "password",
+      csrf: browser.csrf,
+      did: accountContext.did,
+      handle: account.handle,
+      passwordEnabled: state.passwordEnabled,
+    }).body,
+    200,
+    { layout: "settings" },
   );
 };
 
@@ -139,26 +78,36 @@ const renderRecoveryPage = async ({
   account,
 }) => {
   const state = await security.summary(principal);
-  const csrf = browser.csrf;
   page(
     res,
     "Manage recovery email",
-    `${selectedIdentity(account)}<p>Add an email you can still access if your primary mailbox is lost. Each recovery address must be verified before it can restore access.</p>
-      ${rows(state.backupEmails ?? [], (item) => `${recoveryStatus(item)}${form("backup-remove", csrf, hidden("email", item.email), "Remove recovery email", accountContext)}`, "No verified recovery email.")}
-      ${form("backup-request", csrf, field("email", "Recovery email address", "email", 'autocomplete="email" maxlength="320"'), "Send recovery verification", accountContext)}${backLink(accountContext)}`,
+    renderProtectedPage({
+      kind: "recovery",
+      csrf: browser.csrf,
+      did: accountContext.did,
+      handle: account.handle,
+      backupEmails: state.backupEmails ?? [],
+    }).body,
+    200,
+    { layout: "settings" },
   );
 };
 
 const renderStatusPage = ({ res, account, browser, accountContext }) => {
   const active = account.status === "active";
   const label = active ? "Deactivate account" : "Reactivate account";
-  const explanation = active
-    ? "Deactivation pauses repository writes and signs out connected apps. You can reactivate the account later."
-    : "Reactivation restores repository writes.";
   page(
     res,
     label,
-    `${selectedIdentity(account)}<p>${explanation}</p>${form("status", browser.csrf, hidden("status", active ? "deactivated" : "active"), label, accountContext)}${backLink(accountContext)}`,
+    renderProtectedPage({
+      kind: "status",
+      csrf: browser.csrf,
+      did: accountContext.did,
+      handle: account.handle,
+      active,
+    }).body,
+    200,
+    { layout: "settings" },
   );
 };
 
@@ -176,7 +125,9 @@ function mountProtectedPages({ console, security, renderAppPasswordForm }) {
       page(
         res,
         "Create app password",
-        `${selectedIdentity(account)}${renderAppPasswordForm({ csrf: browser.csrf, accountContext })}${backLink(accountContext)}`,
+        `${selectedIdentity(account)}${renderAppPasswordForm({ csrf: browser.csrf, accountContext })}<p><a href="/account?did=${encodeURIComponent(accountContext.did)}&amp;view=apps#app-passwords">Return to app passwords</a></p>`,
+        200,
+        { layout: "settings" },
       ),
   });
   console.mountProtectedPage("recovery", {
@@ -219,76 +170,98 @@ export function mountAccountSettingsPage({
         accountContext,
         canSwitchAccount,
       } = ctx;
-      const state = security
-        ? {
-            ...(await security.summary(principal)),
-            pendingEmailChallengeId:
-              await security.pendingEmailChallengeId(principal),
-          }
-        : { backupEmails: [], passwordEnabled: false };
-      const connected = await loadConnections(req, a.did);
-      const { appPasswords } = connected;
-      const migrationState = migration
-        ? await migration.status(principal, { did: a.did })
-        : null;
+      const view = ["account", "devices", "apps", "about"].includes(
+        req.query.view,
+      )
+        ? req.query.view
+        : "home";
       const csrf = b.csrf;
-      const identity = renderIdentityPanel({
-        a,
-        csrf,
-        security,
-        state,
-        renderHandle,
-        accountContext,
-        canSwitchAccount,
-      });
-      const backup = renderRecoveryPanel({
-        security,
-        state,
-        accountContext,
-      });
-      const passwords = renderPasswordPanel({
-        security,
-        legacy,
-        state,
-        csrf,
-        appPasswords,
-        renderAppPasswords,
-        accountContext,
-      });
-      const sessions = renderConnections({
-        ...connected,
-        csrf,
-        session,
-        b,
-        accountContext,
-      });
-      const statusAction = manageLink(
-        "status",
-        a.status === "active" ? "Deactivate account" : "Reactivate account",
-        accountContext,
-      );
-      const lifecycle = renderLifecycle({
-        csrf,
-        a,
-        statusAction,
-        accountContext,
-      });
-      const migrationPanel = renderMigration({
-        config,
-        a,
-        csrf,
-        accountContext,
-        migrationState,
-        migrationRecovery:
-          migrationState && migrationState.phase !== "complete"
-            ? await migration.pendingRecovery(a.did)
-            : null,
-        migration,
-      });
+      let content = "";
+      if (view === "account") {
+        const state = security
+          ? {
+              ...(await security.summary(principal)),
+              pendingEmailChallengeId:
+                await security.pendingEmailChallengeId(principal),
+            }
+          : { backupEmails: [], passwordEnabled: false };
+        const migrationState = migration
+          ? await migration.status(principal, { did: a.did })
+          : null;
+        const identity = renderIdentityPanel({
+          a,
+          csrf,
+          security,
+          state,
+          canSwitchAccount,
+        });
+        const backup = renderRecoveryPanelHtml({
+          security,
+          state,
+          accountContext,
+        });
+        const passwords = renderPasswordPanelHtml({
+          security,
+          legacy,
+          state,
+          accountContext,
+        });
+        const lifecycle = renderLifecycle({ csrf, a, accountContext });
+        const migrationPanel = renderMigration({
+          config,
+          a,
+          csrf,
+          accountContext,
+          migrationState,
+          migrationRecovery:
+            migrationState && migrationState.phase !== "complete"
+              ? await migration.pendingRecovery(a.did)
+              : null,
+          migration,
+        });
+        content = renderManagementRows({
+          email: a.email,
+          handle: a.handle,
+          passwordEnabled: state.passwordEnabled,
+          status: a.status,
+          identity,
+          handleForm: renderHandle({ a, csrf, accountContext }),
+          recovery: backup,
+          password: passwords,
+          lifecycle,
+          migration: migrationPanel || undefined,
+        }).body;
+      } else if (view === "devices" || view === "apps") {
+        const connected = await loadConnections(req, a.did, view);
+        const sessions = renderConnections({
+          ...connected,
+          csrf,
+          session,
+          b,
+          accountContext,
+          view,
+        });
+        content =
+          view === "apps"
+            ? `${sessions}<section id="app-passwords">${security && legacy ? renderAppPasswords({ appPasswords: connected.appPasswords, csrf, accountContext }) : "<p>App passwords are not available.</p>"}</section>`
+            : sessions;
+      }
       page(
         res,
-        "Account settings",
-        `<p>Manage your sign-in, recovery options, and connected applications.</p><nav class="section-nav" aria-label="Account sections"><a href="#identity">Identity</a><a href="#recovery">Recovery</a><a href="#passwords">Passwords</a><a href="#sessions">Sessions</a><a href="#lifecycle">Lifecycle</a>${migration ? '<a href="#migration">Data server</a>' : ""}</nav>${identity}${backup}${passwords}${sessions}${lifecycle}${migrationPanel}${form("/auth/logout", csrf, "", "Sign out", accountContext, 'class="signout"')}`,
+        view === "home" ? "Home" : view[0].toUpperCase() + view.slice(1),
+        renderAccountShell({
+          did: a.did,
+          handle: a.handle,
+          email: a.email,
+          pdsUrl: a.pdsUrl,
+          view,
+          canSwitchAccount,
+          csrf,
+          migrationAvailable: Boolean(migration),
+          content,
+        }).body,
+        200,
+        { layout: "account" },
       );
     }),
   );

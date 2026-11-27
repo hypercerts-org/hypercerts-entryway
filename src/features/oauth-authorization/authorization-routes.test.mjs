@@ -761,9 +761,14 @@ test("unusable redirect login_hints fall back to the sign-in page without reflec
 
     assert.deepEqual(f.emailCodes, [], extraQuery);
     assert.match(response.body, /action="\/auth\/email"/, extraQuery);
+    assert.equal(
+      [...response.body.matchAll(/<svg\b/g)].length,
+      2,
+      "only the two packaged brand assets are rendered",
+    );
     assert.doesNotMatch(
       response.body,
-      /<script|<svg|alert\(1\)|login_hint|x\.test|owner\.example/,
+      /<script|<svg\s+onload|alert\(1\)|login_hint|x\.test|owner\.example/,
       extraQuery,
     );
   }

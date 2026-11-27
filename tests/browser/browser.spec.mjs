@@ -1,3 +1,7 @@
+import {
+  openAccountSection,
+  openAccountView,
+} from "./support/account-navigation.mjs";
 import { test, expect } from "@playwright/test";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
@@ -223,7 +227,7 @@ async function signup(identity, { negativeOtp = false } = {}) {
       .fill(otp === "00000000" ? "11111111" : "00000000");
     await page.getByRole("button", { name: "Verify code" }).click();
     await expect(page.getByRole("alert")).toHaveText(
-      "Invalid or expired code. Please try again.",
+      "Error: Invalid or expired code. Please try again.",
     );
   }
   await page.getByLabel("Sign-in code").fill(otp);
@@ -523,10 +527,19 @@ test("handle update, deactivate, reactivate, revoke and delete use a disposable 
   const disposable = identities[2];
   await signup(disposable);
   await page.goto(`${config.issuer}/account`);
+  await openAccountView(page, "Account");
+  await openAccountSection(page, "Handle");
   const updated = `new-${randomUUID().replaceAll("-", "").slice(0, 14)}.entryway.atmosbox.test`;
   await page.getByLabel("New handle").fill(updated);
   await page.getByRole("button", { name: "Update handle" }).click();
-  await expect(page.locator("main")).toContainText(updated);
+  await expect(page.locator("#handle")).toBeVisible();
+  await expect(page.locator("#handle")).toContainText(
+    `Current handle: ${updated}`,
+  );
+  const returnUrl = new URL(page.url());
+  expect(returnUrl.searchParams.get("did")).toBe(disposable.did);
+  expect(returnUrl.searchParams.get("view")).toBe("account");
+  expect(returnUrl.hash).toBe("#handle");
   disposable.handle = updated;
   const handleResponse = await page.request.get(
     `https://${updated}/.well-known/atproto-did`,
@@ -549,6 +562,8 @@ test("handle update, deactivate, reactivate, revoke and delete use a disposable 
   await completeConsent(disposable.did);
   expect((await session("secondary")).session.handle).toBe(updated);
   await page.goto(`${config.issuer}/account`);
+  await openAccountView(page, "Account");
+  await openAccountSection(page, "Account status and deletion");
   await page
     .getByRole("link", { name: "Deactivate account", exact: true })
     .click();
@@ -582,6 +597,7 @@ test("handle update, deactivate, reactivate, revoke and delete use a disposable 
   expect((await session()).session.handle).toBe(updated);
   const current = await session();
   await page.goto(`${config.issuer}/account`);
+  await openAccountView(page, "Apps");
   await page.getByRole("button", { name: "Revoke all app sessions" }).click();
   const revoked = await page.request.post(
     `${config.clientUrl}/client/refresh`,
@@ -591,6 +607,8 @@ test("handle update, deactivate, reactivate, revoke and delete use a disposable 
     },
   );
   expect(revoked.ok()).toBe(false);
+  await openAccountView(page, "Account");
+  await openAccountSection(page, "Account status and deletion");
   await page
     .getByLabel("Type your handle to delete this test account")
     .fill(updated);

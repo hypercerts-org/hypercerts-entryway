@@ -1,5 +1,5 @@
-import { page, escapeHtml as esc } from "../../ui/html.mjs";
-import { accountUrl } from "../../ui/account-forms.mjs";
+import { page } from "../../ui/html.mjs";
+import { renderAppPasswordResult } from "#entryway-ssr/connected-apps";
 import { HttpError } from "../../http/http-error.mjs";
 import {
   endBrowserSession,
@@ -95,7 +95,13 @@ export function createConnectedAppsActions({
       return page(
         res,
         "App password created",
-        `<p>Copy this password into ${esc(item.name)} now. It will not be shown again.</p><code data-testid="app-password">${esc(item.password)}</code><p><a href="${accountUrl(account.did)}#passwords">Return to account settings</a></p>`,
+        renderAppPasswordResult({
+          name: item.name,
+          password: item.password,
+          did: account.did,
+        }).body,
+        200,
+        { layout: "settings" },
       );
     },
     "app-password-revoke": async ({ account, value }) => {

@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { captureGallery } from "./support/visual-gallery.mjs";
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -59,10 +60,30 @@ async function openOauthLogin(page, client = "primary") {
   const login = new URL("/client/login", config.clientUrl);
   login.searchParams.set("identifier", config.issuer);
   login.searchParams.set("client", client);
-  await page.goto(login.href);
+  const response = await page.goto(login.href);
   await expect(
     page.getByRole("heading", { name: "Sign in to authorize" }),
   ).toBeVisible();
+  return response;
+}
+
+async function assertBrandAndCsp(page, response, background, focus) {
+  const policy = response.headers()["content-security-policy"];
+  expect(policy).toContain("default-src 'none'");
+  expect(policy).toContain("form-action 'self'");
+  const button = page.getByRole("button", { name: "Send sign-in code" });
+  await expect(button).toHaveCSS("background-color", background);
+  await expect(button).toHaveCSS("color", "rgb(255, 255, 255)");
+  for (
+    let tab = 0;
+    tab < 20 &&
+    !(await button.evaluate((element) => element === document.activeElement));
+    tab++
+  )
+    await page.keyboard.press("Tab");
+  await expect(button).toBeFocused();
+  await expect(button).toHaveCSS("outline-style", "solid");
+  await expect(button).toHaveCSS("outline-color", focus);
 }
 
 test.describe.configure({ mode: "serial" });
@@ -73,7 +94,18 @@ test("trusted client branding falls back to Entryway for standalone sign-in", as
   const context = await browser.newContext({ ignoreHTTPSErrors: false });
   const page = await context.newPage();
   try {
-    await openOauthLogin(page, "primary");
+    let response = await openOauthLogin(page, "primary");
+    await assertBrandAndCsp(
+      page,
+      response,
+      "rgb(55, 87, 200)",
+      "rgb(40, 68, 172)",
+    );
+    await captureGallery(page, {
+      name: "branding-primary",
+      description: "Primary trusted client authorization branding",
+      heading: "Sign in to authorize",
+    });
     await expect(page.locator("main > small")).toHaveText(
       "Hypercerts · Entryway",
     );
@@ -85,7 +117,18 @@ test("trusted client branding falls back to Entryway for standalone sign-in", as
         ),
     ).toBe("#3757c8");
 
-    await openOauthLogin(page, "secondary");
+    response = await openOauthLogin(page, "secondary");
+    await assertBrandAndCsp(
+      page,
+      response,
+      "rgb(8, 126, 126)",
+      "rgb(0, 103, 103)",
+    );
+    await captureGallery(page, {
+      name: "branding-secondary",
+      description: "Secondary trusted client authorization branding",
+      heading: "Sign in to authorize",
+    });
     await expect(page.locator("main > small")).toHaveText(
       "Hypercerts test client · Entryway",
     );
@@ -97,7 +140,30 @@ test("trusted client branding falls back to Entryway for standalone sign-in", as
         ),
     ).toBe("#087e7e");
 
-    await page.goto(new URL("/login", config.issuer).href);
+    response = await openOauthLogin(page, "untrusted");
+    await assertBrandAndCsp(
+      page,
+      response,
+      "rgb(26, 19, 15)",
+      "rgb(26, 19, 15)",
+    );
+    await captureGallery(page, {
+      name: "branding-untrusted",
+      description: "Untrusted client neutral authorization branding",
+      heading: "Sign in to authorize",
+    });
+    response = await page.goto(new URL("/login", config.issuer).href);
+    await assertBrandAndCsp(
+      page,
+      response,
+      "rgb(26, 19, 15)",
+      "rgb(26, 19, 15)",
+    );
+    await captureGallery(page, {
+      name: "branding-neutral",
+      description: "Standalone neutral sign in branding",
+      heading: "Sign in",
+    });
     await expect(page.locator("main > small")).toHaveText(
       "Entryway account service",
     );
@@ -107,7 +173,7 @@ test("trusted client branding falls back to Entryway for standalone sign-in", as
         .evaluate((element) =>
           getComputedStyle(element).getPropertyValue("--accent").trim(),
         ),
-    ).toBe("#194e3b");
+    ).toBe("#1a130f");
   } finally {
     await context.close();
   }
@@ -224,9 +290,7 @@ test("resend invalidates the previous OTP and email correction binds the same fl
       .getByLabel("Personal data server")
       .selectOption(config.pds[0].id);
     await page.getByRole("button", { name: "Create account" }).click();
-    await expect(
-      page.getByRole("heading", { name: "Account settings" }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
     await expect(page.getByTestId("primary-email")).toContainText(
       replacementEmail,
     );
@@ -237,19 +301,22 @@ test("resend invalidates the previous OTP and email correction binds the same fl
       path: "artifacts/experience-account-desktop.png",
       fullPage: true,
     });
+    const homeLink = page
+      .getByRole("navigation", { name: "Account navigation" })
+      .getByRole("link", { name: "Home", exact: true });
+    await homeLink.focus();
+    await expect(homeLink).toBeFocused();
+    await expect(homeLink).toHaveCSS("outline-style", "solid");
     await page.keyboard.press("Tab");
-    await expect(page.locator('a[href="#identity"]')).toBeFocused();
-    expect(
-      await page
-        .locator('a[href="#identity"]')
-        .evaluate((element) => getComputedStyle(element).outlineStyle),
-    ).not.toBe("none");
+    await expect(
+      page
+        .getByRole("navigation", { name: "Account navigation" })
+        .getByRole("link", { name: "Account", exact: true }),
+    ).toBeFocused();
 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(new URL("/account", config.issuer).href);
-    await expect(
-      page.getByRole("heading", { name: "Account settings" }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Home" })).toBeVisible();
     await page.screenshot({
       path: "artifacts/experience-account-narrow.png",
       fullPage: true,
@@ -260,7 +327,7 @@ test("resend invalidates the previous OTP and email correction binds the same fl
     }));
     expect(widths.page).toBeLessThanOrEqual(widths.viewport + 1);
     await expect(
-      page.getByText(`Repository hosted at ${config.pds[0].url}`),
+      page.getByText(`Your account data is hosted at ${config.pds[0].url}.`),
     ).toBeVisible();
   } finally {
     await context.close();
@@ -291,6 +358,11 @@ test("an expired sign-in code is rejected and resend issues one usable replaceme
     await expect(page.locator("#otp-error")).toContainText(
       "Invalid or expired code",
     );
+    await captureGallery(page, {
+      name: "standalone-expired-code",
+      description: "Separate fixture expired code retry",
+      heading: "Check your email",
+    });
     expect(await countMailpitMessages({ recipient: email, since })).toBe(1);
 
     ageCooldown(flowId);
@@ -348,6 +420,11 @@ test("expired OAuth flow restarts from the stored PAR and preserves trusted requ
     await expect(
       page.getByRole("heading", { name: "Sign-in expired" }),
     ).toBeVisible();
+    await captureGallery(page, {
+      name: "oauth-expired-flow",
+      description: "Separate fixture expired OAuth flow with restart",
+      heading: "Sign-in expired",
+    });
     await expect(
       waitForMailpitCode({
         recipient: email,
@@ -368,6 +445,11 @@ test("expired OAuth flow restarts from the stored PAR and preserves trusted requ
     await expect(page.locator("main > small")).toHaveText(
       "Hypercerts · Entryway",
     );
+    await captureGallery(page, {
+      name: "oauth-restarted-flow",
+      description: "Separate fixture resumed original OAuth request",
+      heading: "Sign in to authorize",
+    });
     const restartedId = await page
       .locator('form[action="/auth/email"] input[name="flow"]')
       .inputValue();

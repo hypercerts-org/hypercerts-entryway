@@ -413,6 +413,15 @@ remain independent, while a revoked session or unbound DID cannot reuse an old
 form or fall through to a sibling account. Settings and email proofs use only the selected DID. Browser app-password creation rechecks the selected DID's binding inside the credential transaction, so a mailbox change committed meanwhile cannot attach the new credential to a sibling account. No account
 schema or persistent selection state is added.
 
+The account console presents an overview and separate Account, Devices, Apps,
+and About views, following the information architecture of the [stock PDS
+account UI](https://github.com/bluesky-social/atproto/tree/main/packages/oauth/oauth-provider-ui/src/routes/account/u/%24accountId).
+Account owns identity, recovery, lifecycle and enrolled data-server actions;
+Devices owns browser sessions and remembered devices; Apps owns application
+grants, sessions and app passwords. Links and action destinations retain the
+selected DID. Completed sign-outs and changes that invalidate the session return
+to sign-in instead of assuming that account access remains available.
+
 ### Confirm it's you
 
 Sensitive account-console actions need a recent browser session: one that signed

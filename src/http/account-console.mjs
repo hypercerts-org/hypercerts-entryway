@@ -1,8 +1,7 @@
 import express from "express";
 import { page, escapeHtml as esc } from "../ui/html.mjs";
-import { hidden } from "../ui/forms.mjs";
-import { accountUrl, manageUrl, settingsLink } from "../ui/account-forms.mjs";
-import { accountChooser } from "../ui/account-chooser.mjs";
+import { accountUrl, manageUrl } from "../ui/account-forms.mjs";
+import { renderAccountChooser } from "#entryway-ssr/ui";
 import { HttpError } from "./http-error.mjs";
 import {
   createPendingArrivalGuard,
@@ -11,11 +10,7 @@ import {
 import {
   noRecentLogin,
   retryableCodeFailures,
-  startPage,
-  confirmPage,
-  endedPage,
-  expiredPage,
-  unusablePage,
+  createRecentLoginPages,
 } from "./recent-login.mjs";
 const invalidSelection = () =>
   new HttpError(
@@ -43,7 +38,11 @@ export function createAccountConsole({
   oauth,
   security,
   legacy,
+  renderRecentLogin,
+  renderAccountError,
 }) {
+  const { startPage, confirmPage, endedPage, expiredPage, unusablePage } =
+    createRecentLoginPages(renderRecentLogin);
   const pendingArrival = createPendingArrivalGuard(accounts.storage);
   const guarded = (handler) => async (req, res, next) => {
     try {
@@ -59,8 +58,13 @@ export function createAccountConsole({
         recovery
           ? "Account change waiting for recovery"
           : "Account operation could not be completed",
-        `<p role="alert">${esc(error.message)}</p>${recovery ? "<p>Your saved change is still pending. Contact the service operator. Retrying or signing in again alone cannot settle an uncertain server request; continue the saved change after recovery is authorized.</p>" : ""}<p><a href="${esc(res.locals?.accountUrl ?? "/account")}">Return to account settings</a> · <a href="/login">Sign in again</a></p>`,
+        renderAccountError({
+          message: String(error.message ?? ""),
+          accountUrl: res.locals?.accountUrl ?? "/account",
+          recovery,
+        }).body,
         status >= 400 && status < 600 ? status : 400,
+        { layout: "settings" },
       );
     }
   };
@@ -74,13 +78,13 @@ export function createAccountConsole({
     return null;
   };
   const selectionForm = (browser, accounts) =>
-    accountChooser({
+    renderAccountChooser({
       accounts,
       action: "/account/select",
-      fields: hidden("csrf", browser.csrf),
+      fields: [{ name: "csrf", value: browser.csrf }],
       prompt:
         "More than one account is linked to this verified identity. Choose the account to manage.",
-    });
+    }).body;
   const authenticated = async (req, res) => {
     const session = await oauth.requireSession(req);
     if (!session?.emailVerified) {
@@ -103,6 +107,8 @@ export function createAccountConsole({
           res,
           "Choose an account",
           selectionForm(browser, resolution.accounts),
+          200,
+          { layout: "standalone" },
         );
         return null;
       }
@@ -203,11 +209,12 @@ export function createAccountConsole({
           "Too many codes were requested for this email address. Try again in a few minutes.",
         status: 429,
         signIn: true,
+        returnTo,
       });
     }
-    return confirmPage(res, ctx, { challengeId: begun.challengeId });
+    return confirmPage(res, ctx, { challengeId: begun.challengeId, returnTo });
   };
-  const runAction = async ({ handler, ctx, req, res }) => {
+  const runAction = async ({ destination, handler, ctx, req, res }) => {
     const value = (name) => String(req.body[name] ?? "").trim();
     try {
       await handler({ ...ctx, req, res, value, token: () => value("token") });
@@ -219,16 +226,27 @@ export function createAccountConsole({
       return page(
         res,
         "Account change waiting for recovery",
-        `<p role="alert">Your change has an uncertain server outcome. Contact the service operator; retrying alone cannot settle it.</p><p>The saved account is <strong>${esc(ctx.account.handle)}</strong> (<code>${esc(ctx.account.did)}</code>) on ${esc(pending.target)}. Keep this account and the original requested change when continuing after verified recovery.</p><p>${settingsLink(ctx.account.did)}</p>`,
+        renderAccountError({
+          message:
+            "Your change has an uncertain server outcome. Contact the service operator; retrying alone cannot settle it.",
+          accountUrl: accountUrl(ctx.account.did),
+          pending: {
+            handle: ctx.account.handle,
+            did: ctx.account.did,
+            target: pending.target,
+          },
+        }).body,
         409,
+        { layout: "settings" },
       );
     }
-    if (!res.headersSent) res.redirect(303, accountUrl(ctx.account.did));
+    if (!res.headersSent)
+      res.redirect(303, `${accountUrl(ctx.account.did)}${destination}`);
   };
   /** Every console action runs through here. A gated action from a session that
    * is no longer recent is not made: the user confirms, returns to the page
    * that owns it and makes the change again. */
-  const dispatch = async ({ action, handler, ctx, req, res }) => {
+  const dispatch = async ({ action, destination, handler, ctx, req, res }) => {
     // Resolve the request-carried DID against the live verified binding on every action.
     if (security) await security.summary(ctx.principal);
     if (!noRecentLogin.has(action) && !(await isRecent(ctx.principal))) {
@@ -238,8 +256,10 @@ export function createAccountConsole({
         notMade: true,
       });
     }
-    return await runAction({ handler, ctx, req, res });
+    return await runAction({ destination, handler, ctx, req, res });
   };
+  const cancelReturn = (req) =>
+    protectedPages.has(req.body.returnTo) ? req.body.returnTo : SETTINGS;
   const confirmWithCode = async (ctx, req, res) => {
     const challengeId = String(req.body.challengeId ?? "");
     const code = String(req.body.token ?? "").trim();
@@ -250,10 +270,12 @@ export function createAccountConsole({
         `${challengeId}.${code}`,
       );
     } catch (error_) {
-      if (error_.error === "ExpiredToken") return expiredPage(res, ctx);
+      if (error_.error === "ExpiredToken")
+        return expiredPage(res, ctx, cancelReturn(req));
       if (!retryableCodeFailures.has(error_.error)) throw error_;
       return confirmPage(res, ctx, {
         challengeId,
+        returnTo: cancelReturn(req),
         error: error_.message,
         status: error_.status,
       });
@@ -266,15 +288,19 @@ export function createAccountConsole({
       const issued = await security.resendReconfirm(ctx.principal, challengeId);
       return confirmPage(res, ctx, {
         challengeId: issued.challengeId,
+        returnTo: cancelReturn(req),
         resent: true,
       });
     } catch (error_) {
-      if (error_.error === "ExpiredToken") return expiredPage(res, ctx);
-      if (error_.error === "InvalidToken") return unusablePage(res, ctx);
+      if (error_.error === "ExpiredToken")
+        return expiredPage(res, ctx, cancelReturn(req));
+      if (error_.error === "InvalidToken")
+        return unusablePage(res, ctx, cancelReturn(req));
       // A refused new code leaves the earlier one usable.
       if (error_.error !== "RateLimitExceeded") throw error_;
       return confirmPage(res, ctx, {
         challengeId,
+        returnTo: cancelReturn(req),
         error: error_.message,
         status: error_.status,
       });
@@ -320,7 +346,7 @@ export function createAccountConsole({
       }),
     );
   };
-  const mountActions = (actions) => {
+  const mountActions = (actions, destinations = {}) => {
     app.post(
       "/account/:action",
       express.urlencoded({ extended: false, limit: "16kb" }),
@@ -334,6 +360,7 @@ export function createAccountConsole({
           if (!ctx) return;
           await dispatch({
             action,
+            destination: destinations[action] ?? "",
             handler: actions[action],
             ctx,
             req: request,

@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { renderAppPasswords } from "#entryway-ssr/connected-apps";
+import {
+  renderRecentLogin,
+  renderAccountError,
+} from "#entryway-ssr/account-settings";
 import { createAccountAccess } from "../../dist/src/accounts/account-access.mjs";
 import { mountAccountSettingsPage } from "../../dist/src/features/account-settings/page.mjs";
 import { createAccountConsole } from "../../dist/src/http/account-console.mjs";
@@ -217,6 +222,8 @@ function fixture({ authenticatedAt = new Date() } = {}) {
     },
   };
   const console = createAccountConsole({
+    renderRecentLogin,
+    renderAccountError,
     app,
     accounts: {
       ownership: {
@@ -239,10 +246,19 @@ function fixture({ authenticatedAt = new Date() } = {}) {
     console,
     async loadConnections(_req, did) {
       loadedDids.push(did);
-      return { appPasswords: { passwords: [] } };
+      return {
+        appPasswords: {
+          passwords: [{ name: "test app", createdAt: "2026-01-01T00:00:00Z" }],
+        },
+      };
     },
     renderConnections: () => "<section>Connections</section>",
-    renderAppPasswords: () => "",
+    renderAppPasswords: ({ appPasswords, csrf, accountContext }) =>
+      renderAppPasswords({
+        passwords: appPasswords.passwords,
+        csrf,
+        did: accountContext.did,
+      }).body,
     renderAppPasswordForm: () => "<form>app password form</form>",
     renderHandle: () => "",
     renderLifecycle: () => "",
@@ -255,27 +271,30 @@ function fixture({ authenticatedAt = new Date() } = {}) {
       .filter((name) => !fixtureActions.has(name))
       .map((name) => [name, async () => ran.push(name)]),
   );
-  console.mountActions({
-    ...policyActions,
-    revoke: async ({ account: selected }) => mutations.push(selected.did),
-    // A protected action reading its input both ways handlers do today.
-    "backup-request": async ({ account: selected, req, value }) => {
-      requests.push({
-        did: selected.did,
-        email: value("email"),
-        password: String(req.body.password ?? ""),
-      });
+  console.mountActions(
+    {
+      ...policyActions,
+      revoke: async ({ account: selected }) => mutations.push(selected.did),
+      // A protected action reading its input both ways handlers do today.
+      "backup-request": async ({ account: selected, req, value }) => {
+        requests.push({
+          did: selected.did,
+          email: value("email"),
+          password: String(req.body.password ?? ""),
+        });
+      },
+      // A mailbox-code step: its own challengeId and token fields share names with
+      // the confirmation form's.
+      "backup-confirm": async ({ account: selected, value, token }) => {
+        proofs.push({
+          did: selected.did,
+          challengeId: value("challengeId"),
+          token: token(),
+        });
+      },
     },
-    // A mailbox-code step: its own challengeId and token fields share names with
-    // the confirmation form's.
-    "backup-confirm": async ({ account: selected, value, token }) => {
-      proofs.push({
-        did: selected.did,
-        challengeId: value("challengeId"),
-        token: token(),
-      });
-    },
-  });
+    { revoke: "&view=apps#applications" },
+  );
 
   const response = () => ({
     headersSent: false,
@@ -303,12 +322,15 @@ function fixture({ authenticatedAt = new Date() } = {}) {
       return this;
     },
   });
-  const getPage = async (did) => {
+  const getPage = async (did, view) => {
     const res = response();
     await routes.get("GET /account")(
       {
         method: "GET",
-        query: did === undefined ? {} : { did },
+        query: {
+          ...(did === undefined ? {} : { did }),
+          ...(view ? { view } : {}),
+        },
         body: {},
         headers: {},
       },
@@ -440,6 +462,9 @@ test("multi-binding account page requires an explicit CSRF-protected choice", as
 
   const selected = await f.getPage(didB);
   assert.equal(selected.statusCode, 200);
+  assert.deepEqual(f.loadedDids, []);
+  const apps = await f.getPage(didB, "apps");
+  assert.equal(apps.statusCode, 200);
   assert.deepEqual(f.loadedDids, [didB]);
 });
 
@@ -471,7 +496,7 @@ test("stale selected-DID console requests return to visible email sign-in withou
 test("account actions remain pinned to each tab's DID and reject a revoked binding", async () => {
   const f = fixture();
   const tabA = await f.getPage(didA);
-  const tabB = await f.getPage(didB);
+  const tabB = await f.getPage(didB, "account");
   assert.match(tabA.body, new RegExp(didA));
   assert.doesNotMatch(tabA.body, new RegExp(didB));
   assert.match(tabB.body, new RegExp(didB));
@@ -486,8 +511,14 @@ test("account actions remain pinned to each tab's DID and reject a revoked bindi
   const first = await f.post({ did: didA });
   const second = await f.post({ did: didB });
   assert.deepEqual(f.mutations, [didA, didB]);
-  assert.equal(first.location, `/account?did=${encodeURIComponent(didA)}`);
-  assert.equal(second.location, `/account?did=${encodeURIComponent(didB)}`);
+  assert.equal(
+    first.location,
+    `/account?did=${encodeURIComponent(didA)}&view=apps#applications`,
+  );
+  assert.equal(
+    second.location,
+    `/account?did=${encodeURIComponent(didB)}&view=apps#applications`,
+  );
 
   f.setBindings([account(didB, "two.example.test")]);
   const revokedPage = await f.getPage(didA);
@@ -769,21 +800,22 @@ test("the confirmation forms need the console's CSRF token and selected account"
 
 const assertEnded = (
   res,
-  { status, heading, message, did, signIn = false },
+  { status, heading, message, did, signIn = false, destination = "account" },
 ) => {
   assert.equal(res.statusCode, status);
   assert.ok(res.body.includes(`<h1>${heading}</h1>`));
   assert.ok(res.body.includes(`role="alert">${message}</p>`));
   assert.ok(
-    res.body.includes(`href="/account?did=${encodeURIComponent(did)}"`),
+    res.body.includes(
+      `href="/account?did=${encodeURIComponent(did)}&amp;view=${destination}"`,
+    ),
   );
   assert.doesNotMatch(res.body, /<form|could not be completed/);
   if (signIn)
     // Only the rate-limit page points at sign-in, as one plain secondary line.
     assert.ok(
-      res.body.includes(
-        '<p class="muted">You can also <a href="/login">sign in again</a>.</p>',
-      ) && res.body.split("/login").length === 2,
+      res.body.includes(`href="/login?did=${encodeURIComponent(did)}"`) &&
+        res.body.split("/login?").length === 2,
     );
   else assert.doesNotMatch(res.body, /sign in again|\/login/i);
 };
@@ -858,6 +890,164 @@ test("a refused confirmation code explains the rate limit and offers a plain sig
         "Too many codes were requested for this email address. Try again in a few minutes.",
       did: didA,
       signIn: true,
+      destination: "account#recovery",
     },
   );
+});
+
+test("connected-app controls retain the selected DID and escape client names", async () => {
+  const { renderConnectedApps } = await import("#entryway-ssr/connected-apps");
+  const { body } = renderConnectedApps({
+    csrf,
+    did: didB,
+    grants: [["<client>", { authorizedScopes: ["read"] }]],
+    tokens: [],
+    legacySessions: [],
+    baSessions: [],
+    devices: [],
+    sessionId: "session-one",
+    deviceId: "device-one",
+  });
+  assert.match(body, /&lt;client>/);
+  assert.doesNotMatch(body, /<client>/);
+  assert.match(body, /action="\/account\/grant-revoke"/);
+  assert.match(body, new RegExp(`name="did" value="${didB}"`));
+  assert.match(body, new RegExp(`name="csrf" value="${csrf}"`));
+});
+
+test("app password inventory and revoke control remain in the apps section", async () => {
+  const response = await fixture().getPage(didA, "apps");
+  const section = response.body.match(
+    /<section id="app-passwords"[\s\S]*?<\/section>/,
+  )?.[0];
+  assert.ok(section);
+  assert.match(
+    section,
+    /<li>[\s\S]*?test app[\s\S]*?action="\/account\/app-password-revoke"/,
+  );
+  assert.match(section, new RegExp(`name="did" value="${didA}"`));
+});
+
+test("account navigation preserves the selected DID across every view", async () => {
+  const f = fixture();
+  for (const did of [didA, didB]) {
+    for (const view of ["home", "account", "devices", "apps", "about"]) {
+      const response = await f.getPage(did, view === "home" ? undefined : view);
+      assert.equal(response.statusCode, 200);
+      assert.match(
+        response.body,
+        new RegExp(`<h1>${view[0].toUpperCase() + view.slice(1)}</h1>`),
+      );
+      assert.match(response.body, /aria-label="Account navigation"/);
+      assert.match(
+        response.body,
+        new RegExp(
+          `href="/account\\?did=${encodeURIComponent(did)}(?:&amp;view=${view})?" aria-current="page"`,
+        ),
+      );
+      assert.doesNotMatch(
+        response.body,
+        new RegExp(did === didA ? didB : didA),
+      );
+    }
+  }
+});
+
+test("account controls are separated by destination", async () => {
+  const f = fixture();
+  const home = await f.getPage(didA);
+  const account = await f.getPage(didA, "account");
+  const devices = await f.getPage(didA, "devices");
+  const apps = await f.getPage(didA, "apps");
+  const about = await f.getPage(didA, "about");
+  assert.doesNotMatch(
+    home.body,
+    /action="\/account\/(?:grant-revoke|app-password-revoke)"/,
+  );
+  assert.match(account.body, /id="identity"/);
+  assert.match(account.body, /id="passwords"/);
+  assert.doesNotMatch(account.body, /action="\/account\/app-password-revoke"/);
+  assert.match(apps.body, /action="\/account\/app-password-revoke"/);
+  assert.doesNotMatch(devices.body, /action="\/account\/app-password-revoke"/);
+  assert.doesNotMatch(about.body, /action="\/account\/app-password-revoke"/);
+});
+
+test("recent confirmation cancel links retain the selected DID and destination", async () => {
+  const f = fixture({ authenticatedAt: minutesAgo(11) });
+  for (const did of [didA, didB]) {
+    for (const [name, destination] of [
+      ["password", "account#passwords"],
+      ["recovery", "account#recovery"],
+      ["status", "account#lifecycle"],
+      ["app-password", "apps#app-passwords"],
+    ]) {
+      const result = await f.getManage(name, did);
+      assert.equal(result.statusCode, 200);
+      assert.ok(
+        result.body.includes(
+          `href="/account?did=${encodeURIComponent(did)}&amp;view=${destination}"`,
+        ),
+        `${name} cancel link for ${did}`,
+      );
+    }
+  }
+});
+
+test("ended confirmation keeps allowlisted destinations and rejects untrusted return targets", async () => {
+  const f = fixture({ authenticatedAt: minutesAgo(11) });
+  for (const [returnTo, destination] of [
+    ["recovery", "account#recovery"],
+    ["app-password", "apps#app-passwords"],
+    ["https://evil.example", "account"],
+  ]) {
+    f.failWith(
+      "complete",
+      new HttpError(400, "ExpiredToken", "This token has expired"),
+    );
+    const expired = await f.postConfirm({
+      did: didB,
+      body: { challengeId: "unused", token: "12345678", returnTo },
+    });
+    assertEnded(expired, {
+      status: 400,
+      heading: "Confirmation code expired",
+      message: "This code has expired. Start the change again.",
+      did: didB,
+      destination,
+    });
+    f.failWith(
+      "resend",
+      new HttpError(400, "InvalidToken", "Invalid or already used token"),
+    );
+    const invalid = await f.postConfirm({
+      did: didB,
+      body: { challengeId: "unused", resend: "1", returnTo },
+    });
+    assertEnded(invalid, {
+      status: 400,
+      heading: "Confirmation code no longer valid",
+      message: "This code can no longer be used. Start the change again.",
+      did: didB,
+      destination,
+    });
+  }
+  f.failWith(
+    "begin",
+    new HttpError(429, "RateLimitExceeded", "Too many attempts"),
+  );
+  for (const [returnTo, destination] of [
+    ["recovery", "account#recovery"],
+    ["app-password", "apps#app-passwords"],
+  ]) {
+    const limited = await f.postStart({ did: didB, body: { returnTo } });
+    assertEnded(limited, {
+      status: 429,
+      heading: "Too many codes requested",
+      message:
+        "Too many codes were requested for this email address. Try again in a few minutes.",
+      did: didB,
+      signIn: true,
+      destination,
+    });
+  }
 });

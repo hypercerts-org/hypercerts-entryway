@@ -195,7 +195,9 @@ export function mountEmailLogin({
       const flow = await newFlow(browser, {
         ...(requestedDid ? { accountHint: requestedDid } : {}),
       });
-      page(res, "Sign in", loginForm(flow, browser));
+      page(res, "Sign in", loginForm(flow, browser), 200, {
+        layout: "standalone",
+      });
     }),
   );
   app.post(

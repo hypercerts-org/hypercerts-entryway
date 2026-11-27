@@ -1,4 +1,10 @@
+import {
+  openAccountSection,
+  openAccountView,
+} from "./support/account-navigation.mjs";
 import { test, expect } from "@playwright/test";
+import { captureGallery } from "./support/visual-gallery.mjs";
+import { assertCenteredMonospace } from "./support/visual-layout.mjs";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
@@ -80,7 +86,7 @@ async function signIn(page, identity, { create = false } = {}) {
       .click();
   }
   await expect(
-    page.getByRole("heading", { name: "Account settings", exact: true }),
+    page.getByRole("heading", { name: "Home", exact: true }),
   ).toBeVisible();
   identity.did = await page.getByTestId("account-did").textContent();
 }
@@ -108,8 +114,11 @@ async function mailText(messageId) {
 
 test.afterAll(() => database.close());
 
-const manageRecovery = (page) =>
-  page.getByRole("link", { name: "Manage recovery email" }).click();
+const manageRecovery = async (page) => {
+  await openAccountView(page, "Account");
+  await openAccountSection(page, "Recovery email");
+  await page.getByRole("link", { name: "Manage recovery email" }).click();
+};
 
 async function addRecoveryEmail(page, email) {
   const since = Date.now();
@@ -145,12 +154,15 @@ test("a session signed in more than ten minutes ago confirms it's you before a p
     // sign-in, with no confirmation step.
     await page.goto(new URL("/account", config.issuer).href);
     await expect(page.getByTestId("primary-email")).toContainText(owner.email);
+    await openAccountView(page, "Apps");
     const revoked = posted(page, "/account/revoke");
     await accountForm(page, "revoke").getByRole("button").click();
     expect((await revoked).status()).toBe(303);
     await expect(
-      page.getByRole("heading", { name: "Account settings", exact: true }),
+      page.getByRole("heading", { name: "Apps", exact: true }),
     ).toBeVisible();
+    await openAccountView(page, "Account");
+    await openAccountSection(page, "Email and identity");
 
     // An email change already sends its own code to the primary email, so it
     // goes straight to that step without a separate confirmation.
@@ -171,6 +183,11 @@ test("a session signed in more than ten minutes ago confirms it's you before a p
       page.getByRole("heading", { name: "Confirm it's you" }),
     ).toBeVisible();
     expect(new URL(page.url()).pathname).toBe("/account/manage/recovery");
+    await captureGallery(page, {
+      name: "recent-proof-start",
+      description: "Separate account aged session confirmation start",
+      heading: "Confirm it's you",
+    });
     await expect(accountForm(page, "backup-request")).toHaveCount(0);
     await expect(
       page.locator("strong", { hasText: owner.email }),
@@ -179,6 +196,12 @@ test("a session signed in more than ten minutes ago confirms it's you before a p
     const sent = posted(page, "/account/confirm/start");
     await page.getByRole("button", { name: "Send code" }).click();
     expect((await sent).status()).toBe(200);
+    await captureGallery(page, {
+      name: "recent-proof-code",
+      description: "Separate account aged session empty confirmation code",
+      heading: "Confirm it's you",
+    });
+    await assertCenteredMonospace(page.getByLabel("Confirmation code"));
     const challengeId = await page
       .locator('form[action="/account/confirm"] input[name="challengeId"]')
       .first()
@@ -196,6 +219,7 @@ test("a session signed in more than ten minutes ago confirms it's you before a p
     try {
       const otherPage = await otherContext.newPage();
       await signIn(otherPage, owner);
+      await openAccountView(otherPage, "Apps");
       const form = accountForm(otherPage, "revoke");
       const foreign = await otherPage.request.post(
         new URL("/account/confirm", config.issuer).href,
@@ -226,6 +250,12 @@ test("a session signed in more than ten minutes ago confirms it's you before a p
       "Invalid or already used token",
     );
 
+    await captureGallery(page, {
+      name: "recent-proof-invalid",
+      description: "Separate account confirmation rejected code retry",
+      heading: "Confirm it's you",
+    });
+
     // The other session's attempt and the wrong guess did not consume the
     // owner's code. Confirming returns to the page the user opened.
     await page.getByLabel("Confirmation code").fill(first.code);
@@ -236,6 +266,11 @@ test("a session signed in more than ten minutes ago confirms it's you before a p
       page.getByRole("heading", { name: "Manage recovery email" }),
     ).toBeVisible();
     expect(new URL(page.url()).pathname).toBe("/account/manage/recovery");
+    await captureGallery(page, {
+      name: "recent-proof-return",
+      description: "Separate account confirmation returned to recovery form",
+      heading: "Manage recovery email",
+    });
 
     // The confirmation covers both recovery-email steps.
     const backup = await addRecoveryEmail(page, backupEmail);
@@ -249,7 +284,9 @@ test("a session signed in more than ten minutes ago confirms it's you before a p
       new URL("/account/confirm", config.issuer).href,
       {
         form: {
-          csrf: await accountForm(page, "revoke")
+          csrf: await page
+            .locator('form[action="/auth/logout"]')
+            .first()
             .locator('input[name="csrf"]')
             .inputValue(),
           did: owner.did,
@@ -339,6 +376,8 @@ test("five wrong codes lock a confirmation code until a new one is sent", async 
   try {
     await signIn(page, lockout, { create: true });
     ageSessions(lockout.email, 11);
+    await openAccountView(page, "Account");
+    await openAccountSection(page, "Account password");
     await page.getByRole("link", { name: "Set account password" }).click();
     await expect(
       page.getByRole("heading", { name: "Confirm it's you" }),
@@ -394,6 +433,7 @@ test("a session past the ten-minute window still revokes app passwords, changes 
   });
   try {
     await signIn(page, exempt, { create: true });
+    await openAccountView(page, "Apps");
     await page.getByRole("link", { name: "Create app password" }).click();
     await accountForm(page, "app-password-create")
       .getByLabel("App password name")
@@ -405,16 +445,22 @@ test("a session past the ten-minute window still revokes app passwords, changes 
 
     ageSessions(exempt.email, 11);
     await page.goto(new URL("/account", config.issuer).href);
-    const row = page.locator("#passwords li").filter({ hasText: appPassword });
+    await openAccountView(page, "Apps");
+    const row = page
+      .locator("#app-passwords li")
+      .filter({ hasText: appPassword });
     await row.getByRole("button", { name: "Revoke app password" }).click();
-    await expect(page.locator("#passwords")).not.toContainText(appPassword);
+    await expect(page.locator("#app-passwords")).not.toContainText(appPassword);
     await expect(confirmHeading).toHaveCount(0);
 
+    await openAccountView(page, "Account");
+    await openAccountSection(page, "Handle");
     await page.getByLabel("New handle").fill(handle);
     await page.getByRole("button", { name: "Update handle" }).click();
     await expect(page.locator("main")).toContainText(handle);
     await expect(confirmHeading).toHaveCount(0);
 
+    await openAccountSection(page, "Account status and deletion");
     await page
       .getByLabel("Type your handle to delete this test account")
       .fill(handle);
@@ -434,18 +480,112 @@ test("changing an existing password asks only for the new one", async ({
   const page = await context.newPage();
   try {
     await signIn(page, passwordChange, { create: true });
+    await openAccountView(page, "Account");
+    await openAccountSection(page, "Account password");
     await page.getByRole("link", { name: "Set account password" }).click();
     await setAccountPassword(page, `First password ${run}!`);
 
     // Setting a password signs every session out; a fresh sign-in is enough
     // proof to change it, with no current password.
     await signIn(page, passwordChange);
+    await openAccountView(page, "Account");
+    await openAccountSection(page, "Account password");
     await page.getByRole("link", { name: "Change account password" }).click();
     await expect(
       accountForm(page, "password-set").getByLabel("New account password"),
     ).toBeVisible();
     await expect(page.getByLabel(/current password/i)).toHaveCount(0);
     await setAccountPassword(page, `Second password ${run}!`);
+  } finally {
+    await context.close();
+  }
+});
+
+test("expired recent confirmation offers a recovery destination", async ({
+  browser,
+}) => {
+  const account = {
+    email: `confirm-expired-${run}@example.com`,
+    handle: `cx-${run}.entryway.atmosbox.test`,
+    pdsId: "pds1",
+  };
+  const context = await browser.newContext({ ignoreHTTPSErrors: false });
+  try {
+    const page = await context.newPage();
+    await signIn(page, account, { create: true });
+    ageSessions(account.email, 11);
+    await manageRecovery(page);
+    const since = Date.now();
+    await page.getByRole("button", { name: "Send code" }).click();
+    const challengeId = await accountForm(page, "confirm")
+      .locator('input[name="challengeId"]')
+      .first()
+      .inputValue();
+    const code = await waitForMailpitCode({ recipient: account.email, since });
+    const row = database
+      .prepare("SELECT value FROM key_value_state WHERE namespace=? AND key=?")
+      .get("security:challenges", challengeId);
+    expect(row).toBeTruthy();
+    const challenge = JSON.parse(row.value);
+    challenge.expiresAt = Date.now() - 1_000;
+    const updated = database
+      .prepare("UPDATE key_value_state SET value=? WHERE namespace=? AND key=?")
+      .run(JSON.stringify(challenge), "security:challenges", challengeId);
+    expect(Number(updated.changes)).toBe(1);
+    await page.getByLabel("Confirmation code").fill(code.code);
+    const response = posted(page, "/account/confirm");
+    await page.getByRole("button", { name: "Confirm and continue" }).click();
+    expect((await response).status()).toBe(400);
+    await expect(
+      page.getByRole("heading", { name: "Confirmation code expired" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "Return to account settings" }),
+    ).toBeVisible();
+    await captureGallery(page, {
+      name: "recent-proof-expired",
+      description: "Separate account expired confirmation recovery destination",
+      heading: "Confirmation code expired",
+    });
+  } finally {
+    await context.close();
+  }
+});
+
+test("a replaced confirmation directs the user to restart", async ({
+  browser,
+}) => {
+  const account = {
+    email: `confirm-replaced-${run}@example.com`,
+    handle: `cr-${run}.entryway.atmosbox.test`,
+    pdsId: "pds1",
+  };
+  const context = await browser.newContext({ ignoreHTTPSErrors: false });
+  try {
+    const first = await context.newPage();
+    await signIn(first, account, { create: true });
+    ageSessions(account.email, 11);
+    await manageRecovery(first);
+    await first.getByRole("button", { name: "Send code" }).click();
+    const second = await context.newPage();
+    await second.goto(new URL("/account", config.issuer).href);
+    await manageRecovery(second);
+    await second.getByRole("button", { name: "Send code" }).click();
+    const response = posted(first, "/account/confirm");
+    await first.getByRole("button", { name: "Send a new code" }).click();
+    expect((await response).status()).toBe(400);
+    await expect(
+      first.getByRole("heading", { name: "Confirmation code no longer valid" }),
+    ).toBeVisible();
+    await expect(
+      first.getByRole("link", { name: "Return to account settings" }),
+    ).toBeVisible();
+    await captureGallery(first, {
+      name: "recent-proof-unusable",
+      description:
+        "Separate account replaced confirmation recovery destination",
+      heading: "Confirmation code no longer valid",
+    });
   } finally {
     await context.close();
   }

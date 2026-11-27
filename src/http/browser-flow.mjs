@@ -1,10 +1,11 @@
+import { renderFlowError } from "#entryway-ssr/ui";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import express from "express";
 import {
   AuthorizationError,
   InvalidRequestError,
 } from "@atproto/oauth-provider/errors";
-import { page, escapeHtml } from "../ui/html.mjs";
+import { page } from "../ui/html.mjs";
 import { hidden } from "../ui/forms.mjs";
 import { resolveBrand } from "../ui/experience.js";
 const FLOW_LIFETIME = 15 * 60_000;
@@ -80,7 +81,10 @@ export function createBrowserFlow({
       title,
       body,
       status,
-      clientFormPolicy(flow),
+      {
+        ...clientFormPolicy(flow),
+        layout: flow?.requestUri ? "oauth" : "standalone",
+      },
       resolveBrand(flow?.clientId, brandClients),
     );
   const loadBrowser = async (req, res, rotate = false) => {
@@ -200,16 +204,26 @@ export function createBrowserFlow({
       if (err instanceof AuthorizationError)
         return redirectAuthorizationError(res, err);
       if (err instanceof ExpiredFlowError) {
-        const restartForm = err.flow.requestUri
-          ? `<p>Your sign-in expired. Restart it to continue the same verified application request.</p><form method="post" action="/auth/restart">${fields(err.flow, err.browser)}<button>Restart sign-in</button></form>`
-          : '<p>Your sign-in expired. Start again to request a new code.</p><a href="/login">Start a new sign-in</a>';
-        return pageForFlow(res, "Sign-in expired", restartForm, err.flow, 410);
+        const restart = err.flow.requestUri
+          ? { flow: err.flow.id, csrf: err.browser.csrf }
+          : undefined;
+        const message = restart
+          ? "Your sign-in expired. Restart it to continue the same verified application request."
+          : "Your sign-in expired. Start again to request a new code.";
+        return pageForFlow(
+          res,
+          "Sign-in expired",
+          renderFlowError({ message, ...(restart ? { restart } : {}) }).body,
+          err.flow,
+          410,
+        );
       }
       page(
         res,
         "Unable to continue",
-        `<p role="alert">${escapeHtml(err.message)}</p><a href="/login">Start a new sign-in</a>`,
+        renderFlowError({ message: err.message }).body,
         err.status >= 400 && err.status < 600 ? err.status : 400,
+        { layout: "standalone" },
       );
     }
   };

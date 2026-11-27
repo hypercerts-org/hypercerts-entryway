@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { captureGallery } from "./support/visual-gallery.mjs";
 import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
 import {
   createSharedEmailPair,
@@ -52,6 +53,12 @@ test("a remembered device older than seven days sends its code without asking fo
     await listRememberedAccounts(page);
     await expect(emailCodeButton(page)).toBeVisible();
     await expect(consentForm(page, account.did)).toHaveCount(0);
+    await captureGallery(page, {
+      name: "oauth-remembered-entry",
+      description: "Separate account remembered device requires email proof",
+      heading: "Sign in to authorize",
+      did: account.did,
+    });
 
     // Choosing the account sends the code to its own email, never typed here.
     const since = Date.now();
@@ -63,6 +70,11 @@ test("a remembered device older than seven days sends its code without asking fo
       `***${localPart.slice(-1)}@***e.***t`,
     );
     await expect(page.locator("#change-email")).toHaveValue("");
+    await captureGallery(page, {
+      name: "oauth-remembered-code",
+      description: "Separate account remembered device masked mailbox code",
+      heading: "Check your email",
+    });
     const html = await page.content();
     expect(html).not.toContain(account.email);
     expect(html).not.toContain(localPart);

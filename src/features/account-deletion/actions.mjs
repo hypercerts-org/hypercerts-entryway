@@ -1,5 +1,8 @@
 import { page } from "../../ui/html.mjs";
-import { codeField, field, hidden, nextStep } from "../../ui/account-forms.mjs";
+import {
+  renderDeleteConfirmation,
+  renderDeleteResult,
+} from "#entryway-ssr/account-deletion";
 import { HttpError } from "../../http/http-error.mjs";
 
 export function createDeletionActions({ security, console }) {
@@ -22,27 +25,19 @@ export function createDeletionActions({ security, console }) {
         );
       const issued = await security.requestAccountDeleteForBrowser(principal);
       const state = await security.summary(principal);
-      return nextStep(res, {
-        title: "Confirm account deletion",
-        csrf: browser.csrf,
-        action: "delete-confirm",
-        contents:
-          hidden("confirm", account.handle) +
-          hidden("challengeId", issued.challengeId ?? "") +
-          codeField("Deletion code") +
-          (state.passwordEnabled
-            ? field(
-                "password",
-                "Current password",
-                "password",
-                'autocomplete="current-password" maxlength="256"',
-              )
-            : ""),
-        button: "Permanently delete account",
-        message:
-          "A deletion code was sent to your primary email. This deletes your repository and blobs.",
-        accountContext,
-      });
+      return page(
+        res,
+        "Confirm account deletion",
+        renderDeleteConfirmation({
+          csrf: browser.csrf,
+          did: accountContext.did,
+          handle: account.handle,
+          challengeId: issued.challengeId ?? "",
+          passwordEnabled: state.passwordEnabled,
+        }).body,
+        200,
+        { layout: "standalone" },
+      );
     },
     "delete-confirm": async ({ req, res, account, value, token }) => {
       console.needed();
@@ -58,11 +53,9 @@ export function createDeletionActions({ security, console }) {
         token: `${value("challengeId")}.${token()}`,
         password: String(req.body.password ?? "") || undefined,
       });
-      return page(
-        res,
-        "Test account deleted",
-        '<p>The PDS repository and account were deleted. The DID history remains available in the PLC directory.</p><a href="/login">Return to sign in</a>',
-      );
+      return page(res, "Test account deleted", renderDeleteResult().body, 200, {
+        layout: "settings",
+      });
     },
   };
 }

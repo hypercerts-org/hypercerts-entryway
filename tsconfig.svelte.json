@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "allowArbitraryExtensions": true
+  },
+  "include": ["src/**/*.svelte", "src/**/ssr.ts"],
+  "exclude": ["node_modules", "dist"]
+}

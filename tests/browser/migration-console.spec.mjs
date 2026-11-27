@@ -1,3 +1,7 @@
+import {
+  openAccountSection,
+  openAccountView,
+} from "./support/account-navigation.mjs";
 import { test, expect } from "@playwright/test";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
@@ -52,10 +56,11 @@ async function signIn(page, create = false, pendingMigration = false) {
     await page.getByRole("link", { name: "Open account settings" }).click();
   }
   await expect(
-    page.getByRole("heading", { name: "Account settings", exact: true }),
+    page.getByRole("heading", { name: "Home", exact: true }),
   ).toBeVisible();
 }
 async function appSession(page, pds, name) {
+  await openAccountView(page, "Apps");
   await page.getByRole("link", { name: "Create app password" }).click();
   await accountForm(page, "app-password-create")
     .getByLabel("App password name")
@@ -114,6 +119,8 @@ test("console migrates its own DID, record and blob between enrolled PDSs with m
   const record = await created.json();
 
   await page.goto(`${config.issuer}/account`);
+  await openAccountView(page, "Account");
+  await openAccountSection(page, "Data server");
   const csrf = await page.locator('input[name="csrf"]').first().inputValue();
   // Account actions name their DID; send it so these negative controls reach
   // the migration guards instead of failing account selection.
@@ -207,6 +214,8 @@ test("console migrates its own DID, record and blob between enrolled PDSs with m
     await signIn(page, false, true);
     await page.reload();
     await expect(page.getByTestId("account-did")).toHaveText(did);
+    await openAccountView(page, "Account");
+    await openAccountSection(page, "Data server");
     await expect(page.locator("#migration")).toContainText(target.url);
     await expect(page.locator("#migration")).toContainText(
       "Contact the service operator",
@@ -288,6 +297,8 @@ test("console migrates its own DID, record and blob between enrolled PDSs with m
     expect(approved.status()).toBe(200);
     expect((await approved.json()).pending).toBe(true);
     await page.goto(`${config.issuer}/account`);
+    await openAccountView(page, "Account");
+    await openAccountSection(page, "Data server");
     const resume = page.getByRole("button", {
       name: "Resume data server migration",
     });
@@ -333,6 +344,8 @@ test("console migrates its own DID, record and blob between enrolled PDSs with m
         ).status(),
       ).toBe(409);
       await page.goto(`${config.issuer}/account`);
+      await openAccountView(page, "Account");
+      await openAccountSection(page, "Data server");
       const retry = page.getByRole("button", {
         name: "Resume data server migration",
       });
@@ -400,6 +413,8 @@ test("console migrates its own DID, record and blob between enrolled PDSs with m
 
   await signIn(page);
   await expect(page.getByTestId("account-did")).toHaveText(did);
+  await openAccountView(page, "Account");
+  await openAccountSection(page, "Email and identity");
   await expect(page.locator("#identity")).toContainText(target.url);
   const rkey = record.uri.split("/").at(-1);
   const copiedRecord = await page.request.get(

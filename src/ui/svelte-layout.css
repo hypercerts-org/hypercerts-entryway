@@ -1,0 +1,655 @@
+[data-hc-theme="certified"][data-brand] {
+  --hc-text-ink: var(--text);
+  --hc-text-on-fill: var(--accent-text);
+  --hc-surface-panel: var(--surface);
+  --hc-fill-solid: var(--accent);
+  --hc-fill-solid-hover: color-mix(in oklab, var(--accent) 90%, transparent);
+  --hc-focus-ring: var(--focus);
+  --hc-line-hairline: var(--border);
+}
+html[data-brand="entryway"] {
+  --page: #e7e7e7;
+  --surface: #f7f7f7;
+  --text: #1a130f;
+  --muted: #666;
+  --border: #dedede;
+  --accent: #1a130f;
+  --accent-text: #fff;
+  --focus: #1a130f;
+}
+body {
+  background: var(--page);
+}
+body:has(> main[data-layout="oauth"]),
+body:has(> main[data-layout="standalone"]) {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+main[data-layout="oauth"],
+main[data-layout="standalone"],
+main[data-layout="settings"] {
+  min-height: 0;
+  margin: 24px auto;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+}
+main[data-layout="oauth"] {
+  width: min(497px, calc(100% - 50px));
+  padding: 40px 48px;
+}
+main[data-layout="standalone"] {
+  width: min(420px, calc(100% - 32px));
+}
+main[data-layout="settings"] {
+  width: min(640px, calc(100% - 32px));
+}
+main[data-layout="oauth"] > small,
+main[data-layout="standalone"] > small {
+  display: none;
+}
+main[data-layout="oauth"] > h1,
+main[data-layout="standalone"] > h1,
+main[data-layout="settings"] > h1 {
+  font-family: var(--hc-font-display);
+  font-weight: var(--hc-weight-display);
+}
+main[data-layout="oauth"] > h1,
+main[data-layout="standalone"] > h1 {
+  text-align: center;
+}
+main[data-layout="oauth"] > h1 {
+  font-size: 32px;
+}
+main[data-layout="standalone"] > h1 {
+  font-size: 24px;
+}
+.account-choice {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+  background: var(--hc-surface-panel);
+  color: var(--hc-text-ink);
+  border: 1px solid var(--hc-line-hairline);
+  border-radius: 10px;
+}
+.account-choice-details,
+.consent-identity-details {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.account-choice-details strong,
+.consent-identity-details strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.account-choice small {
+  display: block;
+  overflow-wrap: anywhere;
+  font-weight: 400;
+}
+.account-choice:focus-visible {
+  outline: 3px solid var(--hc-focus-ring);
+  outline-offset: 3px;
+}
+.primary-action {
+  width: 100%;
+  justify-content: center;
+}
+main[data-layout]:not([data-layout="oauth"])
+  input[autocomplete="one-time-code"] {
+  text-align: center;
+  font-family: monospace;
+}
+.code-form {
+  container-type: inline-size;
+}
+.otp-cells {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 4px;
+  position: relative;
+}
+.otp-cell {
+  height: 56px;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.otp-cells .oauth-code {
+  /* Native inputs scroll to reveal the end caret; give it half a cell of
+     room at each edge without shifting the characters inside the cells. */
+  --otp-overhang: calc((100cqw - 28px) / 16);
+  position: absolute;
+  inset: 0 auto 0 calc(-1 * var(--otp-overhang));
+  width: calc(100% + 2 * var(--otp-overhang));
+  height: 56px;
+  border: 0;
+  background: transparent;
+  font-family: monospace;
+  font-size: 20px;
+  text-align: left;
+  letter-spacing: calc((100cqw + 4px) / 8 - 1ch);
+  padding: 0 0 0 calc((100cqw - 28px) / 16 - 0.5ch + var(--otp-overhang));
+}
+.consent-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.consent-identity small,
+.scope-list code {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.scope-list {
+  padding-left: 1.2em;
+}
+.consent-actions {
+  display: flex;
+  gap: 12px;
+}
+.consent-actions .primary-action {
+  width: auto;
+  flex: 1;
+}
+main[data-layout="settings"] > .account-header-action {
+  float: right;
+  margin-top: -4.5em;
+}
+main[data-layout="settings"] > .account-header-action button {
+  margin: 0;
+}
+@media (max-width: 480px) {
+  main[data-layout="settings"] > .account-header-action {
+    float: none;
+    margin: 0 0 1rem;
+  }
+  .consent-actions {
+    flex-direction: column;
+  }
+}
+
+.auth-brandmark {
+  display: flex;
+  justify-content: center;
+  margin: 24px 0 48px;
+}
+.auth-brandmark svg {
+  width: 48px;
+  height: 48px;
+}
+.auth-attribution {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  margin: -8px 0 24px;
+}
+.auth-attribution svg {
+  display: block;
+  width: 76px;
+  height: auto;
+}
+
+.remembered-account {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.remembered-account small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.remembered-account form {
+  margin-left: auto;
+}
+
+main[data-layout="oauth"]:has(.account-choice) {
+  padding: 16px;
+}
+main[data-layout="oauth"]:has(.account-choice) .auth-brandmark {
+  display: none;
+}
+main[data-layout="oauth"]:has(.account-choice) > h1 {
+  font-size: 20px;
+}
+.another-email-choice {
+  display: flex;
+  justify-content: space-between;
+}
+@media (max-width: 600px) {
+  main[data-layout="standalone"],
+  main[data-layout="settings"] {
+    padding: 32px 24px;
+  }
+  main[data-layout="oauth"] {
+    padding: 40px 48px;
+  }
+  main[data-layout="oauth"]:has(.account-choice) {
+    padding: 16px;
+  }
+}
+
+/* Keep consent compact while leaving the requester and each permission legible. */
+main[data-layout="oauth"]:has(.consent-identity) {
+  width: min(384px, calc(100% - 50px));
+  padding: 20px 16px;
+}
+main[data-layout="oauth"]:has(.consent-identity) > .auth-brandmark {
+  display: none;
+}
+main[data-layout="oauth"]:has(.consent-identity) > h1 {
+  margin: 0 0 20px;
+  font-size: 20px;
+}
+.consent-identity {
+  margin-bottom: 16px;
+}
+.scope-list {
+  display: grid;
+  gap: 14px;
+  padding: 0;
+  list-style: none;
+}
+.scope-label {
+  display: block;
+  margin-bottom: 4px;
+}
+.scope-detail + .scope-detail {
+  margin-top: 8px;
+}
+.scope-detail p {
+  margin: 0;
+}
+.scope-detail code {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.85em;
+}
+.consent-actions,
+.consent-account-actions {
+  margin-top: 20px;
+}
+.consent-actions button,
+.consent-account-actions button {
+  justify-content: center;
+  margin-top: 0;
+}
+.consent-account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.consent-account-actions form {
+  margin: 0;
+}
+@media (max-width: 600px) {
+  main[data-layout="oauth"]:has(.consent-identity) {
+    padding: 20px 16px;
+  }
+  .consent-account-actions {
+    flex-direction: column;
+  }
+  .consent-account-actions button {
+    width: 100%;
+  }
+}
+
+/* Keep the account sign-out reachable beside the heading on narrow screens. */
+main[data-layout="settings"]:has(> .account-header-action) > h1 {
+  padding-right: 90px;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 480px) {
+  main[data-layout="settings"] > .account-header-action {
+    float: right;
+    margin: -4.5em 0 0;
+  }
+  main[data-layout="settings"] > .account-header-action button {
+    min-height: 36px;
+    padding: 6px 10px;
+  }
+}
+.code-actions form {
+  margin-bottom: 0;
+}
+.code-actions .secondary-action {
+  min-height: 40px;
+  margin-top: 8px;
+  padding: 8px 10px;
+}
+.code-actions .muted {
+  margin: 6px 0;
+  font-size: 14px;
+}
+.code-actions label {
+  margin-top: 10px;
+}
+
+/* Account console: persistent desktop navigation and a native mobile menu. */
+.account-shell {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  min-height: 620px;
+}
+.account-sidebar {
+  display: flex;
+  flex-direction: column;
+  padding: 24px 16px;
+  border-right: 1px solid var(--border);
+}
+.account-brand {
+  display: block;
+  font-size: 20px;
+}
+.sidebar-account {
+  overflow-wrap: anywhere;
+  margin: 24px 0 6px;
+}
+.account-sidebar nav,
+.account-mobile-header nav {
+  display: grid;
+  gap: 4px;
+  margin: 24px 0;
+}
+.account-sidebar nav a,
+.account-mobile-header nav a {
+  padding: 10px;
+  border-radius: 8px;
+  text-decoration: none;
+}
+.account-sidebar nav a[aria-current="page"],
+.account-mobile-header nav a[aria-current="page"] {
+  background: var(--page);
+  font-weight: 700;
+}
+.account-sidebar nav a span,
+.account-mobile-header nav a span {
+  display: inline-block;
+  width: 28px;
+  font-size: 20px;
+  text-align: center;
+}
+.account-main {
+  min-width: 0;
+  padding: 32px;
+}
+.account-mobile-header {
+  display: none;
+}
+.account-summary {
+  text-align: center;
+  overflow-wrap: anywhere;
+  margin: 8px auto 32px;
+}
+.account-summary h2 {
+  margin: 12px 0 0;
+}
+.account-summary p {
+  margin: 4px 0;
+}
+.account-avatar,
+.destination-icon {
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--page);
+}
+.account-avatar {
+  width: 72px;
+  height: 72px;
+  margin: auto;
+  font-size: 32px;
+  font-weight: 700;
+}
+.account-destinations {
+  display: grid;
+  gap: 12px;
+}
+.account-destination {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  text-decoration: none;
+}
+.account-destination:hover {
+  background: var(--page);
+}
+.account-destination strong,
+.account-destination small {
+  display: block;
+}
+.account-destination strong {
+  font-size: 18px;
+}
+.account-destination small {
+  overflow-wrap: anywhere;
+}
+.destination-icon {
+  width: 48px;
+  height: 48px;
+  font-size: 24px;
+}
+.legacy-anchors a {
+  display: none;
+}
+.legacy-anchors a:target {
+  display: block;
+}
+.sidebar-footer {
+  margin-top: auto;
+}
+.account-sidebar nav a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.account-mobile-header summary,
+.account-mobile-header > a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+@media (max-width: 700px) {
+  .account-shell {
+    display: block;
+  }
+  .account-sidebar {
+    display: none;
+  }
+  .account-main {
+    padding: 16px;
+  }
+  .account-mobile-header {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .account-mobile-header > strong {
+    margin-left: auto;
+  }
+  .account-mobile-header details {
+    position: relative;
+  }
+  .account-mobile-header summary {
+    cursor: pointer;
+    padding: 8px;
+  }
+  .mobile-menu-panel {
+    position: absolute;
+    z-index: 5;
+    top: 100%;
+    left: 0;
+    width: min(280px, calc(100vw - 32px));
+    padding: 12px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px #0002;
+  }
+  .mobile-menu-panel nav {
+    margin: 0 0 12px;
+  }
+  .mobile-menu-panel nav a {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+}
+
+.mobile-identity {
+  display: none;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 700px) {
+  .mobile-identity {
+    display: block;
+    font-size: 14px;
+  }
+}
+
+main[data-layout="account"] {
+  width: 100%;
+  min-height: 100dvh;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--surface);
+}
+main[data-layout="account"] .account-shell {
+  min-height: 100dvh;
+  grid-template-columns: 256px minmax(0, 1fr);
+}
+main[data-layout="account"] .account-main {
+  padding: 0 32px 32px;
+}
+main[data-layout="account"] .account-mobile-header {
+  display: flex;
+  align-items: center;
+  min-height: 56px;
+  gap: 16px;
+  margin: 0 -32px 24px;
+  padding: 0 32px;
+  border-bottom: 1px solid var(--border);
+}
+main[data-layout="account"] .account-mobile-header h1 {
+  font:
+    600 18px/1.4 system-ui,
+    sans-serif;
+  margin: 0;
+}
+main[data-layout="account"] .account-mobile-header > a,
+main[data-layout="account"] .account-mobile-header details,
+main[data-layout="account"] .account-mobile-header > strong {
+  display: none;
+}
+main[data-layout="account"] .account-main > :not(header) {
+  max-width: 848px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.account-operation-rows {
+  display: grid;
+  gap: 12px;
+}
+.account-operation-rows details {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.account-operation-rows summary {
+  cursor: pointer;
+  list-style: none;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
+}
+.account-operation-rows summary::-webkit-details-marker {
+  display: none;
+}
+.account-operation-rows summary strong,
+.account-operation-rows summary small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.account-operation-rows details[open] summary,
+.account-operation-rows summary:hover {
+  background: var(--page);
+}
+.account-operation-rows details[open] .row-chevron {
+  transform: rotate(90deg);
+}
+.account-operation-content {
+  padding: 0 24px 16px;
+}
+.account-main .settings-list {
+  background: transparent;
+  border-radius: 0;
+}
+.account-main .settings-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 0;
+}
+.account-main .settings-list li span {
+  margin: 0;
+}
+.account-main .settings-list form {
+  margin: 0;
+}
+.account-main .settings-list button {
+  margin: 0;
+  min-height: 36px;
+  padding: 6px 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+}
+@media (max-width: 700px) {
+  .account-main .settings-list li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+  .account-main .settings-list form {
+    margin-top: 4px;
+  }
+}
+@media (max-width: 700px) {
+  main[data-layout="account"] .account-shell {
+    display: block;
+  }
+  main[data-layout="account"] .account-main {
+    padding: 0 16px 24px;
+  }
+  main[data-layout="account"] .account-mobile-header {
+    margin: 0 -16px 16px;
+    padding: 0 16px;
+  }
+  main[data-layout="account"] .account-mobile-header > a,
+  main[data-layout="account"] .account-mobile-header details,
+  main[data-layout="account"] .account-mobile-header > strong {
+    display: block;
+  }
+  main[data-layout="account"] .account-mobile-header > strong {
+    margin-left: auto;
+  }
+}

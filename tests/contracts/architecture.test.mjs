@@ -493,3 +493,91 @@ test("resolved Better Auth database adapter aliases cannot bypass database owner
     }
   }
 });
+
+test("Svelte components obey feature boundaries and may import shared components", (t) => {
+  const f = fixture(t, {
+    "src/features/account-settings/Private.svelte": "<p>private</p>",
+    "src/ui/Shared.svelte": "<p>shared</p>",
+  });
+  const violations = f.check(
+    "src/features/email-login/Chooser.svelte",
+    `<script lang="ts">import Private from "../account-settings/Private.svelte"; import Shared from "../../ui/Shared.svelte";</script><Private/><Shared/>`,
+  );
+  assert.ok(
+    violations.some((issue) =>
+      issue.includes("feature email-login imports account-settings internals"),
+    ),
+  );
+  assert.ok(!violations.some((issue) => issue.includes("Shared.svelte")));
+  const dynamic = f.check(
+    "src/features/email-login/Dynamic.svelte",
+    `{#await import("../account-settings/Private.svelte")}loading{/await}`,
+  );
+  assert.ok(
+    dynamic.some((issue) =>
+      issue.includes("feature email-login imports account-settings internals"),
+    ),
+  );
+});
+
+test("runtime cycles include Svelte components", (t) => {
+  const f = fixture(t, {
+    "src/ui/First.svelte": `<script>import { value } from "./second.js";</script><p>{value}</p>`,
+    "src/ui/second.ts": `import First from "./First.svelte"; export const value = First;`,
+  });
+  assert.ok(
+    checkArchitecture(f.root).violations.some(
+      (issue) =>
+        issue.includes("import cycle:") && issue.includes("First.svelte"),
+    ),
+  );
+});
+
+test("exact and wildcard aliases resolve Svelte owners without matching near misses", (t) => {
+  const f = fixture(t, {
+    "src/features/account-settings/Private.svelte": "<p>private</p>",
+    "src/ui/Shared.svelte": "<p>shared</p>",
+  });
+  f.options.paths["@private"] = [
+    join(f.root, "src/features/account-settings/Private.svelte"),
+  ];
+  f.options.paths["@component/*/view"] = [
+    join(f.root, "src/features/*/Private.svelte"),
+  ];
+  f.options.paths["@shared"] = [join(f.root, "src/ui/Shared.svelte")];
+  for (const specifier of ["@private", "@component/account-settings/view"]) {
+    assert.ok(
+      f
+        .check(
+          "src/features/email-login/Alias.svelte",
+          `<script>import Target from "${specifier}";</script><Target/>`,
+        )
+        .some((issue) =>
+          issue.includes(
+            "feature email-login imports account-settings internals",
+          ),
+        ),
+    );
+  }
+  assert.deepEqual(
+    f.check(
+      "src/features/email-login/Alias.svelte",
+      `<script>import Shared from "@shared";</script><Shared/>`,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    f.check(
+      "src/features/email-login/Alias.svelte",
+      `<script>import Other from "@private-other";</script><Other/>`,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    f.check(
+      "src/features/email-login/Alias.svelte",
+      `<script>import Other from "@component/account-settings/views";</script><Other/>`,
+    ),
+    [],
+  );
+});

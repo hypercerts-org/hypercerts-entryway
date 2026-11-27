@@ -1,3 +1,4 @@
+import { openAccountView } from "./support/account-navigation.mjs";
 import { test, expect } from "@playwright/test";
 import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
@@ -730,7 +731,8 @@ async function revokeBrowserSession(page, identity) {
   await test.step("revocation removes the browser SDK client's server session", async () => {
     const account = await page.context().newPage();
     await account.goto(`${config.issuer}/account`);
-    const sessions = account.locator("#sessions");
+    await openAccountView(account, "Apps");
+    const sessions = account.locator("#applications");
     const sdkSession = sessions
       .locator("li")
       .filter({
@@ -753,7 +755,14 @@ async function revokeBrowserSession(page, identity) {
     await expect(page.getByLabel("Handle", { exact: true })).toBeVisible();
 
     await account.reload();
-    await expect(account.getByTestId("account-did")).toHaveText(identity.did);
+    const accountUrl = new URL(account.url());
+    expect(accountUrl.searchParams.get("did")).toBe(identity.did);
+    expect(accountUrl.searchParams.get("view")).toBe("apps");
+    const visibleDid = account
+      .locator(".account-sidebar code, .mobile-identity code")
+      .filter({ visible: true });
+    await expect(visibleDid).toHaveCount(1);
+    await expect(visibleDid).toHaveText(identity.did);
     await expect(sessions).toContainText("No active OAuth refresh sessions.");
     await expect(sdkSession).toHaveCount(0);
     await account.close();

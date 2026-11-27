@@ -1,3 +1,4 @@
+import { openAccountView } from "./support/account-navigation.mjs";
 import { test, expect } from "@playwright/test";
 import { beginAuthorization, consentForm } from "./support/oauth-client.mjs";
 import {
@@ -39,6 +40,7 @@ test("ending one account-settings session leaves its browser OAuth refresh usabl
     await authorizeBrowserApp(ownerPage, identity);
     const otherPage = await other.newPage();
     await signInAccount(otherPage, identity);
+    await openAccountView(otherPage, "Devices");
     const otherSessionId = await otherPage
       .locator("#sessions li")
       .filter({ hasText: "This browser" })
@@ -46,6 +48,7 @@ test("ending one account-settings session leaves its browser OAuth refresh usabl
       .inputValue();
     await authorizeBrowserApp(otherPage, identity);
     await ownerPage.goto(`${config.issuer}/account`);
+    await openAccountView(ownerPage, "Devices");
     expect(
       (
         await accountAction(ownerPage, "browser-session-revoke", {
@@ -104,6 +107,7 @@ test("forgetting one owned OAuth device and signing out require new identity pro
     const identity = await createAccount(page, "device-logout");
     await authorizeBrowserApp(page, identity);
     await page.goto(`${config.issuer}/account`);
+    await openAccountView(page, "Devices");
     await page
       .locator("#sessions li")
       .filter({ hasText: "This device" })
@@ -114,6 +118,7 @@ test("forgetting one owned OAuth device and signing out require new identity pro
     ).toBeVisible();
     expect(new URL(page.url()).searchParams.get("did")).toBe(identity.did);
     await signInAccount(page, identity);
+    await openAccountView(page, "Devices");
     await expect(
       page.locator("#sessions li").filter({ hasText: "This device" }),
     ).toBeVisible();
@@ -190,6 +195,7 @@ test("sign out all browsers removes device membership while an existing client g
     const identity = await createAccount(page, "all-revoke");
     await authorizeBrowserApp(page, identity);
     await page.goto(`${config.issuer}/account`);
+    await openAccountView(page, "Devices");
     expect((await accountAction(page, "browsers-revoke")).status()).toBe(303);
     await page.goto(`${config.issuer}/account`);
     await expect(
@@ -225,6 +231,7 @@ test("revoking an OAuth grant blocks refresh while a previously issued access to
     const identity = await createAccount(page, "grant-revoke");
     await authorizeBrowserApp(page, identity);
     await page.goto(`${config.issuer}/account`);
+    await openAccountView(page, "Apps");
     const grant = accountForm(page, "grant-revoke").filter({
       has: page.locator(
         'input[name="clientId"][value="https://browser.atmosbox.internal/oauth-client-metadata.json"]',
@@ -233,7 +240,7 @@ test("revoking an OAuth grant blocks refresh while a previously issued access to
     await grant
       .getByRole("button", { name: "Revoke application access" })
       .click();
-    await expect(page.locator("#sessions")).toContainText(
+    await expect(page.locator("#applications")).toContainText(
       "No remembered application permissions.",
     );
     await page.goto(browserUrl);
@@ -331,6 +338,7 @@ test("foreign-DID device removal is isolated; login_hint constrains public-clien
     const bob = await createAccount(creatorPage, "shared-b");
     await signInAccount(sharedPage, bob);
     await sharedPage.goto(`${config.issuer}/account`);
+    await openAccountView(sharedPage, "Devices");
     const deviceId = await sharedPage
       .locator("#sessions li")
       .filter({ hasText: "This device" })
@@ -338,6 +346,7 @@ test("foreign-DID device removal is isolated; login_hint constrains public-clien
       .inputValue();
     const foreignPage = await foreign.newPage();
     await createAccount(foreignPage, "foreign-c");
+    await openAccountView(foreignPage, "Devices");
     expect(
       (
         await accountAction(foreignPage, "device-revoke", { deviceId })
@@ -397,6 +406,7 @@ test("foreign-DID device removal is isolated; login_hint constrains public-clien
     await expect(consentForm(sharedPage, alice.did)).toHaveCount(1);
     await expect(consentForm(sharedPage, bob.did)).toHaveCount(1);
     await signInAccount(sharedPage, bob);
+    await openAccountView(sharedPage, "Devices");
     expect(
       (await accountAction(sharedPage, "device-revoke", { deviceId })).status(),
     ).toBe(303);
