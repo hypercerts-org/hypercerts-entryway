@@ -415,6 +415,27 @@ const blindArrivalReads = (db) =>
     },
   });
 
+test("an incoming transfer claim blocks a competing arrival before its DID index", async () => {
+  const { db, authority, claim, prepare, prepareUnclaimed } = await fixture();
+  try {
+    await verifiedUser(db, "user-b", "second@example.test");
+    const competing = await prepareUnclaimed(secondUser);
+    await prepare();
+    const blind = createArrivalStorage(blindArrivalReads(db), hosts, authority);
+    const before = await claimSnapshot(db);
+    await assert.rejects(
+      blind.claimArrival(claim, competing.version, {
+        operationId: "op-2",
+        did,
+      }),
+      { code: "OperationConflict", status: 409 },
+    );
+    assert.deepEqual(await claimSnapshot(db), before);
+  } finally {
+    await db.close();
+  }
+});
+
 for (const [index, code] of [
   ["DID", "OperationPending"],
   ["handle", "HandleNotAvailable"],
@@ -430,6 +451,18 @@ for (const [index, code] of [
           : { ...secondUser, did: otherDid, handle: "dest.entryway.test" };
       const competing = await prepareUnclaimed(racing);
       await prepare();
+      if (index === "DID") {
+        // Exercise the index as a defense against inconsistent persisted state,
+        // independently of the active-transfer fence tested above.
+        assert.equal(
+          await createActiveDidTransferStore(db).release({
+            did,
+            operationId: "op-1",
+            transferKind: "incoming",
+          }),
+          true,
+        );
+      }
       const owner =
         index === "DID"
           ? claim
