@@ -1,5 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, eq, gt, lt, lte, notInArray, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  eq,
+  gt,
+  lt,
+  lte,
+  notInArray,
+  or,
+  sql,
+  ne,
+} from "drizzle-orm";
 import type { DatabaseExecutor, StoredRow } from "../executor.js";
 import type {
   MailAttemptClaim,
@@ -32,6 +43,10 @@ function toEntry(row: StoredRow<"mail_outbox">): MailOutboxEntry {
 }
 export function createMailOutbox(db: DatabaseExecutor): MailOutboxTransactor {
   const t = db.tables.mail_outbox;
+  const isHealth = () =>
+    and(eq(t.purpose, "pds-health"), eq(t.message_kind, "admin"))!;
+  const notHealth = () =>
+    or(ne(t.purpose, "pds-health"), ne(t.message_kind, "admin"))!;
   const active = () => or(eq(t.state, "queued"), eq(t.state, "sending"))!;
   const available = (clock: number) =>
     or(
@@ -66,7 +81,12 @@ export function createMailOutbox(db: DatabaseExecutor): MailOutboxTransactor {
           delivery_uncertain: sql`${t.delivery_uncertain} OR ${t.state}='sending'`,
           ...released,
         },
-        and(eq(t.recipient, recipient), eq(t.purpose, purpose), active())!,
+        and(
+          eq(t.recipient, recipient),
+          eq(t.purpose, purpose),
+          ne(t.message_kind, "admin"),
+          active(),
+        )!,
       );
       return changed;
     });
@@ -85,7 +105,7 @@ export function createMailOutbox(db: DatabaseExecutor): MailOutboxTransactor {
           delivery_uncertain: sql`${t.delivery_uncertain} OR ${t.state}='sending'`,
           ...released,
         },
-        and(active(), lte(t.expires_at, now))!,
+        and(active(), notHealth(), lte(t.expires_at, now))!,
       );
       // A lost acknowledgement on the final attempt is terminal and uncertain;
       // a lease timeout does not mean SMTP failed to deliver the message.
@@ -103,6 +123,7 @@ export function createMailOutbox(db: DatabaseExecutor): MailOutboxTransactor {
         },
         and(
           eq(t.state, "sending"),
+          notHealth(),
           lte(t.lease_expires_at, await db.databaseTime()),
           eq(t.attempt_count, 3),
         )!,
@@ -111,6 +132,7 @@ export function createMailOutbox(db: DatabaseExecutor): MailOutboxTransactor {
     });
   }
   return {
+    databaseTime: () => db.databaseTime(),
     async status(id) {
       const row = (
         await db.read("mail_outbox", { where: eq(t.id, id), limit: 1 })
@@ -120,22 +142,55 @@ export function createMailOutbox(db: DatabaseExecutor): MailOutboxTransactor {
         : null;
     },
     async listRetryable(now, limit) {
+      const clock = await db.databaseTime();
       return (
         await db.read("mail_outbox", {
           where: and(
-            available(await db.databaseTime()),
-            lte(t.next_attempt_at, now),
-            gt(t.expires_at, now),
-            lt(t.attempt_count, 3),
+            available(clock),
+            or(
+              and(
+                isHealth(),
+                lte(t.next_attempt_at, clock),
+                gt(t.expires_at, clock),
+              ),
+              and(
+                notHealth(),
+                lte(t.next_attempt_at, now),
+                gt(t.expires_at, now),
+                lt(t.attempt_count, 3),
+              ),
+            ),
           ),
-          orderBy: [asc(t.created_at), asc(t.id)],
+          orderBy: [
+            asc(sql`CASE WHEN ${isHealth()} THEN 1 ELSE 0 END`),
+            asc(
+              sql`CASE WHEN ${isHealth()} THEN ${t.next_attempt_at} ELSE ${t.created_at} END`,
+            ),
+            asc(t.id),
+          ],
+          limit: Math.min(Math.max(limit, 1), 50),
+        })
+      ).map(toEntry);
+    },
+    async listHealthRetryable(limit) {
+      const clock = await db.databaseTime();
+      return (
+        await db.read("mail_outbox", {
+          where: and(
+            isHealth(),
+            available(clock),
+            lte(t.next_attempt_at, clock),
+            gt(t.expires_at, clock),
+          ),
+          orderBy: [asc(t.next_attempt_at), asc(t.id)],
           limit: Math.min(Math.max(limit, 1), 50),
         })
       ).map(toEntry);
     },
     async enqueue(entry) {
       await db.transact(async () => {
-        await expire(entry.createdAt);
+        if (entry.purpose !== "pds-health" || entry.payload.kind !== "admin")
+          await expire(entry.createdAt);
         if (entry.payload.kind !== "admin")
           await supersede(entry.recipient, entry.purpose);
         await db.insert("mail_outbox", {
@@ -167,9 +222,19 @@ export function createMailOutbox(db: DatabaseExecutor): MailOutboxTransactor {
             where: and(
               eq(t.id, id),
               available(clock),
-              gt(t.expires_at, now),
-              lte(t.next_attempt_at, now),
-              lt(t.attempt_count, 3),
+              or(
+                and(
+                  isHealth(),
+                  gt(t.expires_at, clock),
+                  lte(t.next_attempt_at, clock),
+                ),
+                and(
+                  notHealth(),
+                  gt(t.expires_at, now),
+                  lte(t.next_attempt_at, now),
+                  lt(t.attempt_count, 3),
+                ),
+              ),
             ),
             limit: 1,
           })
@@ -244,7 +309,8 @@ export function createMailOutbox(db: DatabaseExecutor): MailOutboxTransactor {
           retryAt !== null &&
           retryAt < row.expires_at &&
           now < row.expires_at &&
-          row.attempt_count < 3;
+          ((row.purpose === "pds-health" && row.message_kind === "admin") ||
+            row.attempt_count < 3);
         await db.update(
           "mail_outbox",
           {
@@ -277,6 +343,7 @@ export function createMailOutbox(db: DatabaseExecutor): MailOutboxTransactor {
         "mail_outbox",
         and(
           notInArray(t.state, ["queued", "sending"]),
+          notHealth(),
           lt(
             sql`coalesce(${t.delivered_at},${t.expires_at},${t.created_at})`,
             now - OUTBOX_RETENTION_MS,

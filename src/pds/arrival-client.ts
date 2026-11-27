@@ -85,17 +85,18 @@ export class ArrivalPdsClient {
     private readonly options: {
       readonly endpoint: string;
       readonly did: string;
+      readonly fetch?: typeof fetch;
     },
   ) {}
   /** Configured administrator credentials stay in composition's signing closure. */
   public async getAccountInfo(
-    authorization: () => string,
+    authorization: () => string | Promise<string>,
   ): Promise<{ did: string; handle: string; deactivated: boolean } | null> {
     const method = "com.atproto.admin.getAccountInfo";
     const url = this.#url(method);
     url.searchParams.set("did", this.options.did);
-    const response = await fetch(url, {
-      headers: { authorization: authorization() },
+    const response = await (this.options.fetch ?? fetch)(url, {
+      headers: { authorization: await authorization() },
       redirect: "error",
       signal: AbortSignal.timeout(15_000),
     });
@@ -141,7 +142,7 @@ export class ArrivalPdsClient {
     applied: boolean,
   ): Promise<void> {
     const method = "com.atproto.admin.updateSubjectStatus";
-    const response = await fetch(this.#url(method), {
+    const response = await (this.options.fetch ?? fetch)(this.#url(method), {
       method: "POST",
       headers: {
         authorization: await authorization(),
@@ -169,7 +170,7 @@ export class ArrivalPdsClient {
     authorization?: string,
   ): Promise<string> {
     const method = "com.atproto.server.reserveSigningKey";
-    const response = await fetch(this.#url(method), {
+    const response = await (this.options.fetch ?? fetch)(this.#url(method), {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -189,7 +190,7 @@ export class ArrivalPdsClient {
     const url = this.#url(method);
     if (params) url.search = params.toString();
     const value = await readPublicJson(
-      await fetch(url, {
+      await (this.options.fetch ?? fetch)(url, {
         headers: { authorization },
         redirect: "error",
         signal: AbortSignal.timeout(15_000),
@@ -247,7 +248,7 @@ export class ArrivalPdsClient {
     authorization?: string;
   }): Promise<{ did: string; handle: string }> {
     const method = "com.atproto.server.createAccount";
-    const response = await fetch(this.#url(method), {
+    const response = await (this.options.fetch ?? fetch)(this.#url(method), {
       method: "POST",
       headers: {
         "content-type": "application/json",

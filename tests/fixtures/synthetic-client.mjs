@@ -27,18 +27,39 @@ const same = (left, right) => {
 };
 
 /** An independent OAuth client fixture: no account/provider internals are used. */
-export async function mountClient({ app, config, db }) {
+export async function mountClient({
+  app,
+  config,
+  db,
+  pdsOrigins,
+  fetchImpl = globalThis.fetch,
+}) {
   const origin = new URL(config.clientUrl).origin;
   if (!origin.startsWith("https:"))
     throw new Error("The browser client requires HTTPS");
   const hostname = new URL(origin).hostname;
   const issuer = new URL(config.issuer).origin;
   const plcOrigin = new URL(config.plcUrl).origin;
-  const allowedOrigins = new Set([
-    origin,
-    issuer,
-    ...config.pds.map((p) => new URL(p.url).origin),
-  ]);
+  const fixturePdsOrigins =
+    pdsOrigins ?? config.pds.map((p) => new URL(p.url).origin);
+  if (!Array.isArray(fixturePdsOrigins))
+    throw new Error("Invalid fixture PDS policy");
+  const allowedOrigins = new Set([origin, issuer]);
+  for (const value of fixturePdsOrigins) {
+    if (typeof value !== "string")
+      throw new Error("Invalid fixture PDS policy");
+    const url = new URL(value);
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      url.pathname !== "/" ||
+      url.search ||
+      url.hash
+    )
+      throw new Error("Invalid fixture PDS policy");
+    allowedOrigins.add(url.origin);
+  }
   const handles = config.handleDomains ?? [".entryway.test"];
   const isHostedHandle = (name) =>
     /^[a-z0-9.-]+$/.test(name) &&
@@ -66,7 +87,7 @@ export async function mountClient({ app, config, db }) {
         "OAuth client refused an origin outside this test environment",
       );
     }
-    return globalThis.fetch(input, { ...init, redirect: "error" });
+    return fetchImpl(input, { ...init, redirect: "error" });
   };
   const handleResolver = {
     async resolve(handle, options) {

@@ -15,6 +15,7 @@ import {
   sql,
 } from "drizzle-orm";
 import { DomainError } from "../../accounts/errors.js";
+import { createActiveDidTransferStore } from "./active-did-transfer.js";
 import { normalizeEmail } from "../../accounts/rules.js";
 import type { ArrivalTransactor } from "../migration-journal.port.js";
 import type { OperationClaim } from "../operation-ownership.port.js";
@@ -39,6 +40,7 @@ import {
   stagedRotationKeys,
   publicRotationKey,
   assertRotationKeysPreserved,
+  registryPlcEndpoint,
 } from "../../plc/policy.js";
 
 type CutoverReceipt = StoredRow<"external_operation_attempts">;
@@ -187,6 +189,7 @@ export interface ArrivalAuthority {
     handle: string;
     pdsId: string;
     pdsUrl: string;
+    pdsRevision?: number;
     userId: string;
   }): Promise<void>;
   recordSavedUserBinding(did: string, userId: string): Promise<void>;
@@ -249,7 +252,14 @@ function arrivalRecord(
     email: row.email,
     handle: row.handle,
     pdsId: row.pds_id,
+    ...(row.pds_revision === null
+      ? {}
+      : {
+          pdsRevision: row.pds_revision,
+          stagedIncomingMigration: row.staged_incoming_migration,
+        }),
     endpoint: row.endpoint,
+    ...(row.plc_endpoint === null ? {} : { plcEndpoint: row.plc_endpoint }),
     sourcePlcHead: row.source_plc_head,
     sourcePredecessor: JSON.parse(row.source_predecessor),
     source: JSON.parse(row.source_facts),
@@ -283,7 +293,27 @@ export function createArrivalStorage(
     readonly stagedIncomingMigration?: boolean;
   }[],
   authority: ArrivalAuthority,
+  registryOffer?: (
+    pdsId: string,
+    revision: number,
+  ) => Promise<{
+    id: string;
+    url: string;
+    revision: number;
+    stagedIncomingMigration: boolean;
+  }>,
 ): ArrivalTransactor {
+  const transfers = createActiveDidTransferStore(db);
+  const claimTransfer = async (did: string, operationId: string) => {
+    if (
+      !(await transfers.claim({ did, operationId, transferKind: "incoming" }))
+    )
+      throw new DomainError(
+        "OperationConflict",
+        409,
+        "Another transfer already claims this DID",
+      );
+  };
   const table = db.tables.arrivals;
   const codeTable = db.tables.arrival_code;
   const reservationTable = db.tables.arrival_reservations;
@@ -646,7 +676,9 @@ export function createArrivalStorage(
         );
         if (
           input.staged.creationPlcHead !== undefined ||
-          host?.stagedIncomingMigration !== true ||
+          (registryOffer
+            ? input.stagedIncomingMigration !== true
+            : host?.stagedIncomingMigration !== true) ||
           canonicalJson(
             stagedRotationKeys(
               normalized.rotationKeys,
@@ -809,8 +841,24 @@ export function createArrivalStorage(
           400,
           "Invalid arrival operation",
         );
-      assertConfiguredHost(input.pdsId, input.endpoint);
+      if (!registryOffer) assertConfiguredHost(input.pdsId, input.endpoint);
+      else if (
+        !Number.isSafeInteger(input.pdsRevision) ||
+        !input.pdsRevision ||
+        typeof input.stagedIncomingMigration !== "boolean"
+      )
+        throw immutableTuple();
       assertCodeLifetime(input.codeLifetimeMs);
+      const plcEndpoint =
+        input.pdsRevision !== undefined &&
+        input.stagedIncomingMigration !== true
+          ? registryPlcEndpoint(input.endpoint, false)
+          : undefined;
+      if (
+        input.plcEndpoint !== undefined &&
+        input.plcEndpoint !== (plcEndpoint ?? input.endpoint)
+      )
+        throw immutableTuple();
       const saved = await row(input.operationId);
       if (saved) {
         if (
@@ -820,6 +868,11 @@ export function createArrivalStorage(
           saved.handle !== input.handle ||
           saved.pds_id !== input.pdsId ||
           saved.endpoint !== input.endpoint ||
+          (saved.plc_endpoint !== null && saved.plc_endpoint !== plcEndpoint) ||
+          saved.pds_revision !== (input.pdsRevision ?? null) ||
+          (input.pdsRevision !== undefined &&
+            saved.staged_incoming_migration !==
+              input.stagedIncomingMigration) ||
           saved.source_plc_head !== input.sourcePlcHead ||
           canonicalJson(JSON.parse(saved.source_predecessor)) !==
             canonicalJson(input.sourcePredecessor) ||
@@ -838,6 +891,17 @@ export function createArrivalStorage(
         );
       }
       return db.transact(async () => {
+        if (registryOffer) {
+          const offer = await registryOffer(input.pdsId, input.pdsRevision!);
+          if (
+            offer.id !== input.pdsId ||
+            offer.revision !== input.pdsRevision ||
+            offer.url !== input.endpoint ||
+            offer.stagedIncomingMigration !== input.stagedIncomingMigration ||
+            Boolean(input.staged) !== offer.stagedIncomingMigration
+          )
+            throw immutableTuple();
+        }
         const user = (
           await db.read("user", {
             where: eq(db.tables.user.id, input.userId),
@@ -890,7 +954,11 @@ export function createArrivalStorage(
             email,
             handle: input.handle,
             pds_id: input.pdsId,
+            pds_revision: input.pdsRevision ?? null,
+            staged_incoming_migration:
+              input.stagedIncomingMigration ?? Boolean(input.staged),
             endpoint: input.endpoint,
+            plc_endpoint: plcEndpoint ?? null,
             source_plc_head: input.sourcePlcHead,
             source_endpoint: input.source.services.atproto_pds?.endpoint,
             source_predecessor: JSON.stringify(input.sourcePredecessor),
@@ -1154,6 +1222,7 @@ export function createArrivalStorage(
             if (saved.claim_operation_id === owner.operationId) {
               // A retry is settled only for the current fence and admission.
               await assertAdmission(owner, saved.did);
+              await claimTransfer(saved.did, saved.operation_id);
               return {
                 kind: "already-settled" as const,
                 version: saved.version,
@@ -1176,6 +1245,7 @@ export function createArrivalStorage(
             saved.handle,
             saved.operation_id,
           );
+          await claimTransfer(saved.did, saved.operation_id);
           try {
             return {
               kind: "applied" as const,
@@ -1385,7 +1455,7 @@ export function createArrivalStorage(
                 operation: signedOperation,
                 predecessor: JSON.parse(saved.source_predecessor),
                 repositoryKey: input.repositoryKey,
-                endpoint: saved.endpoint,
+                endpoint: saved.plc_endpoint ?? saved.endpoint,
                 handle: saved.handle,
                 rotationKeys: destinationRotationKeys({
                   ...custody,
@@ -1417,7 +1487,8 @@ export function createArrivalStorage(
             if (
               move.verificationMethods.atproto !== input.repositoryKey ||
               move.prev !== handoff.cid ||
-              move.services.atproto_pds?.endpoint !== saved.endpoint ||
+              move.services.atproto_pds?.endpoint !==
+                (saved.plc_endpoint ?? saved.endpoint) ||
               move.services.atproto_pds?.type !== "AtprotoPersonalDataServer" ||
               !move.alsoKnownAs.includes(`at://${saved.handle}`) ||
               canonicalJson(move.rotationKeys) !==
@@ -1884,6 +1955,9 @@ export function createArrivalStorage(
             handle: input.handle,
             pdsId: input.pdsId,
             pdsUrl: saved.endpoint,
+            ...(saved.pds_revision === null
+              ? {}
+              : { pdsRevision: saved.pds_revision }),
             userId: input.userId,
           });
           await authority.reserveEmailClaim(
@@ -1931,7 +2005,16 @@ export function createArrivalStorage(
             "Activation requires observed backend evidence for this arrival",
           );
         return db.withOperationFence(input.owner, async () => {
-          if ((await reservation(input.operationId))?.uncertain_reason)
+          const attempts = await db.read("arrival_attempts", {
+            where: eq(
+              db.tables.arrival_attempts.operation_id,
+              input.operationId,
+            ),
+          });
+          if (
+            (await reservation(input.operationId))?.uncertain_reason ||
+            attempts.some((attempt) => attempt.reason.startsWith("external:"))
+          )
             throw recoveryRequired();
           const account = (await authority.readAccount(input.did)) as {
             email?: unknown;
@@ -1968,6 +2051,14 @@ export function createArrivalStorage(
           // After the arrival is no longer active, so the authority's pending
           // arrival guard passes; any failure rolls back the whole completion.
           await authority.activatePlacedAccount(input.did);
+          if (
+            !(await transfers.release({
+              did: saved.did,
+              operationId: saved.operation_id,
+              transferKind: "incoming",
+            }))
+          )
+            throw versionConflict();
           return { kind: "applied" as const, version: saved.version + 1 };
         });
       });
@@ -2004,6 +2095,9 @@ export function createArrivalStorage(
         did: saved.did,
         userId: saved.user_id,
         pdsId: saved.pds_id,
+        ...(saved.pds_revision === null
+          ? {}
+          : { pdsRevision: saved.pds_revision }),
         provisioned: saved.provisioned_at !== null,
         deactivationObserved: saved.deactivated_at !== null,
         bound: saved.bound_at !== null,

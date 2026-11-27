@@ -8,7 +8,12 @@ import {
 } from "../../ui/account-forms.mjs";
 import { HttpError } from "../../http/http-error.mjs";
 
-export function createMigrationActions({ config, migration, console }) {
+export function createMigrationActions({
+  config,
+  migration,
+  console,
+  accounts,
+}) {
   const perform =
     (action) =>
     async ({
@@ -27,12 +32,32 @@ export function createMigrationActions({ config, migration, console }) {
           "NotAvailable",
           "Data server migration is not available",
         );
-      const target = config.pds.find((pds) => pds.id === value("pdsId"));
+      const requestedId = value("pdsId");
+      const saved =
+        action === "migration-confirm" && accounts?.placement
+          ? await migration.status(principal, { did: account.did })
+          : null;
+      const continuing =
+        saved &&
+        saved.targetPdsId === requestedId &&
+        (!["complete", "refused"].includes(saved.phase) ||
+          (saved.phase === "complete" && account.pdsId === requestedId));
+      const choices = accounts?.placement
+        ? await accounts.placement.choices()
+        : config.pds;
+      const target = continuing
+        ? { id: saved.targetPdsId }
+        : choices.find(
+            (pds) =>
+              pds.id === requestedId &&
+              (pds.id !== account.pdsId ||
+                (!accounts?.placement && action === "migration-confirm")),
+          );
       if (!target)
         throw new HttpError(
           400,
           "InvalidPds",
-          "Choose an enrolled destination data server",
+          "Choose an available destination data server",
         );
       if (action === "migration-request") {
         const issued = await migration.requestMigrationForBrowser(principal, {
@@ -51,18 +76,34 @@ export function createMigrationActions({ config, migration, console }) {
           accountContext,
         });
       }
+      const operationId = value("operationId");
       try {
-        await migration.importAccount(principal, {
-          did: account.did,
-          pdsId: target.id,
-          token: `${value("challengeId")}.${token()}`,
-        });
+        if (operationId)
+          await migration.resumeForBrowser(principal, {
+            did: account.did,
+            pdsId: target.id,
+            operationId,
+          });
+        else
+          await migration.importAccount(principal, {
+            did: account.did,
+            pdsId: target.id,
+            token: value("challengeId")
+              ? `${value("challengeId")}.${token()}`
+              : undefined,
+          });
       } catch (failure) {
         const saved = await migration.status(principal, { did: account.did });
-        if (!saved || saved.phase === "complete") throw failure;
-        const savedTarget = config.pds.find(
-          (pds) => pds.id === saved.targetPdsId,
-        );
+        if (
+          !saved ||
+          ["complete", "refused"].includes(saved.phase) ||
+          (operationId &&
+            (saved.id !== operationId || saved.targetPdsId !== target.id))
+        )
+          throw failure;
+        const savedTarget =
+          !accounts?.placement &&
+          config.pds.find((pds) => pds.id === saved.targetPdsId);
         const recovery = await migration.pendingRecovery(account.did);
         const required = recovery?.state === "dispatched";
         const nextAction = required
@@ -70,7 +111,8 @@ export function createMigrationActions({ config, migration, console }) {
           : form(
               "migration-confirm",
               browser.csrf,
-              hidden("pdsId", saved.targetPdsId),
+              hidden("pdsId", saved.targetPdsId) +
+                hidden("operationId", saved.id),
               "Continue saved migration",
               accountContext,
             );
@@ -84,7 +126,7 @@ export function createMigrationActions({ config, migration, console }) {
       return page(
         res,
         "Data server migration complete",
-        `<p>Your DID and handle are unchanged. Your repository is now on ${esc(target.url)}; the old server retains a deactivated copy. Existing sessions and app passwords were revoked.</p><a href="/login">Sign in again to your moved account</a>`,
+        `<p>Your DID and handle are unchanged. Your repository is now on ${esc(target.url ?? target.id)}; the old server retains a deactivated copy. Existing sessions and app passwords were revoked.</p><a href="/login">Sign in again to your moved account</a>`,
       );
     };
   return {

@@ -73,9 +73,12 @@ const isFatalPostgresError = (error: unknown): boolean => {
   }
   return false;
 };
-export async function openDatabase(configuration: DatabaseConfiguration) {
+export async function openDatabase(
+  configuration: DatabaseConfiguration,
+  mode: "static" | "registry-bootstrap" = "static",
+) {
   if (configuration.backend !== "sqlite" || configuration.path === ":memory:")
-    return connectDatabase(configuration);
+    return connectDatabase(configuration, mode);
   const key = resolve(configuration.path),
     previous = sqliteStartup.get(key) ?? Promise.resolve();
   let release!: () => void;
@@ -85,13 +88,16 @@ export async function openDatabase(configuration: DatabaseConfiguration) {
   sqliteStartup.set(key, current);
   await previous;
   try {
-    return await connectDatabase(configuration);
+    return await connectDatabase(configuration, mode);
   } finally {
     release();
     if (sqliteStartup.get(key) === current) sqliteStartup.delete(key);
   }
 }
-async function connectDatabase(configuration: DatabaseConfiguration) {
+async function connectDatabase(
+  configuration: DatabaseConfiguration,
+  mode: "static" | "registry-bootstrap",
+) {
   const backend = configuration.backend;
   const context = new AsyncLocalStorage<Context>();
   const operationFence = new AsyncLocalStorage<OperationClaim>();
@@ -99,8 +105,13 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
   let closing = false;
   let closePromise: Promise<void> | undefined;
   let closeDriver: () => Promise<void>;
-  let probeDriver: (deadline: number) => Promise<boolean>;
+  let probeDriver: (deadline: number, bootstrap: boolean) => Promise<boolean>;
   let probeFlight: Promise<boolean> | undefined;
+  let bootstrapProbeFlight: Promise<boolean> | undefined;
+  const probeSql = (bootstrap: boolean) =>
+    bootstrap
+      ? "SELECT version,identity FROM schema_identity WHERE (SELECT count(*) FROM authority_mode) = 1 AND EXISTS (SELECT 1 FROM authority_mode WHERE id = 1 AND mode = 'registry-bootstrap') AND (SELECT count(*) FROM authority_phase) = 1 AND EXISTS (SELECT 1 FROM authority_phase WHERE id = 1 AND phase = 'bootstrap' AND generation = 1)"
+      : "SELECT version,identity FROM schema_identity";
   let runConnection: <T>(
     operation: (current: Context) => Promise<T>,
   ) => Promise<T>;
@@ -139,16 +150,38 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
         release();
       }
     };
-    probeDriver = (deadline) =>
-      runConnection(async (current) => {
+    probeDriver = (deadline, bootstrap) => {
+      if (bootstrap && configuration.path !== ":memory:") {
+        const remaining = Math.floor(deadline - performance.now());
+        if (remaining < 1 || closing) return Promise.resolve(false);
+        let reader: Database.Database | undefined;
+        try {
+          reader = new Database(configuration.path, {
+            readonly: true,
+            fileMustExist: true,
+            timeout: remaining,
+          });
+          const rows = reader.prepare(probeSql(true)).all() as {
+            version: number;
+            identity: string;
+          }[];
+          return Promise.resolve(
+            performance.now() < deadline &&
+              rows.length === 1 &&
+              rows[0]?.version === 1 &&
+              rows[0].identity === identity,
+          );
+        } finally {
+          reader?.close();
+        }
+      }
+      return runConnection(async (current) => {
         const remaining = Math.floor(deadline - performance.now());
         if (remaining < 1 || closing) return false;
-        // The native driver cannot be cancelled by a Promise timer. Bound its
-        // actual busy wait while holding the same gate as every authority caller.
         driver.pragma(`busy_timeout = ${remaining}`);
         try {
           const result = await current.execute(
-            sql`SELECT version,identity FROM schema_identity`,
+            sql.raw(probeSql(bootstrap)),
             "all",
           );
           const rows = result.rows as { version: number; identity: string }[];
@@ -162,6 +195,7 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
           driver.pragma("busy_timeout = 5000");
         }
       });
+    };
     closeDriver = async () => {
       await queue;
       driver.close();
@@ -197,7 +231,7 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
     pool.on("connect", (client) => {
       client.on("error", () => brokenClients.add(client));
     });
-    probeDriver = async (deadline) => {
+    probeDriver = async (deadline, bootstrap) => {
       const remaining = () =>
         Math.max(1, Math.floor(deadline - performance.now()));
       // Own the underlying transport through pg's public stream configuration.
@@ -218,7 +252,7 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
         // pg8 supports per-query timeouts; its QueryConfig declaration omits
         // that option, so retain the structural query value explicitly.
         const query = {
-          text: "SELECT version,identity FROM schema_identity",
+          text: probeSql(bootstrap),
           query_timeout: remaining(),
         };
         const result = await client.query(query);
@@ -517,6 +551,42 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
             500,
             "Database schema does not match this application",
           );
+        const modes = (
+          await executor.execute(sql`SELECT id,mode FROM authority_mode`)
+        ).rows as { id: number; mode: string }[];
+        if (modes.length !== 1 || modes[0]?.id !== 1 || modes[0].mode !== mode)
+          throw new DomainError(
+            "SchemaConflict",
+            500,
+            "Database authority mode does not match this application",
+          );
+        const phases = (
+          await executor.execute(
+            sql`SELECT id,phase,generation FROM authority_phase`,
+          )
+        ).rows as { id: number; phase: string; generation: number }[];
+        if (
+          mode === "registry-bootstrap" &&
+          (phases.length !== 1 ||
+            phases[0]?.id !== 1 ||
+            !(
+              (phases[0].phase === "bootstrap" &&
+                Number(phases[0].generation) === 1) ||
+              (phases[0].phase === "registry-serving" &&
+                Number(phases[0].generation) === 2)
+            ))
+        )
+          throw new DomainError(
+            "SchemaConflict",
+            500,
+            "Database authority phase is invalid",
+          );
+        if (mode === "static" && phases.length !== 0)
+          throw new DomainError(
+            "SchemaConflict",
+            500,
+            "Database authority phase is invalid",
+          );
         return;
       }
       for (const command of ddl
@@ -524,6 +594,15 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
         .map((part) => part.trim())
         .filter(Boolean))
         await connected((current) => current.execute(sql.raw(command), "run"));
+      await executor.execute(
+        sql`INSERT INTO authority_mode(id,mode) VALUES (1,${mode})`,
+        "run",
+      );
+      if (mode === "registry-bootstrap")
+        await executor.execute(
+          sql`INSERT INTO authority_phase(id,phase,generation) VALUES (1,'bootstrap',1)`,
+          "run",
+        );
       await connected((current) =>
         current.execute(
           sql`INSERT INTO schema_identity(version,identity) VALUES (1,${identity})`,
@@ -594,35 +673,45 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
       },
     });
   };
+  const boundedProbe = (
+    timeoutMs: number,
+    bootstrap: boolean,
+  ): Promise<boolean> => {
+    if (
+      !Number.isSafeInteger(timeoutMs) ||
+      timeoutMs < 1 ||
+      timeoutMs > 10_000 ||
+      closing
+    )
+      return Promise.resolve(false);
+    let flight = bootstrap ? bootstrapProbeFlight : probeFlight;
+    if (!flight) {
+      const deadline = performance.now() + timeoutMs;
+      flight = Promise.resolve()
+        .then(() => probeDriver(deadline, bootstrap))
+        .catch(() => false)
+        .finally(() => {
+          if (bootstrap) bootstrapProbeFlight = undefined;
+          else probeFlight = undefined;
+        });
+      if (bootstrap) bootstrapProbeFlight = flight;
+      else probeFlight = flight;
+    }
+    let timer: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<boolean>((done) => {
+      timer = setTimeout(() => done(false), timeoutMs);
+    });
+    return Promise.race([flight, timeout]).finally(() => clearTimeout(timer));
+  };
   return {
     ...executor,
     schema: { version: 1, pending: 0 },
     authenticationAdapter,
     probe(timeoutMs: number): Promise<boolean> {
-      if (
-        !Number.isSafeInteger(timeoutMs) ||
-        timeoutMs < 1 ||
-        timeoutMs > 10_000
-      )
-        return Promise.resolve(false);
-      if (closing) return Promise.resolve(false);
-      if (!probeFlight) {
-        const deadline = performance.now() + timeoutMs;
-        probeFlight = probeDriver(deadline)
-          .catch(() => false)
-          .finally(() => {
-            probeFlight = undefined;
-          });
-      }
-      let timer: ReturnType<typeof setTimeout>;
-      const timeout = new Promise<boolean>((done) => {
-        timer = setTimeout(() => done(false), timeoutMs);
-      });
-      // Retain the one physical flight until native/queued work settles. Each
-      // caller gets its own bound, including shorter coalesced probe requests.
-      return Promise.race([probeFlight, timeout]).finally(() =>
-        clearTimeout(timer),
-      );
+      return boundedProbe(timeoutMs, false);
+    },
+    probeBootstrap(timeoutMs: number): Promise<boolean> {
+      return boundedProbe(timeoutMs, true);
     },
     deviceAccountMemberships: createDeviceAccountMemberships(executor),
     get,
@@ -717,8 +806,10 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
         account: (await list("operations")).filter((row) =>
           phasePending(row.value),
         ).length,
-        managedMigration: (await list("migration:operations")).filter((row) =>
-          phasePending(row.value),
+        managedMigration: (await list("migration:operations")).filter(
+          (row) =>
+            phasePending(row.value) &&
+            (row.value as { phase?: string }).phase !== "refused",
         ).length,
         externalMigration: (
           await executor.read("migration_reservations", {
@@ -738,7 +829,7 @@ async function connectDatabase(configuration: DatabaseConfiguration) {
     async close() {
       closing = true;
       await (closePromise ??= (async () => {
-        await probeFlight;
+        await Promise.all([probeFlight, bootstrapProbeFlight]);
         await closeDriver();
       })());
     },

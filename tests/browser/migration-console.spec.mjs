@@ -131,7 +131,7 @@ test("console migrates its own DID, record and blob between enrolled PDSs with m
   );
   expect(forbiddenTarget.status()).toBe(400);
   expect(await forbiddenTarget.text()).toContain(
-    "Choose an enrolled destination data server",
+    "Choose an available destination data server",
   );
   await accountForm(page, "migration-request")
     .getByLabel("Destination data server")

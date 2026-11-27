@@ -10,6 +10,7 @@ import {
   createSourceAccount,
   expectDestinationServes,
   ok,
+  ownedDestination,
   prepareArrival,
 } from "../support/helpers/incoming-journey.mjs";
 import {
@@ -85,6 +86,7 @@ if (phase === "before-restart") {
   test("before the restart: the browser verifies the destination email and prepares the arrival", async () => {
     run.prepared = await prepareArrival(owner, {
       issuer: config.issuer,
+      access,
       mailpitUrl: access.mailpitUrl,
       did: run.source.did,
       handle: run.destinationHandle,
@@ -146,6 +148,10 @@ if (phase === "after-restart") {
 
   test("after the restart: a fresh code renews the arrival code of the admitted arrival", async () => {
     const saved = JSON.parse(readFileSync(statePath, "utf8"));
+    saved.prepared.destinationEndpoint = ownedDestination(
+      saved.prepared.destinationEndpoint,
+      access,
+    );
     run = {
       ...saved,
       inventory: {

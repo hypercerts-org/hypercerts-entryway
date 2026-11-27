@@ -116,6 +116,7 @@ async function head() {
 function publicStatus() {
   return {
     did: state.did,
+    empty: state.empty ?? false,
     email: state.email,
     sourceHandle: state.handle,
     sourcePdsUrl: state.sourcePdsUrl,
@@ -150,8 +151,13 @@ async function body(req) {
     ? JSON.parse(Buffer.concat(chunks).toString("utf8"))
     : {};
 }
-async function initialize() {
-  if (state) return publicStatus();
+async function initialize(input) {
+  if (typeof input.empty !== "boolean") throw new Error("InvalidFixtureShape");
+  if (state) {
+    if ((state.empty ?? false) !== input.empty)
+      throw new Error("FixtureShapeChanged");
+    return publicStatus();
+  }
   const run = `${Date.now().toString(36)}${randomBytes(3).toString("hex")}`;
   const recovery = await Secp256k1Keypair.create({ exportable: true });
   const email = `external-${run}@example.com`;
@@ -163,26 +169,29 @@ async function initialize() {
   const session = await json(source, "com.atproto.server.createSession", {
     body: { identifier: created.did, password },
   });
-  const blobBytes = Buffer.from(`External source blob ${run}\n`);
-  const uploaded = await json(source, "com.atproto.repo.uploadBlob", {
-    bytes: blobBytes,
-    contentType: "text/plain",
-    token: session.accessJwt,
-  });
-  const record = await json(source, "com.atproto.repo.createRecord", {
-    body: {
-      repo: created.did,
-      collection: "org.hypercerts.spike.note",
-      validate: false,
-      record: {
-        $type: "org.hypercerts.spike.note",
-        text: "Before joining Entryway",
-        createdAt: new Date().toISOString(),
-        attachment: uploaded.blob,
+  let uploaded, record, blobBytes;
+  if (!input.empty) {
+    blobBytes = Buffer.from(`External source blob ${run}\n`);
+    uploaded = await json(source, "com.atproto.repo.uploadBlob", {
+      bytes: blobBytes,
+      contentType: "text/plain",
+      token: session.accessJwt,
+    });
+    record = await json(source, "com.atproto.repo.createRecord", {
+      body: {
+        repo: created.did,
+        collection: "org.hypercerts.spike.note",
+        validate: false,
+        record: {
+          $type: "org.hypercerts.spike.note",
+          text: "Before joining Entryway",
+          createdAt: new Date().toISOString(),
+          attachment: uploaded.blob,
+        },
       },
-    },
-    token: session.accessJwt,
-  });
+      token: session.accessJwt,
+    });
+  }
   const op = await plcClient.getLastOp(created.did);
   const normalized = plc.normalizeOp(op);
   if (
@@ -192,6 +201,7 @@ async function initialize() {
     throw new Error("UnexpectedSourceAuthority");
   state = {
     did: created.did,
+    empty: input.empty,
     email,
     handle,
     password,
@@ -204,9 +214,13 @@ async function initialize() {
     recoveryDid: recovery.did(),
     sourceRepositoryKey: normalized.verificationMethods.atproto,
     initialHead: String(await cidForCbor(op)),
-    blobCid: uploaded.blob.ref.$link,
-    blobSha256: hash(blobBytes),
-    record,
+    ...(input.empty
+      ? {}
+      : {
+          blobCid: uploaded.blob.ref.$link,
+          blobSha256: hash(blobBytes),
+          record,
+        }),
     frozen: false,
   };
   await save();
@@ -245,20 +259,19 @@ async function snapshot(input) {
     }),
     32_000_000,
   );
-  const blob = await boundedBytes(
-    await request(source, "com.atproto.sync.getBlob", {
-      token: access,
-      params: { did: state.did, cid: state.blobCid },
-    }),
-    8_000_000,
-  );
-  if (
-    !car.length ||
-    car.length > 32_000_000 ||
-    !blob.length ||
-    blob.length > 8_000_000 ||
-    hash(blob) !== state.blobSha256
-  )
+  let blob;
+  if (!state.empty) {
+    blob = await boundedBytes(
+      await request(source, "com.atproto.sync.getBlob", {
+        token: access,
+        params: { did: state.did, cid: state.blobCid },
+      }),
+      8_000_000,
+    );
+    if (!blob.length || hash(blob) !== state.blobSha256)
+      throw new Error("SnapshotInvalid");
+  }
+  if (!car.length || car.length > 32_000_000)
     throw new Error("SnapshotInvalid");
   const status = await json(source, "com.atproto.server.checkAccountStatus", {
     token: access,
@@ -270,17 +283,21 @@ async function snapshot(input) {
       carDigest: hash(car),
       carBytes: car.length,
       sourceCommit: state.sourceCommit,
-      blobs: [
-        {
-          cid: state.blobCid,
-          digest: hash(blob),
-          bytes: blob.length,
-          contentType: "text/plain",
-        },
-      ],
+      blobs: state.empty
+        ? []
+        : [
+            {
+              cid: state.blobCid,
+              digest: hash(blob),
+              bytes: blob.length,
+              contentType: "text/plain",
+            },
+          ],
     },
     carBase64: car.toString("base64"),
-    blobs: [{ cid: state.blobCid, bytesBase64: blob.toString("base64") }],
+    blobs: state.empty
+      ? []
+      : [{ cid: state.blobCid, bytesBase64: blob.toString("base64") }],
   };
 }
 async function sign(input) {
@@ -400,7 +417,7 @@ createServer(async (req, res) => {
       return response(res, 401, { error: "Unauthorized" });
     const input = req.method === "POST" ? await body(req) : {};
     if (req.method === "POST" && req.url === "/initialize")
-      return response(res, 200, await initialize());
+      return response(res, 200, await initialize(input));
     if (!state) return response(res, 409, { error: "NotInitialized" });
     if (req.method === "GET" && req.url === "/status")
       return response(res, 200, {

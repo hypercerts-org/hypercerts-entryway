@@ -1,3 +1,4 @@
+import { snapshotPdsRegistryVerifier } from "./pds/registry-targets.mjs";
 import { createOperationOwnership } from "./accounts/operation-ownership.js";
 import { createOperationOwnershipStore } from "./database/drizzle/operation-ownership.js";
 import { genesisRotationKeys } from "./plc/policy.js";
@@ -20,12 +21,15 @@ export async function createAccounts({
   db,
   config,
   workerId,
+  placement,
+  registryVerifier,
   ownership = createOperationOwnership({
     store: createOperationOwnershipStore(db),
     workerId,
     ...config.operationLease,
   }),
 }) {
+  registryVerifier = snapshotPdsRegistryVerifier(registryVerifier);
   const plcSigner = await Secp256k1MigrationPlcSigner.fromHex(
     config.plcRotationKeyHex,
   );
@@ -42,9 +46,31 @@ export async function createAccounts({
       { code: "InvalidPlcConfiguration" },
     );
   const plcClient = new CustodyPlcClient(config.plcUrl);
-  const storage = createAccountStorage(db, config.pds);
+  const storage = createAccountStorage(
+    db,
+    config.pds,
+    placement &&
+      (async (row) => {
+        const claim = ownership.currentClaim;
+        if (!claim) return false;
+        const saved = await placement.read(claim);
+        return Boolean(
+          saved &&
+          saved.state === "dispatched" &&
+          saved.host_id === row.pdsId &&
+          saved.public_target === row.pdsUrl,
+        );
+      }),
+  );
   const custody = createCustodyInventoryStorage(db);
-  const shared = createAccountPrimitives({ db, config, storage, ownership });
+  const shared = createAccountPrimitives({
+    db,
+    config,
+    storage,
+    ownership,
+    placement,
+    registryVerifier,
+  });
   const observeCustody = async (did) => {
     const observation = await readCustodyObservation(
       plcClient,
@@ -64,6 +90,8 @@ export async function createAccounts({
     plcClient,
     observeCustody,
     custody,
+    placement,
+    registryVerifier,
     ...shared,
   };
   const registration = createRegistration(context);
@@ -81,6 +109,22 @@ export async function createAccounts({
   return {
     ...shared,
     ...operations,
+    placement,
+    registryVerifier,
+    associatedPds: () =>
+      placement ? placement.associatedResources() : Promise.resolve(config.pds),
+    resourceFor: async (row) => {
+      if (!placement) return config.pds.find((pds) => pds.id === row.pdsId);
+      if (!Number.isSafeInteger(row.pdsRevision) || row.pdsRevision < 1)
+        return undefined;
+      const resource = await placement.resolveLiveAssociated(
+        row.pdsId,
+        row.pdsRevision,
+      );
+      return resource && resource.url === row.pdsUrl ? resource : undefined;
+    },
+    selectRegistrationPds: () =>
+      placement ? placement.select() : Promise.resolve(config.pds[0]?.id),
     plcSigner,
     plcClient,
     observeCustody,

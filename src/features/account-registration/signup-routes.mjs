@@ -17,6 +17,9 @@ async function registrationInput({
       email: existing.email,
       handle: existing.handle,
       pdsId: existing.pdsId,
+      ...(savedIntent?.pdsSelection
+        ? { pdsSelection: savedIntent.pdsSelection }
+        : {}),
       recoveryKey: existing.recoveryKey,
       inviteCode:
         (await db.get("entryway:invite-reservations", existing.email))?.code ??
@@ -30,6 +33,9 @@ async function registrationInput({
       ? String(savedIntent.handle).trim().toLowerCase()
       : withHandleDomain(body.handle, handleDomain),
     pdsId: String(savedIntent?.pdsId ?? body.pdsId ?? ""),
+    ...(savedIntent?.pdsSelection
+      ? { pdsSelection: savedIntent.pdsSelection }
+      : {}),
     inviteCode: body.inviteCode,
     registrationIdentity,
   };

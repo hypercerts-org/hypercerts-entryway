@@ -19,6 +19,20 @@ export interface OwnedOperation {
   /** Whole-operation callers opt in; a staged workflow may return still pending. */
   readonly completeOnReturn?: boolean;
 }
+type AttemptAuthorization =
+  | { kind: "dispatched"; attempt: ExternalAttempt }
+  | { kind: "existing"; attempt: ExternalAttempt }
+  | { kind: "refused" }
+  | { kind: "prior-dispatch" };
+type AttemptGuard = (
+  claim: OperationClaim,
+  descriptor: ExternalAttemptInput,
+  begin: () => Promise<AttemptAuthorization>,
+) => Promise<AttemptAuthorization>;
+type FirstAttemptGuard = (
+  claim: OperationClaim,
+  descriptor: ExternalAttemptInput,
+) => Promise<AttemptAuthorization>;
 interface Execution {
   readonly claim: OperationClaim;
   readonly resources: Set<string>;
@@ -265,7 +279,12 @@ export function createOperationOwnership({
     }
   }
   async function dispatch<T>(
-    input: Omit<ExternalAttemptInput, "intentDigest"> & { intent: unknown },
+    input: Omit<ExternalAttemptInput, "intentDigest"> & {
+      intent: unknown;
+      beforeFirst?: () => Promise<void>;
+      authorizeAttempt?: AttemptGuard;
+      authorizeFirst?: FirstAttemptGuard;
+    },
     callbacks: DispatchCallbacks<T>,
     classifyRejection?: (error: unknown) => PlcSubmissionRejection | null,
   ): Promise<T> {
@@ -308,11 +327,42 @@ export function createOperationOwnership({
         );
       recoveryDisposition = observed.state;
     }
-    const attempt = await store.beginExternal(
-      claim,
-      descriptor,
-      recoveryDisposition,
-    );
+    if (!previous) await input.beforeFirst?.();
+    const begin = async () =>
+      input.authorizeFirst && !previous
+        ? input.authorizeFirst(claim, descriptor)
+        : {
+            kind: "dispatched" as const,
+            attempt: await store.beginExternal(
+              claim,
+              descriptor,
+              recoveryDisposition,
+            ),
+          };
+    const authorization = input.authorizeAttempt
+      ? await input.authorizeAttempt(claim, descriptor, begin)
+      : await begin();
+    if (authorization.kind === "refused")
+      throw new DomainError(
+        "PdsLifecycleIneligible",
+        409,
+        "The selected PDS cannot accept a new account.",
+      );
+    if (
+      authorization.kind === "existing" &&
+      authorization.attempt.state === "acknowledged"
+    )
+      return callbacks.resume(authorization.attempt.result);
+    if (
+      authorization.kind === "prior-dispatch" ||
+      authorization.kind === "existing"
+    )
+      throw new DomainError(
+        "OperationRecoveryRequired",
+        409,
+        "An external account change is pending. Retry after the operator verifies recovery.",
+      );
+    const attempt = authorization.attempt;
     await assertActive();
     // No local check can fence the remote PDS. Any interruption after the
     // marker, even before send(), requires dispatch-source isolation and drain.
@@ -410,12 +460,20 @@ export function createOperationOwnership({
     approveRecovery: store.approveRecovery,
     /** Generic external writes remain pending on every failed response. */
     dispatch: <T>(
-      input: Omit<ExternalAttemptInput, "intentDigest"> & { intent: unknown },
+      input: Omit<ExternalAttemptInput, "intentDigest"> & {
+        intent: unknown;
+        authorizeAttempt?: AttemptGuard;
+        authorizeFirst?: FirstAttemptGuard;
+      },
       callbacks: DispatchCallbacks<T>,
     ) => dispatch(input, callbacks),
     /** Only the complete one-shot PLC operation may settle an audited rejection. */
     dispatchPlcSubmission: <T>(
-      input: { target: string; intent: unknown },
+      input: {
+        target: string;
+        intent: unknown;
+        authorizeAttempt?: AttemptGuard;
+      },
       callbacks: DispatchCallbacks<T> & {
         rejection: (error: unknown) => PlcSubmissionRejection | null;
       },

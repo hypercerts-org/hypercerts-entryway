@@ -1,0 +1,322 @@
+import { registryRequest, validateRegistryOrigin } from "./registry-http.mjs";
+import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
+import { readFile, mkdtemp, writeFile, rm } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+const config = JSON.parse(await readFile("/config/bootstrap.json", "utf8"));
+validateRegistryOrigin(config.issuer);
+assert.equal(new URL(config.issuer).protocol, "https:");
+const source = JSON.parse(await readFile("/config/outbound-pds1.json", "utf8"));
+const host = source.pds.find((item) => item.id === "pds1");
+const auth = `Basic ${Buffer.from(`admin:${config.adminPassword}`).toString("base64")}`;
+const request = async (node, path, body, authenticated = true) => {
+  const response = await registryRequest(config.issuer, path, {
+    method: body ? "POST" : "GET",
+    headers: {
+      "x-bootstrap-node": node,
+      ...(authenticated ? { authorization: auth } : {}),
+      ...(body ? { "content-type": "application/json" } : {}),
+    },
+    ...(body
+      ? { body: typeof body === "string" ? body : JSON.stringify(body) }
+      : {}),
+  });
+  return { status: response.status, body: await response.json() };
+};
+for (const node of ["bootstrap-a", "bootstrap-b"]) {
+  assert.equal((await request(node, "/_health")).status, 200);
+  assert.equal((await request(node, "/_readyz")).status, 200);
+  assert.equal(
+    (await request(node, "/admin/pds-registry/status", undefined, false))
+      .status,
+    401,
+  );
+  for (const path of [
+    "/",
+    "/login",
+    "/xrpc/com.atproto.server.createAccount",
+    "/.well-known/did.json",
+  ])
+    assert.equal((await request(node, path)).status, 404);
+  const absent = await request(
+    node,
+    "/xrpc/com.atproto.server.createAccount",
+    "{",
+  );
+  assert.equal(absent.status, 404);
+  assert.equal(absent.body.error, "NotFound");
+  const malformed = await request(node, "/admin/pds-registry/hosts", "{");
+  assert.equal(malformed.status, 400);
+  assert.equal(malformed.body.error, "InvalidRequest");
+}
+const id = "pds-monitor";
+const base = `/admin/pds-registry/hosts/${id}`;
+const inboundToken = randomBytes(32).toString("base64url");
+const staged = await request("bootstrap-a", "/admin/pds-registry/hosts", {
+  host: {
+    hostId: id,
+    serviceDid: host.did,
+    publicUrl: host.url,
+    internalUrl: host.url,
+    order: 1,
+  },
+  credentials: {
+    outboundPassword: host.adminPassword,
+    inboundToken,
+  },
+  expectedRevision: 0,
+  idempotencyKey: randomBytes(16).toString("hex"),
+});
+assert.equal(staged.status, 200);
+const checked = await request("bootstrap-a", `${base}/check`, {
+  expectedRevision: 1,
+});
+assert.equal(checked.status, 200);
+assert.equal(checked.body.outbound.last.reason, "ok");
+const a = (await request("bootstrap-a", `${base}/policy`)).body;
+const b = (await request("bootstrap-b", `${base}/policy`)).body;
+assert.notEqual(a.intended.fingerprint, b.intended.fingerprint);
+assert.equal(
+  (await request("bootstrap-b", `${base}/check`, { expectedRevision: 1 }))
+    .status,
+  409,
+);
+assert.equal(
+  (
+    await request("bootstrap-b", `${base}/policy`, {
+      revision: 1,
+      expectedGeneration: 1,
+      fingerprint: b.intended.fingerprint,
+    })
+  ).body.policy.generation,
+  2,
+);
+assert.equal(
+  (await request("bootstrap-a", `${base}/check`, { expectedRevision: 1 }))
+    .status,
+  409,
+);
+assert.equal(
+  (
+    await request("bootstrap-a", `${base}/policy`, {
+      revision: 1,
+      expectedGeneration: 2,
+      fingerprint: a.intended.fingerprint,
+    })
+  ).body.policy.generation,
+  3,
+);
+const after = await request("bootstrap-a", base);
+assert.equal(after.body.outbound.last, null);
+assert.equal(after.body.inbound, "unproven");
+assert.equal(after.body.host.lifecycle, "disabled");
+assert.equal(after.body.host.activeRevision, null);
+console.log(
+  "two bootstrap processes: admin isolation, divergent policies and rollback fencing passed",
+);
+
+const rechecked = await request("bootstrap-a", `${base}/check`, {
+  expectedRevision: 1,
+});
+assert.equal(rechecked.status, 200);
+const directory = await mkdtemp(join(tmpdir(), "registry-cli-enrollment-"));
+try {
+  const authFile = join(directory, "auth"),
+    requestFile = join(directory, "request");
+  await writeFile(authFile, config.adminPassword, { mode: 0o600 });
+  const cli = (command, withRequest = false, extra = []) =>
+    spawnSync(
+      process.execPath,
+      [
+        "scripts/pds-registry.mjs",
+        command,
+        "--url",
+        config.issuer,
+        "--auth-file",
+        authFile,
+        "--host",
+        id,
+        ...(withRequest ? ["--request-file", requestFile] : []),
+        ...extra,
+      ],
+      { encoding: "utf8", timeout: 15000 },
+    );
+  const shown = cli("show");
+  assert.equal(shown.status, 0);
+  const details = JSON.parse(shown.stdout);
+  assert.equal(
+    details.outbound.last.receiptId,
+    rechecked.body.outbound.last.receiptId,
+  );
+  assert.equal(details.inbound, "unproven");
+  const attest = {
+    revision: 1,
+    receiptId: details.outbound.last.receiptId,
+    idempotencyKey: "attest",
+    emptyStock: true,
+    manifestApplied: true,
+    callbackCredentialApplied: true,
+    restartedBeforeCheck: true,
+  };
+  assert.equal(
+    (
+      await request("bootstrap-a", `${base}/attest`, {
+        ...attest,
+        emptyStock: false,
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (await request("bootstrap-a", `${base}/attest`, attest, false)).status,
+    401,
+  );
+  for (const credential of [inboundToken, host.adminPassword]) {
+    for (const action of ["attest", "associate"]) {
+      const denied = await registryRequest(config.issuer, `${base}/${action}`, {
+        method: "POST",
+        headers: {
+          "x-bootstrap-node": "bootstrap-a",
+          "content-type": "application/json",
+          authorization: `Basic ${Buffer.from(`admin:${credential}`).toString("base64")}`,
+        },
+        body: JSON.stringify(attest),
+      });
+      assert.equal(denied.status, 401);
+    }
+  }
+
+  await writeFile(requestFile, JSON.stringify(attest), { mode: 0o600 });
+  const attested = cli("attest", true);
+  assert.equal(attested.status, 0);
+  const evidence = JSON.parse(attested.stdout);
+  assert.equal(evidence.association, "unassociated");
+  const association = {
+    revision: 1,
+    attestationId: evidence.attestationId,
+    idempotencyKey: "associate",
+  };
+  await writeFile(requestFile, JSON.stringify(association), { mode: 0o600 });
+  const associated = cli("associate", true);
+  assert.equal(associated.status, 0);
+  assert.equal(JSON.parse(associated.stdout).association, "associated");
+  assert.deepEqual(
+    JSON.parse(cli("associate", true).stdout),
+    JSON.parse(associated.stdout),
+  );
+  const final = JSON.parse(cli("show").stdout);
+  assert.equal(final.host.association, "associated");
+  assert.equal(final.host.lifecycle, "disabled");
+  assert.equal(final.attestation.confirmed, "empty-stock-configuration");
+  assert.equal(final.attestation.usable, false);
+  async function awaitHealth(node, expected) {
+    const deadline = Date.now() + 12_000;
+    while (Date.now() < deadline) {
+      const result = await request(node, base);
+      if (result.body.health?.state === expected && result.body.health?.fresh)
+        return result.body.health;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    throw new Error(`Health did not reach ${expected}`);
+  }
+  const healthy = await awaitHealth("bootstrap-a", "healthy");
+  assert.equal(healthy.publicOk, true);
+  assert.equal(healthy.internalOk, true);
+  const historicalReceipt = final.attestation.associationReceipt;
+  assert.deepEqual(historicalReceipt, rechecked.body.outbound.last);
+  assert.equal(
+    (await request("bootstrap-a", `${base}/check`, { expectedRevision: 1 }))
+      .status,
+    200,
+  );
+  const afterCheck = JSON.parse(cli("show").stdout);
+  assert.deepEqual(
+    afterCheck.attestation.associationReceipt,
+    historicalReceipt,
+  );
+  const changed = await request("bootstrap-b", `${base}/policy`, {
+    revision: 1,
+    expectedGeneration: 3,
+    fingerprint: b.intended.fingerprint,
+  });
+  assert.equal(changed.body.policy.generation, 4);
+  const unhealthy = await awaitHealth("bootstrap-b", "unhealthy");
+  assert.equal(unhealthy.publicOk, false);
+  assert.equal(unhealthy.internalOk, false);
+  const contacts = JSON.parse(
+    await readFile("/config/health-contacts.json", "utf8"),
+  );
+  async function waitForMail(subject) {
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      const counts = [];
+      for (const recipient of [contacts.fleet, contacts.hosts[id]]) {
+        const search = new URL("/api/v1/search", process.env.MAILPIT_URL);
+        search.searchParams.set("query", `to:${recipient}`);
+        const response = await fetch(search);
+        const data = await response.json();
+        counts.push(
+          data.messages.filter((message) => message.Subject === subject).length,
+        );
+      }
+      if (counts.every((count) => count === 1)) return;
+      if (counts.some((count) => count > 1))
+        throw new Error("DuplicateHealthMail");
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    throw new Error("HealthMailMissing");
+  }
+  await waitForMail("Entryway PDS health incident");
+  const afterPolicy = JSON.parse(cli("show").stdout);
+  assert.equal(afterPolicy.host.lifecycle, "disabled");
+  assert.deepEqual(
+    afterPolicy.attestation.associationReceipt,
+    historicalReceipt,
+  );
+  assert.equal(final.inbound, "unproven");
+  const restored = await request("bootstrap-a", `${base}/policy`, {
+    revision: 1,
+    expectedGeneration: 4,
+    fingerprint: a.intended.fingerprint,
+  });
+  assert.equal(restored.body.policy.generation, 5);
+  await awaitHealth("bootstrap-a", "healthy");
+  await waitForMail("Entryway PDS health recovered");
+  const incidentStatus = (await request("bootstrap-a", base)).body.incident;
+  assert.equal(incidentStatus.state, "closed");
+  assert.ok(
+    incidentStatus.notices.every((notice) => notice.state === "delivered"),
+  );
+  console.log(
+    "health incident: both operators received one open and one recovery notice in Mailpit",
+  );
+  const callbackDenied = await registryRequest(
+    config.issuer,
+    `${base}/callback/revoke`,
+    {
+      method: "POST",
+      headers: {
+        "x-bootstrap-node": "bootstrap-a",
+        "content-type": "application/json",
+        authorization: `Basic ${Buffer.from(`admin:${inboundToken}`).toString("base64")}`,
+      },
+      body: JSON.stringify({ revision: 1 }),
+    },
+  );
+  assert.equal(callbackDenied.status, 401);
+  for (let index = 0; index < 2; index++) {
+    const revoked = cli("revoke-callback", false, ["--revision", "1"]);
+    assert.equal(revoked.status, 0);
+    assert.deepEqual(JSON.parse(revoked.stdout), { revoked: true });
+  }
+  console.log(
+    "operator CLI: callback token refused, global revocation persisted over verified TLS",
+  );
+  console.log(
+    "operator CLI: explicit attestation and disabled association through verified TLS passed",
+  );
+} finally {
+  await rm(directory, { recursive: true, force: true });
+}

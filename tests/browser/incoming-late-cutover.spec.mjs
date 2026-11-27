@@ -1,8 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { Secp256k1Keypair } from "@atproto/crypto";
+import { cidForCbor } from "@atproto/common";
 import { readCarWithRoot } from "@atproto/repo";
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { access as fileAccess, readFile, writeFile } from "node:fs/promises";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   call,
   createSourceAccount,
@@ -11,6 +13,7 @@ import {
   json,
 } from "../support/helpers/incoming-journey.mjs";
 import {
+  arrivalStates,
   arrivalSummary,
   changeSourceHandle,
   creationMethod,
@@ -28,6 +31,12 @@ import {
   wellKnownDid,
 } from "../support/helpers/incoming-failures.mjs";
 import { expectSourceCutover } from "../support/helpers/incoming-post-move.mjs";
+import { submitWithoutClientResponse } from "../support/helpers/incoming-lost-response.mjs";
+
+const afterPublished = process.env.INCOMING_AFTER_SIGNED_PUBLICATION === "1";
+const cutoverCase = afterPublished
+  ? "staged signed publication survives a lost client response and restart"
+  : "a public incoming migration keeps the source DID until the staged repository is ready";
 
 async function sandbox() {
   const access = JSON.parse(
@@ -46,10 +55,12 @@ async function xrpc(origin, method, options) {
   return response;
 }
 
-test("a public incoming migration keeps the source DID until the staged repository is ready", async ({
-  page,
-}) => {
+test(cutoverCase, async ({ page }) => {
   const direct = test.info().project.metadata.submitAt === "destination";
+  test.skip(
+    afterPublished && direct,
+    "The lost response is at Entryway's signed handoff endpoint",
+  );
   const { access, config } = await sandbox();
   const unique = randomUUID().replaceAll("-", "").slice(0, 14);
   const sourceEmail = `source-${unique}@example.com`;
@@ -110,7 +121,9 @@ test("a public incoming migration keeps the source DID until the staged reposito
 
   const sourceHead = async () =>
     json(
-      await xrpc(access.sourceUrl, "sync.getLatestCommit", { params: { did } }),
+      await xrpc(access.sourceUrl, "sync.getLatestCommit", {
+        params: { did },
+      }),
     );
   async function transfer(since) {
     const exported = await xrpc(access.sourceUrl, "sync.getRepo", {
@@ -247,11 +260,135 @@ test("a public incoming migration keeps the source DID until the staged reposito
   expect(operation.prev).toBe(predecessor);
   expect(await plcAudit(access, did)).toEqual(historyBeforeMove);
   expect((await sourceHead()).cid).toBe(last.cid);
+  const signedCid = String(await cidForCbor(operation));
+  if (process.env.INCOMING_BEFORE_SIGNED_SUBMIT === "1") {
+    expect(afterPublished).toBe(false);
+    expect(direct).toBe(false);
+    const beforeRestart = await arrivalSummary(
+      page,
+      config,
+      prepared.operationId,
+    );
+    const sourceBeforeRestart = await plcData(access, did);
+    await writeFile("/run/incoming-barrier/ready", "ready\n");
+    let released = false;
+    for (let attempt = 0; attempt < 300; attempt++) {
+      try {
+        await fileAccess("/run/incoming-barrier/release");
+        released = true;
+        break;
+      } catch {
+        await delay(1000);
+      }
+    }
+    expect(released, "Entryway restart barrier released").toBe(true);
+    expect(await arrivalSummary(page, config, prepared.operationId)).toEqual(
+      beforeRestart,
+    );
+    expect(await plcAudit(access, did)).toEqual(historyBeforeMove);
+    expect(await plcData(access, did)).toEqual(sourceBeforeRestart);
+    expect(sourceBeforeRestart.services.atproto_pds.endpoint).toBe(
+      access.sourceUrl,
+    );
+    expect((await sourceHead()).cid).toBe(last.cid);
+    expect(operation.prev).toBe(predecessor);
+    expect(String(await cidForCbor(operation))).toBe(signedCid);
+    expect(
+      await page
+        .getByText("Approved rotation keys, in priority order", {
+          exact: true,
+        })
+        .locator("+ ol li code")
+        .allTextContents(),
+    ).toEqual(rotationKeys);
+  }
   if (direct) {
     await xrpc(endpoint, "identity.submitPlcOperation", {
       token,
       body: { operation },
     });
+  } else if (afterPublished) {
+    const lost = await submitWithoutClientResponse(config, {
+      jwt: await serviceAuth(access, config, source, handoffMethod),
+      code: prepared.arrivalCode,
+      body: { operation },
+    });
+    expect(lost.upstreamStatus, "Entryway completed the public handoff").toBe(
+      200,
+    );
+    expect(lost.clientFailed, "migration client received no success").toBe(
+      true,
+    );
+    const publishedAudit = await plcAudit(access, did);
+    expect(publishedAudit.slice(0, -1)).toEqual(historyBeforeMove);
+    expect(publishedAudit.at(-1)).toMatchObject({
+      cid: signedCid,
+      operation,
+    });
+    const publishedData = await plcData(access, did);
+    expect(publishedData.services.atproto_pds.endpoint).toBe(endpoint);
+    expect(publishedData.rotationKeys).toEqual(rotationKeys);
+    const saved = await arrivalSummary(page, config, prepared.operationId);
+    expect(saved.did).toBe(did);
+    expect(saved.state).toBe(arrivalStates.pausedPending);
+    await expect(
+      page.getByText("Entryway checks for missing referenced blobs.", {
+        exact: false,
+      }),
+    ).toBeVisible();
+    expect(
+      await page
+        .getByText("Approved rotation keys, in priority order", {
+          exact: true,
+        })
+        .locator("+ ol li code")
+        .allTextContents(),
+    ).toEqual(rotationKeys);
+    expect((await status()).activated).toBe(false);
+    await writeFile("/run/incoming-after-publication/ready", "ready\n");
+    let released = false;
+    for (let attempt = 0; attempt < 300; attempt++) {
+      try {
+        await fileAccess("/run/incoming-after-publication/release");
+        released = true;
+        break;
+      } catch {
+        await delay(1000);
+      }
+    }
+    expect(released, "after-publication restart barrier released").toBe(true);
+    expect(await arrivalSummary(page, config, prepared.operationId)).toEqual(
+      saved,
+    );
+    await expect(
+      page.getByText("Entryway checks for missing referenced blobs.", {
+        exact: false,
+      }),
+    ).toBeVisible();
+    expect(
+      await page
+        .getByText("Approved rotation keys, in priority order", {
+          exact: true,
+        })
+        .locator("+ ol li code")
+        .allTextContents(),
+    ).toEqual(rotationKeys);
+    expect(await plcAudit(access, did)).toEqual(publishedAudit);
+    expect(await plcData(access, did)).toEqual(publishedData);
+    expect((await status()).activated).toBe(false);
+    const afterRestartCredentials = json(
+      await xrpc(endpoint, "identity.getRecommendedDidCredentials", {
+        token,
+      }),
+    );
+    expect(afterRestartCredentials.services.atproto_pds.endpoint).toBe(
+      endpoint,
+    );
+    const retried = await admitted(handoffMethod, { operation });
+    expect(retried.status, retried.error ?? "retry submitPlcOperation").toBe(
+      200,
+    );
+    expect(await plcAudit(access, did)).toEqual(publishedAudit);
   } else {
     const submitted = await admitted(handoffMethod, { operation });
     expect(submitted.status, submitted.error ?? "submitPlcOperation").toBe(200);
@@ -259,6 +396,7 @@ test("a public incoming migration keeps the source DID until the staged reposito
   const audit = await plcAudit(access, did);
   expect(audit.slice(0, -1)).toEqual(historyBeforeMove);
   expect(audit.at(-1).operation).toEqual(operation);
+  expect(audit.at(-1).cid).toBe(signedCid);
   const moved = await plcData(access, did);
   expect(moved.rotationKeys).toEqual(rotationKeys);
   expect(moved.verificationMethods.atproto).toBe(
@@ -283,7 +421,10 @@ test("a public incoming migration keeps the source DID until the staged reposito
       body: {
         repo: did,
         collection: record.$type,
-        record: { ...record, text: "Written after sign-in at the destination" },
+        record: {
+          ...record,
+          text: "Written after sign-in at the destination",
+        },
       },
     }),
   );
@@ -305,7 +446,9 @@ test("a public incoming migration keeps the source DID until the staged reposito
 });
 
 test("ordinary signup on the staged-capable PDS", async ({ page }) => {
-  test.skip(test.info().project.metadata.submitAt !== "entryway");
+  test.skip(
+    afterPublished || test.info().project.metadata.submitAt !== "entryway",
+  );
   const { access, config } = await sandbox();
   const label = `u${randomUUID().slice(0, 8)}`;
   const ordinary = await signUpOrdinary(page, {

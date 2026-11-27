@@ -5,15 +5,26 @@ import {
 import { cidForCbor } from "@atproto/common";
 import type { CustodyInventoryTransactor } from "../../database/custody.port.js";
 import * as plc from "@did-plc/lib";
-import { genesisRotationKeys } from "../../plc/policy.js";
+import { genesisRotationKeys, registryPlcEndpoint } from "../../plc/policy.js";
 import { HttpError } from "../../http/http-error.mjs";
 import {
   registrationInputSchema,
   type RegistrationInput,
 } from "../../accounts/input-schema.js";
-import { xrpc } from "../../pds/client.mjs";
+import { xrpc, registryXrpc } from "../../pds/client.mjs";
+import {
+  authorizeRegistryAttempt,
+  authorizeRegistryTarget,
+} from "../../pds/registry-policy.mjs";
+import { registryPdsFetch } from "../../pds/registry-transport.mjs";
 import { createPendingArrivalGuard } from "../../accounts/pending-arrival.js";
 
+import type {
+  OperationClaim,
+  ExternalAttemptInput,
+  ExternalAttempt,
+} from "../../database/operation-ownership.port.js";
+import type { PdsHostRevision } from "../../database/pds-registry.port.js";
 import type { AuthorityDatabase } from "../../database/connection.js";
 import type { AccountRow } from "../../accounts/types.js";
 import type {
@@ -74,6 +85,62 @@ interface Context {
     registrationIdentity?: RegistrationIdentity;
   }): Promise<void>;
   ownership: ReturnType<typeof createOperationOwnership>;
+  registryVerifier?: Parameters<typeof registryPdsFetch>[2];
+  placement?: {
+    select(): Promise<string | undefined>;
+    resolveAuthenticated(
+      hostId: string,
+      revision: number,
+      actualPolicy: (revision: PdsHostRevision) => string | undefined,
+    ): Promise<
+      | { id: string; url: string; internalUrl: string; revision: number }
+      | undefined
+    >;
+    resolve(
+      hostId: string,
+      revision?: number,
+    ): Promise<
+      | {
+          id: string;
+          url: string;
+          internalUrl: string;
+          stagedIncomingMigration?: boolean;
+        }
+      | undefined
+    >;
+    read(claim: OperationClaim): Promise<
+      | {
+          host_id: string;
+          target: string;
+          public_target: string;
+          revision: number;
+        }
+      | undefined
+    >;
+    reserve(
+      claim: OperationClaim,
+      purpose: string,
+      intent: string,
+      targetSteps: readonly string[],
+      requestedHostId?: string,
+    ): Promise<{
+      id: string;
+      host_id: string;
+      target: string;
+      public_target: string;
+      revision: number;
+    }>;
+    beginFirstDispatch(
+      claim: OperationClaim,
+      reservationId: string,
+      input: ExternalAttemptInput,
+    ): Promise<
+      | { kind: "dispatched"; attempt: ExternalAttempt }
+      | { kind: "existing"; attempt: ExternalAttempt }
+      | { kind: "refused" }
+      | { kind: "prior-dispatch" }
+    >;
+  };
 }
 function safeCode(error: unknown): string {
   if (typeof error === "object" && error !== null) {
@@ -134,6 +201,8 @@ export function createRegistration({
   validateHandle,
   journal,
   ownership,
+  placement,
+  registryVerifier,
 }: Context) {
   const pending = new Map<
     string,
@@ -141,6 +210,7 @@ export function createRegistration({
       promise: Promise<AccountRow>;
       handle: string;
       pdsId: string;
+      pdsSelection: RegistrationInput["pdsSelection"];
       recoveryKey: string | null;
       registrationIdentity: RegistrationIdentity | undefined;
     }
@@ -218,7 +288,8 @@ export function createRegistration({
                     ];
       throw new HttpError(400, code, message);
     }
-    const { email, handle, pdsId, recoveryKey, inviteCode } = input.data;
+    const { email, handle, pdsId, pdsSelection, recoveryKey, inviteCode } =
+      input.data;
     const registrationIdentity = await registrationIdentityFor(
       untrustedIdentity,
       email,
@@ -247,6 +318,7 @@ export function createRegistration({
       if (
         inFlight.handle !== handle ||
         inFlight.pdsId !== pdsId ||
+        inFlight.pdsSelection !== pdsSelection ||
         inFlight.recoveryKey !== (recoveryKey ?? null) ||
         !sameIdentity(inFlight.registrationIdentity, registrationIdentity)
       )
@@ -261,6 +333,7 @@ export function createRegistration({
       email,
       handle,
       pdsId,
+      pdsSelection,
       recoveryKey,
       inviteCode,
       ...(registrationIdentity ? { registrationIdentity } : {}),
@@ -269,6 +342,7 @@ export function createRegistration({
       promise: work,
       handle,
       pdsId,
+      pdsSelection,
       recoveryKey: recoveryKey ?? null,
       registrationIdentity,
     });
@@ -282,6 +356,7 @@ export function createRegistration({
     email,
     handle,
     pdsId,
+    pdsSelection,
     recoveryKey,
     registrationIdentity,
   }: ProvisionInput) => ({
@@ -290,22 +365,55 @@ export function createRegistration({
       email,
       handle,
       pdsId,
+      ...(pdsSelection ? { pdsSelection } : {}),
       recoveryKey: recoveryKey ?? null,
       ...(registrationIdentity ? { registrationIdentity } : {}),
     },
     completeOnReturn: true,
   });
   const allocateIdentity = async (
-    { email, handle, pdsId, recoveryKey, registrationIdentity }: ProvisionInput,
+    {
+      email,
+      handle,
+      pdsId,
+      pdsSelection,
+      recoveryKey,
+      inviteCode,
+      registrationIdentity,
+    }: ProvisionInput,
     pds: Context["config"]["pds"][number],
   ): Promise<AccountRow> => {
-    if (!ownership.currentClaim!.resumed)
-      await db.transact(async () => {
+    let reservation:
+      | Awaited<ReturnType<NonNullable<Context["placement"]>["reserve"]>>
+      | undefined;
+    const reserve = async () => {
+      if (!placement) return;
+      reservation = await placement.reserve(
+        ownership.currentClaim!,
+        "registration",
+        ownership.currentClaim!.requestDigest,
+        ["reserve-signing-key", "create-account"],
+        pdsId,
+      );
+      if (
+        reservation.host_id !== pdsId ||
+        reservation.public_target !== pds.url ||
+        reservation.target !== pds.internalUrl
+      )
+        throw new HttpError(
+          409,
+          "PdsLifecycleIneligible",
+          "The saved PDS configuration is unavailable",
+        );
+    };
+    if (!ownership.currentClaim!.resumed) {
+      const refused = await db.transact(async () => {
         await db.set("registration:intents", email, {
           authorityOperationId: ownership.currentClaim!.operationId,
           email,
           handle,
           pdsId,
+          ...(pdsSelection ? { pdsSelection } : {}),
           recoveryKey: recoveryKey ?? null,
           ...(registrationIdentity ? { registrationIdentity } : {}),
           rotationKeys: genesisRotationKeys({
@@ -320,12 +428,62 @@ export function createRegistration({
             email,
             handle,
             pdsId,
+            ...(pdsSelection ? { pdsSelection } : {}),
             recoveryKey: recoveryKey ?? null,
             ...(registrationIdentity ? { registrationIdentity } : {}),
           },
           false,
         );
+        try {
+          await reserve();
+          return false;
+        } catch (error) {
+          if (
+            !(error instanceof Error) ||
+            error.message !== "PdsLifecycleIneligible"
+          )
+            throw error;
+          const intent = (await db.get(
+            "registration:intents",
+            email,
+          )) as Record<string, unknown>;
+          await db.set("registration:intents", email, {
+            ...intent,
+            placementRefused: true,
+          });
+          await ownership.checkpoint(
+            "placement-refused",
+            {
+              email,
+              handle,
+              pdsId,
+              ...(pdsSelection ? { pdsSelection } : {}),
+              recoveryKey: recoveryKey ?? null,
+            },
+            true,
+          );
+          return true;
+        }
       });
+      if (refused)
+        throw new HttpError(
+          409,
+          "PdsLifecycleIneligible",
+          "The selected PDS cannot accept a new account",
+        );
+    }
+    if (ownership.currentClaim!.resumed) {
+      const previous = (await db.get("registration:intents", email)) as {
+        placementRefused?: boolean;
+      } | null;
+      if (previous?.placementRefused)
+        throw new HttpError(
+          409,
+          "PdsLifecycleIneligible",
+          "The selected PDS cannot accept a new account",
+        );
+      await reserve();
+    }
     // Recovery reuses custody selected before allocation, not deployment defaults.
     const savedIntent = (await db.get("registration:intents", email)) as
       | (RegistrationInput & { rotationKeys: string[] })
@@ -345,16 +503,67 @@ export function createRegistration({
         "RequiredSignerUnavailable",
         "The selected genesis signer is unavailable",
       );
+    if (placement && reservation)
+      await authorizeRegistryTarget(placement, registryVerifier, {
+        ...pds,
+        revision: reservation.revision,
+      });
     const reserved = await ownership.dispatch<unknown>(
       {
         step: "reserve-signing-key",
         target: pds.url,
         method: "com.atproto.server.reserveSigningKey",
         intent: {},
+        ...(placement && reservation
+          ? {
+              authorizeAttempt: authorizeRegistryAttempt(
+                db,
+                placement,
+                registryVerifier,
+                { ...pds, revision: reservation.revision },
+              ),
+            }
+          : {}),
+        ...(placement && reservation
+          ? {
+              authorizeFirst: (
+                claim: OperationClaim,
+                descriptor: ExternalAttemptInput,
+              ) =>
+                db.transact(async () => {
+                  const outcome = await placement.beginFirstDispatch(
+                    claim,
+                    reservation!.id,
+                    descriptor,
+                  );
+                  if (outcome.kind === "dispatched")
+                    await provisionPolicy?.reserve(inviteCode, email);
+                  return outcome;
+                }),
+            }
+          : {}),
       },
       {
-        send: () =>
-          xrpc(pds.internalUrl, "com.atproto.server.reserveSigningKey", {}),
+        send: async () => {
+          if (placement && reservation) {
+            await authorizeRegistryTarget(placement, registryVerifier, {
+              ...pds,
+              revision: reservation.revision,
+            });
+            return registryXrpc(
+              pds.internalUrl,
+              "com.atproto.server.reserveSigningKey",
+              {},
+              undefined,
+              registryVerifier,
+            );
+          }
+          return xrpc(
+            pds.internalUrl,
+            "com.atproto.server.reserveSigningKey",
+            {},
+          );
+        },
         ...signingKeyResult,
         // An unbound reserved key has no DID/account effect; after dispatcher
         // isolation and upstream drain a fresh allocation is safe.
@@ -366,7 +575,13 @@ export function createRegistration({
       signingKey,
       rotationKeys: savedIntent.rotationKeys,
       handle,
-      pds: pds.url,
+      pds: placement
+        ? registryPlcEndpoint(
+            pds.url,
+            "stagedIncomingMigration" in pds &&
+              pds.stagedIncomingMigration === true,
+          )
+        : pds.url,
     });
     const createdAt = new Date().toISOString();
     const row: AccountRow = {
@@ -375,6 +590,7 @@ export function createRegistration({
       handle,
       pdsId,
       pdsUrl: pds.url,
+      ...(reservation ? { pdsRevision: reservation.revision } : {}),
       status: "provisioning",
       op,
       createdAt,
@@ -388,6 +604,21 @@ export function createRegistration({
       await db.transact(async () => {
         await storage.insertAccount(row!);
         await ownership.bindResource(row!.did);
+        if (reservation) {
+          // Preserve the original public signed genesis and exact placement for
+          // later host-reference proofs. Never overwrite existing evidence.
+          if (await db.get("registration:host-references", row!.did))
+            throw new Error("RegistrationReferenceConflict");
+          await db.set("registration:host-references", row!.did, {
+            operationId,
+            did: row!.did,
+            hostId: reservation.host_id,
+            revision: reservation.revision,
+            publicTarget: reservation.public_target,
+            internalTarget: reservation.target,
+            signedGenesis: op,
+          });
+        }
         // Persist genesis and its authorization history before dispatch so a
         // retry keeps the same DID and signed operation.
         await custody.recordSigned({
@@ -482,6 +713,7 @@ export function createRegistration({
     email,
     handle,
     pdsId,
+    pdsSelection,
     recoveryKey,
     inviteCode,
     registrationIdentity,
@@ -511,19 +743,47 @@ export function createRegistration({
     if (row && row.status !== "provisioning")
       throw new HttpError(409, "AccountUnavailable", "Account is unavailable");
     await validateHandle(handle, row?.did);
-    const pds = config.pds.find((p) => p.id === pdsId);
+    let saved = placement
+      ? await placement.read(ownership.currentClaim!)
+      : undefined;
+    const pds = placement
+      ? await placement.resolve(pdsId, saved?.revision)
+      : config.pds.find((p) => p.id === pdsId);
     if (!pds) throw new HttpError(400, "InvalidPds", "Unknown PDS");
-    await provisionPolicy?.reserve(inviteCode, email);
+    if (row && placement) {
+      if (
+        !saved ||
+        saved.host_id !== pdsId ||
+        saved.public_target !== pds.url ||
+        saved.target !== pds.internalUrl
+      )
+        throw new HttpError(
+          409,
+          "PdsLifecycleIneligible",
+          "The saved PDS configuration is unavailable",
+        );
+    }
+    if (!placement) await provisionPolicy?.reserve(inviteCode, email);
     row ??= await allocateIdentity(
       {
         email,
         handle,
         pdsId,
+        pdsSelection,
         recoveryKey,
+        inviteCode,
         ...(registrationIdentity ? { registrationIdentity } : {}),
       },
       pds,
     );
+    if (placement && !saved)
+      saved = await placement.read(ownership.currentClaim!);
+    if (placement && !saved)
+      throw new HttpError(
+        409,
+        "OperationRecoveryRequired",
+        "The saved data server is unavailable",
+      );
     const operation = {
       id: `create:${row.did}`,
       kind: "create",
@@ -539,20 +799,58 @@ export function createRegistration({
         target: pds.url,
         method: "com.atproto.server.createAccount",
         intent: { did: row.did, handle, plcOp: row.op },
+        ...(placement && saved
+          ? {
+              authorizeAttempt: authorizeRegistryAttempt(
+                db,
+                placement,
+                registryVerifier,
+                { ...pds, revision: saved.revision },
+              ),
+            }
+          : {}),
       },
       {
         ...noExternalResult,
-        send: () =>
-          xrpc(pds.internalUrl, "com.atproto.server.createAccount", {
-            did: row.did,
-            handle,
-            plcOp: row.op,
-          }),
-        observe: async () => {
-          const probe = await fetch(
-            `${pds.internalUrl}/xrpc/com.atproto.repo.describeRepo?repo=${encodeURIComponent(row.did)}`,
-            { signal: AbortSignal.timeout(5000) },
+        send: async () => {
+          const body = { did: row.did, handle, plcOp: row.op };
+          if (placement && saved) {
+            await authorizeRegistryTarget(placement, registryVerifier, {
+              ...pds,
+              revision: saved.revision,
+            });
+            return registryXrpc(
+              pds.internalUrl,
+              "com.atproto.server.createAccount",
+              body,
+              undefined,
+              registryVerifier,
+            );
+          }
+          return xrpc(
+            pds.internalUrl,
+            "com.atproto.server.createAccount",
+            body,
           );
+        },
+        observe: async () => {
+          const probeUrl = new URL(
+            `/xrpc/com.atproto.repo.describeRepo?repo=${encodeURIComponent(row.did)}`,
+            pds.internalUrl,
+          );
+          if (placement && saved)
+            await authorizeRegistryTarget(placement, registryVerifier, {
+              ...pds,
+              revision: saved.revision,
+            });
+          const probe = placement
+            ? await registryPdsFetch(
+                probeUrl,
+                { signal: AbortSignal.timeout(5000) },
+                registryVerifier,
+                1_000_000,
+              )
+            : await fetch(probeUrl, { signal: AbortSignal.timeout(5000) });
           const data = await probe.json().catch(() => ({}));
           let head;
           try {
@@ -672,6 +970,7 @@ export function createRegistration({
       email: record.email,
       handle: record.handle,
       pdsId: record.pdsId,
+      ...(record.pdsSelection ? { pdsSelection: record.pdsSelection } : {}),
       recoveryKey: record.recoveryKey ?? null,
       ...(registrationIdentity ? { registrationIdentity } : {}),
     };

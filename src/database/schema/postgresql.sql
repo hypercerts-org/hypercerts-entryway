@@ -29,6 +29,12 @@ CREATE TABLE "accounts" (
 	"sequence" bigint NOT NULL UNIQUE
 );
 --> statement-breakpoint
+CREATE TABLE "active_did_transfers" (
+	"did" text PRIMARY KEY,
+	"operation_id" text NOT NULL,
+	"transfer_kind" text NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "arrival_attempts" (
 	"attempt_binding" text PRIMARY KEY,
 	"ownership_operation_id" text NOT NULL,
@@ -105,7 +111,10 @@ CREATE TABLE "arrivals" (
 	"email" text NOT NULL,
 	"handle" text NOT NULL,
 	"pds_id" text NOT NULL,
+	"pds_revision" bigint,
+	"staged_incoming_migration" boolean DEFAULT false NOT NULL,
 	"endpoint" text NOT NULL,
+	"plc_endpoint" text,
 	"source_plc_head" text NOT NULL,
 	"source_endpoint" text,
 	"canonical_handoff_cid" text,
@@ -132,6 +141,11 @@ CREATE TABLE "arrivals" (
 	CONSTRAINT "arrival_complete" CHECK (("completed_at" IS NULL) OR ("completed_at" IS NOT NULL AND "bound_at" IS NOT NULL AND "activation_method" IS NOT NULL))
 );
 --> statement-breakpoint
+CREATE TABLE "authority_mode" (
+	"id" integer PRIMARY KEY,
+	"mode" text NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "authority_operations" (
 	"id" text PRIMARY KEY,
 	"kind" text NOT NULL,
@@ -150,10 +164,32 @@ CREATE TABLE "authority_operations" (
 	"updated_at" bigint NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "authority_phase" (
+	"id" integer PRIMARY KEY,
+	"phase" text NOT NULL,
+	"generation" bigint NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "authority_phase_events" (
+	"command_key" text PRIMARY KEY,
+	"expected_generation" bigint NOT NULL,
+	"phase" text NOT NULL,
+	"generation" bigint NOT NULL,
+	"principal_class" text NOT NULL,
+	"created_at" bigint NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "backup_emails" (
 	"email" text PRIMARY KEY,
 	"did" text NOT NULL,
 	"created_at" text NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "controller_challenges" (
+	"nonce" text PRIMARY KEY,
+	"context" text NOT NULL,
+	"expires_at" bigint NOT NULL,
+	"consumed_at" bigint
 );
 --> statement-breakpoint
 CREATE TABLE "custody_history" (
@@ -239,7 +275,7 @@ CREATE TABLE "mail_outbox" (
 	"lease_expires_at" bigint,
 	"delivery_uncertain" boolean DEFAULT false NOT NULL,
 	CONSTRAINT "mail_message_kind" CHECK ("message_kind" IN ('otp','proof','admin')),
-	CONSTRAINT "mail_attempts" CHECK ("attempt_count" BETWEEN 0 AND 3),
+	CONSTRAINT "mail_attempts" CHECK ("attempt_count" >= 0 AND (("purpose" = 'pds-health' AND "message_kind" = 'admin') OR "attempt_count" <= 3)),
 	CONSTRAINT "mail_state" CHECK ("state" IN ('queued','sending','delivered','failed','expired')),
 	CONSTRAINT "mail_claim" CHECK (("state"='sending' AND "claim_owner" IS NOT NULL AND "claim_attempt" IS NOT NULL AND "lease_expires_at" IS NOT NULL) OR ("state"!='sending' AND "claim_owner" IS NULL AND "claim_attempt" IS NULL AND "lease_expires_at" IS NULL)),
 	CONSTRAINT "mail_expiry" CHECK ("expires_at">"created_at"),
@@ -262,7 +298,7 @@ CREATE TABLE "migration_custody_inventory" (
 --> statement-breakpoint
 CREATE TABLE "migration_reservations" (
 	"workflow_id" text PRIMARY KEY,
-	"did" text NOT NULL UNIQUE,
+	"did" text NOT NULL,
 	"handle" text NOT NULL,
 	"email" text NOT NULL,
 	"user_id" text NOT NULL,
@@ -281,14 +317,203 @@ CREATE TABLE "migration_snapshot_manifest" (
 --> statement-breakpoint
 CREATE TABLE "migration_workflow" (
 	"id" text PRIMARY KEY,
-	"did" text NOT NULL UNIQUE,
+	"did" text NOT NULL,
+	"active_did" text UNIQUE,
+	"authority_operation_id" text NOT NULL UNIQUE,
 	"version" integer NOT NULL,
-	"value" text NOT NULL
+	"value" text NOT NULL,
+	CONSTRAINT "migration_workflow_active_did" CHECK ("active_did" IS NULL OR "active_did" = "did")
 );
 --> statement-breakpoint
 CREATE TABLE "operation_admissions" (
 	"resource" text PRIMARY KEY,
 	"operation_id" text NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "pds_health_incidents" (
+	"id" text PRIMARY KEY,
+	"host_id" text NOT NULL,
+	"revision" bigint NOT NULL,
+	"generation" bigint NOT NULL,
+	"cause" text NOT NULL,
+	"opened_at" bigint NOT NULL,
+	"closed_at" bigint,
+	"state" text NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "pds_health_notices" (
+	"id" text PRIMARY KEY,
+	"incident_id" text NOT NULL,
+	"phase" text NOT NULL,
+	"role" text NOT NULL,
+	"recipient" text,
+	"outbox_id" text,
+	"created_at" bigint NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "pds_health_sweep" (
+	"id" integer PRIMARY KEY,
+	"generation" bigint NOT NULL,
+	"claim_id" text,
+	"lease_expires_at" bigint,
+	"last_clock" bigint NOT NULL,
+	"cursor" text NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "pds_host_checks" (
+	"host_id" text PRIMARY KEY,
+	"attempt_id" text,
+	"generation" bigint NOT NULL,
+	"attempt_revision" bigint,
+	"expires_at" bigint,
+	"started_at" bigint,
+	"last_revision" bigint,
+	"last_receipt_id" text,
+	"manifest_fingerprint" text,
+	"verifier_version" bigint,
+	"verifier_policy_fingerprint" text,
+	"verifier_policy_generation" bigint,
+	"completed_at" bigint,
+	"receipt_expires_at" bigint,
+	"observed_at" bigint,
+	"public_did_ok" boolean,
+	"internal_did_ok" boolean,
+	"public_metadata_ok" boolean,
+	"internal_metadata_ok" boolean,
+	"admin_attempted" boolean,
+	"admin_ok" boolean,
+	"reason" text
+);
+--> statement-breakpoint
+CREATE TABLE "pds_host_credential_requests" (
+	"host_id" text,
+	"idempotency_key" text,
+	"key_id" text NOT NULL,
+	"digest" text NOT NULL,
+	"revision" bigint NOT NULL,
+	CONSTRAINT "pds_host_credential_requests_pkey" PRIMARY KEY("host_id","idempotency_key")
+);
+--> statement-breakpoint
+CREATE TABLE "pds_host_credentials" (
+	"host_id" text,
+	"revision" bigint,
+	"key_id" text NOT NULL,
+	"nonce" text NOT NULL,
+	"ciphertext" text NOT NULL,
+	"tag" text NOT NULL,
+	"inbound_digest" text NOT NULL,
+	"inbound_revoked_at" bigint,
+	CONSTRAINT "pds_host_credentials_pkey" PRIMARY KEY("host_id","revision")
+);
+--> statement-breakpoint
+CREATE TABLE "pds_host_enrollment_events" (
+	"id" text PRIMARY KEY,
+	"host_id" text NOT NULL,
+	"revision" bigint NOT NULL,
+	"kind" text NOT NULL,
+	"principal_class" text NOT NULL,
+	"idempotency_key" text NOT NULL,
+	"request" text NOT NULL,
+	"receipt_id" text NOT NULL,
+	"attestation_id" text NOT NULL,
+	"generation" bigint NOT NULL,
+	"policy_generation" bigint NOT NULL,
+	"manifest_fingerprint" text NOT NULL,
+	"receipt_snapshot" text NOT NULL,
+	"expires_at" bigint NOT NULL,
+	"created_at" bigint NOT NULL,
+	"result" text NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "pds_host_health" (
+	"host_id" text PRIMARY KEY,
+	"revision" bigint NOT NULL,
+	"generation" bigint NOT NULL,
+	"claim_id" text,
+	"claim_expires_at" bigint,
+	"claim_started_at" bigint,
+	"next_sample_at" bigint,
+	"policy_generation" bigint NOT NULL,
+	"policy_fingerprint" text NOT NULL,
+	"observed_at" bigint,
+	"monitor_observed_at" bigint,
+	"completed_at" bigint,
+	"public_ok" boolean,
+	"internal_ok" boolean,
+	"failures" bigint NOT NULL,
+	"successes" bigint NOT NULL,
+	"state" text NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "pds_host_lifecycle_events" (
+	"id" text PRIMARY KEY,
+	"host_id" text NOT NULL,
+	"command_key" text NOT NULL,
+	"request" text NOT NULL,
+	"result" text NOT NULL,
+	"created_at" bigint NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "pds_host_manifests" (
+	"host_id" text,
+	"revision" bigint,
+	"manifest" text NOT NULL,
+	"fingerprint" text NOT NULL,
+	CONSTRAINT "pds_host_manifests_pkey" PRIMARY KEY("host_id","revision")
+);
+--> statement-breakpoint
+CREATE TABLE "pds_host_revisions" (
+	"host_id" text,
+	"revision" bigint,
+	"service_did" text NOT NULL,
+	"public_url" text NOT NULL,
+	"internal_url" text NOT NULL,
+	"staged_incoming_migration" boolean DEFAULT false NOT NULL,
+	"configured_order" bigint NOT NULL,
+	CONSTRAINT "pds_host_revisions_pkey" PRIMARY KEY("host_id","revision")
+);
+--> statement-breakpoint
+CREATE TABLE "pds_host_stage_requests" (
+	"host_id" text,
+	"idempotency_key" text,
+	"request" text NOT NULL,
+	"revision" bigint NOT NULL,
+	CONSTRAINT "pds_host_stage_requests_pkey" PRIMARY KEY("host_id","idempotency_key")
+);
+--> statement-breakpoint
+CREATE TABLE "pds_host_verifier_policies" (
+	"host_id" text PRIMARY KEY,
+	"revision" bigint NOT NULL,
+	"generation" bigint NOT NULL,
+	"fingerprint" text NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "pds_hosts" (
+	"id" text PRIMARY KEY,
+	"revision" bigint NOT NULL,
+	"configured_order" bigint NOT NULL,
+	"association" text NOT NULL,
+	"lifecycle" text NOT NULL,
+	"lifecycle_version" bigint DEFAULT 0 NOT NULL,
+	"active_revision" bigint,
+	"staged_revision" bigint
+);
+--> statement-breakpoint
+CREATE TABLE "pds_placement_reservations" (
+	"id" text PRIMARY KEY,
+	"operation_id" text NOT NULL,
+	"purpose" text NOT NULL,
+	"intent" text NOT NULL,
+	"requested_host_id" text,
+	"host_id" text NOT NULL,
+	"revision" bigint NOT NULL,
+	"target" text NOT NULL,
+	"public_target" text NOT NULL,
+	"target_steps" text NOT NULL,
+	"state" text NOT NULL,
+	"dispatch_input" text,
+	"first_attempt_id" text,
+	"created_at" bigint NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "session" (
@@ -339,6 +564,7 @@ CREATE UNIQUE INDEX "arrivals_handle_active" ON "arrivals" (lower("handle")) WHE
 CREATE INDEX "arrivals_handle" ON "arrivals" (lower("handle"),"created_at");--> statement-breakpoint
 CREATE INDEX "authority_operation_lease" ON "authority_operations" ("state","lease_expires_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "backup_emails_ci" ON "backup_emails" (lower("email"));--> statement-breakpoint
+CREATE INDEX "controller_challenge_expiry" ON "controller_challenges" ("expires_at");--> statement-breakpoint
 CREATE INDEX "custody_history_did" ON "custody_history" ("did");--> statement-breakpoint
 CREATE UNIQUE INDEX "email_claims_exclusive_ci" ON "email_claims" (lower("email")) WHERE "purpose" IN ('backup','pending');--> statement-breakpoint
 CREATE INDEX "external_operation_step" ON "external_operation_attempts" ("operation_id","step","created_at");--> statement-breakpoint
@@ -351,8 +577,15 @@ CREATE UNIQUE INDEX "migration_checkpoint_command" ON "migration_checkpoint" ("w
 CREATE INDEX "migration_checkpoint_workflow_idx" ON "migration_checkpoint" ("workflow_id","id");--> statement-breakpoint
 CREATE INDEX "migration_email_ci" ON "migration_reservations" (lower("email"));--> statement-breakpoint
 CREATE INDEX "migration_user_id" ON "migration_reservations" ("user_id");--> statement-breakpoint
-CREATE UNIQUE INDEX "migration_handle_ci" ON "migration_reservations" (lower("handle"));--> statement-breakpoint
+CREATE UNIQUE INDEX "migration_active_did" ON "migration_reservations" ("did") WHERE "state" <> 'complete';--> statement-breakpoint
+CREATE UNIQUE INDEX "migration_handle_ci" ON "migration_reservations" (lower("handle")) WHERE "state" <> 'complete';--> statement-breakpoint
 CREATE INDEX "operation_admission_id" ON "operation_admissions" ("operation_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "pds_health_incident_generation" ON "pds_health_incidents" ("host_id","generation");--> statement-breakpoint
+CREATE UNIQUE INDEX "pds_health_open_incident" ON "pds_health_incidents" ("host_id") WHERE "state" = 'open';--> statement-breakpoint
+CREATE UNIQUE INDEX "pds_health_notice_role" ON "pds_health_notices" ("incident_id","phase","role");--> statement-breakpoint
+CREATE UNIQUE INDEX "pds_host_enrollment_idempotency" ON "pds_host_enrollment_events" ("host_id","kind","idempotency_key");--> statement-breakpoint
+CREATE UNIQUE INDEX "pds_host_lifecycle_command" ON "pds_host_lifecycle_events" ("host_id","command_key");--> statement-breakpoint
+CREATE UNIQUE INDEX "pds_placement_operation" ON "pds_placement_reservations" ("operation_id");--> statement-breakpoint
 CREATE INDEX "session_user_id" ON "session" ("userId");--> statement-breakpoint
 CREATE UNIQUE INDEX "user_email_ci" ON "user" (lower("email"));--> statement-breakpoint
 CREATE INDEX "verification_identifier" ON "verification" ("identifier");--> statement-breakpoint
@@ -371,5 +604,19 @@ ALTER TABLE "external_operation_attempts" ADD CONSTRAINT "external_operation_att
 ALTER TABLE "handle_claims" ADD CONSTRAINT "handle_claims_did_accounts_did_fkey" FOREIGN KEY ("did") REFERENCES "accounts"("did");--> statement-breakpoint
 ALTER TABLE "migration_checkpoint" ADD CONSTRAINT "migration_checkpoint_workflow_id_migration_workflow_id_fkey" FOREIGN KEY ("workflow_id") REFERENCES "migration_workflow"("id");--> statement-breakpoint
 ALTER TABLE "migration_snapshot_manifest" ADD CONSTRAINT "migration_snapshot_manifest_MV6jDrceH3um_fkey" FOREIGN KEY ("workflow_id") REFERENCES "migration_workflow"("id");--> statement-breakpoint
+ALTER TABLE "migration_workflow" ADD CONSTRAINT "migration_workflow_LnmUuHX2epdb_fkey" FOREIGN KEY ("authority_operation_id") REFERENCES "authority_operations"("id");--> statement-breakpoint
 ALTER TABLE "operation_admissions" ADD CONSTRAINT "operation_admissions_operation_id_authority_operations_id_fkey" FOREIGN KEY ("operation_id") REFERENCES "authority_operations"("id");--> statement-breakpoint
+ALTER TABLE "pds_health_incidents" ADD CONSTRAINT "pds_health_incidents_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
+ALTER TABLE "pds_health_notices" ADD CONSTRAINT "pds_health_notices_incident_id_pds_health_incidents_id_fkey" FOREIGN KEY ("incident_id") REFERENCES "pds_health_incidents"("id");--> statement-breakpoint
+ALTER TABLE "pds_host_checks" ADD CONSTRAINT "pds_host_checks_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
+ALTER TABLE "pds_host_credential_requests" ADD CONSTRAINT "pds_host_credential_requests_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
+ALTER TABLE "pds_host_credentials" ADD CONSTRAINT "pds_host_credentials_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
+ALTER TABLE "pds_host_enrollment_events" ADD CONSTRAINT "pds_host_enrollment_events_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
+ALTER TABLE "pds_host_health" ADD CONSTRAINT "pds_host_health_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
+ALTER TABLE "pds_host_lifecycle_events" ADD CONSTRAINT "pds_host_lifecycle_events_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
+ALTER TABLE "pds_host_manifests" ADD CONSTRAINT "pds_host_manifests_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
+ALTER TABLE "pds_host_revisions" ADD CONSTRAINT "pds_host_revisions_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
+ALTER TABLE "pds_host_stage_requests" ADD CONSTRAINT "pds_host_stage_requests_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
+ALTER TABLE "pds_host_verifier_policies" ADD CONSTRAINT "pds_host_verifier_policies_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
+ALTER TABLE "pds_placement_reservations" ADD CONSTRAINT "pds_placement_reservations_host_id_pds_hosts_id_fkey" FOREIGN KEY ("host_id") REFERENCES "pds_hosts"("id");--> statement-breakpoint
 ALTER TABLE "session" ADD CONSTRAINT "session_userId_user_id_fkey" FOREIGN KEY ("userId") REFERENCES "user"("id") ON DELETE CASCADE;

@@ -44,6 +44,7 @@ export function createDurableArrivalProvisioning({
   signer,
   backend,
   bindPending,
+  placement,
 }: {
   arrivals: ArrivalTransactor;
   ownership: OperationOwnership;
@@ -58,11 +59,39 @@ export function createDurableArrivalProvisioning({
     } | null>;
     create(operation?: Record<string, unknown>): Promise<unknown>;
     assertStagingEnabled(): void;
+    validate?(): Promise<void>;
+    authorizeAttempt?: Parameters<
+      OperationOwnership["dispatch"]
+    >[0]["authorizeAttempt"];
     installedSigningKey(): Promise<string>;
     pause(): Promise<void>;
     reserveSigningKey(): Promise<string>;
   };
   bindPending: ArrivalTransactor["bindProvisionedArrival"];
+  placement?: {
+    read(
+      owner: OperationClaim,
+    ): Promise<
+      | { id: string; host_id: string; revision: number; public_target: string }
+      | undefined
+    >;
+    beginFirstDispatch(
+      owner: OperationClaim,
+      reservationId: string,
+      input: import("../../database/operation-ownership.port.js").ExternalAttemptInput,
+    ): Promise<
+      | {
+          kind: "dispatched";
+          attempt: import("../../database/operation-ownership.port.js").ExternalAttempt;
+        }
+      | {
+          kind: "existing";
+          attempt: import("../../database/operation-ownership.port.js").ExternalAttempt;
+        }
+      | { kind: "refused" }
+      | { kind: "prior-dispatch" }
+    >;
+  };
 }) {
   return async (owner: OperationClaim, initial: ArrivalAggregate) => {
     let saved = initial.arrival;
@@ -146,12 +175,41 @@ export function createDurableArrivalProvisioning({
         if (intent.kind === "reconciliation-required")
           return pending("The saved arrival allocation is uncertain");
       }
+      const registryReservation =
+        saved.pdsRevision === undefined
+          ? undefined
+          : await placement?.read(owner);
+      if (
+        saved.pdsRevision !== undefined &&
+        (!registryReservation ||
+          registryReservation.host_id !== saved.pdsId ||
+          registryReservation.revision !== saved.pdsRevision ||
+          registryReservation.public_target !== saved.endpoint)
+      )
+        return pending("The saved destination reservation is unavailable");
       const reserved = await ownership.dispatch(
         {
           step: "incoming-reservation",
           target: saved.endpoint,
           method: "com.atproto.server.reserveSigningKey",
           intent: { did: saved.did, pdsId: saved.pdsId },
+          ...(target.authorizeAttempt
+            ? { authorizeAttempt: target.authorizeAttempt }
+            : {}),
+          ...(target.validate ? { beforeFirst: () => target.validate!() } : {}),
+          ...(placement && registryReservation
+            ? {
+                authorizeFirst: (
+                  claim: OperationClaim,
+                  descriptor: import("../../database/operation-ownership.port.js").ExternalAttemptInput,
+                ) =>
+                  placement.beginFirstDispatch(
+                    claim,
+                    registryReservation.id,
+                    descriptor,
+                  ),
+              }
+            : {}),
         },
         {
           send: async () => ({ signingKey: await target.reserveSigningKey() }),
@@ -221,7 +279,16 @@ export function createDurableArrivalProvisioning({
         return receipt;
       };
       await ownership.dispatch(
-        { step, target: saved.endpoint, method, intent },
+        {
+          step,
+          target: saved.endpoint,
+          method,
+          intent,
+          ...(target.authorizeAttempt
+            ? { authorizeAttempt: target.authorizeAttempt }
+            : {}),
+          ...(target.validate ? { beforeFirst: () => target.validate!() } : {}),
+        },
         {
           send: async () => {
             await associate();
@@ -333,7 +400,7 @@ export function createDurableArrivalProvisioning({
           {
             handoffOperation: handoff.operation,
             repositoryKey: saved.signingKey,
-            endpoint: saved.endpoint,
+            endpoint: saved.plcEndpoint ?? saved.endpoint,
             handle: saved.handle,
             rotationKeys: destinationRotationKeys(saved),
           },
@@ -363,7 +430,8 @@ export function createDurableArrivalProvisioning({
         String(await cidForCbor(move.operation)) !== move.cid ||
         parsedMove.prev !== creationHead ||
         parsedMove.verificationMethods.atproto !== saved.signingKey ||
-        parsedMove.services.atproto_pds?.endpoint !== saved.endpoint ||
+        parsedMove.services.atproto_pds?.endpoint !==
+          (saved.plcEndpoint ?? saved.endpoint) ||
         parsedMove.services.atproto_pds?.type !== "AtprotoPersonalDataServer" ||
         !parsedMove.alsoKnownAs.includes(`at://${saved.handle}`) ||
         JSON.stringify(parsedMove.rotationKeys) !==

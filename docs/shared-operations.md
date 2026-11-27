@@ -179,10 +179,13 @@ Recovery observations are operation-specific:
   later third-party publication; the protocol's PLC previous-CID rule remains.
 - Status/deletion observations follow verified old-request drain and compare the
   affected target account. They do not prove drain themselves.
-- Managed migration retains original DID, target key and every journaled PLC
-  operation. Only the existing exact-head/absent-target partial-create repair is
-  allowed; a foreign head is divergence. Snapshot recovery verifies full CAR
-  record-CID inventories and every blob's bytes, not counts alone. Empty
+- Managed migration retains the original DID, the repository key from the PLC
+  predecessor, the target key and every journaled PLC operation. The source key
+  remains the original even after a partial-create repair changes the PLC head.
+  Only the existing exact-head/absent-target partial-create repair is allowed; a
+  foreign head is divergence. Snapshot recovery verifies the source CAR signature
+  against that retained key, full record-CID inventories and every blob's bytes,
+  not counts alone. Missing source-key evidence requires operator inspection. Empty
   `applyWrites` uses `swapCommit` against the observed root. A safe repeated empty
   write may create a new signed commit/revision; it does not mutate records or
   blobs and is not exactly-once execution.
@@ -330,3 +333,46 @@ record/blob and session/write assertions. Desktop/narrow pending and completion
 outputs support visual inspection; focused diagnostics alone do not replace full
 acceptance. See [implementation limits](implementation-assessment.md#known-limits)
 for the unresolved moderation and credential-lifetime defects.
+
+Managed migration admission also claims the shared active DID transfer fence in
+the proof and journal transaction. Incoming admissions conflict with this claim.
+The challenge binds a distinct server-side move ID; snapshots and retained move
+journals use that ID. A pending move retains the claim and terminal placement
+refusal or verified local cutover releases only its matching owner. Authenticated
+retries may select the saved challenge; an ambiguous tokenless retry is refused.
+A managed return to an existing account requires the latest completed move's saved
+former-host identity, inactive repository head and signing key to match the live
+host. Older journals without host identity cannot qualify. A qualifying return freezes
+the current source and stages its verified snapshot on the inactive retained host only
+when the retained signed record inventory is an unchanged subset. The exact import is
+owned and recoverable. After verifying the staged root, retained key,
+inactive source and saved intent, it publishes the exact signed PLC operation and
+checkpoints its canonical CID before activation and guarded re-signing. A lost PLC
+response requires uncertain-write recovery and observation of the exact canonical
+head; a different head requires reconciliation. Before return placement commits, an
+independent validated PLC audit must match the exact saved return operation, key,
+endpoint and authority. Its custody observation, retained-source history, placement
+and matching claim release commit together. A conflicting newer observation or
+unavailable audit leaves the move pending for reconciliation; directory keys alone
+do not establish private-key custody. Other existing accounts are refused.
+Before snapshot and cutover, managed migration requires the source to be
+observed inactive. Before placement commits,
+it verifies the target's signed repository and saved records again. Blobs use the
+standard owned upload, checkpoint and account-status checks; return does not independently
+read back each target blob.
+If these checks fail, keep the operation pending; do not manually activate both
+hosts or overwrite either repository. Use uncertain-write recovery only when an
+external attempt is actually uncertain. An acknowledged request whose observed
+state does not match (for example an acknowledged deactivation or re-sign that
+had no effect) is not eligible for that procedure and is not automatically
+redispatched. Investigate the remote state and escalate for operator reconciliation;
+ordinary retry cannot repair the acknowledged step. These observations narrow
+race windows but do not make PLC, PDS and local placement atomic.
+Repository and blob snapshots and move journals are retained in the database by operation ID;
+there is no automatic expiry or garbage collection. They can contain account data
+and consume storage proportional to transferred data and repeated moves. Protect
+and capacity-plan database storage and backups accordingly; do not delete snapshots
+needed for recovery. A lifecycle refusal at initial admission releases the claim
+before remote work. A later preflight or target-read refusal keeps the claim: an
+earlier source action or recovery obligation may already exist, and placement's
+target-dispatch checks alone do not prove it is safe to release.

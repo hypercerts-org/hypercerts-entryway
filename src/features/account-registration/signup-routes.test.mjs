@@ -10,7 +10,13 @@ const row = {
   email,
 };
 
-function fixture({ existing, createError, handleDomain, loginHint } = {}) {
+function fixture({
+  existing,
+  createError,
+  handleDomain,
+  loginHint,
+  savedIntent,
+} = {}) {
   const handlers = new Map();
   const created = [];
   const authenticatedCalls = [];
@@ -26,7 +32,11 @@ function fixture({ existing, createError, handleDomain, loginHint } = {}) {
   };
   mountSignupRoutes({
     app: fakeApp(handlers),
-    db: {},
+    db: {
+      async get() {
+        return null;
+      },
+    },
     accounts: {
       storage: {
         async listByEmail() {
@@ -34,7 +44,7 @@ function fixture({ existing, createError, handleDomain, loginHint } = {}) {
         },
       },
       async pendingRegistration() {
-        return null;
+        return savedIntent ?? null;
       },
       async create(input) {
         created.push(input);
@@ -129,4 +139,31 @@ test("a signup for a requested handle or DID can only create that account", asyn
   const otherDid = fixture({ loginHint: "did:plc:bbbbbbbbbbbbbbbbbbbbbbbb" });
   await assert.rejects(otherDid.submit(), { status: 403 });
   assert.deepEqual(otherDid.created, []);
+});
+
+test("browser continuation retains saved selection shape from XRPC and legacy intents", async () => {
+  for (const selection of ["implicit", "explicit", undefined]) {
+    const savedIntent = {
+      email,
+      handle: "owner.example.test",
+      pdsId: "original",
+      recoveryKey: null,
+      registrationIdentity: { kind: "better-auth", userId: "user", email },
+      ...(selection ? { pdsSelection: selection } : {}),
+    };
+    for (const existing of [
+      undefined,
+      {
+        ...row,
+        status: "provisioning",
+        handle: savedIntent.handle,
+        pdsId: savedIntent.pdsId,
+      },
+    ]) {
+      const f = fixture({ savedIntent, existing });
+      await f.submit();
+      assert.equal(f.created[0].pdsId, "original");
+      assert.equal(f.created[0].pdsSelection, selection);
+    }
+  }
 });

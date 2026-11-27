@@ -29,6 +29,8 @@ import {
   ensureV3Commit,
 } from "@atproto/repo";
 import { Secp256k1Keypair } from "@atproto/crypto";
+import { cidForCbor } from "@atproto/common";
+import { plcAudit, plcData } from "../support/helpers/incoming-failures.mjs";
 import { waitForStockPlcMessage } from "../support/helpers/stock-plc-mailpit.mjs";
 import { nodeRouting } from "../support/helpers/incoming-nodes.mjs";
 
@@ -131,6 +133,7 @@ test("the client verifies the source export before identity cutover", async () =
 test("the source signs the authority handoff and Entryway publishes only that", async () => {
   // Stock service tokens last about a minute: the creation token is minted
   // immediately before it is used, not here.
+  const sourceIdentity = await plcData(access, run.source.did);
   const since = Date.now();
   ok(
     await call(
@@ -162,6 +165,8 @@ test("the source signs the authority handoff and Entryway publishes only that", 
   );
   ok(signed, "signed handoff");
   const operation = json(signed).operation;
+  run.auditBeforeHandoff = await plcAudit(access, run.source.did);
+  expect(operation.prev).toBe(run.auditBeforeHandoff.at(-1).cid);
   await nodes.stage("handoff", 1, run.source.did, async () => {
     // Wrong code, then wrong method, are refused before anything is published.
     const wrongCode = await fetch(
@@ -180,6 +185,9 @@ test("the source signs the authority handoff and Entryway publishes only that", 
     nodes.expectServed(wrongCode, "wrong-code handoff");
     expect(wrongCode.status).toBe(409);
     expect((await wrongCode.json()).error).toBe("ArrivalExpired");
+    expect(await plcAudit(access, run.source.did)).toEqual(
+      run.auditBeforeHandoff,
+    );
     const wrongMethodJwt = await serviceAuth(creationMethod);
     const wrongMethod = await fetch(
       new URL(`/xrpc/${handoffMethod}`, config.issuer),
@@ -196,6 +204,9 @@ test("the source signs the authority handoff and Entryway publishes only that", 
     );
     nodes.expectServed(wrongMethod, "wrong-method handoff");
     expect(wrongMethod.status).toBe(403);
+    expect(await plcAudit(access, run.source.did)).toEqual(
+      run.auditBeforeHandoff,
+    );
     const submitted = await fetch(
       new URL(`/xrpc/${handoffMethod}`, config.issuer),
       {
@@ -213,6 +224,18 @@ test("the source signs the authority handoff and Entryway publishes only that", 
     expect(submitted.status).toBe(200);
     expect(submitted.headers.get("cache-control")).toBe("no-store");
   });
+  run.auditAfterHandoff = await plcAudit(access, run.source.did);
+  expect(run.auditAfterHandoff.slice(0, -1)).toEqual(run.auditBeforeHandoff);
+  expect(run.auditAfterHandoff.at(-1).operation).toEqual(operation);
+  expect(run.auditAfterHandoff.at(-1).cid).toBe(
+    String(await cidForCbor(operation)),
+  );
+  const handoffIdentity = await plcData(access, run.source.did);
+  expect(handoffIdentity.services.atproto_pds.endpoint).toBe(access.sourceUrl);
+  expect(handoffIdentity.alsoKnownAs).toEqual(sourceIdentity.alsoKnownAs);
+  expect(handoffIdentity.verificationMethods).toEqual(
+    sourceIdentity.verificationMethods,
+  );
   // createAccount publishes a second operation. Read the head before creation.
   const head = await fetch(
     new URL(`/${run.source.did}/log/last`, access.plcUrl),
@@ -273,6 +296,21 @@ async function createDestination() {
   expect(run.destination.did).toBe(run.source.did);
   expect(run.destination.handle).toBe(run.destinationHandle);
   expect(run.destination.active).toBe(false);
+  const auditAfterCreation = await plcAudit(access, run.source.did);
+  expect(auditAfterCreation).toHaveLength(run.auditBeforeHandoff.length + 2);
+  expect(auditAfterCreation.slice(0, -1)).toEqual(run.auditAfterHandoff);
+  const creationUpdate = auditAfterCreation.at(-1);
+  expect(creationUpdate.operation.prev).toBe(run.auditAfterHandoff.at(-1).cid);
+  expect(creationUpdate.cid).toBe(
+    String(await cidForCbor(creationUpdate.operation)),
+  );
+  const destinationIdentity = await plcData(access, run.source.did);
+  expect(destinationIdentity.services.atproto_pds.endpoint).toBe(
+    run.prepared.destinationEndpoint,
+  );
+  expect(creationUpdate.operation.verificationMethods.atproto).toBe(
+    destinationIdentity.verificationMethods.atproto,
+  );
   // An exact replay cannot mint another family once credentials were issued.
   const repeated = await fetch(
     new URL(`/xrpc/${creationMethod}`, config.issuer),
@@ -285,6 +323,30 @@ async function createDestination() {
   nodes.expectServed(repeated, "createAccount replay");
   expect(repeated.status).toBe(409);
   expect((await repeated.json()).error).toBe("OperationConflict");
+  expect(await plcAudit(access, run.source.did)).toEqual(auditAfterCreation);
+  // Independently prove the PLC key against the destination's own pre-import commit.
+  const destinationRepo = await call(
+    run.prepared.destinationEndpoint,
+    "com.atproto.sync.getRepo",
+    {
+      token: run.destination.accessJwt,
+      params: { did: run.source.did },
+    },
+  );
+  ok(destinationRepo, "pre-import destination export");
+  const destinationCar = await readCarWithRoot(destinationRepo.content);
+  const destinationCommit = ensureV3Commit(
+    await new MemoryBlockstore(destinationCar.blocks).readObj(
+      destinationCar.root,
+      def.versionedCommit,
+    ),
+  );
+  expect(
+    await verifyCommitSig(
+      destinationCommit,
+      creationUpdate.operation.verificationMethods.atproto,
+    ),
+  ).toBe(true);
   // The paused destination refuses ordinary activation paths at Entryway.
   const plain = await fetch(
     new URL("/xrpc/com.atproto.server.getSession", config.issuer),

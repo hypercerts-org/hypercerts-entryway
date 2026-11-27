@@ -30,6 +30,10 @@ import { createMailFeature } from "../../dist/src/mail/create-mail.js";
 import { createMailOutbox } from "../../dist/src/database/drizzle/mail-outbox.js";
 import { MailTransportError } from "../../dist/src/mail/port.js";
 import { createOtpMessage } from "../../dist/src/mail/templates.js";
+import { createOperationOwnership } from "../../dist/src/accounts/operation-ownership.js";
+import { createCustodyInventoryStorage } from "../../dist/src/database/drizzle/migration-custody.js";
+import { createActiveDidTransferStore } from "../../dist/src/database/drizzle/active-did-transfer.js";
+import { createAccountMigration } from "../../dist/src/features/pds-migration/move-between-pds.mjs";
 
 async function fixture(t, { initialLogin = true } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "entryway-account-security-"));
@@ -203,6 +207,104 @@ async function fixture(t, { initialLogin = true } = {}) {
   }
   return f;
 }
+
+test("a browser-authorized managed move excludes a later move to another destination", async (t) => {
+  const f = await fixture(t);
+  f.config.pds[1].internalUrl = "https://pds2.example.test";
+  f.config.pds.push({
+    id: "pds3",
+    did: "did:web:pds3.example.test",
+    url: "https://pds3.example.test",
+    internalUrl: "https://pds3.example.test",
+  });
+  const ownership = createOperationOwnership({
+    store: createOperationOwnershipStore(f.db),
+  });
+  f.accounts.ownership = ownership;
+  f.accounts.serialized = (did, perform, intent) =>
+    ownership.accountStep(did, intent, perform);
+  const migration = await createAccountMigration({
+    db: f.db,
+    config: f.config,
+    accounts: f.accounts,
+    security: f.security,
+    custody: createCustodyInventoryStorage(f.db),
+    transfers: createActiveDidTransferStore(f.db),
+  });
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    calls.push(String(url));
+    throw new Error("destination unavailable");
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const first = await migration.requestMigrationForBrowser(f.actor, {
+    pdsId: "pds2",
+  });
+  const firstToken = await f.token(f.alice.email);
+  assert.ok(firstToken.startsWith(`${first.challengeId}.`));
+  await assert.rejects(
+    migration.importAccount(f.actor, {
+      did: f.alice.did,
+      pdsId: "pds2",
+      token: firstToken,
+    }),
+    /destination unavailable/,
+  );
+  const winner = await f.db.get(
+    "migration:operations",
+    `migrate:${f.alice.did}`,
+  );
+  assert.equal(winner.phase, "authorized");
+  assert.equal(winner.targetPdsId, "pds2");
+  const firstChallenge = await f.db.get(
+    "security:challenges",
+    first.challengeId,
+  );
+  assert.equal(winner.id, firstChallenge.data.operationId);
+  assert.ok(firstChallenge.consumedAt);
+  const callsAfterWinner = [...calls];
+  assert.equal(callsAfterWinner.length, 1);
+  assert.match(callsAfterWinner[0], /^https:\/\/pds2\.example\.test\//);
+
+  const second = await migration.requestMigrationForBrowser(f.actor, {
+    pdsId: "pds3",
+  });
+  const secondToken = await f.token(f.alice.email);
+  assert.ok(secondToken.startsWith(`${second.challengeId}.`));
+  const secondChallenge = await f.db.get(
+    "security:challenges",
+    second.challengeId,
+  );
+  assert.notEqual(secondChallenge.data.operationId, winner.id);
+  await assert.rejects(
+    migration.importAccount(f.actor, {
+      did: f.alice.did,
+      pdsId: "pds3",
+      token: secondToken,
+    }),
+    { code: "OperationPending" },
+  );
+  assert.equal(
+    (await f.db.get("security:challenges", second.challengeId)).consumedAt,
+    undefined,
+  );
+  assert.deepEqual(calls, callsAfterWinner);
+  assert.deepEqual(
+    await f.db.get("migration:operations", `migrate:${f.alice.did}`),
+    winner,
+  );
+  assert.deepEqual(
+    (await f.db.list("migration:history")).map(({ value }) => value),
+    [winner],
+  );
+  assert.deepEqual(await f.db.read("active_did_transfers"), [
+    { did: f.alice.did, operation_id: winner.id, transfer_kind: "managed" },
+  ]);
+});
 
 async function bindSiblingToSharedEmail(f, sharedUserId) {
   const sibling = { ...f.bob, email: f.alice.email };

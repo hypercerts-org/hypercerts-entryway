@@ -6,6 +6,7 @@ import test from "node:test";
 import { SignJWT, importJWK } from "jose";
 import { Secp256k1Keypair } from "@atproto/crypto";
 import { openTestDatabase } from "../tests/support/database-fixture.mjs";
+import { createLifecycle } from "../dist/src/http/lifecycle.js";
 import { createApp } from "../dist/src/app.mjs";
 import { createMailFeature } from "../dist/src/mail/create-mail.js";
 import { createMailOutbox } from "../dist/src/database/drizzle/mail-outbox.js";
@@ -13,7 +14,7 @@ import { createMailOutbox } from "../dist/src/database/drizzle/mail-outbox.js";
 /** The real application assembly (registration order, composition, error
  * handling) over an in-memory authority database. Nothing is stubbed except
  * outbound mail delivery; no request here reaches a PDS or the directory. */
-async function application(t) {
+async function application(t, authorityState) {
   const issuer = "https://entryway.example.test";
   const rotation = await Secp256k1Keypair.create({ exportable: true });
   const offline = await Secp256k1Keypair.create();
@@ -51,7 +52,20 @@ async function application(t) {
     outbox: createMailOutbox(db),
     transport: { send: async () => {} },
   });
-  const { app } = await createApp({ config, db, mail });
+  const lifecycle = authorityState
+    ? createLifecycle({
+        probe: async (timeout) =>
+          authorityState.available && (await db.probe(timeout)),
+        configuration: { probeTimeoutMs: 100, shutdownTimeoutMs: 1000 },
+      })
+    : undefined;
+  lifecycle?.initialize();
+  const { app } = await createApp({
+    config,
+    db,
+    mail,
+    ...(lifecycle ? { lifecycle } : {}),
+  });
   const server = app.listen(0, "127.0.0.1");
   t.after(() => new Promise((resolve) => server.close(resolve)));
   await once(server, "listening");
@@ -106,7 +120,7 @@ async function application(t) {
       .setIssuedAt(issuedAt)
       .setExpirationTime(issuedAt + (typ === "at+jwt" ? 300 : 3600))
       .sign(await importJWK(jwtJwk, "ES256K"));
-  return { call, config, sign };
+  return { call, config, sign, db };
 }
 
 test("through the real application, requests without an incoming selector keep the ordinary routes", async (t) => {
@@ -209,4 +223,27 @@ test("through the real application, a genuine but untracked expired or revoked c
     "expired refresh": [400, "ExpiredToken"],
     "unknown-family refresh": [400, "InvalidToken"],
   });
+});
+
+test("application liveness survives an authority outage while readiness fails", async (t) => {
+  const authorityState = { available: true };
+  const { call, config, db } = await application(t, authorityState);
+  assert.equal((await call("/_readyz", { method: "GET" })).status, 200);
+  authorityState.available = false;
+  let reads = 0;
+  t.mock.method(db, "read", async () => {
+    reads++;
+    throw Error("authority unavailable");
+  });
+  const live = await call("/_health", { method: "GET" });
+  assert.equal(live.status, 200);
+  assert.deepEqual(live.body, {
+    status: "ok",
+    role: "entryway",
+    pds: config.pds.map(({ id, url }) => ({ id, url })),
+  });
+  assert.equal(reads, 0);
+  const ready = await call("/_readyz", { method: "GET" });
+  assert.equal(ready.status, 503);
+  assert.equal(ready.body.status, "unavailable");
 });

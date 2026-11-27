@@ -300,10 +300,19 @@ publication obligation, and the claim checkpoint, and then submits directly to t
 configured PLC directory. If any write in that transaction fails, the whole transaction rolls back, the
 DID is free again and the credential is not consumed. A failure after commit,
 including PLC submission, keeps the claim pending. From the commit on, this is the
-only live claimed arrival for the DID. Handoff admission refuses:
+only live claimed arrival for the DID. Stock handoff and staged creation also
+acquire the shared active-transfer claim in that transaction. An existing claim
+from another transfer refuses admission; pending and uncertain arrivals retain
+it until verified activation completes, when the exact arrival releases it in
+the account-activation transaction. Managed-move admission also acquires this
+shared claim in its admission transaction. Account-state and proof checks can
+refuse a competing route before it reaches the shared claim; live cross-entry
+qualification is separate from the transactional exclusion guarantee.
+Handoff admission refuses:
 
 - another claimed arrival for the DID, or a lease held elsewhere on this arrival,
   with `OperationPending`;
+- an existing shared active-transfer claim for the DID with `OperationConflict`;
 - a handle or email that a claimed arrival or an account has taken since
   preparation, with `HandleNotAvailable` or `EmailNotAvailable`;
 - a DID that became hosted, with `IdentityConflict`;

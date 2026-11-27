@@ -9,12 +9,16 @@ export function renderMigrationPanel({
   migrationState,
   migrationRecovery,
   migration,
+  destinations: available = config.pds,
+  registry = false,
 }) {
-  const destinations = config.pds.filter((pds) => pds.id !== a.pdsId);
+  const destinations = available.filter((pds) => pds.id !== a.pdsId);
   const migrationPending =
-    migrationState && migrationState.phase !== "complete";
+    migrationState && !["complete", "refused"].includes(migrationState.phase);
   const migrationTarget = migrationState
-    ? config.pds.find((pds) => pds.id === migrationState.targetPdsId)
+    ? registry
+      ? null
+      : config.pds.find((pds) => pds.id === migrationState.targetPdsId)
     : null;
   const recoveryRequired = migrationRecovery?.state === "dispatched";
   if (!migration) return "";
@@ -22,6 +26,8 @@ export function renderMigrationPanel({
   if (migrationState) {
     const target = esc(migrationTarget?.url ?? migrationState.targetPdsId);
     let description = `Last migration completed to ${target}.`;
+    if (migrationState.phase === "refused")
+      description = `The migration to ${target} was refused.`;
     if (migrationPending) {
       const guidance = recoveryRequired
         ? "Contact the service operator; retrying alone cannot settle the uncertain server request."
@@ -37,7 +43,8 @@ export function renderMigrationPanel({
       : form(
           "migration-confirm",
           csrf,
-          hidden("pdsId", migrationState.targetPdsId),
+          hidden("pdsId", migrationState.targetPdsId) +
+            hidden("operationId", migrationState.id),
           "Resume data server migration",
           accountContext,
         );
@@ -48,7 +55,7 @@ export function renderMigrationPanel({
           `<option value="${esc(pds.id)}">${esc(pds.id)} — ${esc(pds.url)}</option>`,
       )
       .join("");
-    const destination = `<label>Destination data server<select name="pdsId" required>${options}</select></label>`;
+    const destination = `<label>Destination data server<select name="pdsId" required>${registry ? '<option value="" selected disabled>Choose a data server</option>' : ""}${options}</select></label>`;
     actions = form(
       "migration-request",
       csrf,
@@ -57,7 +64,8 @@ export function renderMigrationPanel({
       accountContext,
     );
   } else {
-    actions = "<p>No other data server is enrolled.</p>";
+    actions =
+      "<p>No other data server is currently available. Try again later.</p>";
   }
   return section(
     "migration",

@@ -8,6 +8,28 @@ import { oauthMiddleware } from "@atproto/oauth-provider/middleware";
 import { createOAuthStores } from "../../database/drizzle/oauth-stores.mjs";
 import { createAuthentication } from "../../compose-authentication.mjs";
 
+/** Serve registry-backed discovery from current associated resources on each request. */
+export function mountAssociatedResourceMetadata(app, provider, accounts) {
+  app.get(
+    "/.well-known/oauth-authorization-server",
+    async (_req, res, next) => {
+      try {
+        const resources = await accounts.associatedPds();
+        res.set("Access-Control-Allow-Origin", "*");
+        res.set("Cache-Control", "no-store");
+        res.json({
+          ...provider.metadata,
+          protected_resources: [
+            ...new Set(resources.map((resource) => resource.protectedResource)),
+          ],
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+}
+
 export function createClientMetadataFetch({
   config,
   safeFetch,
@@ -158,6 +180,8 @@ export async function createOAuth({
   });
   // Mount the supported provider middleware after our authorization page and
   // before any global Express body parser. No provider routers are mutated.
+  if (accounts.placement)
+    mountAssociatedResourceMetadata(app, provider, accounts);
   const protocol = oauthMiddleware(provider, {
     onError(_req, _res, error, message) {
       console.error(message, error.message);

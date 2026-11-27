@@ -11,6 +11,7 @@ import {
 } from "../support/database-fixture.mjs";
 import { createAccountStorage } from "../../dist/src/database/drizzle/account-storage.js";
 import { createArrivalStorage } from "../../dist/src/database/drizzle/migration-arrival.js";
+import { createActiveDidTransferStore } from "../../dist/src/database/drizzle/active-did-transfer.js";
 import { createOperationOwnershipStore } from "../../dist/src/database/drizzle/operation-ownership.js";
 import { Secp256k1Keypair } from "@atproto/crypto";
 import * as plc from "@did-plc/lib";
@@ -86,7 +87,7 @@ const signed = async (tag = "a", overrides = {}) => {
   return { operation: normalized, cid: String(await cidForCbor(normalized)) };
 };
 
-async function fixture() {
+async function fixture({ stagedHost = false } = {}) {
   const db = await openTestDatabase(":memory:");
   const accounts = createAccountStorage(db, hosts);
   const authority = {
@@ -118,7 +119,13 @@ async function fixture() {
         input.userId,
       ),
   };
-  const arrivals = createArrivalStorage(db, hosts, authority);
+  const arrivals = createArrivalStorage(
+    db,
+    stagedHost
+      ? hosts.map((host) => ({ ...host, stagedIncomingMigration: true }))
+      : hosts,
+    authority,
+  );
   const ownership = createOperationOwnershipStore(db);
   const claim = await ownership.acquire({
     resource: `arrival:${did}`,
@@ -231,6 +238,50 @@ const arrivalRows = (db) =>
     db,
     "SELECT operation_id, did_root, claim_operation_id, active FROM arrivals ORDER BY operation_id",
   );
+
+for (const [profile, options] of [
+  ["stock", {}],
+  ["staged", { staged: { entrywayKey: hotKey.did(), retireRotationKeys: [] } }],
+])
+  test(`${profile} incoming admission conflicts with a managed transfer and retries idempotently`, async () => {
+    const { db, prepareUnclaimed, claimArrival } = await fixture({
+      stagedHost: profile === "staged",
+    });
+    try {
+      const transfers = createActiveDidTransferStore(db);
+      const managed = {
+        did,
+        operationId: "managed-1",
+        transferKind: "managed",
+      };
+      assert.equal(await transfers.claim(managed), true);
+      const prepared = await prepareUnclaimed(options);
+      const before = await claimSnapshot(db);
+      await assert.rejects(claimArrival(prepared.version), {
+        code: "OperationConflict",
+      });
+      assert.deepEqual(await claimSnapshot(db), before);
+      assert.equal(await transfers.release(managed), true);
+      const beforeRollback = await claimSnapshot(db);
+      await assert.rejects(
+        db.transact(async () => {
+          await claimArrival(prepared.version);
+          throw new Error("rollback admission");
+        }),
+        /rollback admission/,
+      );
+      assert.deepEqual(await claimSnapshot(db), beforeRollback);
+      const claimed = await claimArrival(prepared.version);
+      assert.equal(claimed.kind, "applied");
+      assert.deepEqual(await claimArrival(prepared.version), {
+        kind: "already-settled",
+        version: claimed.version,
+      });
+      assert.equal(await transfers.claim(managed), false);
+    } finally {
+      await db.close();
+    }
+  });
 
 test("preparation stores only a code hash and writes no DID root or claim", async () => {
   const { db, arrivals, prepareUnclaimed } = await fixture();
@@ -364,6 +415,27 @@ const blindArrivalReads = (db) =>
     },
   });
 
+test("an incoming transfer claim blocks a competing arrival before its DID index", async () => {
+  const { db, authority, claim, prepare, prepareUnclaimed } = await fixture();
+  try {
+    await verifiedUser(db, "user-b", "second@example.test");
+    const competing = await prepareUnclaimed(secondUser);
+    await prepare();
+    const blind = createArrivalStorage(blindArrivalReads(db), hosts, authority);
+    const before = await claimSnapshot(db);
+    await assert.rejects(
+      blind.claimArrival(claim, competing.version, {
+        operationId: "op-2",
+        did,
+      }),
+      { code: "OperationConflict", status: 409 },
+    );
+    assert.deepEqual(await claimSnapshot(db), before);
+  } finally {
+    await db.close();
+  }
+});
+
 for (const [index, code] of [
   ["DID", "OperationPending"],
   ["handle", "HandleNotAvailable"],
@@ -379,6 +451,18 @@ for (const [index, code] of [
           : { ...secondUser, did: otherDid, handle: "dest.entryway.test" };
       const competing = await prepareUnclaimed(racing);
       await prepare();
+      if (index === "DID") {
+        // Exercise the index as a defense against inconsistent persisted state,
+        // independently of the active-transfer fence tested above.
+        assert.equal(
+          await createActiveDidTransferStore(db).release({
+            did,
+            operationId: "op-1",
+            transferKind: "incoming",
+          }),
+          true,
+        );
+      }
       const owner =
         index === "DID"
           ? claim
@@ -1763,9 +1847,25 @@ test("activation completion is separate and requires exact version and observed 
       assert.deepEqual(await claimSnapshot(db), completedSnapshot);
     }
     assert.equal((await accounts.getByDid(did))?.status, "active");
+    const transfers = createActiveDidTransferStore(db);
+    const successor = {
+      did,
+      operationId: "managed-successor",
+      transferKind: "managed",
+    };
+    assert.equal(await transfers.claim(successor), true);
     await assert.rejects(complete({ expectedVersion: bound.version + 1 }), {
       code: "OperationConflict",
     });
+    assert.equal(
+      await transfers.claim({
+        did,
+        operationId: "op-1",
+        transferKind: "incoming",
+      }),
+      false,
+    );
+    assert.equal(await transfers.release(successor), true);
   } finally {
     await db.close();
   }
@@ -1824,12 +1924,77 @@ test("a failure after the account flip rolls back the flip and the completion", 
     assert.equal(access.complete, false);
     assert.equal(access.version, bound.version);
     assert.equal(
+      await createActiveDidTransferStore(db).claim({
+        did,
+        operationId: "managed",
+        transferKind: "managed",
+      }),
+      false,
+    );
+    assert.equal(
       (await completion(arrivals, claim, bound.version)).kind,
       "applied",
     );
     assert.equal(await accountState(db), "active");
   } finally {
     await db.close();
+  }
+});
+
+test("activation completion retains the transfer while an external attempt is unresolved", async () => {
+  const f = await fixture();
+  try {
+    const bound = await f.bind(await f.allocate((await f.prepare()).version));
+    const store = createOperationOwnershipStore(f.db);
+    const receipt = await store.beginExternal(f.claim, {
+      step: "incoming-activation",
+      target: endpoint,
+      method: "com.atproto.admin.updateSubjectStatus",
+      intentDigest: hash("e"),
+    });
+    const attempt = {
+      operationId: "op-1",
+      did,
+      externalAttemptId: receipt.id,
+      step: "incoming-activation",
+    };
+    const associated = await f.arrivals.associateArrivalAttempt(
+      f.claim,
+      bound.version,
+      attempt,
+    );
+    await assert.rejects(completion(f.arrivals, f.claim, associated.version), {
+      code: "OperationRecoveryRequired",
+    });
+    const transfers = createActiveDidTransferStore(f.db);
+    assert.equal(
+      await transfers.claim({
+        did,
+        operationId: "managed",
+        transferKind: "managed",
+      }),
+      false,
+    );
+    await store.acknowledgeExternal(f.claim, receipt, null);
+    const settled = await f.arrivals.settleArrivalAttempt(
+      f.claim,
+      associated.version,
+      attempt,
+    );
+    assert.equal(
+      (await completion(f.arrivals, f.claim, settled.version)).kind,
+      "applied",
+    );
+    assert.equal(
+      await transfers.claim({
+        did,
+        operationId: "managed",
+        transferKind: "managed",
+      }),
+      true,
+    );
+  } finally {
+    await f.db.close();
   }
 });
 
@@ -3015,6 +3180,7 @@ const claimSnapshot = async (db) => {
     "migration_reservations",
     "arrival_signed_operations",
     "arrival_reservations",
+    "active_did_transfers",
   ])
     result[name] = await query(db, `SELECT * FROM ${name}`);
   return result;

@@ -43,9 +43,11 @@ export function createLifecycle({
   const changed = () => {
     if (idle()) notifyIdle?.();
   };
-  const ready = async () => {
+  const ready = async (selectedProbe = probe) => {
     if (!initialized || draining) return false;
-    const usable = await probe(configuration.probeTimeoutMs).catch(() => false);
+    const usable = await selectedProbe(configuration.probeTimeoutMs).catch(
+      () => false,
+    );
     return usable && initialized && !draining;
   };
   const unavailable = (request: Request, response: Response) => {
@@ -73,18 +75,21 @@ export function createLifecycle({
         "This request was not started because the service is temporarily unavailable. Retry when service resumes.",
     });
   };
-  const readiness: RequestHandler = (_request, response, next) => {
-    response.setHeader("x-entryway-instance", instanceId);
-    void ready()
-      .then((usable) => {
-        usable = usable && !draining;
-        response.status(usable ? 200 : 503).json({
-          status: usable ? "ready" : draining ? "draining" : "unavailable",
-          instanceId,
-        });
-      })
-      .catch(next);
-  };
+  const readinessWithProbe =
+    (selectedProbe: (timeoutMs: number) => Promise<boolean>): RequestHandler =>
+    (_request, response, next) => {
+      response.setHeader("x-entryway-instance", instanceId);
+      void ready(selectedProbe)
+        .then((usable) => {
+          usable = usable && !draining;
+          response.status(usable ? 200 : 503).json({
+            status: usable ? "ready" : draining ? "draining" : "unavailable",
+            instanceId,
+          });
+        })
+        .catch(next);
+    };
+  const readiness = readinessWithProbe(probe);
   const admission: RequestHandler = (request, response, next) => {
     response.setHeader("x-entryway-instance", instanceId);
     void ready()
@@ -108,6 +113,7 @@ export function createLifecycle({
   return {
     instanceId,
     readiness,
+    readinessWithProbe,
     admission,
     ready,
     initialize() {

@@ -2,7 +2,19 @@ import { pathToFileURL } from "node:url";
 
 // This inventory owns the database contract suite, including co-located tests.
 export const databaseDomains = {
+  registry: [
+    "controller-challenges",
+    "pds-lifecycle",
+    "pds-health-sweep",
+    "pds-health-incidents",
+    "pds-health",
+    "pds-registry-enrollment",
+    "pds-registry-targets",
+    "pds-registry-routes",
+    "pds-registry",
+  ],
   identity: [
+    "authority-mode",
     "custody-history",
     "plc-policy",
     "plc-signing",
@@ -30,6 +42,7 @@ export const databaseDomains = {
     "xrpc-security",
   ],
   migration: [
+    "active-did-transfer",
     "repository-verification",
     "migration",
     "migration-payload",

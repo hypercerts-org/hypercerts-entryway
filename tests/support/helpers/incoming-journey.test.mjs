@@ -9,7 +9,11 @@ import {
   getFullRepo,
   readCar,
 } from "@atproto/repo";
-import { carFrames, malformedCars } from "./incoming-journey.mjs";
+import {
+  carFrames,
+  malformedCars,
+  ownedDestination,
+} from "./incoming-journey.mjs";
 
 const did = "did:plc:malformedcarfixture";
 const profile = {
@@ -130,4 +134,31 @@ test("the missing record block CAR is every frame except that record's, and stil
     await cids(missingRecordBlock),
     (await cids(car)).filter((cid) => cid !== droppedBlock),
   );
+});
+
+const access = {
+  destinationUrls: ["https://one.example.test", "https://two.example.test"],
+};
+
+test("ownedDestination accepts each exact controller-projected origin", () => {
+  for (const origin of access.destinationUrls)
+    assert.equal(ownedDestination(origin, access), origin);
+});
+
+test("ownedDestination refuses unapproved values before dispatch", () => {
+  let dispatched = false;
+  for (const endpoint of [
+    "https://other.example.test",
+    "https://one.example.test/",
+    "https://one.example.test/path",
+    "https://one.example.test@other.example.test",
+    undefined,
+  ]) {
+    assert.throws(() => {
+      ownedDestination(endpoint, access);
+      dispatched = true;
+    }, /not an owned sandbox origin/);
+  }
+  assert.equal(dispatched, false);
+  assert.throws(() => ownedDestination(access.destinationUrls[0], {}));
 });

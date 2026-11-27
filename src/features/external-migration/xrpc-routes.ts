@@ -69,6 +69,19 @@ export function mountIncomingXrpc({
         response.set("Cache-Control", "no-store");
         response.json((await work(request)) ?? {});
       } catch (error) {
+        if (
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === "PdsLifecycleIneligible"
+        ) {
+          response.status(409).json({
+            error: "PdsLifecycleIneligible",
+            message:
+              "The saved destination cannot accept this arrival. Keep the original offer and try again later.",
+          });
+          return;
+        }
         next(error);
       }
     };

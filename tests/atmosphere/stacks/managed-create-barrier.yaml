@@ -1,0 +1,8 @@
+services:
+  entryway:
+    environment:
+      NODE_OPTIONS: --import=/app/tests/support/managed-create-barrier-preload.mjs
+      MANAGED_CREATE_BARRIER_DIRECTORY: /run/managed-create-barrier
+      MANAGED_CREATE_BARRIER_ORIGIN: http://pds1:3000
+    volumes:
+      - ${MANAGED_CREATE_BARRIER_HOST_DIRECTORY:?required}:/run/managed-create-barrier

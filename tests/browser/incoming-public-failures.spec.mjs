@@ -99,6 +99,7 @@ test("the standalone sources serve their seeded inventories", async () => {
 test("the browser verifies the destination email and prepares the arrival", async () => {
   run.prepared = await prepareArrival(owner, {
     issuer: config.issuer,
+    access,
     mailpitUrl: access.mailpitUrl,
     did: run.source.did,
     handle: run.destinationHandle,
@@ -536,6 +537,7 @@ test("an arrival whose destination email an account took after preparation is re
     });
     const prepared = await prepareArrival(page, {
       issuer: config.issuer,
+      access,
       mailpitUrl: access.mailpitUrl,
       did: source.did,
       handle: `d${tag}${domain}`,
@@ -638,6 +640,7 @@ test("a destination handle or DID already hosted at the target is refused and th
     const handle = `d${tag}${domain}`;
     const prepared = await prepareArrival(page, {
       issuer: config.issuer,
+      access,
       mailpitUrl: access.mailpitUrl,
       did: source.did,
       handle,

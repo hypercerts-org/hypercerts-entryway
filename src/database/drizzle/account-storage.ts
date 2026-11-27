@@ -70,6 +70,7 @@ export function translateConstraint(
 export function createAccountStorage(
   db: DatabaseExecutor,
   configuredPds: readonly ConfiguredPds[],
+  registryPds?: (row: AccountRow) => Promise<boolean>,
 ): AccountTransactor {
   const t = db.tables;
   const one = async <K extends keyof typeof t>(
@@ -291,7 +292,10 @@ export function createAccountStorage(
         throw new DomainError("HandleNotAvailable", 409, "Handle is reserved");
       const external = await one(
         "migration_reservations",
-        eq(t.migration_reservations.handle, handle),
+        and(
+          eq(sql`lower(${t.migration_reservations.handle})`, handle),
+          ne(t.migration_reservations.state, "complete"),
+        )!,
       );
       const existing = await one(
         "handle_claims",
@@ -310,7 +314,21 @@ export function createAccountStorage(
         }
       }
     });
-  const assertPds = (row: AccountRow) => {
+  const assertPds = async (row: AccountRow, allowExisting = false) => {
+    if (registryPds) {
+      if (allowExisting) {
+        const previous = await getByDid(row.did);
+        if (
+          previous &&
+          previous.pdsId === row.pdsId &&
+          previous.pdsUrl === row.pdsUrl &&
+          previous.pdsRevision === row.pdsRevision
+        )
+          return;
+      }
+      if (await registryPds(row)) return;
+      throw new DomainError("InvalidAccount", 400, "Unknown account data host");
+    }
     const pds = configuredPds.find((item) => item.id === row.pdsId);
     if (!pds || (row.pdsUrl !== undefined && row.pdsUrl !== pds.url))
       throw new DomainError("InvalidAccount", 400, "Unknown account data host");
@@ -325,9 +343,9 @@ export function createAccountStorage(
   });
   const insertAccount = async (row: AccountRow, ownerUserId?: string) => {
     assertAccountShape(row);
-    assertPds(row);
     try {
       await db.transact(async () => {
+        await assertPds(row);
         await assertNoActiveArrival(row.email, row.did, row.handle);
         const previous = (
           await db.read("accounts", {
@@ -354,9 +372,9 @@ export function createAccountStorage(
     }: { allowSameOwnerActiveMigrationReservation?: boolean } = {},
   ) => {
     assertAccountShape(row);
-    assertPds(row);
     try {
       await db.transact(async () => {
+        await assertPds(row, true);
         await assertNoActiveArrival(row.email, row.did, row.handle);
         const previous = await getByDid(row.did);
         if (!previous)
@@ -401,7 +419,13 @@ export function createAccountStorage(
         const handle = await getHandleClaim(row.handle);
         const external = await one(
           "migration_reservations",
-          eq(t.migration_reservations.handle, row.handle),
+          and(
+            eq(
+              sql`lower(${t.migration_reservations.handle})`,
+              row.handle.toLowerCase(),
+            ),
+            ne(t.migration_reservations.state, "complete"),
+          )!,
         );
         if (
           (handle && handle !== row.did) ||

@@ -1,3 +1,6 @@
+import https from "node:https";
+import { EventEmitter } from "node:events";
+import { Readable } from "node:stream";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1119,5 +1122,221 @@ test("crash after signed row commit reuses acknowledged repository key and saved
       (call) => call.method === "com.atproto.server.reserveSigningKey",
     ).length,
     1,
+  );
+});
+
+const fixtureRegistryHost = {
+  id: "pds1",
+  url: "https://pds1.entryway.atmosbox.test",
+  internalUrl: "https://pds1.internal",
+  revision: 1,
+};
+const placementFixtureView = {
+  async select() {
+    return fixtureRegistryHost.id;
+  },
+  async resolve(hostId, revision = fixtureRegistryHost.revision) {
+    if (
+      hostId === fixtureRegistryHost.id &&
+      revision === fixtureRegistryHost.revision
+    )
+      return fixtureRegistryHost;
+  },
+  async resolveAuthenticated(hostId, revision) {
+    if (revision === fixtureRegistryHost.revision)
+      return this.resolve(hostId, revision);
+  },
+  async read() {
+    return undefined;
+  },
+};
+
+test("placement refusal stops before repository key allocation", async (t) => {
+  let steps;
+  const placement = {
+    ...placementFixtureView,
+    async reserve(_claim, _purpose, _intent, targetSteps) {
+      steps = targetSteps;
+      return {
+        id: "reservation",
+        revision: 1,
+        host_id: "pds1",
+        public_target: fixtureRegistryHost.url,
+        target: fixtureRegistryHost.internalUrl,
+      };
+    },
+    async beginFirstDispatch() {
+      return { kind: "refused" };
+    },
+  };
+  const f = await fixture(t, undefined, { placement });
+  await assert.rejects(
+    f.accounts.create({ ...alice, pdsSelection: "implicit" }),
+    { code: "PdsLifecycleIneligible" },
+  );
+  assert.deepEqual(steps, ["reserve-signing-key", "create-account"]);
+  assert.equal(
+    f.calls.filter(
+      (call) => call.method === "com.atproto.server.reserveSigningKey",
+    ).length,
+    0,
+  );
+  assertNothingPublished(f);
+});
+
+test("placement authorizes the first key allocation before target requests", async (t) => {
+  const { createOperationOwnershipStore } =
+    await import("../../../dist/src/database/drizzle/operation-ownership.js");
+  let authorizations = 0;
+  t.mock.method(https, "request", (url, options, respond) => {
+    assert.equal(authorizations, 1);
+    assert.equal(url.origin, fixtureRegistryHost.internalUrl);
+    const request = new EventEmitter();
+    let body;
+    request.write = (chunk) => {
+      body = chunk;
+    };
+    request.end = () => {
+      void (async () => {
+        const result = await fetch(url, { ...options, body });
+        const response = Readable.fromWeb(result.body);
+        response.statusCode = result.status;
+        response.headers = Object.fromEntries(result.headers);
+        respond(response);
+      })().catch((error) => request.emit("error", error));
+    };
+    return request;
+  });
+  const f = await fixture(t, undefined, {
+    registryVerifier: {
+      targets: new Map([[fixtureRegistryHost.internalUrl, ["192.0.2.1"]]]),
+      ca: Buffer.from("fixture CA"),
+    },
+    placementFactory: (db) => ({
+      ...placementFixtureView,
+      async read() {
+        return authorizations
+          ? {
+              host_id: "pds1",
+              public_target: fixtureRegistryHost.url,
+              target: fixtureRegistryHost.internalUrl,
+              revision: 1,
+              state: "dispatched",
+            }
+          : undefined;
+      },
+      async reserve() {
+        return {
+          id: "reservation",
+          revision: 1,
+          host_id: "pds1",
+          public_target: fixtureRegistryHost.url,
+          target: fixtureRegistryHost.internalUrl,
+        };
+      },
+      async beginFirstDispatch(claim, _reservationId, input) {
+        authorizations++;
+        return {
+          kind: "dispatched",
+          attempt: await createOperationOwnershipStore(db).beginExternal(
+            claim,
+            input,
+          ),
+        };
+      },
+    }),
+  });
+  const row = await f.accounts.create({ ...alice, pdsSelection: "explicit" });
+  assert.equal(row.status, "active");
+  assert.equal(authorizations, 1);
+  assert.equal(
+    f.calls.filter(
+      (call) => call.method === "com.atproto.server.reserveSigningKey",
+    ).length,
+    1,
+  );
+  assert.equal(createAccountCalls(f.calls).length, 1);
+});
+
+test("a refused implicit registration retains its original intent and rejects an explicit retry", async (t) => {
+  const { eq } = await import("drizzle-orm");
+  const placementFactory = (db) => ({
+    ...placementFixtureView,
+    async reserve() {
+      return {
+        id: "reservation",
+        revision: 1,
+        host_id: "pds1",
+        public_target: fixtureRegistryHost.url,
+        target: fixtureRegistryHost.internalUrl,
+      };
+    },
+    async beginFirstDispatch(claim) {
+      await db.update(
+        "authority_operations",
+        { pending: true, phase: "placement-refused" },
+        eq(db.tables.authority_operations.id, claim.operationId),
+      );
+      return { kind: "refused" };
+    },
+  });
+  const f = await fixture(t, undefined, { placementFactory });
+  await assert.rejects(
+    f.accounts.create({ ...alice, pdsSelection: "implicit" }),
+    { code: "PdsLifecycleIneligible" },
+  );
+  const saved = await f.accounts.pendingRegistration(alice.email);
+  assert.equal(saved.pdsId, "pds1");
+  assert.equal(saved.pdsSelection, "implicit");
+  await assert.rejects(
+    f.accounts.create({ ...alice, pdsSelection: "explicit" }),
+  );
+  assert.equal(
+    f.calls.filter(
+      (call) => call.method === "com.atproto.server.reserveSigningKey",
+    ).length,
+    0,
+  );
+});
+
+test("reservation-time ineligibility keeps a stable pending refusal", async (t) => {
+  let eligible = false;
+  let reserveCalls = 0;
+  const placement = {
+    ...placementFixtureView,
+    async reserve() {
+      reserveCalls++;
+      if (!eligible) throw new Error("PdsLifecycleIneligible");
+      return {
+        id: "reservation",
+        revision: 1,
+        host_id: "pds1",
+        public_target: fixtureRegistryHost.url,
+        target: fixtureRegistryHost.internalUrl,
+      };
+    },
+    async beginFirstDispatch() {
+      throw Error("must not dispatch");
+    },
+  };
+  const f = await fixture(t, undefined, { placement });
+  const input = { ...alice, pdsSelection: "implicit" };
+  await assert.rejects(f.accounts.create(input), {
+    error: "PdsLifecycleIneligible",
+  });
+  assert.equal(
+    (await f.db.get("registration:intents", alice.email)).placementRefused,
+    true,
+  );
+  eligible = true;
+  await assert.rejects(f.accounts.create(input), {
+    error: "PdsLifecycleIneligible",
+  });
+  assert.equal(reserveCalls, 1);
+  assert.equal(
+    f.calls.filter(
+      (call) => call.method === "com.atproto.server.reserveSigningKey",
+    ).length,
+    0,
   );
 });

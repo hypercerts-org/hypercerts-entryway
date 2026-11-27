@@ -11,6 +11,8 @@ const lateCutover = process.env.INCOMING_LATE_CUTOVER === "1";
 // The same journey on the two-node PostgreSQL profile, once per node order, is
 // selected only by `./tests/local.sh incoming-two-node`. One-off evidence, not
 // a CI gate.
+const crossEntryManagedFirst = process.env.CROSS_ENTRY_MANAGED_FIRST === "1";
+const crossEntryIncomingFirst = process.env.CROSS_ENTRY_INCOMING_FIRST === "1";
 const twoNode = process.env.INCOMING_TWO_NODE === "1";
 const lifecycleTwoNode = process.env.ACCOUNT_LIFECYCLE_TWO_NODE === "1";
 // The goat journey is selected only by `./tests/local.sh incoming-goat-journey`.
@@ -49,6 +51,8 @@ if (
 // Every preparation flow displays the one-time arrival code. Do not copy
 // their DOM into failure reports.
 if (
+  crossEntryManagedFirst ||
+  crossEntryIncomingFirst ||
   lateCutover ||
   incomingJourney ||
   twoNode ||
@@ -58,6 +62,11 @@ if (
 )
   process.env.PLAYWRIGHT_NO_COPY_PROMPT = "1";
 const selected = [
+  [
+    process.env.TRANSFER_HISTORY === "1",
+    "transfer-history",
+    "transfer-history.spec.mjs",
+  ],
   [lateCutover, "incoming-late-cutover", "incoming-late-cutover.spec.mjs"],
   [
     failures,
@@ -82,6 +91,16 @@ const selected = [
     "account-lifecycle-two-node",
     "account-lifecycle-two-node.spec.mjs",
   ],
+  [
+    crossEntryManagedFirst,
+    "cross-entry-managed-first",
+    "cross-entry-managed-first.spec.mjs",
+  ],
+  [
+    crossEntryIncomingFirst,
+    "cross-entry-incoming-first",
+    "cross-entry-incoming-first.spec.mjs",
+  ],
   [twoNode, "incoming-two-node", "incoming-public-journey.spec.mjs"],
   [
     incomingJourney,
@@ -91,6 +110,23 @@ const selected = [
   [publicRun, "public-browser", "public-browser.spec.mjs"],
 ].find(([active]) => active);
 const artifactPrefix = selected?.[1] ?? "browser";
+const transferPhase = process.env.TRANSFER_HISTORY_PHASE;
+if (
+  artifactPrefix === "transfer-history" &&
+  !["before", "after"].includes(transferPhase)
+)
+  throw new Error("Unknown transfer history phase");
+const artifactDir =
+  artifactPrefix === "transfer-history" ||
+  artifactPrefix === "incoming-public-journey"
+    ? "/app/artifacts"
+    : "artifacts";
+const reportPrefix =
+  artifactPrefix === "transfer-history"
+    ? `${artifactPrefix}-${transferPhase}`
+    : artifactPrefix;
+if (artifactPrefix === "transfer-history")
+  process.env.PLAYWRIGHT_NO_COPY_PROMPT = "1";
 // Projects belong to the selection that won, never to another one.
 const selectedProjects = {
   "incoming-late-cutover": ["entryway", "destination"].map((submitAt) => ({
@@ -116,17 +152,24 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: 0,
-  timeout: 90_000,
+  timeout:
+    process.env.INCOMING_BEFORE_SIGNED_SUBMIT === "1" ||
+    process.env.INCOMING_AFTER_SIGNED_PUBLICATION === "1"
+      ? 420_000
+      : 90_000,
   expect: { timeout: 20_000 },
   reporter: [
+    ...(process.env.STAGED_QUALIFICATION_RESULTS
+      ? [["./support/staged-qualification-reporter.mjs"]]
+      : []),
     ["list"],
-    ["json", { outputFile: `artifacts/${artifactPrefix}-results.json` }],
+    ["json", { outputFile: `${artifactDir}/${reportPrefix}-results.json` }],
     [
       "html",
-      { outputFolder: `artifacts/${artifactPrefix}-report`, open: "never" },
+      { outputFolder: `${artifactDir}/${reportPrefix}-report`, open: "never" },
     ],
   ],
-  outputDir: `artifacts/${artifactPrefix}-output`,
+  outputDir: `${artifactDir}/${reportPrefix}-output`,
   use: {
     browserName: "chromium",
     ignoreHTTPSErrors: false,
