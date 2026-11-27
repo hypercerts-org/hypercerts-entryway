@@ -1,4 +1,8 @@
-import { verifyRepositorySnapshot } from "../../pds/repository-verification.js";
+import {
+  verifyFrozenRepositoryRoot,
+  verifyRepositorySnapshot,
+  verifyRetainedAdditive,
+} from "../../pds/repository-verification.js";
 import {
   noExternalResult,
   signingKeyResult,
@@ -17,11 +21,13 @@ import {
   authorizeRegistryTarget,
 } from "../../pds/registry-policy.mjs";
 import { registryPdsFetch } from "../../pds/registry-transport.mjs";
+import { publishRetainedReturn } from "./publish-retained-return.mjs";
 
 const error = (name, message, status = 400) =>
   new HttpError(status, name, message);
 const PHASES = [
   "authorized",
+  "return-pending",
   "source-frozen",
   "snapshot-ready",
   "operation-ready",
@@ -33,6 +39,10 @@ const PHASES = [
 ];
 const basic = (pds) =>
   `Basic ${Buffer.from(`admin:${pds.adminPassword}`).toString("base64")}`;
+const isStockBlobAbsent = (failure) =>
+  failure?.status === 400 &&
+  failure.error === "InvalidRequest" &&
+  failure.message === "Blob not found";
 
 /** Known-account migration between configured PDSs sharing this entryway's trust.
  * The persisted journal is authorization to finish that exact operation after a
@@ -242,13 +252,14 @@ export async function createAccountMigration({
   };
   const userCall = async (did, pds, method, body) =>
     pdsXrpc(pds, method, body, `Bearer ${await jwt(did, pds)}`);
-  const setActive = (did, pds, active, step) =>
+  const setActive = (did, pds, active, step, guard, verifyApplied) =>
     ownership.dispatch(
       {
         step,
         target: pds.url,
         method: "com.atproto.admin.updateSubjectStatus",
         intent: { did, active },
+        ...(guard ? { beforeFirst: guard } : {}),
         ...(placement
           ? {
               authorizeAttempt: authorizeRegistryAttempt(
@@ -262,8 +273,10 @@ export async function createAccountMigration({
       },
       {
         ...noExternalResult,
-        send: () =>
-          pdsXrpc(
+        send: async () => {
+          if (guard) await guard();
+          await ownership.assertActive();
+          return pdsXrpc(
             pds,
             "com.atproto.admin.updateSubjectStatus",
             {
@@ -271,7 +284,8 @@ export async function createAccountMigration({
               deactivated: { applied: !active },
             },
             basic(pds),
-          ),
+          );
+        },
         observe: async () => {
           const status = await userCall(
             did,
@@ -280,6 +294,8 @@ export async function createAccountMigration({
           );
           if (typeof status.activated !== "boolean")
             return { state: "diverged" };
+          if (status.activated === active && verifyApplied)
+            await verifyApplied();
           return {
             state: status.activated === active ? "applied" : "unapplied",
             result: {},
@@ -372,12 +388,24 @@ export async function createAccountMigration({
       source,
       "com.atproto.server.checkAccountStatus",
     );
+    if (status.activated !== false)
+      throw error(
+        "SourceChanged",
+        "Source deactivation was not observed; operator reconciliation is required",
+        409,
+      );
     const repo = await request(
       source,
       getUrl(source, "com.atproto.sync.getRepo", { did: operation.did }),
       {
         headers: { authorization: basic(source) },
       },
+    );
+    const importRoot = await verifyFrozenRepositoryRoot(
+      repo.bytes,
+      operation.did,
+      operation.sourceSigningKey,
+      status.repoCommit,
     );
     await db.set("migration:snapshots", `${operation.id}/repo`, {
       base64: repo.bytes.toString("base64"),
@@ -427,7 +455,7 @@ export async function createAccountMigration({
     }
     return await journal(operation, {
       phase: "snapshot-ready",
-      snapshot: { status, blobs, totalBytes },
+      snapshot: { status, importRoot, blobs, totalBytes },
       importedBlobs: [],
     });
   };
@@ -535,11 +563,15 @@ export async function createAccountMigration({
         "The DID document no longer points at the recorded source PDS",
         409,
       );
-    const { signingKey: reservedKey } = await reserveKey(
-      operation.did,
-      target,
-      (await cidForCbor(current)).toString(),
-    );
+    const reservedKey =
+      operation.returnIntent?.signingKey ??
+      (
+        await reserveKey(
+          operation.did,
+          target,
+          (await cidForCbor(current)).toString(),
+        )
+      ).signingKey;
     const expected = await accounts.plcSigner.signManagedMove(
       current,
       reservedKey,
@@ -623,6 +655,70 @@ export async function createAccountMigration({
       throw error_;
     }
   };
+  // A retained actor is not an empty migration destination. Record the exact
+  // former-host baseline before any source or PLC mutation, and recheck it on
+  // every retry. Older journals without a saved host identity cannot qualify.
+  const retainReturnIntent = async (operation, target) => {
+    const prior = (await history(operation.did))
+      .filter((item) => item.id !== operation.id && item.phase === "complete")
+      .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt))[0];
+    if (
+      !prior ||
+      prior.sourcePdsId !== target.id ||
+      prior.targetPdsId !== operation.sourcePdsId ||
+      prior.sourcePdsUrl !== target.url ||
+      prior.sourcePdsDid !== target.did ||
+      (placement && prior.sourcePdsRevision !== target.revision) ||
+      prior.retainedSource?.activated !== false ||
+      typeof prior.retainedSource.repoCommit !== "string" ||
+      typeof prior.sourceSigningKey !== "string"
+    )
+      throw error(
+        "TargetAccountExists",
+        "The target already contains this DID",
+        409,
+      );
+    const actor = await probeTarget(operation, target);
+    const status = await userCall(
+      operation.did,
+      target,
+      "com.atproto.server.checkAccountStatus",
+    );
+    const credentials = await userCall(
+      operation.did,
+      target,
+      "com.atproto.identity.getRecommendedDidCredentials",
+    );
+    const baseline = {
+      priorOperationId: prior.id,
+      targetPdsId: target.id,
+      targetPdsUrl: target.url,
+      targetPdsDid: target.did,
+      ...(placement ? { targetPdsRevision: target.revision } : {}),
+      repoCommit: prior.retainedSource.repoCommit,
+      signingKey: prior.sourceSigningKey,
+    };
+    if (
+      actor?.did !== operation.did ||
+      actor.handle !== operation.handle ||
+      status.activated !== false ||
+      status.repoCommit !== baseline.repoCommit ||
+      credentials.verificationMethods?.atproto !== baseline.signingKey ||
+      (operation.returnIntent &&
+        JSON.stringify(operation.returnIntent) !== JSON.stringify(baseline))
+    )
+      throw error(
+        "TargetAccountExists",
+        "The retained target no longer matches its saved baseline",
+        409,
+      );
+    if (!operation.returnIntent)
+      operation = await journal(operation, {
+        phase: "return-pending",
+        returnIntent: baseline,
+      });
+    return operation;
+  };
   const createTarget = (operation, target) =>
     ownership.dispatch(
       {
@@ -689,6 +785,233 @@ export async function createAccountMigration({
         },
       },
     );
+  const importSnapshotRepository = async (operation, target) => {
+    const repo = await db.get("migration:snapshots", `${operation.id}/repo`);
+    if (!repo)
+      throw error(
+        "MissingSnapshot",
+        "The durable source snapshot is missing",
+        409,
+      );
+    if (
+      operation.returnIntent &&
+      (!operation.snapshot.importRoot || !operation.returnIntent.repoCommit)
+    )
+      throw error(
+        "OperationRecoveryRequired",
+        "The verified return roots are unavailable",
+        409,
+      );
+    if (!operation.targetBeforeImport)
+      operation = await journal(operation, {
+        targetBeforeImport: await userCall(
+          operation.did,
+          target,
+          "com.atproto.server.checkAccountStatus",
+        ),
+      });
+    const qualifyRetainedImport = async () => {
+      if (operation.returnIntent) {
+        const saved = await read(operation.did);
+        const actor = await probeTarget(operation, target);
+        const status = await userCall(
+          operation.did,
+          target,
+          "com.atproto.server.checkAccountStatus",
+        );
+        const credentials = await userCall(
+          operation.did,
+          target,
+          "com.atproto.identity.getRecommendedDidCredentials",
+        );
+        const head = String(
+          await cidForCbor(await accounts.plcClient.getLastOp(operation.did)),
+        );
+        const sourceStatus = await userCall(
+          operation.did,
+          await chooseSource(operation),
+          "com.atproto.server.checkAccountStatus",
+        );
+        if (
+          sourceStatus.activated !== false ||
+          sourceStatus.repoCommit !== operation.snapshot.importRoot ||
+          saved?.id !== operation.id ||
+          saved.authorityOperationId !== ownership.currentClaim.operationId ||
+          saved.plcOpCid !== operation.plcOpCid ||
+          saved.snapshot?.importRoot !== operation.snapshot.importRoot ||
+          JSON.stringify(saved.returnIntent) !==
+            JSON.stringify(operation.returnIntent) ||
+          !(await transfers.isOwner(transferOwner(operation))) ||
+          head !== operation.plcOp.prev ||
+          actor?.did !== operation.did ||
+          actor.handle !== operation.handle ||
+          status.activated !== false ||
+          status.repoCommit !== operation.returnIntent.repoCommit ||
+          credentials.verificationMethods?.atproto !==
+            operation.returnIntent.signingKey
+        )
+          throw error(
+            "OperationRecoveryRequired",
+            "The retained target or ownership changed before import",
+            409,
+          );
+        const retained = await request(
+          target,
+          getUrl(target, "com.atproto.sync.getRepo", {
+            did: operation.did,
+          }),
+          { headers: { authorization: basic(target) } },
+        );
+        await verifyRetainedAdditive({
+          sourceCar: Buffer.from(repo.base64, "base64"),
+          targetCar: retained.bytes,
+          did: operation.did,
+          sourceSigningKey: operation.sourceSigningKey,
+          sourceRoot: operation.snapshot.importRoot,
+          targetSigningKey: operation.returnIntent.signingKey,
+          targetRoot: operation.returnIntent.repoCommit,
+        });
+      }
+    };
+    const reservation =
+      placement && operation.returnIntent
+        ? await placement.read(ownership.currentClaim)
+        : undefined;
+    await ownership.dispatch(
+      {
+        step: "import-repository",
+        target: target.url,
+        method: "com.atproto.repo.importRepo",
+        intent: {
+          did: operation.did,
+          sourceCommit: operation.returnIntent
+            ? operation.snapshot.importRoot
+            : operation.snapshot.status.repoCommit,
+          ...(operation.returnIntent
+            ? { priorCommit: operation.returnIntent.repoCommit }
+            : {}),
+        },
+        ...(operation.returnIntent
+          ? { beforeFirst: qualifyRetainedImport }
+          : {}),
+        ...(placement &&
+        operation.returnIntent &&
+        reservation?.state !== "dispatched"
+          ? {
+              authorizeFirst: (claim, descriptor) =>
+                placement.beginFirstDispatch(claim, reservation.id, descriptor),
+            }
+          : {}),
+        ...(placement
+          ? {
+              authorizeAttempt: authorizeRegistryAttempt(
+                db,
+                placement,
+                registryVerifier,
+                target,
+              ),
+            }
+          : {}),
+      },
+      {
+        ...noExternalResult,
+        send: async () => {
+          await qualifyRetainedImport();
+          await request(
+            target,
+            new URL("/xrpc/com.atproto.repo.importRepo", target.internalUrl),
+            {
+              method: "POST",
+              headers: {
+                authorization: `Bearer ${await jwt(operation.did, target)}`,
+                "content-type": "application/vnd.ipld.car",
+              },
+              body: Buffer.from(repo.base64, "base64"),
+            },
+          );
+        },
+        observe: async () => {
+          if (
+            (
+              await cidForCbor(
+                await accounts.plcClient.getLastOp(operation.did),
+              )
+            ).toString() !==
+            (operation.returnIntent ? operation.plcOp.prev : operation.plcOpCid)
+          )
+            return { state: "diverged" };
+          const status = await userCall(
+            operation.did,
+            target,
+            "com.atproto.server.checkAccountStatus",
+          );
+          if (operation.returnIntent) {
+            const saved = await read(operation.did);
+            const actor = await probeTarget(operation, target);
+            const credentials = await userCall(
+              operation.did,
+              target,
+              "com.atproto.identity.getRecommendedDidCredentials",
+            );
+            if (
+              saved?.id !== operation.id ||
+              saved.authorityOperationId !==
+                ownership.currentClaim.operationId ||
+              saved.plcOpCid !== operation.plcOpCid ||
+              saved.snapshot?.importRoot !== operation.snapshot.importRoot ||
+              JSON.stringify(saved.returnIntent) !==
+                JSON.stringify(operation.returnIntent) ||
+              !(await transfers.isOwner(transferOwner(operation))) ||
+              actor?.did !== operation.did ||
+              actor.handle !== operation.handle ||
+              status.activated !== false ||
+              credentials.verificationMethods?.atproto !==
+                operation.returnIntent.signingKey
+            )
+              return { state: "diverged" };
+          }
+          return {
+            state:
+              status.repoCommit ===
+              (operation.returnIntent
+                ? operation.snapshot.importRoot
+                : operation.snapshot.status.repoCommit)
+                ? "applied"
+                : status.repoCommit ===
+                    (operation.returnIntent
+                      ? operation.returnIntent.repoCommit
+                      : operation.targetBeforeImport.repoCommit)
+                  ? "unapplied"
+                  : "diverged",
+            result: {},
+          };
+        },
+      },
+    );
+    if (operation.returnIntent) {
+      const status = await userCall(
+        operation.did,
+        target,
+        "com.atproto.server.checkAccountStatus",
+      );
+      const head = String(
+        await cidForCbor(await accounts.plcClient.getLastOp(operation.did)),
+      );
+      if (
+        status.activated !== false ||
+        status.repoCommit !== operation.snapshot.importRoot ||
+        head !== operation.plcOp.prev ||
+        !(await transfers.isOwner(transferOwner(operation)))
+      )
+        throw error(
+          "OperationRecoveryRequired",
+          "The retained import was not observed under its predecessor",
+          409,
+        );
+    }
+    operation = await journal(operation, { phase: "repo-imported" });
+    return operation;
+  };
   const verifyImportedSnapshot = async (operation, target) => {
     if (
       (
@@ -726,26 +1049,96 @@ export async function createAccountMigration({
       sourceCommit: operation.snapshot.status.repoCommit,
       targetSigningKey: operation.signingKey,
     });
-    for (const cid of operation.snapshot.blobs) {
-      const expected = await db.get(
-        "migration:snapshots",
-        `${operation.id}/blob/${cid}`,
-      );
-      if (!expected)
-        throw error("MissingSnapshot", "A saved blob is missing", 409);
-      const observed = await request(
-        target,
-        getUrl(target, "com.atproto.sync.getBlob", { did: operation.did, cid }),
-        { headers: { authorization: basic(target) } },
-      );
-      if (!observed.bytes.equals(Buffer.from(expected.base64, "base64")))
-        throw error(
-          "BlobIntegrityError",
-          "A target blob differs from the saved snapshot",
-          409,
+    if (!operation.returnIntent)
+      for (const cid of operation.snapshot.blobs) {
+        const expected = await db.get(
+          "migration:snapshots",
+          `${operation.id}/blob/${cid}`,
         );
-    }
+        if (!expected)
+          throw error("MissingSnapshot", "A saved blob is missing", 409);
+        const observed = await request(
+          target,
+          getUrl(target, "com.atproto.sync.getBlob", {
+            did: operation.did,
+            cid,
+          }),
+          { headers: { authorization: basic(target) } },
+        );
+        if (!observed.bytes.equals(Buffer.from(expected.base64, "base64")))
+          throw error(
+            "BlobIntegrityError",
+            "A target blob differs from the saved snapshot",
+            409,
+          );
+      }
     return verified;
+  };
+  const assertImportComplete = (operation, status) => {
+    if (
+      status.indexedRecords !== operation.snapshot.status.indexedRecords ||
+      status.expectedBlobs > status.importedBlobs ||
+      status.importedBlobs < operation.snapshot.blobs.length
+    )
+      throw error(
+        "IncompleteImport",
+        "The target repository or blob index is incomplete",
+        409,
+      );
+  };
+  const qualifyRetainedBlobStaging = async (
+    operation,
+    target,
+    expectedHead = "predecessor",
+    requireComplete = false,
+  ) => {
+    const saved = await read(operation.did);
+    const status = await userCall(
+      operation.did,
+      target,
+      "com.atproto.server.checkAccountStatus",
+    );
+    if (requireComplete) assertImportComplete(operation, status);
+    const head = String(
+      await cidForCbor(await accounts.plcClient.getLastOp(operation.did)),
+    );
+    const reservation = placement
+      ? await placement.read(ownership.currentClaim)
+      : undefined;
+    if (
+      saved?.id !== operation.id ||
+      saved.authorityOperationId !== ownership.currentClaim.operationId ||
+      saved.plcOpCid !== operation.plcOpCid ||
+      String(await cidForCbor(operation.plcOp)) !== operation.plcOpCid ||
+      saved.snapshot?.importRoot !== operation.snapshot.importRoot ||
+      JSON.stringify(saved.returnIntent) !==
+        JSON.stringify(operation.returnIntent) ||
+      !(await transfers.isOwner(transferOwner(operation))) ||
+      !(
+        expectedHead === "either"
+          ? [operation.plcOp.prev, operation.plcOpCid]
+          : [
+              expectedHead === "published"
+                ? operation.plcOpCid
+                : operation.plcOp.prev,
+            ]
+      ).includes(head) ||
+      status.activated !== false ||
+      status.repoCommit !== operation.snapshot.importRoot ||
+      (placement &&
+        (!reservation ||
+          reservation.state !== "dispatched" ||
+          reservation.operation_id !== ownership.currentClaim.operationId ||
+          reservation.host_id !== operation.targetPdsId ||
+          reservation.revision !== target.revision ||
+          reservation.target !== target.internalUrl))
+    )
+      throw error(
+        "OperationRecoveryRequired",
+        "Retained blob staging authority changed",
+        409,
+      );
+    await ownership.assertActive();
   };
   const resume = async (initial) => {
     let operation = initial;
@@ -851,31 +1244,31 @@ export async function createAccountMigration({
             observe: async () => ({ state: "replay-safe" }),
           },
         );
-        if (targetExists)
-          throw error(
-            "TargetAccountExists",
-            "The target already contains this DID",
-            409,
-          );
+        if (targetExists || operation.returnIntent)
+          operation = await retainReturnIntent(operation, target);
       }
       if (
         !placement &&
         !operation.plcOp &&
-        operation.phase === "authorized" &&
-        (await probeTarget(operation, target))
+        (["authorized", "return-pending"].includes(operation.phase) ||
+          (operation.returnIntent &&
+            ["source-frozen", "snapshot-ready"].includes(operation.phase))) &&
+        (operation.returnIntent || (await probeTarget(operation, target)))
       )
-        throw error(
-          "TargetAccountExists",
-          "The target already contains this DID; a reviewed restore or reverse-migration workflow is required",
-          409,
-        );
+        operation = await retainReturnIntent(operation, target);
       if (operation.plcOp) {
         const head = (
           await cidForCbor(await accounts.plcClient.getLastOp(operation.did))
         ).toString();
-        const permitted = before("target-created")
-          ? [operation.plcOp.prev, operation.plcOpCid]
-          : [operation.plcOpCid];
+        const permitted = operation.returnIntent
+          ? operation.retainedPublicationCid
+            ? [operation.plcOpCid]
+            : before("blobs-imported")
+              ? [operation.plcOp.prev]
+              : [operation.plcOp.prev, operation.plcOpCid]
+          : before("target-created")
+            ? [operation.plcOp.prev, operation.plcOpCid]
+            : [operation.plcOpCid];
         if (!permitted.includes(head))
           throw error(
             "IdentityChanged",
@@ -913,10 +1306,13 @@ export async function createAccountMigration({
           source,
           "com.atproto.server.checkAccountStatus",
         );
-        if (stable.repoCommit !== operation.snapshot.status.repoCommit)
+        if (
+          stable.activated !== false ||
+          stable.repoCommit !== operation.snapshot.status.repoCommit
+        )
           throw error(
             "SourceChanged",
-            "Source changed after its snapshot; operator reconciliation is required",
+            "Source is active or changed after its snapshot; operator reconciliation is required",
             409,
           );
         const current = await accounts.plcClient.getLastOp(operation.did);
@@ -930,142 +1326,61 @@ export async function createAccountMigration({
             "PLC changed after migration was prepared; operator reconciliation is required",
             409,
           );
-        const outcome = await createTarget(operation, target);
-        if (outcome === "plc-published-actor-absent") {
-          // This known partial result is classified only after operator-confirmed
-          // isolation/drain. Extend exactly the retained PLC head, never a newer
-          // unrelated operation, and retain the original signed history.
-          const head = await accounts.plcClient.getLastOp(operation.did);
-          if ((await cidForCbor(head)).toString() !== operation.plcOpCid)
-            throw error(
-              "IdentityChanged",
-              "PLC changed before the recorded target repair",
-              409,
-            );
-          const { signingKey: reservedKey } = await reserveKey(
-            operation.did,
-            target,
-            operation.plcOpCid,
-          );
-          const repaired = await accounts.plcSigner.signManagedRepair(
-            head,
-            reservedKey,
-            (signed, facts, cid) =>
-              authorizeSigned(operation, signed, facts, cid, {
-                previousPlcOps: [
-                  ...(operation.previousPlcOps ?? []),
-                  operation.plcOp,
-                ],
-                signingKey: reservedKey,
-              }),
-          );
-          operation = await journal(operation, {
-            previousPlcOps: [
-              ...(operation.previousPlcOps ?? []),
-              operation.plcOp,
-            ],
-            plcOp: repaired,
-            plcOpCid: (await cidForCbor(repaired)).toString(),
-            signingKey: reservedKey,
-          });
-          if ((await createTarget(operation, target)) !== "created")
-            throw error(
-              "OperationRecoveryRequired",
-              "The repair itself requires a separately verified recovery",
-              409,
-            );
-        }
-        await accounts.observeCustody?.(operation.did);
-        await setActive(operation.did, target, false, "target-freeze");
-        operation = await journal(operation, { phase: "target-created" });
-      }
-      if (before("repo-imported")) {
-        const repo = await db.get(
-          "migration:snapshots",
-          `${operation.id}/repo`,
-        );
-        if (!repo)
-          throw error(
-            "MissingSnapshot",
-            "The durable source snapshot is missing",
-            409,
-          );
-        if (!operation.targetBeforeImport)
-          operation = await journal(operation, {
-            targetBeforeImport: await userCall(
+        if (operation.returnIntent) {
+          operation = await journal(operation, { phase: "target-created" });
+        } else {
+          const outcome = await createTarget(operation, target);
+          if (outcome === "plc-published-actor-absent") {
+            // This known partial result is classified only after operator-confirmed
+            // isolation/drain. Extend exactly the retained PLC head, never a newer
+            // unrelated operation, and retain the original signed history.
+            const head = await accounts.plcClient.getLastOp(operation.did);
+            if ((await cidForCbor(head)).toString() !== operation.plcOpCid)
+              throw error(
+                "IdentityChanged",
+                "PLC changed before the recorded target repair",
+                409,
+              );
+            const { signingKey: reservedKey } = await reserveKey(
               operation.did,
               target,
-              "com.atproto.server.checkAccountStatus",
-            ),
-          });
-        await ownership.dispatch(
-          {
-            step: "import-repository",
-            target: target.url,
-            method: "com.atproto.repo.importRepo",
-            intent: {
-              did: operation.did,
-              sourceCommit: operation.snapshot.status.repoCommit,
-            },
-            ...(placement
-              ? {
-                  authorizeAttempt: authorizeRegistryAttempt(
-                    db,
-                    placement,
-                    registryVerifier,
-                    target,
-                  ),
-                }
-              : {}),
-          },
-          {
-            ...noExternalResult,
-            send: async () => {
-              await request(
-                target,
-                new URL(
-                  "/xrpc/com.atproto.repo.importRepo",
-                  target.internalUrl,
-                ),
-                {
-                  method: "POST",
-                  headers: {
-                    authorization: `Bearer ${await jwt(operation.did, target)}`,
-                    "content-type": "application/vnd.ipld.car",
-                  },
-                  body: Buffer.from(repo.base64, "base64"),
-                },
+              operation.plcOpCid,
+            );
+            const repaired = await accounts.plcSigner.signManagedRepair(
+              head,
+              reservedKey,
+              (signed, facts, cid) =>
+                authorizeSigned(operation, signed, facts, cid, {
+                  previousPlcOps: [
+                    ...(operation.previousPlcOps ?? []),
+                    operation.plcOp,
+                  ],
+                  signingKey: reservedKey,
+                }),
+            );
+            operation = await journal(operation, {
+              previousPlcOps: [
+                ...(operation.previousPlcOps ?? []),
+                operation.plcOp,
+              ],
+              plcOp: repaired,
+              plcOpCid: (await cidForCbor(repaired)).toString(),
+              signingKey: reservedKey,
+            });
+            if ((await createTarget(operation, target)) !== "created")
+              throw error(
+                "OperationRecoveryRequired",
+                "The repair itself requires a separately verified recovery",
+                409,
               );
-            },
-            observe: async () => {
-              if (
-                (
-                  await cidForCbor(
-                    await accounts.plcClient.getLastOp(operation.did),
-                  )
-                ).toString() !== operation.plcOpCid
-              )
-                return { state: "diverged" };
-              const status = await userCall(
-                operation.did,
-                target,
-                "com.atproto.server.checkAccountStatus",
-              );
-              return {
-                state:
-                  status.repoCommit === operation.snapshot.status.repoCommit
-                    ? "applied"
-                    : status.repoCommit ===
-                        operation.targetBeforeImport.repoCommit
-                      ? "unapplied"
-                      : "diverged",
-                result: {},
-              };
-            },
-          },
-        );
-        operation = await journal(operation, { phase: "repo-imported" });
+          }
+          await accounts.observeCustody?.(operation.did);
+          await setActive(operation.did, target, false, "target-freeze");
+          operation = await journal(operation, { phase: "target-created" });
+        }
       }
+      if (before("repo-imported"))
+        operation = await importSnapshotRepository(operation, target);
       if (before("blobs-imported")) {
         for (const cid of operation.snapshot.blobs) {
           if (operation.importedBlobs.includes(cid)) continue;
@@ -1085,6 +1400,12 @@ export async function createAccountMigration({
               target: target.url,
               method: "com.atproto.repo.uploadBlob",
               intent: { did: operation.did, cid },
+              ...(operation.returnIntent
+                ? {
+                    beforeFirst: () =>
+                      qualifyRetainedBlobStaging(operation, target),
+                  }
+                : {}),
               ...(placement
                 ? {
                     authorizeAttempt: authorizeRegistryAttempt(
@@ -1099,6 +1420,10 @@ export async function createAccountMigration({
             {
               ...noExternalResult,
               send: async () => {
+                if (operation.returnIntent)
+                  await qualifyRetainedBlobStaging(operation, target);
+                const token = await jwt(operation.did, target);
+                await ownership.assertActive();
                 const result = await request(
                   target,
                   new URL(
@@ -1108,7 +1433,7 @@ export async function createAccountMigration({
                   {
                     method: "POST",
                     headers: {
-                      authorization: `Bearer ${await jwt(operation.did, target)}`,
+                      authorization: `Bearer ${token}`,
                       "content-type": blob.type,
                     },
                     body: Buffer.from(blob.base64, "base64"),
@@ -1129,9 +1454,19 @@ export async function createAccountMigration({
                     await cidForCbor(
                       await accounts.plcClient.getLastOp(operation.did),
                     )
-                  ).toString() !== operation.plcOpCid
+                  ).toString() !==
+                  (operation.returnIntent
+                    ? operation.plcOp.prev
+                    : operation.plcOpCid)
                 )
                   return { state: "diverged" };
+                if (operation.returnIntent) {
+                  try {
+                    await qualifyRetainedBlobStaging(operation, target);
+                  } catch {
+                    return { state: "diverged" };
+                  }
+                }
                 try {
                   const observed = await request(
                     target,
@@ -1150,8 +1485,7 @@ export async function createAccountMigration({
                     result: {},
                   };
                 } catch (error_) {
-                  if (["BlobNotFound", "NotFound"].includes(error_.error))
-                    return { state: "unapplied" };
+                  if (isStockBlobAbsent(error_)) return { state: "unapplied" };
                   throw error_;
                 }
               },
@@ -1163,23 +1497,174 @@ export async function createAccountMigration({
         }
         operation = await journal(operation, { phase: "blobs-imported" });
       }
+      const verifyPrepublication = async (
+        expectedHead = "predecessor",
+        requireComplete = false,
+      ) => {
+        const prior = await db.get(
+          "migration:history",
+          operation.returnIntent.priorOperationId,
+        );
+        const intent = operation.returnIntent;
+        const actor = await probeTarget(operation, target);
+        const sourceStatus = await userCall(
+          operation.did,
+          source,
+          "com.atproto.server.checkAccountStatus",
+        );
+        const credentials = await userCall(
+          operation.did,
+          target,
+          "com.atproto.identity.getRecommendedDidCredentials",
+        );
+        if (
+          prior?.phase !== "complete" ||
+          prior.did !== operation.did ||
+          prior.sourcePdsId !== target.id ||
+          prior.targetPdsId !== operation.sourcePdsId ||
+          prior.sourcePdsUrl !== target.url ||
+          prior.sourcePdsDid !== target.did ||
+          (placement && prior.sourcePdsRevision !== target.revision) ||
+          prior.retainedSource?.activated !== false ||
+          prior.retainedSource.repoCommit !== intent.repoCommit ||
+          prior.sourceSigningKey !== intent.signingKey ||
+          intent.targetPdsId !== target.id ||
+          intent.targetPdsUrl !== target.url ||
+          intent.targetPdsDid !== target.did ||
+          (placement && intent.targetPdsRevision !== target.revision) ||
+          actor?.did !== operation.did ||
+          actor.handle !== operation.handle ||
+          operation.signingKey !== intent.signingKey ||
+          credentials.verificationMethods?.atproto !== intent.signingKey ||
+          sourceStatus.activated !== false ||
+          sourceStatus.repoCommit !== operation.snapshot.status.repoCommit
+        )
+          throw error(
+            "OperationRecoveryRequired",
+            "Retained return publication preconditions changed",
+            409,
+          );
+        const repo = await request(
+          target,
+          getUrl(target, "com.atproto.sync.getRepo", { did: operation.did }),
+          { headers: { authorization: basic(target) } },
+        );
+        await verifyFrozenRepositoryRoot(
+          repo.bytes,
+          operation.did,
+          operation.sourceSigningKey,
+          operation.snapshot.importRoot,
+        );
+        const finalSourceStatus = await userCall(
+          operation.did,
+          source,
+          "com.atproto.server.checkAccountStatus",
+        );
+        if (
+          finalSourceStatus.activated !== false ||
+          finalSourceStatus.repoCommit !== operation.snapshot.status.repoCommit
+        )
+          throw error("SourceChanged", "The frozen source changed", 409);
+        await qualifyRetainedBlobStaging(
+          operation,
+          target,
+          expectedHead,
+          requireComplete,
+        );
+      };
+      if (operation.returnIntent && !operation.retainedPublicationCid) {
+        await verifyPrepublication("either");
+        await publishRetainedReturn({
+          db,
+          ownership,
+          transfers,
+          plcClient: accounts.plcClient,
+          plcUrl: config.plcUrl,
+          operation,
+          verifyPrepublication,
+        });
+        operation = await journal(operation, {
+          retainedPublicationCid: operation.plcOpCid,
+        });
+      }
+      if (
+        operation.returnIntent &&
+        operation.retainedPublicationCid !== operation.plcOpCid
+      )
+        throw error(
+          "OperationRecoveryRequired",
+          "Retained publication checkpoint changed",
+          409,
+        );
       if (before("target-ready")) {
         const status = await userCall(
           operation.did,
           target,
           "com.atproto.server.checkAccountStatus",
         );
+        assertImportComplete(operation, status);
+        const sourceBeforeActivation = await userCall(
+          operation.did,
+          source,
+          "com.atproto.server.checkAccountStatus",
+        );
         if (
-          status.indexedRecords !== operation.snapshot.status.indexedRecords ||
-          status.expectedBlobs > status.importedBlobs ||
-          status.importedBlobs < operation.snapshot.blobs.length
+          sourceBeforeActivation.activated !== false ||
+          sourceBeforeActivation.repoCommit !==
+            operation.snapshot.status.repoCommit
         )
           throw error(
-            "IncompleteImport",
-            "The target repository or blob index is incomplete",
+            "SourceChanged",
+            "Source is active or changed before target activation; operator reconciliation is required",
             409,
           );
-        await setActive(operation.did, target, true, "target-activate");
+        const verifyAppliedActivation = async () => {
+          const sourceStatus = await userCall(
+            operation.did,
+            source,
+            "com.atproto.server.checkAccountStatus",
+          );
+          if (
+            sourceStatus.activated !== false ||
+            sourceStatus.repoCommit !== operation.snapshot.status.repoCommit ||
+            !(await transfers.isOwner(transferOwner(operation)))
+          )
+            throw error(
+              "OperationRecoveryRequired",
+              "Return activation recovery preconditions changed",
+              409,
+            );
+          const verified = await verifyImportedSnapshot(operation, target);
+          const targetStatus = await userCall(
+            operation.did,
+            target,
+            "com.atproto.server.checkAccountStatus",
+          );
+          if (
+            !targetStatus.activated ||
+            targetStatus.repoCommit !== verified.targetCommit
+          )
+            throw error(
+              "OperationRecoveryRequired",
+              "Return activation recovery target changed",
+              409,
+            );
+          await ownership.assertActive();
+        };
+        await setActive(
+          operation.did,
+          target,
+          true,
+          "target-activate",
+          operation.returnIntent
+            ? async () => {
+                await verifyPrepublication("published", true);
+                await ownership.assertActive();
+              }
+            : undefined,
+          operation.returnIntent ? verifyAppliedActivation : undefined,
+        );
+        if (operation.returnIntent) await verifyAppliedActivation();
         // importRepo preserves the old signed root. A normal empty write asks the
         // target PDS to produce a new commit under its new repository signing key.
         await ownership.dispatch(
@@ -1231,7 +1716,7 @@ export async function createAccountMigration({
               if (verified.targetSignatureValid)
                 return { state: "applied", result: {} };
               // After verified drain, another empty mutation preserves the verified
-              // record/blob inventory. swapCommit rejects a changed root between
+              // record inventory. swapCommit rejects a changed root between
               // observation and write. A new signed commit/revision may be created.
               return { state: "replay-safe" };
             },
@@ -1242,10 +1727,16 @@ export async function createAccountMigration({
           target,
           "com.atproto.server.checkAccountStatus",
         );
-        if (!ready.validDid || !ready.activated)
+        const verified = await verifyImportedSnapshot(operation, target);
+        if (
+          !ready.validDid ||
+          !ready.activated ||
+          !verified.targetSignatureValid ||
+          ready.repoCommit !== verified.targetCommit
+        )
           throw error(
             "TargetNotReady",
-            "Target identity or activation is not ready",
+            "Target identity, activation or signed repository is not ready",
             409,
           );
         operation = await journal(operation, {
@@ -1263,15 +1754,35 @@ export async function createAccountMigration({
             "PLC changed before local mapping commit",
             409,
           );
+        const targetStatus = await userCall(
+          operation.did,
+          target,
+          "com.atproto.server.checkAccountStatus",
+        );
+        const verified = await verifyImportedSnapshot(operation, target);
+        if (
+          !targetStatus.activated ||
+          !targetStatus.validDid ||
+          !verified.targetSignatureValid ||
+          targetStatus.repoCommit !== verified.targetCommit
+        )
+          throw error(
+            "TargetNotReady",
+            "Target identity, activation or signed repository is not ready",
+            409,
+          );
         const stable = await userCall(
           operation.did,
           source,
           "com.atproto.server.checkAccountStatus",
         );
-        if (stable.repoCommit !== operation.snapshot.status.repoCommit)
+        if (
+          stable.activated !== false ||
+          stable.repoCommit !== operation.snapshot.status.repoCommit
+        )
           throw error(
             "SourceChanged",
-            "Source changed during cutover; source data was retained for reconciliation",
+            "Source is active or changed during cutover; source data was retained for reconciliation",
             409,
           );
         // Source remains deactivated, including on retried completion.
@@ -1288,6 +1799,31 @@ export async function createAccountMigration({
           throw error(
             "SourceChanged",
             "The retained source is not inactive at the saved repository head; operator reconciliation is required",
+            409,
+          );
+        const finalTarget = await userCall(
+          operation.did,
+          target,
+          "com.atproto.server.checkAccountStatus",
+        );
+        if (
+          !finalTarget.activated ||
+          !finalTarget.validDid ||
+          finalTarget.repoCommit !== verified.targetCommit
+        )
+          throw error(
+            "TargetNotReady",
+            "Target changed after repository verification",
+            409,
+          );
+        if (
+          String(
+            await cidForCbor(await accounts.plcClient.getLastOp(operation.did)),
+          ) !== operation.plcOpCid
+        )
+          throw error(
+            "IdentityChanged",
+            "PLC changed before local mapping commit",
             409,
           );
         await db.transact(async () => {
@@ -1426,6 +1962,11 @@ export async function createAccountMigration({
               };
             throw error("InvalidPds", "Account is already on this PDS");
           }
+          const sourceHost = await chooseSource({
+            sourcePdsId: row.pdsId,
+            sourcePdsRevision: row.pdsRevision,
+            sourcePdsUrl: row.pdsUrl,
+          });
           const admission = await db.transact(async () => {
             let proof;
             try {
@@ -1452,10 +1993,11 @@ export async function createAccountMigration({
               did: row.did,
               handle: row.handle,
               sourcePdsId: row.pdsId,
+              sourcePdsUrl: sourceHost.url,
+              sourcePdsDid: sourceHost.did,
               ...(placement
                 ? {
                     sourcePdsRevision: row.pdsRevision,
-                    sourcePdsUrl: row.pdsUrl,
                     targetPlcEndpoint: registryPlcEndpoint(
                       target.url,
                       target.stagedIncomingMigration === true,

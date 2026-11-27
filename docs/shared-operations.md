@@ -340,8 +340,30 @@ The challenge binds a distinct server-side move ID; snapshots and retained move
 journals use that ID. A pending move retains the claim and terminal placement
 refusal or verified local cutover releases only its matching owner. Authenticated
 retries may select the saved challenge; an ambiguous tokenless retry is refused.
-Previously retained repositories are not automatically eligible for reuse. Repository
-and blob snapshots and move journals are retained in the database by operation ID;
+A managed return to an existing account requires the latest completed move's saved
+former-host identity, inactive repository head and signing key to match the live
+host. Older journals without host identity cannot qualify. A qualifying return freezes
+the current source and stages its verified snapshot on the inactive retained host only
+when the retained signed record inventory is an unchanged subset. The exact import is
+owned and recoverable. After verifying the staged root, retained key,
+inactive source and saved intent, it publishes the exact signed PLC operation and
+checkpoints its canonical CID before activation and guarded re-signing. A lost PLC
+response requires uncertain-write recovery and observation of the exact canonical
+head; a different head requires reconciliation. Other existing accounts are refused.
+Before snapshot and cutover, managed migration requires the source to be
+observed inactive. Before placement commits,
+it verifies the target's signed repository and saved records again. Blobs use the
+standard owned upload, checkpoint and account-status checks; return does not independently
+read back each target blob.
+If these checks fail, keep the operation pending; do not manually activate both
+hosts or overwrite either repository. Use uncertain-write recovery only when an
+external attempt is actually uncertain. An acknowledged request whose observed
+state does not match (for example an acknowledged deactivation or re-sign that
+had no effect) is not eligible for that procedure and is not automatically
+redispatched. Investigate the remote state and escalate for operator reconciliation;
+ordinary retry cannot repair the acknowledged step. These observations narrow
+race windows but do not make PLC, PDS and local placement atomic.
+Repository and blob snapshots and move journals are retained in the database by operation ID;
 there is no automatic expiry or garbage collection. They can contain account data
 and consume storage proportional to transferred data and repeated moves. Protect
 and capacity-plan database storage and backups accordingly; do not delete snapshots

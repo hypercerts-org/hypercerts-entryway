@@ -37,6 +37,13 @@ export function createActiveDidTransferStore(
           )) === 1
         );
       }),
+    isOwner: async (transfer) =>
+      (
+        await db.read("active_did_transfers", {
+          where: owner(transfer),
+          limit: 1,
+        })
+      ).length === 1,
     release: async (transfer) =>
       (await db.remove("active_did_transfers", owner(transfer))) === 1,
   };
