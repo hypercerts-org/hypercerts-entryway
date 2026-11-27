@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import express from "express";
 import { HttpError } from "./http/http-error.mjs";
 import { canonicalBasic } from "./http/authorization-scheme.js";
-import { equalSecret } from "./http/secret-equality.js";
+import { equalSecret } from "./secret-equality.js";
 import { requestFailureEvent } from "./logging/request-event.js";
 import { createPdsHealthSweep } from "./database/drizzle/pds-health-sweep.js";
 import { createPdsHealthIncidents } from "./database/drizzle/pds-health-incidents.js";

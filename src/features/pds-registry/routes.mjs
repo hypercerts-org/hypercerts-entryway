@@ -1,6 +1,6 @@
 import { isValidDid } from "@atproto/syntax";
 import { HttpError } from "../../http/http-error.mjs";
-import { equalSecret } from "../../http/secret-equality.js";
+import { equalSecret } from "../../secret-equality.js";
 import { pdsPublicTrust } from "./trust.mjs";
 
 const record = (value, keys) =>

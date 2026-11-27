@@ -155,3 +155,44 @@ test("registry callback tokens cannot access privileged admin or no-DID routes",
     "admin",
   );
 });
+
+test("admin Basic credentials preserve scheme handling and host scope", async () => {
+  const { admin } = await createProtocolRouting({
+    app: express(),
+    db: {},
+    config: {
+      adminPassword: "global-fixture",
+      pds: [{ id: "a", adminPassword: "host-fixture" }],
+    },
+    accounts: { get: async (did) => ({ pdsId: did }) },
+    accountAccess: {},
+    oauth: {},
+    legacy: {},
+  });
+  const req = (value) => ({ headers: { authorization: value } });
+  const basic = (password, scheme = "Basic") =>
+    `${scheme} ${Buffer.from(`admin:${password}`).toString("base64")}`;
+  assert.equal(
+    (await admin(req(basic("global-fixture", "bAsIc")), "b", true)).kind,
+    "admin",
+  );
+  assert.equal((await admin(req(basic("host-fixture")), "a")).kind, "admin");
+  await assert.rejects(admin(req(basic("host-fixture")), "b"), {
+    status: 403,
+    error: "Forbidden",
+  });
+  await assert.rejects(admin(req(basic("host-fixture")), "a", true), {
+    status: 401,
+    error: "AuthRequired",
+  });
+  for (const value of [
+    basic("host-fixturE"),
+    basic("host-fixture", "Bearer"),
+    undefined,
+  ]) {
+    await assert.rejects(admin(req(value), "a"), {
+      status: 401,
+      error: "AuthRequired",
+    });
+  }
+});

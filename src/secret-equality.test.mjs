@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { equalSecret } from "../../dist/src/http/secret-equality.js";
-import { canonicalBasic } from "../../dist/src/http/authorization-scheme.js";
+import { equalSecret } from "../dist/src/secret-equality.js";
+import { canonicalBasic } from "../dist/src/http/authorization-scheme.js";
 
 test("secret equality compares UTF-8 bytes and rejects different values and lengths", () => {
   assert.equal(equalSecret("fixture-κλειδί-🔐", "fixture-κλειδί-🔐"), true);
