@@ -48,6 +48,11 @@ esac
                                "guard", str(self.root / "tests/support/rootless-docker.sh")],
                               env={**self.env, **environment}, capture_output=True, timeout=15)
 
+    def test_database_domain_inventory(self):
+        source = Path(__file__).resolve().parents[2]
+        subprocess.run(["node", "--test", "tests/support/database-domains.test.mjs"],
+                       cwd=source, check=True, timeout=30)
+
     def test_hosted_network_diagnostics_are_bounded_and_payload_free(self):
         from unittest.mock import patch
         import contextlib
@@ -63,7 +68,7 @@ esac
         script = shell.split("python3 - <<'PYTHON'\n", 1)[1].rsplit("PYTHON", 1)[0]
         compiled = compile(script, "hosted-network-diagnostics", "exec")
         self.assertEqual(workflow.count("run: *package-network-diagnostics"), 3)
-        incoming = workflow.split("\n  incoming:\n", 1)[1].split("\n  databases:\n", 1)[0]
+        incoming = workflow.split("\n  incoming:\n", 1)[1].split("\n  database-inventory:\n", 1)[0]
         steps = ["run: *package-network-diagnostics", "ci-ownership.py register",
                  "run: bash tests/local.sh prepare", "run: bash tests/local.sh up",
                  "run: bash tests/local.sh incoming-public-journey",

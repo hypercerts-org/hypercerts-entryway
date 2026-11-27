@@ -7,11 +7,15 @@ project=${SANDBOX_PROJECT:-hypercerts-entryway}
 artifacts=${ACCEPTANCE_REPORT_DIR:-"$root/tests/artifacts"}
 export SANDBOX_CHECKOUT="$sandbox" SANDBOX_PROJECT="$project" ACCEPTANCE_REPORT_DIR="$artifacts"
 [[ "$project" =~ ^hypercerts-entryway(-[a-z0-9_-]+)?$ ]] || { echo "Invalid Entryway project name" >&2; exit 2; }
+command=${1:-help}
+# Reject invalid selectors before Docker or sandbox provisioning.
+if [[ ${DATABASE_DOMAIN+x} ]]; then
+  node "$root/tests/support/database-domains.mjs" --validate "$DATABASE_DOMAIN"
+fi
 mkdir -p "$sandbox"
 cd "$sandbox"
 sandbox=$PWD
 export SANDBOX_CHECKOUT="$sandbox"
-command=${1:-help}
 mkdir -p "$artifacts"
 # Phase identity comes from the controller, never from a command or request body.
 case "$command" in
@@ -226,13 +230,14 @@ case "$command" in
     # container, PostgreSQL gives each test a private schema, and each writes
     # distinct report files. Output goes to per-backend logs so the two runs
     # cannot interleave; summaries print after both finish.
+    printf "Database domain=%s backends=sqlite,postgresql\n" "${DATABASE_DOMAIN:-all}"
     pids=()
     backends=(sqlite postgresql)
     for backend in "${backends[@]}"; do
       (
         result=0
-        compose run --rm --no-deps -e "CONTRACT_DATABASE_BACKEND=$backend" -e CONTRACT_DATABASE_URL=postgresql://authority_owner@entryway-postgres/account_authority test node tests/support/run-database-contracts.mjs > "$artifacts/database-$backend.log" 2>&1 || result=$?
-        printf '%s\n' "$result" > "$artifacts/database-$backend.exit"
+        compose run --rm --no-deps -e "DATABASE_DOMAIN=${DATABASE_DOMAIN:-}" -e "CONTRACT_DATABASE_BACKEND=$backend" -e CONTRACT_DATABASE_URL=postgresql://authority_owner@entryway-postgres/account_authority test node tests/support/run-database-contracts.mjs > "$artifacts/database-${DATABASE_DOMAIN:-all}-$backend.log" 2>&1 || result=$?
+        printf '%s\n' "$result" > "$artifacts/database-${DATABASE_DOMAIN:-all}-$backend.exit"
         exit "$result"
       ) &
       pids+=("$!")
@@ -242,12 +247,18 @@ case "$command" in
       backend=${backends[$i]}
       result=0
       wait "${pids[$i]}" || result=$?
-      python3 "$root/scripts/ci-summary.py" < "$artifacts/database-$backend.log" || true
-      echo "Database $backend: exit $result"
+      python3 "$root/scripts/ci-summary.py" < "$artifacts/database-${DATABASE_DOMAIN:-all}-$backend.log" || true
+      echo "Database domain=${DATABASE_DOMAIN:-all} backend=$backend exit=$result"
       (( result == 0 )) || failed=$result
     done
     (( failed == 0 )) || exit "$failed"
-    if [[ "$command" == database-contracts ]]; then bash "$root/tests/support/run-postgresql-profile.sh"; fi
+    if [[ "$command" == database-contracts ]]; then
+      echo 'Database standalone PostgreSQL profile: running'
+      bash "$root/tests/support/run-postgresql-profile.sh"
+      echo 'Database standalone PostgreSQL profile: passed'
+    else
+      echo 'Database standalone PostgreSQL profile: skipped (database-dialects)'
+    fi
     ;;
   resilience-profiles)
     bash "$root/tests/support/run-resilience-profiles.sh"

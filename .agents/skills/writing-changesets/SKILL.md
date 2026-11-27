@@ -33,3 +33,7 @@ Validate with `./scripts/changesets.sh status`; authoring via
 Do not run npm on the host. Read [RELEASING.md](../../../RELEASING.md) for version
 preparation. Writing a note does not authorize applying versions, tagging,
 publishing or deployment. Never hand-edit `CHANGELOG.md` to bypass a Changeset.
+
+When explicitly asked for a no-version-bump Changeset, use empty frontmatter
+(two `---` lines with no packages between them) and state in the prose that no
+version bump is needed. Validate with the same managed status command.
