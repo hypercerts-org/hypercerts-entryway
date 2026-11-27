@@ -1,7 +1,8 @@
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import express from "express";
 import { HttpError } from "./http/http-error.mjs";
 import { canonicalBasic } from "./http/authorization-scheme.js";
+import { equalSecret } from "./http/secret-equality.js";
 import { requestFailureEvent } from "./logging/request-event.js";
 import { createPdsHealthSweep } from "./database/drizzle/pds-health-sweep.js";
 import { createPdsHealthIncidents } from "./database/drizzle/pds-health-incidents.js";
@@ -57,14 +58,8 @@ export function createRegistryBootstrap({
     return next(error);
   });
   const admin = async (req) => {
-    const hash = (value) => createHash("sha256").update(value).digest();
     const expected = `Basic ${Buffer.from(`admin:${config.adminPassword}`).toString("base64")}`;
-    if (
-      !timingSafeEqual(
-        hash(canonicalBasic(req.headers.authorization)),
-        hash(expected),
-      )
-    )
+    if (!equalSecret(canonicalBasic(req.headers.authorization), expected))
       throw new HttpError(
         401,
         "AuthRequired",

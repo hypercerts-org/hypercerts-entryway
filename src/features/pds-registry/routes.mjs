@@ -1,6 +1,6 @@
-import { createHash, timingSafeEqual } from "node:crypto";
 import { isValidDid } from "@atproto/syntax";
 import { HttpError } from "../../http/http-error.mjs";
+import { equalSecret } from "../../http/secret-equality.js";
 import { pdsPublicTrust } from "./trust.mjs";
 
 const record = (value, keys) =>
@@ -9,11 +9,6 @@ const record = (value, keys) =>
   !Array.isArray(value) &&
   Object.keys(value).length === keys.length &&
   keys.every((key) => Object.hasOwn(value, key));
-const sameSecret = (left, right) =>
-  timingSafeEqual(
-    createHash("sha256").update(left).digest(),
-    createHash("sha256").update(right).digest(),
-  );
 const invalid = () =>
   new HttpError(400, "InvalidRequest", "Invalid registry request");
 
@@ -433,11 +428,11 @@ export function mountPdsRegistryRoutes({
         ]),
       ].filter((value) => typeof value === "string" && value.length > 0);
       if (
-        sameSecret(outboundPassword, inboundToken) ||
+        equalSecret(outboundPassword, inboundToken) ||
         reserved.some(
           (value) =>
-            sameSecret(value, outboundPassword) ||
-            sameSecret(value, inboundToken),
+            equalSecret(value, outboundPassword) ||
+            equalSecret(value, inboundToken),
         )
       )
         throw new HttpError(
