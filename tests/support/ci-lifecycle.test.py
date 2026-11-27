@@ -208,7 +208,8 @@ esac
     def test_incoming_native_coverage_is_explicit_and_unique(self):
         source = Path(__file__).resolve().parents[2]
         package = json.loads((source / "package.json").read_text())
-        helpers = ["tests/support/helpers/mailpit.test.mjs",
+        helpers = ["tests/support/managed-create-barrier.test.mjs",
+                   "tests/support/helpers/mailpit.test.mjs",
                    "tests/support/helpers/stock-plc-mailpit.test.mjs",
                    "tests/support/helpers/incoming-public-io.test.mjs",
                    "tests/support/helpers/incoming-journey.test.mjs",
