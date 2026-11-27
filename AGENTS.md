@@ -137,3 +137,8 @@ agent ledgers, acceptance tables, generated source/hash inventories or per-run
 results. Report validation in PR checks, comments or the final handoff; keep raw
 private artifacts in ignored `tests/artifacts/` and working plans local. Preserve
 source provenance in the reuse assessment or harness provenance guide.
+
+Database contract work is assigned by the domains in `tests/support/database-domains.mjs`;
+keep each contract in exactly one domain. Use `DATABASE_DOMAIN=<domain>` for a
+focused reproduction on both dialects, and the unfiltered gate for full coverage.
+A focused pass does not establish the full gate; see [testing](docs/testing.md).

@@ -10,7 +10,9 @@ tag, publish to npm, create a GitHub Release or deploy a service.
 Use the [writing-changesets skill](.agents/skills/writing-changesets/SKILL.md).
 Write a descriptive `.changeset/<change>.md` file, or use the managed CLI and rename
 its generated file before review. Runtime behavior, configuration and recovery
-changes need a note; internal refactoring, tests and prose alone do not.
+changes need a note; internal refactoring, tests and prose alone do not. When a
+no-version-bump Changeset is explicitly requested, use empty frontmatter (`---`
+on two lines) and prose stating that no version bump is needed; list no package.
 
 ```sh
 ./scripts/changesets.sh add

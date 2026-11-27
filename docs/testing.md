@@ -647,11 +647,19 @@ Contributors maintain the actual job commands in `.github/workflows/ci.yml`.
 Formatting, lint, syntax, types, architecture, schema, build, unit and lifecycle
 checks each have a visible step. Integration runs browser before contracts,
 then migration, the declared moderation-gap assertion, recovery/crash/authority
-checks and resilience last. The separate `incoming` job runs the public incoming journey, then its failure and restart cases, in its own sandbox on every PR. Database dialects and the PostgreSQL application
-profile are separate steps: the databases job starts its sandbox on PostgreSQL,
-runs the SQLite and PostgreSQL suites concurrently, and runs the application
-profile in that sandbox (`POSTGRESQL_PROFILE_REUSE_SANDBOX=1`, which leaves
-cleanup to the job; without it the profile owns a fresh sandbox). Each
+checks and resilience last. The separate `incoming` job runs the public incoming journey, then its failure and restart cases, in its own sandbox on every PR. Database contracts are partitioned by the single inventory in
+`tests/support/database-domains.mjs`. Assign every database contract file to one
+domain, including co-located feature tests. CI derives its matrix from that
+inventory: each domain runs both SQLite and PostgreSQL in an isolated sandbox;
+the PostgreSQL application profile is a separate required matrix shard. The
+stable `databases` aggregate fails unless inventory and every shard succeed.
+For a focused reproduction run `DATABASE_DOMAIN=identity ./tests/local.sh
+fresh-group database-contracts` (substitute an inventory domain). Both dialects
+run and the separate PostgreSQL profile also runs. After an existing `up`,
+`DATABASE_DOMAIN=identity ./tests/local.sh database-dialects` runs just the two
+contract dialects. Unset `DATABASE_DOMAIN` for the complete local suite; a focused
+pass is not the full gate. Invalid domains fail before provisioning. Reports
+include domain and backend in their names. Each
 deployment profile runs as its own parallel matrix job, `profiles (<profile>)`.
 It uploads only the receipt files the aggregate assertion reads, and the
 `profiles (assert all receipts)` job downloads them and asserts all three. In

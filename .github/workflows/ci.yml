@@ -239,15 +239,32 @@ jobs:
           if test -f "$CI_OWNERSHIP_MANIFEST"; then
             python3 scripts/ci-ownership.py cleanup "$CI_OWNERSHIP_MANIFEST"
           fi
-  databases:
+  database-inventory:
+    runs-on: ubuntu-24.04
+    outputs:
+      domains: ${{ steps.inventory.outputs.domains }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - id: inventory
+        run: echo "domains=$(node tests/support/database-domains.mjs --matrix)" >> "$GITHUB_OUTPUT"
+  database-shards:
+    name: database (${{ matrix.domain }})
+    needs: database-inventory
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        domain: ${{ fromJSON(needs.database-inventory.outputs.domains) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
       SOURCE_CHECKOUT: ${{ github.workspace }}
-      SANDBOX_PROJECT: hypercerts-entryway-ci-databases-${{ github.run_id }}-${{ github.run_attempt }}
-      SANDBOX_CHECKOUT: ${{ github.workspace }}/tests/.runtime/ci-databases-${{ github.run_id }}-${{ github.run_attempt }}
-      ACCEPTANCE_REPORT_DIR: ${{ github.workspace }}/tests/artifacts/ci-databases-${{ github.run_id }}-${{ github.run_attempt }}/reports
-      CI_OWNERSHIP_MANIFEST: ${{ github.workspace }}/tests/artifacts/ci-databases-${{ github.run_id }}-${{ github.run_attempt }}/ownership.json
+      SANDBOX_PROJECT: hypercerts-entryway-ci-databases-${{ matrix.domain }}-${{ github.run_id }}-${{ github.run_attempt }}
+      SANDBOX_CHECKOUT: ${{ github.workspace }}/tests/.runtime/ci-databases-${{ matrix.domain }}-${{ github.run_id }}-${{ github.run_attempt }}
+      ACCEPTANCE_REPORT_DIR: ${{ github.workspace }}/tests/artifacts/ci-databases-${{ matrix.domain }}-${{ github.run_id }}-${{ github.run_attempt }}/reports
+      CI_OWNERSHIP_MANIFEST: ${{ github.workspace }}/tests/artifacts/ci-databases-${{ matrix.domain }}-${{ github.run_id }}-${{ github.run_attempt }}/ownership.json
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -284,19 +301,36 @@ jobs:
         run: |
           bash tests/local.sh up
       - name: SQLite and PostgreSQL contracts
+        if: matrix.domain != 'postgresql-profile'
+        env:
+          DATABASE_DOMAIN: ${{ matrix.domain }}
         run: |
           bash tests/local.sh database-dialects
       - name: PostgreSQL login restart and restore
+        if: matrix.domain == 'postgresql-profile'
         env:
           POSTGRESQL_PROFILE_REUSE_SANDBOX: "1"
         run: |
-          bash tests/support/run-postgresql-profile.sh
+          echo "Database contract dialects: skipped (standalone profile shard)"
+          echo "Database standalone PostgreSQL profile: running"
+          env -u DATABASE_DOMAIN bash tests/support/run-postgresql-profile.sh
+          echo "Database standalone PostgreSQL profile: passed"
       - name: Clean only recorded projects and children
         if: always()
         run: |
           if test -f "$CI_OWNERSHIP_MANIFEST"; then
             python3 scripts/ci-ownership.py cleanup "$CI_OWNERSHIP_MANIFEST"
           fi
+  databases:
+    if: always()
+    needs: [database-inventory, database-shards]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every database shard
+        env:
+          INVENTORY_RESULT: ${{ needs.database-inventory.result }}
+          SHARDS_RESULT: ${{ needs.database-shards.result }}
+        run: test "$INVENTORY_RESULT" = success && test "$SHARDS_RESULT" = success
   profiles:
     name: profiles (${{ matrix.profile }})
     runs-on: ubuntu-24.04
