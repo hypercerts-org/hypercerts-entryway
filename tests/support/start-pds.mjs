@@ -9,6 +9,13 @@ const config = JSON.parse(
 );
 const pds = config.pds.find(({ id }) => id === process.env.PDS_ID);
 if (!pds) throw new Error(`Unknown PDS_ID: ${process.env.PDS_ID}`);
+if (
+  typeof pds.callbackToken !== "string" ||
+  !/^[A-Za-z0-9_-]{43}$/.test(pds.callbackToken) ||
+  pds.callbackToken === config.adminPassword ||
+  pds.callbackToken === pds.adminPassword
+)
+  throw new Error("InvalidPdsCallbackConfiguration");
 await mkdir("/data/blobs", { recursive: true });
 await mkdir("/data/actors", { recursive: true });
 
@@ -31,7 +38,7 @@ const env = {
   entrywayDid: config.serviceDid,
   entrywayJwtVerifyKeyK256PublicKeyHex: config.jwtPublicHex,
   entrywayPlcRotationKey: config.plcRotationKeyDid,
-  entrywayAdminToken: config.adminPassword,
+  entrywayAdminToken: pds.callbackToken,
   devMode: true,
   disableSsrfProtection: true,
   rateLimitsEnabled: false,

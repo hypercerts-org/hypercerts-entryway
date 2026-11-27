@@ -57,7 +57,7 @@ export function assertActivationReady(facts: ActivationFacts): void {
   const service = directory.source.services.atproto_pds;
   if (
     service?.type !== "AtprotoPersonalDataServer" ||
-    service.endpoint !== arrival.endpoint
+    service.endpoint !== (arrival.plcEndpoint ?? arrival.endpoint)
   )
     throw identity("The canonical hosting endpoint is not the saved placement");
   if (

@@ -498,6 +498,19 @@ export function createOperationOwnershipStore(
         return previous;
       });
     },
+    async readExternalById(claim, attemptId) {
+      return db.transact(async () => {
+        await assertActive(claim);
+        const [row] = await db.read("external_operation_attempts", {
+          where: and(
+            eq(external.operation_id, claim.operationId),
+            eq(external.id, attemptId),
+          ),
+          limit: 1,
+        });
+        return row ? externalRow(row) : null;
+      });
+    },
     async beginExternal(claim, input, recoveryDisposition) {
       return db.transact(async () => {
         await assertActive(claim);

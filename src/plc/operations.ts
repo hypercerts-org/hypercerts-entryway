@@ -1,8 +1,24 @@
+import { randomUUID } from "node:crypto";
+import { DomainError } from "../accounts/errors.js";
+import {
+  registryPdsFetch,
+  registryPdsTarget,
+} from "../pds/registry-transport.mjs";
+import {
+  authorizeRegistryAttempt,
+  authorizeRegistryTarget,
+} from "../pds/registry-policy.mjs";
+import { readXrpcResponse } from "../pds/xrpc-response.js";
+import type {
+  OperationClaim,
+  ExternalAttemptInput,
+  ExternalAttempt,
+} from "../database/operation-ownership.port.js";
 import { signingKeyResult } from "../accounts/operation-ownership.js";
 import type { CustodyInventoryTransactor } from "../database/custody.port.js";
 
 import { fail } from "../accounts/input.mjs";
-import { xrpc } from "../pds/client.mjs";
+import { xrpc, registryXrpc } from "../pds/client.mjs";
 
 import type { AuthorityDatabase } from "../database/connection.js";
 import type { createOperationOwnership } from "../accounts/operation-ownership.js";
@@ -13,6 +29,7 @@ interface Account {
   did: string;
   email: string;
   status: string;
+  pdsRevision?: number;
 }
 interface Pds {
   internalUrl: string;
@@ -27,8 +44,53 @@ interface Context {
     plcClient: Client;
     observeCustody?(did: string): Promise<unknown>;
     ownership: ReturnType<typeof createOperationOwnership>;
+    placement?: {
+      reserve(
+        owner: OperationClaim,
+        purpose: string,
+        intent: string,
+        steps: readonly string[],
+        hostId?: string,
+      ): Promise<{
+        id: string;
+        host_id: string;
+        revision: number;
+        public_target: string;
+        target: string;
+      }>;
+      resolve(
+        hostId: string,
+        revision: number,
+      ): Promise<{ url: string; internalUrl: string } | undefined>;
+      resolveAuthenticated(
+        hostId: string,
+        revision: number,
+        actualPolicy: (
+          revision: import("../database/pds-registry.port.js").PdsHostRevision,
+        ) => string | undefined,
+      ): Promise<
+        | { id: string; revision: number; url: string; internalUrl: string }
+        | undefined
+      >;
+      finishUnusedUnboundKey(owner: OperationClaim): Promise<void>;
+      releaseUnused(
+        owner: OperationClaim,
+        reservationId: string,
+      ): Promise<unknown>;
+      beginFirstDispatch(
+        owner: OperationClaim,
+        reservationId: string,
+        input: ExternalAttemptInput,
+      ): Promise<
+        | { kind: "dispatched"; attempt: ExternalAttempt }
+        | { kind: "existing"; attempt: ExternalAttempt }
+        | { kind: "refused" }
+        | { kind: "prior-dispatch" }
+      >;
+    };
+    registryVerifier?: Parameters<typeof registryPdsFetch>[2];
     get(did: string): Promise<Account | null>;
-    pdsFor(row: Account): Pds;
+    pdsFor(row: Account): Pds | Promise<Pds>;
     assertNoMigration?(did: string): Promise<void>;
     serialized<T>(
       did: string,
@@ -76,15 +138,210 @@ export function createPlcOperations({
     pdsId,
   }: { did?: string; pdsId?: string } = {}) => {
     const existing = did && (await accounts.get(did));
-    const pds = existing ? accounts.pdsFor(existing) : choosePds(pdsId);
-    const send = () =>
-      xrpc(
+    if (!existing && accounts.placement) {
+      if (pdsId !== undefined && (typeof pdsId !== "string" || !pdsId.trim()))
+        throw new DomainError(
+          "InvalidAccount",
+          400,
+          "Invalid data server selection",
+        );
+      const perform = async () => {
+        const claim = accounts.ownership.currentClaim;
+        if (!claim)
+          throw new DomainError(
+            "OperationLeaseLost",
+            409,
+            "Operation owner unavailable",
+          );
+        let reservation;
+        try {
+          reservation = await accounts.placement!.reserve(
+            claim,
+            "unbound-key",
+            claim.requestDigest,
+            ["reserve-signing-key"],
+            pdsId,
+          );
+        } catch (error) {
+          if (
+            !(error instanceof Error) ||
+            error.message !== "PdsLifecycleIneligible"
+          )
+            throw error;
+          if (!did) await accounts.placement!.finishUnusedUnboundKey(claim);
+          throw new DomainError(
+            "AccountUnavailable",
+            409,
+            "No eligible data server is available",
+          );
+        }
+        const target = await accounts.placement!.resolve(
+          reservation.host_id,
+          reservation.revision,
+        );
+        if (
+          !target ||
+          target.url !== reservation.public_target ||
+          target.internalUrl !== reservation.target
+        ) {
+          if (!did) await accounts.placement!.finishUnusedUnboundKey(claim);
+          throw new DomainError(
+            "OperationRecoveryRequired",
+            409,
+            "The reserved data server configuration is unavailable",
+          );
+        }
+        const boundTarget = {
+          id: reservation.host_id,
+          revision: reservation.revision,
+          ...target,
+        };
+        try {
+          await authorizeRegistryTarget(
+            accounts.placement!,
+            accounts.registryVerifier,
+            boundTarget,
+          );
+        } catch {
+          if (!did) await accounts.placement!.finishUnusedUnboundKey(claim);
+          throw new DomainError(
+            "AccountUnavailable",
+            409,
+            "The selected data server is unavailable",
+          );
+        }
+        const targetUrl = new URL(
+          "/xrpc/com.atproto.server.reserveSigningKey",
+          target.internalUrl,
+        );
+        try {
+          registryPdsTarget(targetUrl, accounts.registryVerifier, 65536);
+        } catch {
+          if (did)
+            await accounts.placement!.releaseUnused(claim, reservation.id);
+          else await accounts.placement!.finishUnusedUnboundKey(claim);
+          throw new DomainError(
+            "AccountUnavailable",
+            409,
+            "The selected data server is unavailable",
+          );
+        }
+        try {
+          return await accounts.ownership.dispatch(
+            {
+              step: "reserve-signing-key",
+              target: target.url,
+              method: "com.atproto.server.reserveSigningKey",
+              intent: did ? { did } : {},
+              authorizeAttempt: authorizeRegistryAttempt(
+                db,
+                accounts.placement,
+                accounts.registryVerifier,
+                boundTarget,
+              ),
+              authorizeFirst: (owner, descriptor) =>
+                accounts.placement!.beginFirstDispatch(
+                  owner,
+                  reservation.id,
+                  descriptor,
+                ),
+            },
+            {
+              ...signingKeyResult,
+              send: async () => {
+                await authorizeRegistryTarget(
+                  accounts.placement!,
+                  accounts.registryVerifier,
+                  boundTarget,
+                );
+                const response = await registryPdsFetch(
+                  targetUrl,
+                  {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify(did ? { did } : {}),
+                    signal: AbortSignal.timeout(15000),
+                  },
+                  accounts.registryVerifier,
+                  65536,
+                );
+                return readXrpcResponse(
+                  response,
+                  target.internalUrl,
+                  "com.atproto.server.reserveSigningKey",
+                );
+              },
+              observe: () =>
+                Promise.resolve({
+                  state: did ? ("replay-safe" as const) : ("diverged" as const),
+                }),
+            },
+          );
+        } catch (error) {
+          if (
+            !did &&
+            error instanceof Error &&
+            "code" in error &&
+            error.code === "PdsVerifierPolicyConflict"
+          ) {
+            try {
+              await accounts.placement!.finishUnusedUnboundKey(claim);
+            } catch (finalizationError) {
+              if (
+                !(finalizationError instanceof Error) ||
+                finalizationError.message !== "PdsPlacementConflict"
+              )
+                throw finalizationError;
+            }
+            throw new DomainError(
+              "AccountUnavailable",
+              409,
+              "The selected data server is unavailable",
+            );
+          }
+          if (
+            error instanceof DomainError &&
+            error.code === "PdsLifecycleIneligible"
+          ) {
+            if (!did) await accounts.placement!.finishUnusedUnboundKey(claim);
+            throw new DomainError(
+              "AccountUnavailable",
+              409,
+              "The selected data server is unavailable",
+            );
+          }
+          throw error;
+        }
+      };
+      return did
+        ? perform()
+        : accounts.ownership.run(
+            `unbound-key:${randomUUID()}`,
+            {
+              kind: "unbound-key",
+              request: { pdsId: pdsId ?? null },
+              completeOnReturn: true,
+            },
+            perform,
+          );
+    }
+    const pds = existing ? await accounts.pdsFor(existing) : choosePds(pdsId);
+    if (existing && accounts.placement)
+      registryPdsTarget(
+        new URL("/xrpc/com.atproto.server.reserveSigningKey", pds.internalUrl),
+        accounts.registryVerifier,
+        1024 * 1024,
+      );
+    const send = async () => {
+      if (existing && accounts.placement) await accounts.pdsFor(existing);
+      return (existing && accounts.placement ? registryXrpc : xrpc)(
         pds.internalUrl,
         "com.atproto.server.reserveSigningKey",
         did ? { did } : {},
+        undefined,
+        accounts.registryVerifier,
       );
-    // Without a DID this only allocates an unbound repository key. It cannot
-    // change an account, publish PLC or conflict with an admitted DID operation.
+    };
     if (!did) return send();
     return accounts.ownership.dispatch(
       {
@@ -92,6 +349,20 @@ export function createPlcOperations({
         target: pds.url ?? pds.internalUrl,
         method: "com.atproto.server.reserveSigningKey",
         intent: { did },
+        ...(existing && accounts.placement
+          ? {
+              authorizeAttempt: authorizeRegistryAttempt(
+                db,
+                accounts.placement,
+                accounts.registryVerifier,
+                {
+                  ...pds,
+                  id: (existing as Account & { pdsId: string }).pdsId,
+                  revision: existing.pdsRevision,
+                },
+              ),
+            }
+          : {}),
       },
       {
         ...signingKeyResult,

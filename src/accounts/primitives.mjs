@@ -2,9 +2,19 @@ import { noExternalResult } from "./operation-ownership.js";
 import { ensureValidHandle, isValidDid, isValidHandle } from "@atproto/syntax";
 import { validateHostedHandle } from "./input-schema.js";
 import { HttpError } from "../http/http-error.mjs";
-import { xrpc } from "../pds/client.mjs";
+import { xrpc, registryXrpc } from "../pds/client.mjs";
+import { authorizeRegistryAttempt } from "../pds/registry-policy.mjs";
+import { pdsVerifierPolicy } from "../pds/registry-targets.mjs";
+import { registryPdsTarget } from "../pds/registry-transport.mjs";
 
-export function createAccountPrimitives({ db, config, storage, ownership }) {
+export function createAccountPrimitives({
+  db,
+  config,
+  storage,
+  ownership,
+  placement,
+  registryVerifier,
+}) {
   const claimHandle = async (handle, did) =>
     await storage.reserveHandle(handle, did);
   // Callers pass untrusted values (hostnames, JWT subjects, login input), so
@@ -26,28 +36,88 @@ export function createAccountPrimitives({ db, config, storage, ownership }) {
   };
   const list = async () => await storage.listAccounts();
   const save = async (row) => await storage.saveAccount(row);
-  const pdsFor = (row) => config.pds.find((p) => p.id === row.pdsId);
+  const pdsFor = async (row) => {
+    if (!placement) return config.pds.find((p) => p.id === row.pdsId);
+    if (!Number.isSafeInteger(row.pdsRevision) || row.pdsRevision < 1)
+      throw new HttpError(
+        409,
+        "AccountUnavailable",
+        "The saved data server is unavailable",
+      );
+    const pds = await placement.resolveAuthenticated(
+      row.pdsId,
+      row.pdsRevision,
+      (revision) => pdsVerifierPolicy(revision, registryVerifier),
+    );
+    if (!pds || row.pdsUrl !== pds.url)
+      throw new HttpError(
+        409,
+        "AccountUnavailable",
+        "The saved data server is unavailable",
+      );
+    return pds;
+  };
   const admin = async (row, nsid, body, { previousHandle } = {}) => {
-    const p = pdsFor(row);
-    const authorization = `Basic ${Buffer.from(`admin:${p.adminPassword}`).toString("base64")}`;
+    const p = await pdsFor(row);
+    const credentials = placement
+      ? await placement.resolveMigration(row.pdsId, row.pdsRevision)
+      : p;
+    if (
+      !p ||
+      !credentials ||
+      credentials.url !== p.url ||
+      credentials.internalUrl !== p.internalUrl
+    )
+      throw new HttpError(
+        409,
+        "AccountUnavailable",
+        "The saved data server is unavailable",
+      );
+    const call = async (method, input) => {
+      if (placement) await pdsFor(row);
+      return placement
+        ? registryXrpc(
+            p.internalUrl,
+            method,
+            input,
+            authorization,
+            registryVerifier,
+          )
+        : xrpc(p.internalUrl, method, input, authorization);
+    };
+    if (placement)
+      registryPdsTarget(
+        new URL(`/xrpc/${nsid}`, p.internalUrl),
+        registryVerifier,
+        1024 * 1024,
+      );
+    const authorization = `Basic ${Buffer.from(`admin:${credentials.adminPassword}`).toString("base64")}`;
     return ownership.dispatch(
       {
         step: nsid,
         target: p.url ?? p.internalUrl,
         method: nsid,
         intent: body,
+        ...(placement
+          ? {
+              authorizeAttempt: authorizeRegistryAttempt(
+                db,
+                placement,
+                registryVerifier,
+                p,
+              ),
+            }
+          : {}),
       },
       {
         ...noExternalResult,
-        send: () => xrpc(p.internalUrl, nsid, body, authorization),
+        send: () => call(nsid, body),
         observe: async () => {
           let observed;
           try {
-            observed = await xrpc(
-              p.internalUrl,
+            observed = await call(
               `com.atproto.admin.getAccountInfo?did=${encodeURIComponent(row.did)}`,
               undefined,
-              authorization,
             );
           } catch (error) {
             if (

@@ -70,12 +70,25 @@ export function createSignupForm({ db, config, accounts, fields }) {
       (await db.list("entryway:invites")).length
         ? `<label for="inviteCode">Invite code${config.inviteCodeRequired ? "" : " (optional)"}</label><input id="inviteCode" name="inviteCode" value="${escapeHtml(reservedInvite ?? "")}" ${config.inviteCodeRequired ? "required" : ""} ${reservedInvite ? "readonly" : ""}>`
         : "";
-    const pdsOptions = config.pds
-      .map((p) => {
-        const selected = retry && p.id === pending.pdsId ? " selected" : "";
-        return `<option value="${escapeHtml(p.id)}"${selected}>${escapeHtml(p.id)} — ${escapeHtml(p.url)}</option>`;
-      })
-      .join("");
+    const registry = Boolean(accounts.placement);
+    const candidates = registry
+      ? await accounts.placement.choices()
+      : config.pds;
+    const choices =
+      retry && registry
+        ? [{ id: pending.pdsId, url: pending.pdsUrl }]
+        : candidates;
+    const pdsOptions =
+      (registry && !retry && choices.length
+        ? '<option value="" selected disabled>Choose a data server</option>'
+        : "") +
+      choices
+        .map((p) => {
+          const selected = retry && p.id === pending.pdsId ? " selected" : "";
+          return `<option value="${escapeHtml(p.id)}"${selected}>${escapeHtml(p.id)}${p.url ? ` — ${escapeHtml(p.url)}` : ""}</option>`;
+        })
+        .join("");
+    const unavailable = registry && !retry && !choices.length;
     const { intro, button } = signupState(recoveryRequired, retry);
     const locked = retry || Boolean(hintedHandle);
     // An editable hosted handle takes only the name; the server appends this
@@ -95,7 +108,7 @@ export function createSignupForm({ db, config, accounts, fields }) {
         escapeHtml(suffix) +
         " is added for you. A full handle containing a dot is used as typed."
       : handleHelp;
-    return `<p>${intro}</p><form method="post" action="/auth/account">${fields(flow, browser)}<label for="handle">Handle</label>${handleField}${suggestions}<small id="handle-help">${handleHint}</small><label for="pdsId">Personal data server</label><select id="pdsId" name="pdsId" ${retry ? "disabled" : ""}>${pdsOptions}</select>${inviteInput}<button ${recoveryRequired ? "disabled" : ""}>${button}</button></form>`;
+    return `<p>${intro}</p><form method="post" action="/auth/account">${fields(flow, browser)}<label for="handle">Handle</label>${handleField}${suggestions}<small id="handle-help">${handleHint}</small><label for="pdsId">Personal data server</label><select id="pdsId" name="pdsId" required ${retry || unavailable ? "disabled" : ""}>${pdsOptions}</select>${unavailable ? '<p role="status">No data server is currently available. Try again later.</p>' : ""}${inviteInput}<button ${recoveryRequired || unavailable ? "disabled" : ""}>${button}</button></form>`;
   };
   return signupForm;
 }

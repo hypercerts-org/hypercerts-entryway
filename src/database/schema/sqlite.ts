@@ -15,6 +15,23 @@ import type {
 const time = (name: string) => integer(name, { mode: "timestamp_ms" });
 const boolean = (name: string) => integer(name, { mode: "boolean" });
 const count = integer;
+export const authority_mode = table("authority_mode", {
+  id: integer("id").primaryKey(),
+  mode: text("mode").notNull(),
+});
+export const authority_phase = table("authority_phase", {
+  id: integer("id").primaryKey(),
+  phase: text("phase").notNull(),
+  generation: count("generation").notNull(),
+});
+export const authority_phase_events = table("authority_phase_events", {
+  command_key: text("command_key").primaryKey(),
+  expected_generation: count("expected_generation").notNull(),
+  phase: text("phase").notNull(),
+  generation: count("generation").notNull(),
+  principal_class: text("principal_class").notNull(),
+  created_at: count("created_at").notNull(),
+});
 // Explicit Better Auth 1.7.3 core schema; emailOTP persists proofs in verification.
 export const user = table(
   "user",
@@ -184,7 +201,12 @@ export const arrivals = table(
     email: text("email").notNull(),
     handle: text("handle").notNull(),
     pds_id: text("pds_id").notNull(),
+    pds_revision: count("pds_revision"),
+    staged_incoming_migration: boolean("staged_incoming_migration")
+      .notNull()
+      .default(false),
     endpoint: text("endpoint").notNull(),
+    plc_endpoint: text("plc_endpoint"),
     source_plc_head: text("source_plc_head").notNull(),
     source_endpoint: text("source_endpoint"),
     canonical_handoff_cid: text("canonical_handoff_cid"),
@@ -552,7 +574,10 @@ export const mail_outbox = table(
       "mail_message_kind",
       sql`${t.message_kind} IN ('otp','proof','admin')`,
     ),
-    check("mail_attempts", sql`${t.attempt_count} BETWEEN 0 AND 3`),
+    check(
+      "mail_attempts",
+      sql`${t.attempt_count} >= 0 AND ((${t.purpose} = 'pds-health' AND ${t.message_kind} = 'admin') OR ${t.attempt_count} <= 3)`,
+    ),
     check(
       "mail_state",
       sql`${t.state} IN ('queued','sending','delivered','failed','expired')`,
@@ -567,4 +592,275 @@ export const mail_outbox = table(
       sql`(${t.state}='delivered' AND ${t.delivered_at} IS NOT NULL AND ${t.code} IS NULL) OR (${t.state}!='delivered' AND ${t.delivered_at} IS NULL)`,
     ),
   ],
+);
+
+export const pds_hosts = table("pds_hosts", {
+  id: text("id").primaryKey(),
+  revision: count("revision").notNull(),
+  configured_order: count("configured_order").notNull(),
+  association: text("association").notNull(),
+  lifecycle: text("lifecycle").notNull(),
+  lifecycle_version: count("lifecycle_version").notNull().default(0),
+  active_revision: count("active_revision"),
+  staged_revision: count("staged_revision"),
+});
+export const pds_host_revisions = table(
+  "pds_host_revisions",
+  {
+    host_id: text("host_id")
+      .notNull()
+      .references(() => pds_hosts.id),
+    revision: count("revision").notNull(),
+    service_did: text("service_did").notNull(),
+    public_url: text("public_url").notNull(),
+    internal_url: text("internal_url").notNull(),
+    staged_incoming_migration: boolean("staged_incoming_migration")
+      .notNull()
+      .default(false),
+    configured_order: count("configured_order").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.host_id, t.revision] })],
+);
+export const pds_host_stage_requests = table(
+  "pds_host_stage_requests",
+  {
+    host_id: text("host_id")
+      .notNull()
+      .references(() => pds_hosts.id),
+    idempotency_key: text("idempotency_key").notNull(),
+    request: text("request").notNull(),
+    revision: count("revision").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.host_id, t.idempotency_key] })],
+);
+
+export const pds_host_credentials = table(
+  "pds_host_credentials",
+  {
+    host_id: text("host_id")
+      .notNull()
+      .references(() => pds_hosts.id),
+    revision: count("revision").notNull(),
+    key_id: text("key_id").notNull(),
+    nonce: text("nonce").notNull(),
+    ciphertext: text("ciphertext").notNull(),
+    tag: text("tag").notNull(),
+    inbound_digest: text("inbound_digest").notNull(),
+    inbound_revoked_at: count("inbound_revoked_at"),
+  },
+  (t) => [primaryKey({ columns: [t.host_id, t.revision] })],
+);
+export const pds_host_credential_requests = table(
+  "pds_host_credential_requests",
+  {
+    host_id: text("host_id")
+      .notNull()
+      .references(() => pds_hosts.id),
+    idempotency_key: text("idempotency_key").notNull(),
+    key_id: text("key_id").notNull(),
+    digest: text("digest").notNull(),
+    revision: count("revision").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.host_id, t.idempotency_key] })],
+);
+
+export const pds_host_checks = table("pds_host_checks", {
+  host_id: text("host_id")
+    .primaryKey()
+    .references(() => pds_hosts.id),
+  attempt_id: text("attempt_id"),
+  generation: count("generation").notNull(),
+  attempt_revision: count("attempt_revision"),
+  expires_at: count("expires_at"),
+  started_at: count("started_at"),
+  last_revision: count("last_revision"),
+  last_receipt_id: text("last_receipt_id"),
+  manifest_fingerprint: text("manifest_fingerprint"),
+  verifier_version: count("verifier_version"),
+  verifier_policy_fingerprint: text("verifier_policy_fingerprint"),
+  verifier_policy_generation: count("verifier_policy_generation"),
+  completed_at: count("completed_at"),
+  receipt_expires_at: count("receipt_expires_at"),
+  observed_at: count("observed_at"),
+  public_did_ok: boolean("public_did_ok"),
+  internal_did_ok: boolean("internal_did_ok"),
+  public_metadata_ok: boolean("public_metadata_ok"),
+  internal_metadata_ok: boolean("internal_metadata_ok"),
+  admin_attempted: boolean("admin_attempted"),
+  admin_ok: boolean("admin_ok"),
+  reason: text("reason"),
+});
+
+export const pds_host_manifests = table(
+  "pds_host_manifests",
+  {
+    host_id: text("host_id")
+      .notNull()
+      .references(() => pds_hosts.id),
+    revision: count("revision").notNull(),
+    manifest: text("manifest").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.host_id, t.revision] })],
+);
+
+export const pds_host_verifier_policies = table("pds_host_verifier_policies", {
+  host_id: text("host_id")
+    .primaryKey()
+    .references(() => pds_hosts.id),
+  revision: count("revision").notNull(),
+  generation: count("generation").notNull(),
+  fingerprint: text("fingerprint").notNull(),
+});
+
+export const pds_host_enrollment_events = table(
+  "pds_host_enrollment_events",
+  {
+    id: text("id").primaryKey(),
+    host_id: text("host_id")
+      .notNull()
+      .references(() => pds_hosts.id),
+    revision: count("revision").notNull(),
+    kind: text("kind").notNull(),
+    principal_class: text("principal_class").notNull(),
+    idempotency_key: text("idempotency_key").notNull(),
+    request: text("request").notNull(),
+    receipt_id: text("receipt_id").notNull(),
+    attestation_id: text("attestation_id").notNull(),
+    generation: count("generation").notNull(),
+    policy_generation: count("policy_generation").notNull(),
+    manifest_fingerprint: text("manifest_fingerprint").notNull(),
+    receipt_snapshot: text("receipt_snapshot").notNull(),
+    expires_at: count("expires_at").notNull(),
+    created_at: count("created_at").notNull(),
+    result: text("result").notNull(),
+  },
+  (t) => [
+    uniqueIndex("pds_host_enrollment_idempotency").on(
+      t.host_id,
+      t.kind,
+      t.idempotency_key,
+    ),
+  ],
+);
+
+export const pds_host_health = table("pds_host_health", {
+  host_id: text("host_id")
+    .primaryKey()
+    .references(() => pds_hosts.id),
+  revision: count("revision").notNull(),
+  generation: count("generation").notNull(),
+  claim_id: text("claim_id"),
+  claim_expires_at: count("claim_expires_at"),
+  claim_started_at: count("claim_started_at"),
+  next_sample_at: count("next_sample_at"),
+  policy_generation: count("policy_generation").notNull(),
+  policy_fingerprint: text("policy_fingerprint").notNull(),
+  observed_at: count("observed_at"),
+  monitor_observed_at: count("monitor_observed_at"),
+  completed_at: count("completed_at"),
+  public_ok: boolean("public_ok"),
+  internal_ok: boolean("internal_ok"),
+  failures: count("failures").notNull(),
+  successes: count("successes").notNull(),
+  state: text("state").notNull(),
+});
+
+export const pds_health_incidents = table(
+  "pds_health_incidents",
+  {
+    id: text("id").primaryKey(),
+    host_id: text("host_id")
+      .notNull()
+      .references(() => pds_hosts.id),
+    revision: count("revision").notNull(),
+    generation: count("generation").notNull(),
+    cause: text("cause").notNull(),
+    opened_at: count("opened_at").notNull(),
+    closed_at: count("closed_at"),
+    state: text("state").notNull(),
+  },
+  (t) => [
+    uniqueIndex("pds_health_incident_generation").on(t.host_id, t.generation),
+    uniqueIndex("pds_health_open_incident")
+      .on(t.host_id)
+      .where(sql`${t.state} = 'open'`),
+  ],
+);
+export const pds_health_notices = table(
+  "pds_health_notices",
+  {
+    id: text("id").primaryKey(),
+    incident_id: text("incident_id")
+      .notNull()
+      .references(() => pds_health_incidents.id),
+    phase: text("phase").notNull(),
+    role: text("role").notNull(),
+    recipient: text("recipient"),
+    outbox_id: text("outbox_id"),
+    created_at: count("created_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("pds_health_notice_role").on(t.incident_id, t.phase, t.role),
+  ],
+);
+
+export const pds_health_sweep = table("pds_health_sweep", {
+  id: integer("id").primaryKey(),
+  generation: count("generation").notNull(),
+  claim_id: text("claim_id"),
+  lease_expires_at: count("lease_expires_at"),
+  last_clock: count("last_clock").notNull(),
+  cursor: text("cursor").notNull(),
+});
+
+export const pds_host_lifecycle_events = table(
+  "pds_host_lifecycle_events",
+  {
+    id: text("id").primaryKey(),
+    host_id: text("host_id")
+      .notNull()
+      .references(() => pds_hosts.id),
+    command_key: text("command_key").notNull(),
+    request: text("request").notNull(),
+    result: text("result").notNull(),
+    created_at: count("created_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("pds_host_lifecycle_command").on(t.host_id, t.command_key),
+  ],
+);
+
+export const pds_placement_reservations = table(
+  "pds_placement_reservations",
+  {
+    id: text("id").primaryKey(),
+    operation_id: text("operation_id").notNull(),
+    purpose: text("purpose").notNull(),
+    intent: text("intent").notNull(),
+    requested_host_id: text("requested_host_id"),
+    host_id: text("host_id")
+      .notNull()
+      .references(() => pds_hosts.id),
+    revision: count("revision").notNull(),
+    target: text("target").notNull(),
+    public_target: text("public_target").notNull(),
+    target_steps: text("target_steps").notNull(),
+    state: text("state").notNull(),
+    dispatch_input: text("dispatch_input"),
+    first_attempt_id: text("first_attempt_id"),
+    created_at: count("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("pds_placement_operation").on(t.operation_id)],
+);
+
+export const controller_challenges = table(
+  "controller_challenges",
+  {
+    nonce: text("nonce").primaryKey(),
+    context: text("context").notNull(),
+    expires_at: count("expires_at").notNull(),
+    consumed_at: count("consumed_at"),
+  },
+  (t) => [index("controller_challenge_expiry").on(t.expires_at)],
 );

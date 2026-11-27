@@ -144,6 +144,12 @@ suite does not establish.
 
 Run `./tests/local.sh incoming-late-cutover` to create and remove a disposable project. Its first managed PDS is built from the pinned #5831 upstream source. The standalone source runs the normal sandbox image. The browser verifies the destination email and uses the public Entryway and PDS endpoints to migrate two new accounts. Both check the source DID and PLC history during import, a source write caught up by revision, the single final migration operation, destination sign-in and write, and source deactivation. One account changes its handle at the source, reapproves the new PLC head, and retires its source keys through Entryway. The other submits through the destination PDS and keeps its original keys. A separate signup checks ordinary registration on the same PDS. The phase log is under `tests/artifacts/`.
 
+Contributors testing controller-owned launch inputs can use a separate disposable staged sandbox. Set `SANDBOX_PROJECT` to a unique `hypercerts-entryway-...` name, set `SANDBOX_CHECKOUT` to its own directory under `tests/.runtime/`, and export `ENTRYWAY_LATE_CUTOVER=1`. Run `./tests/local.sh prepare`, `./tests/local.sh up`, and `./tests/local.sh controller-launch` in that order. The test recreates the staged PDS and checks that it refuses a configuration changed between the host check and startup. It also checks for stale inputs, restart, and replacement. Staged migration qualification and gateway continuity have separate gates.
+
+The controller launch test uses the repository's verified Docker context and allows one run per sandbox. It restores the original destination and removes the test's credential-bearing input and MAC key volumes on exit. After an interruption, rerun `./tests/local.sh controller-launch` with the same sandbox settings to recover and retry, or run `./tests/local.sh controller-launch cleanup` to recover without rerunning the test. Recovery checks each volume's exact project label, controller role, and generated name. It restores the destination when the PDS still mounts one of those volumes, even if the interruption happened before the launch state was saved.
+
+To test the experimental gateway, run `npm run build` natively, prepare and start the same kind of disposable staged sandbox, then run `./tests/local.sh controller-gateway`. This temporarily restarts its Caddy ingress and PDS, isolates the PDS on a private bridge, and tests the public TLS route and a read-only managed challenge. It checks that old pins cannot forward requests to a replacement gateway at the same address. The controller-local fixture tests mTLS caller isolation, synthetic qualification, lease acquisition, durable generation, dispatch deduplication, crash and lost-acknowledgement behavior against a fixture backend. Its qualification is injected by the test and is not a controller-attested receipt. The managed PDS path does not admit writes or qualify migrations. After an interrupted run, use `./tests/local.sh controller-gateway cleanup` with the same sandbox settings to restore the original route and remove its labelled resources.
+
 ### Incoming migration targets
 
 Four `tests/local.sh` targets run incoming migration through Entryway's public
@@ -909,3 +915,14 @@ without former-host authority and checks exact directory CID/keys and source
 signer rejection. It uses neither SQL nor private fixture APIs. This is bounded
 identity qualification, not repository/blob migration or destination activation.
 The case is opt-in because ordinary test containers do not contain a browser.
+
+Operators and contributors can run `SANDBOX_PROJECT=hypercerts-entryway-registry-test ./tests/local.sh registry-bootstrap` after preparing and starting a dedicated sandbox. This exercises two bootstrap nodes through the sandbox's verified TLS gateway, restores the normal ingress and PDS afterward, and uses a new disposable PostgreSQL database. Never point this test at a shared sandbox.
+
+The stock-PDS sandbox gives each PDS a separate configuration volume containing only its own runtime secrets and a distinct inbound callback token. The Entryway global administrator secret is not mounted into a PDS container. The pinned PDS constructs an Entryway admin client, but the inspected runtime does not establish an initiating admin callback; supplying a token does not demonstrate that it is sent or accepted.
+
+Registry fixture profiles can be exercised in separate disposable projects with
+`./tests/local.sh fresh-group registry-qualification` (fresh bootstrap authority
+and stock PDS outbound checks) and `./tests/local.sh fresh-group registry-operator`
+(full serving transition before operator checks). Both use the controller-verified
+sandbox origin; neither is a staged production admission qualification. The
+bootstrap fixture remains available as `fresh-group registry-bootstrap`.

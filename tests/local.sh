@@ -15,7 +15,7 @@ command=${1:-help}
 mkdir -p "$artifacts"
 # Phase identity comes from the controller, never from a command or request body.
 case "$command" in
-  fresh|fresh-group|prepare|up|_incoming-late-cutover-run|contracts|database-contracts|database-dialects|resilience-profiles|database-profile|browser|incoming-late-cutover|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-public-failures|incoming-two-node|account-lifecycle-two-node|incoming-goat-journey|incoming-moover-journey|incoming-arrival-live|migration|migration-resume|resilience|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|all|down|status|help) ;;
+  fresh|fresh-group|prepare|up|controller-launch|controller-gateway|_incoming-late-cutover-run|contracts|database-contracts|database-dialects|registry-bootstrap|registry-operator|registry-qualification|resilience-profiles|database-profile|browser|incoming-late-cutover|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-public-failures|incoming-two-node|account-lifecycle-two-node|incoming-goat-journey|incoming-moover-journey|incoming-arrival-live|migration|migration-resume|resilience|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|all|down|status|help) ;;
   *) echo 'code=UNKNOWN_PHASE'; exit 2 ;;
 esac
 printf 'phase=%s status=started\n' "$command"
@@ -118,7 +118,7 @@ case "$command" in
     (( $# > 0 )) || { echo 'fresh-group needs at least one step' >&2; exit 2; }
     for step in "$@"; do
       case "$step" in
-        browser|contracts|incoming-late-cutover|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-public-failures|incoming-two-node|account-lifecycle-two-node|incoming-goat-journey|incoming-moover-journey|database-contracts|migration|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience) ;;
+        registry-bootstrap|registry-operator|registry-qualification|browser|contracts|incoming-late-cutover|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-public-failures|incoming-two-node|account-lifecycle-two-node|incoming-goat-journey|incoming-moover-journey|database-contracts|migration|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience) ;;
         *) echo "Unknown fresh-group step: $step" >&2; exit 2 ;;
       esac
     done
@@ -203,15 +203,38 @@ case "$command" in
     deno task sandbox access --json > "$sandbox/access.json"
     node "$root/tests/atmosphere/validate-access.mjs" "$sandbox/access.json" "$project"
     ;;
+  controller-launch)
+    require_state
+    [[ "${ENTRYWAY_LATE_CUTOVER:-0}" == 1 ]] || { echo 'Controller launch test requires a disposable staged sandbox' >&2; exit 2; }
+    mode=${2:-test}
+    [[ $# -le 2 && ( "$mode" == test || "$mode" == cleanup ) ]] || { echo 'Usage: ./tests/local.sh controller-launch [cleanup]' >&2; exit 2; }
+    "$root/tests/support/run-controller-launch.sh" "$root" "$sandbox" "$project" "$mode"
+    ;;
+  controller-gateway)
+    require_state
+    [[ "${ENTRYWAY_LATE_CUTOVER:-0}" == 1 ]] || { echo 'Controller gateway test requires a disposable staged sandbox' >&2; exit 2; }
+    mode=${2:-test}
+    [[ $# -le 2 && ( "$mode" == test || "$mode" == cleanup ) ]] || { echo 'Usage: ./tests/local.sh controller-gateway [cleanup]' >&2; exit 2; }
+    "$root/tests/support/run-controller-gateway.sh" "$root" "$sandbox" "$project" "$mode"
+    ;;
   incoming-late-cutover)
     exec "$root/tests/local.sh" fresh-group incoming-late-cutover
     ;;
   _incoming-late-cutover-run)
     require_state
     prepare_incoming_access
+    private=$(mktemp -d "$sandbox/.staged-controller.XXXXXX")
+    results=$(mktemp "$sandbox/.staged-results.XXXXXX")
+    node "$root/tests/support/staged-qualification.mjs" before "$project" "$private"
     compose run --rm --no-deps --volume "$sandbox/incoming-access.json:/run/incoming-access.json:ro" \
+      --volume "$results:/qualification-results.json" -e STAGED_QUALIFICATION_RESULTS=/qualification-results.json \
       -e INCOMING_ACCESS_PATH=/run/incoming-access.json -e "INCOMING_PROJECT=$project" -e INCOMING_LATE_CUTOVER=1 \
       browser npx --no-install playwright test --config tests/playwright.config.mjs 2>&1 | tee "$artifacts/incoming-late-cutover.log" | python3 "$root/scripts/ci-summary.py"
+    mv "$results" "$private/staged-qualification-results.json"
+    node "$root/tests/support/staged-qualification.mjs" after "$project" "$private"
+    receipt="$artifacts/staged-qualification-$(basename "$private").json"
+    cp "$private/staged-qualification.json" "$receipt"
+    echo "Staged observation: $receipt"
     ;;
   contracts)
     require_state
@@ -227,11 +250,15 @@ case "$command" in
     # distinct report files. Output goes to per-backend logs so the two runs
     # cannot interleave; summaries print after both finish.
     pids=()
+    concurrency_env=()
+    if [[ -n "${DATABASE_CONTRACT_CONCURRENCY:-}" ]]; then
+      concurrency_env=(-e "DATABASE_CONTRACT_CONCURRENCY=$DATABASE_CONTRACT_CONCURRENCY")
+    fi
     backends=(sqlite postgresql)
     for backend in "${backends[@]}"; do
       (
         result=0
-        compose run --rm --no-deps -e "CONTRACT_DATABASE_BACKEND=$backend" -e CONTRACT_DATABASE_URL=postgresql://authority_owner@entryway-postgres/account_authority test node tests/support/run-database-contracts.mjs > "$artifacts/database-$backend.log" 2>&1 || result=$?
+        compose run --rm --no-deps "${concurrency_env[@]}" -e "CONTRACT_DATABASE_BACKEND=$backend" -e CONTRACT_DATABASE_URL=postgresql://authority_owner@entryway-postgres/account_authority test node tests/support/run-database-contracts.mjs > "$artifacts/database-$backend.log" 2>&1 || result=$?
         printf '%s\n' "$result" > "$artifacts/database-$backend.exit"
         exit "$result"
       ) &
@@ -248,6 +275,12 @@ case "$command" in
     done
     (( failed == 0 )) || exit "$failed"
     if [[ "$command" == database-contracts ]]; then bash "$root/tests/support/run-postgresql-profile.sh"; fi
+    ;;
+  registry-bootstrap|registry-operator|registry-qualification)
+    require_state
+    [[ "$project" != hypercerts-entryway ]] || { echo 'Use a dedicated sandbox project for registry bootstrap' >&2; exit 2; }
+    prepare_incoming_access
+    bash "$root/tests/support/run-registry-bootstrap.sh" "${command#registry-}"
     ;;
   resilience-profiles)
     bash "$root/tests/support/run-resilience-profiles.sh"
@@ -451,7 +484,7 @@ JS
     deno task sandbox status
     ;;
   *)
-    echo 'Usage: ./tests/local.sh fresh|fresh-group <steps...>|prepare|up|browser|incoming-late-cutover|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-public-failures|incoming-two-node|account-lifecycle-two-node|incoming-goat-journey|incoming-moover-journey|contracts|database-contracts|database-profile|resilience-profiles|migration|migration-resume|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience|all|status|down'
+    echo 'Usage: ./tests/local.sh fresh|fresh-group <steps...>|prepare|up|controller-launch|controller-gateway|browser|incoming-late-cutover|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-public-failures|incoming-two-node|account-lifecycle-two-node|incoming-goat-journey|incoming-moover-journey|contracts|database-contracts|database-profile|resilience-profiles|migration|migration-resume|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience|all|status|down'
     echo 'all requires a fresh project fixture; down retains state and volumes. No implicit reset.'
     ;;
 esac

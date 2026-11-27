@@ -23,6 +23,33 @@ export function publicRotationKey(value: unknown): string {
   return value;
 }
 
+/** Stock reference PDS publishes its origin as the exact DID service endpoint.
+ * Staged profiles retain their explicitly nominated value until separately qualified. */
+export function registryPlcEndpoint(
+  publicUrl: string,
+  staged: boolean,
+): string {
+  if (staged) return publicUrl;
+  try {
+    const url = new URL(publicUrl);
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      url.pathname !== "/" ||
+      url.search ||
+      url.hash
+    )
+      throw new Error();
+    return url.origin;
+  } catch {
+    throw new PlcError(
+      "InvalidPlcOperation",
+      "Stock PDS requires an HTTPS origin endpoint",
+    );
+  }
+}
+
 /** Genesis priority is policy, not a normalization rule for existing identities. */
 export function genesisRotationKeys(input: {
   user?: unknown;

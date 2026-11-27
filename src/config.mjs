@@ -9,6 +9,20 @@ export async function loadConfig() {
       "utf8",
     ),
   );
+  config.authorityMode = process.env.AUTHORITY_MODE ?? "static";
+  if (
+    !["static", "registry-bootstrap"].includes(config.authorityMode) ||
+    (config.authorityMode === "registry-bootstrap" &&
+      (!Array.isArray(config.pds) ||
+        config.pds.length !== 0 ||
+        typeof config.adminPassword !== "string" ||
+        !config.adminPassword.trim() ||
+        !config.adminPassword.isWellFormed()))
+  ) {
+    const error = new Error("Invalid authority mode configuration");
+    error.code = "InvalidAuthorityModeConfiguration";
+    throw error;
+  }
   if (process.env.BROWSER_CLIENT_METADATA_URL) {
     config.browserClientMetadataUrl = process.env.BROWSER_CLIENT_METADATA_URL;
   }
@@ -27,6 +41,7 @@ export async function loadConfig() {
   config.database = loadDatabaseConfiguration(process.env);
   config.lifecycle = loadLifecycleConfiguration(process.env);
   config.operationLease = loadOperationLeaseConfiguration(process.env);
+  config.pdsHealth = loadPdsHealthConfiguration(process.env);
   return config;
 }
 
@@ -187,4 +202,27 @@ function isSmtpSender(value) {
     local.length + domain.length + 1 <= 254 &&
     domain.split(".").every((label) => label.length <= 63)
   );
+}
+
+/** Scheduler cadence and per-request deadline; defaults are operational starting points. */
+export function loadPdsHealthConfiguration(env) {
+  const intervalMs =
+    env.PDS_HEALTH_INTERVAL_MS === undefined
+      ? 10_000
+      : Number(env.PDS_HEALTH_INTERVAL_MS);
+  const timeoutMs =
+    env.PDS_HEALTH_TIMEOUT_MS === undefined
+      ? 3_000
+      : Number(env.PDS_HEALTH_TIMEOUT_MS);
+  if (
+    !Number.isSafeInteger(intervalMs) ||
+    intervalMs < 1_000 ||
+    intervalMs > 600_000 ||
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < 100 ||
+    timeoutMs > 10_000 ||
+    2 * intervalMs + timeoutMs >= 45_000
+  )
+    throw new Error("InvalidPdsHealthConfiguration");
+  return { intervalMs, timeoutMs };
 }

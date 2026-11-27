@@ -1,3 +1,4 @@
+import { HttpError } from "./http/http-error.mjs";
 import { mountOperationRecoveryRoutes } from "./features/account-settings/operation-recovery-routes.js";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import express from "express";
@@ -14,13 +15,53 @@ import { createAccountMigration } from "./features/pds-migration/move-between-pd
 import { requestFailureEvent } from "./logging/request-event.js";
 import { canonicalBasic } from "./http/authorization-scheme.js";
 import { createIncomingArrival } from "./compose-incoming-arrival.mjs";
+import { createPdsOutboundCheckStore } from "./database/drizzle/pds-registry-checks.js";
+import { checkPdsOutbound } from "./pds/registry-check.mjs";
+import { createPdsRegistry } from "./database/drizzle/pds-registry.js";
+import { pdsRegistryKeyStatus } from "./database/pds-registry-bootstrap.js";
+import { pdsPublicTrust } from "./features/pds-registry/trust.mjs";
+import { mountPdsRegistryRoutes } from "./features/pds-registry/routes.mjs";
 import { mountIncomingRoutes } from "./features/external-migration/routes.js";
+import { validateRegistryServingConfiguration } from "./pds/registry-serving-config.mjs";
 
-export async function createApp({ config, db, mail, lifecycle }) {
+export async function createApp({
+  config,
+  db,
+  mail,
+  lifecycle,
+  registryKeyring,
+  registryTargets,
+  registryRuntime,
+  testClient,
+}) {
+  if (registryRuntime && config.authorityMode !== "registry-bootstrap")
+    throw new Error("RegistryServingUnavailable");
+  if (config.authorityMode === "registry-bootstrap") {
+    if (
+      !registryRuntime ||
+      registryRuntime.db !== db ||
+      registryRuntime.config !== config ||
+      registryRuntime.registryKeyring !== registryKeyring ||
+      !registryKeyring ||
+      !registryRuntime.registryTargets ||
+      !Array.isArray(config.pds) ||
+      config.pds.length ||
+      (await registryRuntime.phase.read()).phase !== "registry-serving"
+    )
+      throw new Error("RegistryServingUnavailable");
+    await validateRegistryServingConfiguration(
+      config,
+      registryKeyring,
+      registryRuntime.registryTargets,
+    );
+    registryTargets = registryRuntime.registryTargets;
+  }
   const accounts = await createAccounts({
     db,
     config,
     workerId: lifecycle?.instanceId,
+    placement: registryRuntime?.placement,
+    registryVerifier: registryTargets,
   });
   const accountAccess = createAccountAccess(accounts.storage);
   const app = express();
@@ -68,9 +109,11 @@ export async function createApp({ config, db, mail, lifecycle }) {
   // Client origin is a separate application, hosted here only for the spike.
   // It must never expose entryway auth/account routes under its hostname.
   const clientRouter = express.Router();
-  const { mountClient } =
-    await import("../tests/fixtures/synthetic-client.mjs");
-  await mountClient({ app: clientRouter, db, config });
+  if (config.authorityMode !== "registry-bootstrap" || testClient) {
+    const { mountClient } =
+      await import("../tests/fixtures/synthetic-client.mjs");
+    await mountClient({ app: clientRouter, db, config, ...(testClient ?? {}) });
+  }
   app.use((req, res, next) => {
     if (req.hostname === new URL(config.clientUrl).hostname)
       return clientRouter(req, res, () => res.sendStatus(404));
@@ -111,6 +154,8 @@ export async function createApp({ config, db, mail, lifecycle }) {
     db,
     config,
     accounts,
+    placement: accounts.placement,
+    registryVerifier: accounts.registryVerifier,
     legacy,
     security,
   });
@@ -169,6 +214,13 @@ export async function createApp({ config, db, mail, lifecycle }) {
     migration,
   });
   app.use(express.json({ limit: "64kb" }));
+  app.use("/admin/pds-registry", (error, _req, _res, next) => {
+    if (error.type === "entity.parse.failed")
+      return next(
+        new HttpError(400, "InvalidRequest", "Invalid registry request"),
+      );
+    return next(error);
+  });
   mountOperationRecoveryRoutes({ app, config, ownership: accounts.ownership });
   const incoming = await createIncomingArrival({
     db,
@@ -184,7 +236,7 @@ export async function createApp({ config, db, mail, lifecycle }) {
     oauth,
     rateLimit: protocolOperations.rateLimit,
   });
-  await mountXrpc({
+  const { admin } = await mountXrpc({
     app,
     incoming,
     db,
@@ -198,11 +250,37 @@ export async function createApp({ config, db, mail, lifecycle }) {
     migration,
     reconcile,
   });
+  mountPdsRegistryRoutes({
+    app,
+    config,
+    admin,
+    keyring: registryKeyring,
+    registry:
+      registryRuntime?.registry ??
+      createPdsRegistry(db, registryKeyring, () => pdsPublicTrust(config)),
+    enrollment: registryRuntime?.enrollment,
+    health: registryRuntime?.health,
+    incidents: registryRuntime?.incidents,
+    phase: registryRuntime?.phase,
+    lifecycleControl: registryRuntime?.lifecycleControl,
+    keyStatus: () => pdsRegistryKeyStatus(db, registryKeyring),
+    checks:
+      registryRuntime?.checks ??
+      createPdsOutboundCheckStore(
+        db,
+        () => pdsPublicTrust(config),
+        (revision) => registryTargets?.policyFor(revision),
+      ),
+    outboundCheck: (revision, password) =>
+      checkPdsOutbound(revision, config.issuer, password, registryTargets),
+  });
   app.get("/", (_req, res) =>
     page(
       res,
       "Your identity, your data",
-      `<p>This entryway handles email sign-in and OAuth authorization for two stock personal data servers.</p><p><a href="/login">Sign in or create a test account</a></p><p><a href="${config.clientUrl}/client">Open the test application</a></p><p><a href="/account">Account settings</a></p><small>Focused local spike. Email codes are delivered to the private test mailbox.</small>`,
+      config.authorityMode === "registry-bootstrap"
+        ? `<p>Sign in or create an account with this Entryway.</p><p><a href="/login">Sign in</a></p><p><a href="/account">Account settings</a></p>`
+        : `<p>This entryway handles email sign-in and OAuth authorization for two stock personal data servers.</p><p><a href="/login">Sign in or create a test account</a></p><p><a href="${config.clientUrl}/client">Open the test application</a></p><p><a href="/account">Account settings</a></p><small>Focused local spike. Email codes are delivered to the private test mailbox.</small>`,
     ),
   );
   app.use((_req, res) =>

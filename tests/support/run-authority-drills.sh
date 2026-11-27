@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 source "$(dirname -- "${BASH_SOURCE[0]}")/operational-common.sh"
+source "$(dirname -- "${BASH_SOURCE[0]}")/authority-restore.sh"
 run=$(date -u +%Y%m%dt%H%M%Sz)
 out="$artifacts/authority-$run"
 mkdir -p "$out"
@@ -7,7 +8,7 @@ name=${project}-restored
 restored=false
 rotated=false
 record_candidate authority-drills
-configcmd() { compose run --rm --no-deps configure node tests/support/operational-state-probe.mjs "$1" "$run"; }
+configcmd() { compose run --rm --no-deps configure node tests/support/operational-state-probe.mjs "$1" "$run" "${2:-}"; }
 finish() {
   local code=$?
   trap - EXIT INT TERM
@@ -17,8 +18,7 @@ finish() {
     compose start entryway >/dev/null || code=1
   fi
   if $rotated; then
-    configcmd restore-key || code=1
-    compose restart entryway pds1 pds2 >/dev/null || code=1
+    restore_authority_and_restart || code=1
   fi
   health || code=1
   exit "$code"
@@ -52,21 +52,26 @@ remove_owned "$name"
 compose start entryway >/dev/null
 restored=false
 health
+configcmd snapshot
+configcmd check-projections before
 probe before
 # Only the JWT issuer/verification key changes. PLC authority stays identical.
 rotated=true
 configcmd rotate
 compose restart entryway >/dev/null
 health
+configcmd check-projections issuer-only
 probe issuer-only
+configcmd project-key
 compose restart pds1 pds2 >/dev/null
 health
+configcmd check-projections fleet
 probe fleet
 compose run --rm --no-deps --name "${project}-operational-browser" -e OPERATIONAL_RUN="$run" -e ROTATION_STAGE=fleet browser npx --no-install playwright test rotation-browser.spec.mjs --config tests/operational.playwright.config.mjs 2>&1 | tee "$out/rotation-oauth-fleet.log" | python3 "$root/scripts/ci-summary.py"
 cp "$artifacts/operations-$run-oauth-fleet.json" "$out/rotation-oauth-fleet.json"
-configcmd restore-key
-compose restart entryway pds1 pds2 >/dev/null
+restore_authority_and_restart
 health
+configcmd check-projections restored
 probe restored
 compose run --rm --no-deps --name "${project}-operational-browser" -e OPERATIONAL_RUN="$run" -e ROTATION_STAGE=restored browser npx --no-install playwright test rotation-browser.spec.mjs --config tests/operational.playwright.config.mjs 2>&1 | tee "$out/rotation-oauth-restored.log" | python3 "$root/scripts/ci-summary.py"
 cp "$artifacts/operations-$run-oauth-restored.json" "$out/rotation-oauth-restored.json"

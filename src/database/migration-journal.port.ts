@@ -79,7 +79,10 @@ export interface ArrivalTransactor {
       email: string;
       handle: string;
       pdsId: string;
+      pdsRevision?: number;
+      stagedIncomingMigration?: boolean;
       endpoint: string;
+      plcEndpoint?: string;
       sourcePlcHead: string;
       codeHash: string;
       /** Storage issues the expiry from database time; at most 24 hours. */

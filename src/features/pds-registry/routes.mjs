@@ -1,0 +1,451 @@
+import { isValidDid } from "@atproto/syntax";
+import { HttpError } from "../../http/http-error.mjs";
+import { equalSecret } from "../../secret-equality.js";
+import { pdsPublicTrust } from "./trust.mjs";
+
+const record = (value, keys) =>
+  value !== null &&
+  typeof value === "object" &&
+  !Array.isArray(value) &&
+  Object.keys(value).length === keys.length &&
+  keys.every((key) => Object.hasOwn(value, key));
+const invalid = () =>
+  new HttpError(400, "InvalidRequest", "Invalid registry request");
+
+export function mountPdsRegistryRoutes({
+  app,
+  config,
+  registry,
+  keyring,
+  keyStatus,
+  checks,
+  outboundCheck,
+  enrollment,
+  health,
+  incidents,
+  phase,
+  lifecycleControl,
+  admin,
+}) {
+  const guarded = (handler) => async (req, res, next) => {
+    try {
+      await admin(req, undefined, true);
+      await handler(req, res);
+    } catch (error) {
+      if (error.message === "PdsVerifierUnavailable")
+        return next(
+          new HttpError(
+            503,
+            "InvalidRequest",
+            "Registry checking is not configured",
+          ),
+        );
+      if (error.message === "PdsAssociatedHostRestageUnsupported")
+        return next(
+          new HttpError(
+            409,
+            "OperationConflict",
+            "Associated PDS hosts cannot be restaged",
+          ),
+        );
+      if (error.message === "PdsEnrollmentReferencesUnmapped")
+        return next(
+          new HttpError(
+            409,
+            "OperationConflict",
+            "Retained records need reference reconciliation before changing this host",
+          ),
+        );
+      if (
+        [
+          "RegistrySigningKeyConflict",
+          "RegistryServingUnavailable",
+          "AuthorityPhaseConflict",
+          "AuthorityPhaseEnrollmentRequired",
+          "PdsLifecycleModeConflict",
+          "PdsLifecycleConflict",
+          "PdsLifecycleIneligible",
+          "PdsHostRevisionConflict",
+          "PdsHostIdempotencyConflict",
+          "PdsInboundCredentialConflict",
+          "PdsRegistryCredentialUnavailable",
+          "PdsVerifierPolicyConflict",
+          "PdsEnrollmentConflict",
+          "PdsEnrollmentAliasConflict",
+          "PdsEnrollmentModeConflict",
+          "PdsEnrollmentReferencesExist",
+        ].includes(error.message)
+      )
+        return next(
+          new HttpError(
+            409,
+            "OperationConflict",
+            "Registry request conflicts with existing state",
+          ),
+        );
+      if (
+        [
+          "InvalidAuthorityPhaseRequest",
+          "InvalidPdsLifecycleRequest",
+          "InvalidPdsHost",
+          "InvalidPdsHostUrl",
+          "InvalidPdsHostRequest",
+          "InvalidPdsRegistryCredential",
+          "PdsEnrollmentIdentityInvalid",
+        ].includes(error.message)
+      )
+        return next(invalid());
+      return next(error);
+    }
+  };
+  if (phase && lifecycleControl) {
+    app.get(
+      "/admin/pds-registry/phase",
+      guarded(async (_req, res) => res.json(await phase.read())),
+    );
+    app.post(
+      "/admin/pds-registry/activate",
+      guarded(async (req, res) => {
+        if (
+          !record(req.body, ["expectedGeneration", "commandKey"]) ||
+          !Number.isSafeInteger(req.body.expectedGeneration) ||
+          typeof req.body.commandKey !== "string"
+        )
+          throw invalid();
+        res.json(
+          await phase.activate(
+            req.body.expectedGeneration,
+            req.body.commandKey,
+          ),
+        );
+      }),
+    );
+    app.post(
+      "/admin/pds-registry/hosts/:hostId/lifecycle",
+      guarded(async (req, res) => {
+        if (
+          !record(req.body, [
+            "command",
+            "revision",
+            "expectedLifecycleVersion",
+            "commandKey",
+          ]) ||
+          typeof req.body.command !== "string" ||
+          !Number.isSafeInteger(req.body.revision) ||
+          !Number.isSafeInteger(req.body.expectedLifecycleVersion) ||
+          typeof req.body.commandKey !== "string"
+        )
+          throw invalid();
+        res.json(
+          await lifecycleControl.transition(
+            req.params.hostId,
+            req.body.command,
+            req.body.revision,
+            req.body.expectedLifecycleVersion,
+            req.body.commandKey,
+          ),
+        );
+      }),
+    );
+  }
+  app.get(
+    "/admin/pds-registry/status",
+    guarded(async (_req, res) => {
+      res.json(await keyStatus());
+    }),
+  );
+  app.get(
+    "/admin/pds-registry/trust",
+    guarded(async (_req, res) => {
+      res.json(pdsPublicTrust(config));
+    }),
+  );
+  app.post(
+    "/admin/pds-registry/hosts/:hostId/callback/revoke",
+    guarded(async (req, res) => {
+      if (
+        !record(req.body, ["revision"]) ||
+        !Number.isSafeInteger(req.body.revision) ||
+        req.body.revision < 1
+      )
+        throw invalid();
+      res.json(
+        await registry.revokeInbound(req.params.hostId, req.body.revision),
+      );
+    }),
+  );
+  app.get(
+    "/admin/pds-registry/hosts/:hostId/policy",
+    guarded(async (req, res) => {
+      if (!checks)
+        throw new HttpError(
+          503,
+          "InvalidRequest",
+          "Registry checking is not configured",
+        );
+      res.json(await checks.policyStatus(req.params.hostId));
+    }),
+  );
+  app.post(
+    "/admin/pds-registry/hosts/:hostId/policy",
+    guarded(async (req, res) => {
+      if (!checks)
+        throw new HttpError(
+          503,
+          "InvalidRequest",
+          "Registry checking is not configured",
+        );
+      if (
+        !record(req.body, ["revision", "expectedGeneration", "fingerprint"]) ||
+        !Number.isSafeInteger(req.body.revision) ||
+        req.body.revision < 1 ||
+        !Number.isSafeInteger(req.body.expectedGeneration) ||
+        req.body.expectedGeneration < 0 ||
+        typeof req.body.fingerprint !== "string" ||
+        !/^[a-f0-9]{64}$/.test(req.body.fingerprint)
+      )
+        throw invalid();
+      res.json({
+        policy: await checks.transitionPolicy(
+          req.params.hostId,
+          req.body.revision,
+          req.body.expectedGeneration,
+          req.body.fingerprint,
+        ),
+      });
+    }),
+  );
+  app.post(
+    "/admin/pds-registry/hosts/:hostId/check",
+    guarded(async (req, res) => {
+      if (!keyring || !checks || !outboundCheck)
+        throw new HttpError(
+          503,
+          "InvalidRequest",
+          "Registry checking is not configured",
+        );
+      if (
+        !record(req.body, ["expectedRevision"]) ||
+        !Number.isSafeInteger(req.body.expectedRevision) ||
+        req.body.expectedRevision < 1
+      )
+        throw invalid();
+      const { attemptId, revision } = await checks.begin(
+        req.params.hostId,
+        req.body.expectedRevision,
+      );
+      const password = await registry.readOutbound(
+        revision.hostId,
+        revision.revision,
+      );
+      const observation = await outboundCheck(revision, password);
+      const receipt = await checks.complete(
+        revision.hostId,
+        revision.revision,
+        attemptId,
+        observation,
+      );
+      res.json({
+        outbound: { pending: false, last: receipt },
+        inbound: "unproven",
+        association:
+          (await registry.readHost(revision.hostId))?.association ??
+          "unassociated",
+      });
+    }),
+  );
+  app.get(
+    "/admin/pds-registry/hosts",
+    guarded(async (_req, res) => {
+      res.json({ hosts: await registry.listHosts() });
+    }),
+  );
+  app.get(
+    "/admin/pds-registry/hosts/:hostId",
+    guarded(async (req, res) => {
+      const host = await registry.readHost(req.params.hostId);
+      if (!host) throw new HttpError(404, "NotFound", "Host not found");
+      res.json({
+        host,
+        staged: await registry.readHostRevision(
+          host.hostId,
+          host.stagedRevision,
+        ),
+        outbound: checks
+          ? await checks.status(host.hostId)
+          : { pending: false, last: null },
+        inbound: "unproven",
+        health: health ? await health.status(host.hostId) : null,
+        incident: incidents ? await incidents.status(host.hostId) : null,
+        attestation: enrollment ? await enrollment.status(host.hostId) : null,
+        manifest: await registry.readManifest(host.hostId, host.stagedRevision),
+      });
+    }),
+  );
+  for (const kind of ["attest", "associate"]) {
+    app.post(
+      `/admin/pds-registry/hosts/:hostId/${kind}`,
+      guarded(async (req, res) => {
+        if (!enrollment)
+          throw new HttpError(
+            409,
+            "OperationConflict",
+            "Registry enrollment is not available in this authority mode",
+          );
+        const body = req.body;
+        const keys =
+          kind === "attest"
+            ? [
+                "revision",
+                "receiptId",
+                "idempotencyKey",
+                "emptyStock",
+                "manifestApplied",
+                "callbackCredentialApplied",
+                "restartedBeforeCheck",
+              ]
+            : ["revision", "attestationId", "idempotencyKey"];
+        if (
+          !record(body, keys) ||
+          !Number.isSafeInteger(body.revision) ||
+          body.revision < 1 ||
+          typeof body.idempotencyKey !== "string" ||
+          !body.idempotencyKey ||
+          body.idempotencyKey.length > 128 ||
+          typeof body[kind === "attest" ? "receiptId" : "attestationId"] !==
+            "string" ||
+          !/^[0-9a-f-]{36}$/.test(
+            body[kind === "attest" ? "receiptId" : "attestationId"],
+          ) ||
+          (kind === "attest" &&
+            ![
+              body.emptyStock,
+              body.manifestApplied,
+              body.callbackCredentialApplied,
+              body.restartedBeforeCheck,
+            ].every((value) => value === true))
+        )
+          throw invalid();
+        res.json(await enrollment[kind](req.params.hostId, body));
+      }),
+    );
+  }
+  app.post(
+    "/admin/pds-registry/hosts/:hostId/reauthorize",
+    guarded(async (req, res) => {
+      if (!enrollment)
+        throw new HttpError(
+          409,
+          "OperationConflict",
+          "Registry enrollment is not available in this authority mode",
+        );
+      const body = req.body;
+      if (
+        !record(body, [
+          "revision",
+          "policyGeneration",
+          "receiptId",
+          "idempotencyKey",
+        ]) ||
+        !Number.isSafeInteger(body.revision) ||
+        body.revision < 1 ||
+        !Number.isSafeInteger(body.policyGeneration) ||
+        body.policyGeneration < 1 ||
+        typeof body.receiptId !== "string" ||
+        !/^[0-9a-f-]{36}$/.test(body.receiptId) ||
+        typeof body.idempotencyKey !== "string" ||
+        !body.idempotencyKey ||
+        body.idempotencyKey.length > 128
+      )
+        throw invalid();
+      res.json(await enrollment.reauthorize(req.params.hostId, body));
+    }),
+  );
+  app.post(
+    "/admin/pds-registry/hosts",
+    guarded(async (req, res) => {
+      if (!keyring)
+        throw new HttpError(
+          503,
+          "InvalidRequest",
+          "Registry staging is not configured",
+        );
+      const body = req.body;
+      if (
+        !record(body, [
+          "host",
+          "credentials",
+          "expectedRevision",
+          "idempotencyKey",
+        ]) ||
+        !(
+          record(body.host, [
+            "hostId",
+            "serviceDid",
+            "publicUrl",
+            "internalUrl",
+            "order",
+          ]) ||
+          record(body.host, [
+            "hostId",
+            "serviceDid",
+            "publicUrl",
+            "internalUrl",
+            "order",
+            "stagedIncomingMigration",
+          ])
+        ) ||
+        (body.host.stagedIncomingMigration !== undefined &&
+          typeof body.host.stagedIncomingMigration !== "boolean") ||
+        !record(body.credentials, ["outboundPassword", "inboundToken"]) ||
+        ![
+          body.host.hostId,
+          body.host.serviceDid,
+          body.host.publicUrl,
+          body.host.internalUrl,
+          body.idempotencyKey,
+          body.credentials.outboundPassword,
+          body.credentials.inboundToken,
+        ].every(
+          (value) =>
+            typeof value === "string" &&
+            value.length > 0 &&
+            value.length <= 2048,
+        ) ||
+        !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(body.host.hostId) ||
+        !isValidDid(body.host.serviceDid) ||
+        !Number.isSafeInteger(body.host.order) ||
+        !Number.isSafeInteger(body.expectedRevision) ||
+        body.expectedRevision < 0
+      )
+        throw invalid();
+      const { outboundPassword, inboundToken } = body.credentials;
+      const reserved = [
+        config.adminPassword,
+        ...config.pds.flatMap((host) => [
+          host.adminPassword,
+          host.callbackToken,
+        ]),
+      ].filter((value) => typeof value === "string" && value.length > 0);
+      if (
+        equalSecret(outboundPassword, inboundToken) ||
+        reserved.some(
+          (value) =>
+            equalSecret(value, outboundPassword) ||
+            equalSecret(value, inboundToken),
+        )
+      )
+        throw new HttpError(
+          409,
+          "OperationConflict",
+          "Registry credential conflicts with existing authority",
+        );
+      const staged = await registry.stageHostWithCredentials(
+        { host: body.host, credentials: body.credentials },
+        body.expectedRevision,
+        body.idempotencyKey,
+      );
+      res.status(200).json({ staged });
+    }),
+  );
+}
