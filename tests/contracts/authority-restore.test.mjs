@@ -132,6 +132,12 @@ compose() {
     await writeFile(join(stubBin, "cp"), "#!/bin/sh\nexit 0\n", {
       mode: 0o755,
     });
+    // The drill's fixture-log pipeline needs a consumer, not host Python.
+    await writeFile(
+      join(stubBin, "python3"),
+      "#!/bin/sh\nexec node -e 'process.stdin.resume()'\n",
+      { mode: 0o755 },
+    );
     for (const missing of ["yes", "no"]) {
       await writeFile(issuer, '{"jwtPublicHex":"original"}');
       await writeFile(pds1, '{"jwtPublicHex":"original"}');
