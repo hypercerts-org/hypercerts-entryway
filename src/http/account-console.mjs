@@ -51,8 +51,9 @@ export function createAccountConsole({
     } catch (error) {
       if (res.headersSent) return next(error);
       const status = Number(error.status ?? error.statusCode ?? 400);
-      const recovery =
-        (error.code ?? error.error) === "OperationRecoveryRequired";
+      const code = error.code ?? error.error;
+      const recovery = code === "OperationRecoveryRequired";
+      if (code === "AccountMismatch") delete res.locals.accountUrl;
       page(
         res,
         recovery
@@ -92,11 +93,10 @@ export function createAccountConsole({
     if (req.method === "POST") {
       oauth.checkCsrf(req, browser);
       const did = selectedDidFromPost(req);
-      res.locals.accountUrl = accountUrl(did);
       account = await accountAccess.requireBoundAccount(session, did);
+      res.locals.accountUrl = accountUrl(did);
     } else {
       const did = selectedDidFromQuery(req);
-      if (did !== undefined) res.locals.accountUrl = accountUrl(did);
       const resolution = await accountAccess.resolveBoundAccounts(session);
       if (did === undefined && resolution.kind === "selection-required") {
         page(

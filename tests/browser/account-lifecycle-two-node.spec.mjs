@@ -5,6 +5,8 @@ import { loadConfig } from "../../dist/src/config.mjs";
 import { openDatabase } from "../../dist/src/database/connection.js";
 import { createAccount } from "../support/helpers/browser-oauth.mjs";
 import { nodeRouting } from "../support/helpers/incoming-nodes.mjs";
+import { createSharedEmailPair } from "./support/email-chooser-fixture.mjs";
+import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
 import { beginAuthorization, finishConsent } from "./support/oauth-client.mjs";
 
 const config = await loadConfig();
@@ -183,5 +185,200 @@ test("cross-node grant revocation and held access token expiry", async ({
     ).toBe(200);
   } finally {
     await db.close();
+  }
+});
+
+test("a form opened on one node cannot issue after a mailbox change on the other", async ({
+  browser,
+}) => {
+  test.setTimeout(240_000);
+  await nodes.load();
+  const runId = Date.now().toString(36);
+  const pair = await createSharedEmailPair(browser, {
+    prefix: "tn",
+    runId,
+    database: config.database,
+  });
+  const nextEmail = `tn-${runId}-new@example.test`;
+  const name = `stale-${runId}`;
+  const context = await browser.newContext({ ignoreHTTPSErrors: false });
+  const stale = await context.newPage();
+  const change = await context.newPage();
+  try {
+    await nodes.stage(
+      "open password form",
+      0,
+      pair.first.did,
+      async () => {
+        await stale.goto(`${config.issuer}/login`);
+        await stale
+          .getByLabel("Email address", { exact: true })
+          .fill(pair.email);
+        const since = Date.now();
+        await stale.getByRole("button", { name: "Send sign-in code" }).click();
+        const code = await waitForMailpitCode({ recipient: pair.email, since });
+        await stale.getByLabel("Sign-in code", { exact: true }).fill(code.code);
+        await stale.getByRole("button", { name: "Verify code" }).click();
+        await stale
+          .getByRole("button", {
+            name: `Continue with this account: ${pair.first.handle}, ${pair.first.did}`,
+          })
+          .click();
+        await stale.getByRole("link", { name: "Create app password" }).click();
+        await stale.getByLabel("App password name").fill(name);
+      },
+      { page: stale },
+    );
+    await nodes.stage(
+      "change mailbox",
+      1,
+      pair.first.did,
+      async () => {
+        await change.goto(
+          `${config.issuer}/account?did=${encodeURIComponent(pair.first.did)}`,
+        );
+        const since = Date.now();
+        await change
+          .getByRole("button", { name: "Start email change" })
+          .click();
+        const oldCode = await waitForMailpitCode({
+          recipient: pair.email,
+          since,
+        });
+        await change
+          .getByLabel("Current email verification code")
+          .fill(oldCode.code);
+        await change
+          .getByLabel("New primary email", { exact: true })
+          .fill(nextEmail);
+        const nextSince = Date.now();
+        await change
+          .getByRole("button", { name: "Verify current email and continue" })
+          .click();
+        const newCode = await waitForMailpitCode({
+          recipient: nextEmail,
+          since: nextSince,
+        });
+        await change
+          .getByLabel("New email verification code")
+          .fill(newCode.code);
+        await change.getByRole("button", { name: "Confirm new email" }).click();
+        await expect(
+          change.getByRole("heading", { name: "Primary email updated" }),
+        ).toBeVisible();
+      },
+      { page: change },
+    );
+    await nodes.stage(
+      "submit old form",
+      0,
+      pair.first.did,
+      async () => {
+        const response = stale.waitForResponse(
+          (item) =>
+            item.request().method() === "POST" &&
+            new URL(item.url()).pathname === "/account/app-password-create",
+        );
+        await stale
+          .getByRole("button", { name: "Create app password" })
+          .click();
+        const refused = await response;
+        expect(refused.status()).toBe(403);
+        // The stale form still names the DID it was opened for, which the
+        // action rechecks against the moved binding.
+        expect(
+          new URLSearchParams(refused.request().postData()).get("did"),
+        ).toBe(pair.first.did);
+        await expect(stale.getByRole("alert")).toHaveText(
+          "The selected account is not linked to this verified identity",
+        );
+        await expect(
+          stale.getByRole("link", { name: "Return to account settings" }),
+        ).toHaveAttribute("href", "/account");
+        await expect(stale.getByTestId("app-password")).toHaveCount(0);
+      },
+      { page: stale },
+    );
+    nodes.expectAlternation(
+      ["open password form", "change mailbox", "submit old form"],
+      pair.first.did,
+    );
+    const ownerContext = await browser.newContext({ ignoreHTTPSErrors: false });
+    const owner = await ownerContext.newPage();
+    const sibling = await context.newPage();
+    const signIn = async (page, email) => {
+      await page.goto(`${config.issuer}/login`);
+      await page.getByLabel("Email address", { exact: true }).fill(email);
+      const since = Date.now();
+      await page.getByRole("button", { name: "Send sign-in code" }).click();
+      const code = await waitForMailpitCode({ recipient: email, since });
+      await page.getByLabel("Sign-in code", { exact: true }).fill(code.code);
+      await page.getByRole("button", { name: "Verify code" }).click();
+    };
+    try {
+      await nodes.stage(
+        "sibling control",
+        1,
+        pair.second.did,
+        async () => {
+          await signIn(sibling, pair.email);
+          await expect(sibling.getByTestId("account-did")).toHaveText(
+            pair.second.did,
+          );
+          await expect(sibling.getByText(name, { exact: true })).toHaveCount(0);
+          await sibling
+            .getByRole("link", { name: "Create app password" })
+            .click();
+          await sibling
+            .getByLabel("App password name")
+            .fill(`control-${runId}`);
+          await sibling
+            .getByRole("button", { name: "Create app password" })
+            .click();
+          await expect(sibling.getByTestId("app-password")).toBeVisible();
+          await sibling
+            .getByRole("link", { name: "Return to account settings" })
+            .click();
+          await expect(
+            sibling.getByText(`control-${runId}`, { exact: true }),
+          ).toBeVisible();
+        },
+        { page: sibling },
+      );
+      await nodes.stage(
+        "new owner inventory",
+        0,
+        pair.first.did,
+        async () => {
+          await signIn(owner, nextEmail);
+          await expect(owner.getByTestId("account-did")).toHaveText(
+            pair.first.did,
+          );
+          await expect(owner.getByText(name, { exact: true })).toHaveCount(0);
+          await expect(
+            owner.getByText(`control-${runId}`, { exact: true }),
+          ).toHaveCount(0);
+          await owner
+            .getByRole("link", { name: "Create app password" })
+            .click();
+          await owner.getByLabel("App password name").fill(`owner-${runId}`);
+          await owner
+            .getByRole("button", { name: "Create app password" })
+            .click();
+          await expect(owner.getByTestId("app-password")).toBeVisible();
+          await owner
+            .getByRole("link", { name: "Return to account settings" })
+            .click();
+          await expect(
+            owner.getByText(`owner-${runId}`, { exact: true }),
+          ).toBeVisible();
+        },
+        { page: owner },
+      );
+    } finally {
+      await ownerContext.close();
+    }
+  } finally {
+    await context.close();
   }
 });

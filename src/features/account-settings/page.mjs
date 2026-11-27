@@ -105,6 +105,9 @@ function renderPasswordPanel({
   );
 }
 
+const selectedIdentity = (account) =>
+  `<p>Selected account: <strong>${esc(account.handle)}</strong> (<code>${esc(account.did)}</code>)</p>`;
+
 const backLink = (accountContext) =>
   `<p>${settingsLink(accountContext.did)}</p>`;
 
@@ -114,6 +117,7 @@ const renderPasswordPage = async ({
   principal,
   browser,
   accountContext,
+  account,
 }) => {
   const state = await security.summary(principal);
   const removeForm = state.passwordEnabled
@@ -122,7 +126,7 @@ const renderPasswordPage = async ({
   page(
     res,
     passwordLabel(state),
-    `<p>Changing or removing the password ends all sessions and removes existing app passwords.</p>${form("password-set", browser.csrf, field("password", "New account password", "password", 'autocomplete="new-password" minlength="12" maxlength="256"'), passwordLabel(state), accountContext)}${removeForm}${backLink(accountContext)}`,
+    `${selectedIdentity(account)}<p>Changing or removing the password ends all sessions and removes existing app passwords.</p>${form("password-set", browser.csrf, field("password", "New account password", "password", 'autocomplete="new-password" minlength="12" maxlength="256"'), passwordLabel(state), accountContext)}${removeForm}${backLink(accountContext)}`,
   );
 };
 
@@ -132,13 +136,14 @@ const renderRecoveryPage = async ({
   principal,
   browser,
   accountContext,
+  account,
 }) => {
   const state = await security.summary(principal);
   const csrf = browser.csrf;
   page(
     res,
     "Manage recovery email",
-    `<p>Add an email you can still access if your primary mailbox is lost. Each recovery address must be verified before it can restore access.</p>
+    `${selectedIdentity(account)}<p>Add an email you can still access if your primary mailbox is lost. Each recovery address must be verified before it can restore access.</p>
       ${rows(state.backupEmails ?? [], (item) => `${recoveryStatus(item)}${form("backup-remove", csrf, hidden("email", item.email), "Remove recovery email", accountContext)}`, "No verified recovery email.")}
       ${form("backup-request", csrf, field("email", "Recovery email address", "email", 'autocomplete="email" maxlength="320"'), "Send recovery verification", accountContext)}${backLink(accountContext)}`,
   );
@@ -153,7 +158,7 @@ const renderStatusPage = ({ res, account, browser, accountContext }) => {
   page(
     res,
     label,
-    `<p>${explanation}</p>${form("status", browser.csrf, hidden("status", active ? "deactivated" : "active"), label, accountContext)}${backLink(accountContext)}`,
+    `${selectedIdentity(account)}<p>${explanation}</p>${form("status", browser.csrf, hidden("status", active ? "deactivated" : "active"), label, accountContext)}${backLink(accountContext)}`,
   );
 };
 
@@ -167,11 +172,11 @@ function mountProtectedPages({ console, security, renderAppPasswordForm }) {
   });
   console.mountProtectedPage("app-password", {
     actions: ["app-password-create"],
-    render: ({ res, browser, accountContext }) =>
+    render: ({ res, browser, accountContext, account }) =>
       page(
         res,
         "Create app password",
-        `${renderAppPasswordForm({ csrf: browser.csrf, accountContext })}${backLink(accountContext)}`,
+        `${selectedIdentity(account)}${renderAppPasswordForm({ csrf: browser.csrf, accountContext })}${backLink(accountContext)}`,
       ),
   });
   console.mountProtectedPage("recovery", {
@@ -283,7 +288,7 @@ export function mountAccountSettingsPage({
       page(
         res,
         "Account settings",
-        `<p>Manage your sign-in, recovery options, and connected applications.</p><nav class="section-nav" aria-label="Account sections"><a href="#identity">Identity</a><a href="#recovery">Recovery</a><a href="#passwords">Passwords</a><a href="#sessions">Sessions</a><a href="#lifecycle">Lifecycle</a>${migration ? '<a href="#migration">Data server</a>' : ""}</nav>${identity}${backup}${passwords}${sessions}${lifecycle}${migrationPanel}${form("/auth/logout", csrf, "", "Sign out", accountContext, 'class="signout"')}<p><a href="${esc(config.clientUrl)}/client">Open test application</a></p>`,
+        `<p>Manage your sign-in, recovery options, and connected applications.</p><nav class="section-nav" aria-label="Account sections"><a href="#identity">Identity</a><a href="#recovery">Recovery</a><a href="#passwords">Passwords</a><a href="#sessions">Sessions</a><a href="#lifecycle">Lifecycle</a>${migration ? '<a href="#migration">Data server</a>' : ""}</nav>${identity}${backup}${passwords}${sessions}${lifecycle}${migrationPanel}${form("/auth/logout", csrf, "", "Sign out", accountContext, 'class="signout"')}`,
       );
     }),
   );

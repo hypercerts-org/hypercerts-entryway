@@ -21,8 +21,17 @@ export function createConsent({
   const { fields, save, readCurrentIntent, pageForFlow } = flows;
   const chooseAnotherAccountForm = (flow, browser) =>
     `<form method="post" action="/auth/choose">${fields(flow, browser)}<button class="secondary">Choose a different account</button></form>`;
+  // While the verified identity has more than one linked account, the
+  // consent page lets that session reconsider: switch among the offered
+  // accounts, or restart the sign-in with another mailbox. A single-binding
+  // sign-in keeps its plain consent page.
+  const otherMailboxForm = (flow, browser) =>
+    flow.authUserId && flow.authBindings > 1
+      ? chooseAnotherAccountForm(flow, browser) +
+        `<form method="post" action="/auth/another-account">${fields(flow, browser)}<button class="secondary">Use another email address</button></form>`
+      : "";
   const consentForm = (flow, browser, account) =>
-    `<div class="account"><strong>${escapeHtml(account.handle ?? account.did)}</strong><br><small>${escapeHtml(account.did)}</small>${flow.authUserId ? chooseAnotherAccountForm(flow, browser) : ""}</div><p><strong>${escapeHtml(flow.clientName ?? "Your application")}</strong> requests access:</p><p><code>${escapeHtml(flow.parameters?.scope)}</code></p><form method="post" action="/auth/consent">${fields(flow, browser)}${hidden("did", account.did)}<button name="decision" value="approve">Allow access</button> <button class="secondary" name="decision" value="deny">Cancel</button></form>`;
+    `<div class="account"><strong>${escapeHtml(account.handle ?? account.did)}</strong><br><small>${escapeHtml(account.did)}</small>${otherMailboxForm(flow, browser)}</div><p><strong>${escapeHtml(flow.clientName ?? "Your application")}</strong> requests access:</p><p><code>${escapeHtml(flow.parameters?.scope)}</code></p><form method="post" action="/auth/consent">${fields(flow, browser)}${hidden("did", account.did)}<button name="decision" value="approve">Allow access</button> <button class="secondary" name="decision" value="deny">Cancel</button></form>`;
   // Loads what completeAuthorization needs, then lets the caller's policy decide
   // whether this sign-in may issue the code without showing consent. Every
   // lookup that precedes issuing the code is inside the try, so any failure
@@ -32,11 +41,7 @@ export function createConsent({
     try {
       const version = await approvalVersion(db, did, flow.clientId);
       const client = await provider.clientManager.getClient(flow.clientId);
-      const request = await provider.requestManager.get(
-        flow.requestUri,
-        browser.deviceId,
-        flow.clientId,
-      );
+      const request = await flows.request(flow, browser);
       const deviceAccount = await provider.accountManager.getDeviceAccount(
         browser.deviceId,
         did,
@@ -97,6 +102,10 @@ export function createConsent({
       commitCookies = () => {},
       fromChooser = false,
       newAccount = false,
+      // How many accounts the verified identity is bound to (0 when the caller
+      // does not know), so the consent page knows whether another choice
+      // exists.
+      bindingCount = 0,
     } = {},
   ) => {
     const displayAccount =
@@ -126,6 +135,14 @@ export function createConsent({
           "Sign in to the account requested by this application",
         );
       current.authEmail = identity.email.toLowerCase();
+      // Record the verified identity with the binding, so reopening the
+      // authorization URL resumes at this consent form instead of asking for
+      // another code.
+      current.authUserId = identity.userId;
+      // The caller supplies the identity's current binding count whenever it
+      // knows it, so a binding lost between chooser and selection also
+      // lowers the recorded count here.
+      if (bindingCount) current.authBindings = bindingCount;
       // The latest choice wins. An unavailable account still replaces the
       // earlier selection, so that account's consent form no longer matches.
       current.authDid = account.status === "active" ? account.did : undefined;
@@ -191,6 +208,7 @@ export function createConsent({
           config,
           provider,
           refreshFlow: flows.refreshFlow,
+          runRequest: flows.runRequest,
           res,
           flow: authorized.current,
           browser,

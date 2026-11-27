@@ -67,6 +67,7 @@ export function createBrowserFlow({
   config,
   provider,
   redirectAuthorizationError,
+  stores,
 }) {
   const origin = new URL(config.issuer).origin;
   const brandClients = {
@@ -115,6 +116,33 @@ export function createBrowserFlow({
     await save(flow);
     return flow;
   };
+  // Call within the transaction that validates the current attempt.
+  const replaceFlow = async (current, browser, extra = {}, restart = false) => {
+    const next = await newFlow(browser, {
+      ...(restart ? {} : { createdAt: current.createdAt }),
+      requestUri: current.requestUri,
+      requestRecordId: current.requestRecordId,
+      requestOwner: current.requestOwner,
+      clientId: current.clientId,
+      clientName: current.clientName,
+      parameters: current.parameters,
+      accountHint: current.accountHint,
+      // A restart earns a fresh per-flow code budget: the new attempt sends
+      // its own code. A mailbox switch keeps the counters, so the cooldown
+      // and the per-flow limit survive the replacement.
+      ...(restart
+        ? {}
+        : {
+            otpRequestCount: current.otpRequestCount,
+            lastOtpSentAt: current.lastOtpSentAt,
+          }),
+      ...extra,
+    });
+    if (next.requestRecordId)
+      await stores.setAuthorizationFlow(next, current.id);
+    await db.delete("auth-flows", current.id);
+    return next;
+  };
   const readFlow = async (id, browser) => {
     const flow = await db.get("auth-flows", String(id ?? ""));
     if (!flow || flow.deviceId !== browser.deviceId) {
@@ -122,6 +150,7 @@ export function createBrowserFlow({
         "This sign-in has expired. Start again from your application.",
       );
     }
+    if (flow.requestRecordId) await stores.assertAuthorizationFlow(flow);
     const createdAt = new Date(flow.createdAt).getTime();
     if (
       !Number.isFinite(createdAt) ||
@@ -144,16 +173,23 @@ export function createBrowserFlow({
       throw new ChangedFlowIntentError(current, browser);
     return current;
   };
+  const runRequest = (flow, operation) =>
+    flow.requestRecordId
+      ? stores.runAuthorizationFlow(flow, operation)
+      : operation();
+  const request = (flow, browser) =>
+    runRequest(flow, () =>
+      provider.requestManager.get(
+        flow.requestUri,
+        browser.deviceId,
+        flow.clientId,
+      ),
+    );
   const getFlow = async (req, res) => {
     const browser = await loadBrowser(req, res);
     checkCsrf(req, browser);
     const flow = await readFlow(req.body?.flow, browser);
-    if (flow.requestUri)
-      await provider.requestManager.get(
-        flow.requestUri,
-        browser.deviceId,
-        flow.clientId,
-      );
+    if (flow.requestUri) await request(flow, browser);
     return { flow, browser };
   };
   const guarded = (fn) => async (req, res, next) => {
@@ -185,8 +221,16 @@ export function createBrowserFlow({
     fields,
     save,
     newFlow,
+    replaceFlow,
+    async bindFlow(flow, previousId) {
+      if (flow.requestRecordId)
+        await stores.setAuthorizationFlow(flow, previousId);
+    },
     getFlow,
     refreshFlow,
+    readFlow,
+    request,
+    runRequest,
     readCurrentIntent,
     pageForFlow,
     guarded,

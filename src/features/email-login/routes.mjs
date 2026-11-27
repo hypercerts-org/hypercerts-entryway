@@ -64,6 +64,8 @@ export function mountEmailLogin({
   authenticated,
   getAccountSecurity,
   forgetBrowserAccounts,
+  provider,
+  consentForm,
 }) {
   const {
     save,
@@ -147,6 +149,7 @@ export function mountEmailLogin({
         delete flow.authDid;
         delete flow.authEmail;
         delete flow.authUserId;
+        delete flow.authBindings;
         await save(flow);
         // Verification and outbox queue belong to this reservation. The returned
         // dispatcher performs SMTP only after the outer transaction commits.
@@ -261,6 +264,10 @@ export function mountEmailLogin({
             }
             current.authEmail = identity.email.toLowerCase();
             current.authUserId = identity.userId;
+            // Count every binding of the verified identity, not the hint-
+            // filtered offer: a hint narrows the chooser, not the choice set
+            // the consent page may offer.
+            current.authBindings = linkedAccounts(resolution).length;
             await save(current);
             verifiedFlow = current;
           } else if (
@@ -280,14 +287,7 @@ export function mountEmailLogin({
         // Rotate the provider's browser session after successful identity verification.
         const rotated = await loadBrowser(req, res, true);
         const verifiedEmail = identity.email.toLowerCase();
-        if (hintMismatch)
-          return pageForFlow(
-            res,
-            "Account not linked",
-            `<p role="alert">Your verified email is not linked to the requested account. Use the email associated with that account.</p>${loginForm(flow, rotated)}`,
-            flow,
-            403,
-          );
+        if (hintMismatch) return accountNotLinkedPage(res, flow, rotated);
         if (resolution?.kind === "account-requires-repair")
           return pageForFlow(
             res,
@@ -362,6 +362,48 @@ export function mountEmailLogin({
       emailVerified: true,
     };
   };
+  // The shared refusal for a verified email that matches no offered account.
+  const accountNotLinkedPage = (res, flow, browser) =>
+    pageForFlow(
+      res,
+      "Account not linked",
+      '<p role="alert">Your verified email is not linked to the requested account. Use the email associated with that account.</p>' +
+        loginForm(flow, browser),
+      flow,
+      403,
+    );
+  app.post(
+    "/auth/another-account",
+    form,
+    guarded(async (req, res) => {
+      const { flow, browser } = await getFlow(req, res);
+      const identity = await requireChooserIdentity(req, flow);
+      const replacement = await db.transact(async () => {
+        const current = await readCurrentIntent(flow, browser);
+        if (
+          current.authUserId !== identity.userId ||
+          current.authEmail !== identity.email
+        )
+          throw new InvalidRequestError("Verified sign-in session expired");
+        return flows.replaceFlow(current, browser);
+      });
+      // Answer with a GET that resumes the replacement, so reloading the page
+      // cannot re-post this retired flow id. For OAuth the authorization entry
+      // is rebuilt from the flow's own request data; admitAuthorization
+      // resolves the active attempt to the replacement and keeps the original
+      // client request. Standalone sign-in starts a fresh /login, keeping any
+      // remembered-account hint.
+      if (replacement.requestUri)
+        return res.redirect(
+          303,
+          `/oauth/authorize?client_id=${encodeURIComponent(replacement.clientId)}&request_uri=${encodeURIComponent(replacement.requestUri)}`,
+        );
+      const hint = replacement.accountHint
+        ? `?did=${encodeURIComponent(replacement.accountHint)}`
+        : "";
+      return res.redirect(303, `/login${hint}`);
+    }),
+  );
   app.post(
     "/auth/choose",
     form,
@@ -394,6 +436,7 @@ export function mountEmailLogin({
       const selectedDid = String(req.body.did ?? "");
       let current;
       let selected;
+      let bindings;
       await db.transact(async () => {
         current = await readCurrentIntent(flow, browser);
         if (
@@ -405,10 +448,13 @@ export function mountEmailLogin({
           );
         const resolution =
           await getAccountSecurity()?.assertLoginEmail(identity);
-        selected = linkedAccounts(resolution).find(
-          (account) =>
-            account.did === selectedDid && matchesLoginHint(current, account),
+        // The consent page counts every binding of the verified identity, not
+        // the hint-filtered offer the chooser displayed.
+        bindings = linkedAccounts(resolution);
+        const offered = bindings.filter((account) =>
+          matchesLoginHint(current, account),
         );
+        selected = offered.find((account) => account.did === selectedDid);
         if (!selected)
           throw new InvalidRequestError(
             "The selected account is not linked to this verified identity",
@@ -417,6 +463,7 @@ export function mountEmailLogin({
       await authenticated(req, res, current, browser, selected, {
         identity,
         fromChooser: true,
+        bindingCount: bindings.length,
       });
     }),
   );
@@ -433,5 +480,133 @@ export function mountEmailLogin({
   );
   // Lets authorization start the same rate-limited code send as the email
   // form, for an email login_hint on the redirect URL or a hinted account.
-  return { startEmailCode: sendCode };
+  const resumeFlow = async (req, res, flow, browser) => {
+    if (flow.authUserId && flow.authEmail) {
+      const identity = await requireChooserIdentity(req, flow);
+      const resolution = await getAccountSecurity()?.assertLoginEmail(identity);
+      const accounts = linkedAccounts(resolution).filter((account) =>
+        matchesLoginHint(flow, account),
+      );
+      if (flow.authDid) {
+        const account = accounts.find(
+          (candidate) =>
+            candidate.did === flow.authDid && candidate.status === "active",
+        );
+        const session =
+          account &&
+          (await provider.accountManager.getDeviceAccount(
+            browser.deviceId,
+            account.did,
+          ));
+        if (!session || provider.checkLoginRequired(session))
+          throw new InvalidRequestError("Sign in to this account first");
+        return pageForFlow(
+          res,
+          "Authorize application",
+          consentForm(flow, browser, account),
+          flow,
+        );
+      }
+      if (!accounts.length)
+        throw new InvalidRequestError("No linked account is available");
+      return pageForFlow(
+        res,
+        "Choose an account",
+        forms.accountSelectionForm(flow, browser, accounts),
+        flow,
+      );
+    }
+    if (flow.authEmail) {
+      // The unbound signup path stores the verified mailbox without a user
+      // ID. Reopening the authorization URL resumes the same signup decision
+      // without sending a code, and re-runs the eligibility /auth/verify used:
+      // a mailbox that gained a binding goes to the chooser or consent, never
+      // to signup for an account it now names.
+      const session = await authentication.requireSession(req);
+      if (
+        session?.emailVerified !== true ||
+        session.email.toLowerCase() !== flow.authEmail
+      )
+        throw new InvalidRequestError("Verified sign-in session expired");
+      const identity = {
+        userId: session.userId,
+        email: session.email.toLowerCase(),
+        emailVerified: true,
+      };
+      const resolution = await getAccountSecurity()?.assertLoginEmail(identity);
+      if (resolution?.kind === "account-requires-repair")
+        return pageForFlow(
+          res,
+          "Account requires repair",
+          '<p role="alert">This email is associated with an existing account that needs repair before sign-in can continue. Signup is unavailable for this email. Contact support for help.</p>',
+          flow,
+          409,
+        );
+      if (resolution?.kind === "selection-required") {
+        let verifiedFlow;
+        let selectionAccounts;
+        let hintMismatch = false;
+        await db.transact(async () => {
+          const current = await readCurrentIntent(flow, browser);
+          selectionAccounts = linkedAccounts(resolution).filter((account) =>
+            matchesLoginHint(current, account),
+          );
+          if (
+            loginHints(current).length > 0 &&
+            selectionAccounts.length === 0
+          ) {
+            hintMismatch = true;
+            return;
+          }
+          // Persist the verified identity and the verified identity's binding
+          // count (not the hint-filtered offer), so the rendered chooser can
+          // complete and its consent page keeps the account choice:
+          // /auth/select requires the stored user id.
+          current.authUserId = identity.userId;
+          current.authBindings = linkedAccounts(resolution).length;
+          await save(current);
+          verifiedFlow = current;
+        });
+        if (hintMismatch) return accountNotLinkedPage(res, flow, browser);
+        return pageForFlow(
+          res,
+          "Choose an account",
+          forms.accountSelectionForm(verifiedFlow, browser, selectionAccounts),
+          verifiedFlow,
+        );
+      }
+      if (
+        resolution?.kind === "single" &&
+        resolution.account.status !== "provisioning"
+      )
+        return authenticated(req, res, flow, browser, resolution.account, {
+          identity,
+        });
+      const body = await signupForm(flow, browser);
+      return pageForFlow(res, "Create your account", body, flow);
+    }
+    if (flow.consentDid) {
+      const session = await provider.accountManager.getDeviceAccount(
+        browser.deviceId,
+        flow.consentDid,
+      );
+      if (
+        !session ||
+        session.account.deactivated ||
+        provider.checkLoginRequired(session) ||
+        !matchesLoginHint(flow, session.account)
+      )
+        throw new InvalidRequestError("Sign in to this account first");
+      return pageForFlow(
+        res,
+        "Authorize application",
+        consentForm(flow, browser, session.account),
+        flow,
+      );
+    }
+    if (flow.email)
+      return pageForFlow(res, "Check your email", otpForm(flow, browser), flow);
+    return pageForFlow(res, "Sign in", loginForm(flow, browser), flow);
+  };
+  return { startEmailCode: sendCode, resumeFlow };
 }

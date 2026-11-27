@@ -492,11 +492,7 @@ test("account actions remain pinned to each tab's DID and reject a revoked bindi
   f.setBindings([account(didB, "two.example.test")]);
   const revokedPage = await f.getPage(didA);
   assert.equal(revokedPage.statusCode, 403);
-  assert.ok(
-    revokedPage.body.includes(
-      `href="/account?did=${encodeURIComponent(didA)}"`,
-    ),
-  );
+  assert.ok(revokedPage.body.includes('href="/account"'));
   assert.doesNotMatch(revokedPage.body, /two\.example\.test/);
 
   const revokedManage = await f.getManage("password", didA);
@@ -506,9 +502,7 @@ test("account actions remain pinned to each tab's DID and reject a revoked bindi
   const revoked = await f.post({ did: didA });
   assert.equal(revoked.statusCode, 403);
   assert.match(revoked.body, /not linked to this verified identity/i);
-  assert.ok(
-    revoked.body.includes(`href="/account?did=${encodeURIComponent(didA)}"`),
-  );
+  assert.ok(revoked.body.includes('href="/account"'));
   assert.deepEqual(f.mutations, [didA, didB]);
 });
 
@@ -534,11 +528,7 @@ test("duplicate or mismatched selector values cannot act", async () => {
 
   const unsafeUrl = await f.post({ did: "https://evil.example/path" });
   assert.equal(unsafeUrl.statusCode, 403);
-  assert.ok(
-    unsafeUrl.body.includes(
-      'href="/account?did=https%3A%2F%2Fevil.example%2Fpath"',
-    ),
-  );
+  assert.ok(unsafeUrl.body.includes('href="/account"'));
   assert.deepEqual(f.mutations, []);
 });
 

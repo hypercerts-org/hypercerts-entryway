@@ -127,3 +127,82 @@ test("account actions dispatch selected DID and preserve current-session redirec
   );
   assert.deepEqual(redirect, [303, "/login"]);
 });
+
+test("app password issuance checks the live binding and recent proof within its transaction", async () => {
+  const { createConnectedAppsActions } =
+    await import("../../../dist/src/features/connected-apps/actions.mjs");
+  let inTransaction = false;
+  let bound = true;
+  let recent = true;
+  const issued = [];
+  const actions = createConnectedAppsActions({
+    db: {
+      async transact(run) {
+        inTransaction = true;
+        try {
+          return await run();
+        } finally {
+          inTransaction = false;
+        }
+      },
+    },
+    accounts: {
+      async serialized(_did, run) {
+        return run();
+      },
+    },
+    accountAccess: {
+      async requireBoundAccount(_session, did) {
+        assert.equal(inTransaction, true);
+        if (!bound) throw Error("AccountMismatch");
+        assert.equal(did, "did:a");
+      },
+    },
+    security: {
+      async summary() {
+        assert.equal(inTransaction, true);
+      },
+      async isRecent() {
+        assert.equal(inTransaction, true);
+        return recent;
+      },
+    },
+    legacy: {
+      async createAppPassword(did, input) {
+        assert.equal(inTransaction, true);
+        issued.push({ did, ...input });
+        return { ...input, password: "synthetic" };
+      },
+    },
+    console: { needed() {} },
+  });
+  const invoke = () =>
+    actions["app-password-create"]({
+      req: { body: {} },
+      res: {
+        set() {},
+        type() {
+          return this;
+        },
+        status() {
+          return this;
+        },
+        send() {},
+      },
+      account: { did: "did:a" },
+      session: {},
+      principal: {},
+      value: () => "example",
+    });
+  bound = false;
+  await assert.rejects(invoke(), /AccountMismatch/);
+  bound = true;
+  recent = false;
+  await assert.rejects(invoke(), { error: "ReauthenticationRequired" });
+  assert.deepEqual(issued, []);
+  recent = true;
+  await invoke();
+  assert.deepEqual(issued, [
+    { did: "did:a", name: "example", privileged: false },
+  ]);
+});

@@ -1,5 +1,8 @@
 import { test, expect } from "@playwright/test";
-import { createSharedEmailPair } from "./support/email-chooser-fixture.mjs";
+import {
+  createRealAccount,
+  createSharedEmailPair,
+} from "./support/email-chooser-fixture.mjs";
 import {
   assertOAuthSubjectAndWrite,
   beginAuthorization,
@@ -24,6 +27,7 @@ test.beforeAll(async ({ browser }) => {
 /** Open the client sign-in and verify the shared email, ending at the chooser. */
 async function reachChooser(page) {
   await beginAuthorization(page, { prompt: "consent" });
+  const authorizeUrl = page.url();
   await expect(page.getByLabel("Email address")).toBeVisible();
   const message = await requestVisibleCode(page, shared.email);
   const beforeProof = await page.content();
@@ -35,6 +39,7 @@ async function reachChooser(page) {
   await expect(
     page.getByRole("heading", { name: "Choose an account" }),
   ).toBeVisible();
+  return authorizeUrl;
 }
 
 // Each DID completes its own journey in a fresh context, so a regression that
@@ -79,6 +84,48 @@ for (const which of ["first", "second"]) {
   });
 }
 
+test("another email completes the original authorization as its own account", async ({
+  browser,
+}) => {
+  test.setTimeout(180_000);
+  const other = {
+    email: `ch-${runId}-other@example.test`,
+    handle: `ch-${runId}-n.entryway.atmosbox.test`,
+    pdsId: "pds1",
+  };
+  await createRealAccount(browser, other);
+  const context = await browser.newContext({ ignoreHTTPSErrors: false });
+  try {
+    const page = await context.newPage();
+    await reachChooser(page);
+    await page
+      .getByRole("button", { name: "Use another email address" })
+      .click();
+    // The mailbox switch answers 303 to the authorization entry, so this
+    // immediate reload resumes the replacement sign-in instead of re-posting
+    // the retired flow id.
+    await expect(page).toHaveURL(/\/oauth\/authorize\?/);
+    await page.reload();
+    await expect(page.getByLabel("Email address")).toBeVisible();
+    await expect(page.locator('form[action="/auth/select"]')).toHaveCount(0);
+    await expect(page.locator('form[action="/auth/consent"]')).toHaveCount(0);
+    const resumed = await page.content();
+    for (const account of [shared.first, shared.second])
+      expect(resumed).not.toContain(account.did);
+    // The retained flow keeps its five-second resend cooldown.
+    await page.waitForTimeout(5_000);
+    const code = await requestVisibleCode(page, other.email);
+    await verifyVisibleCode(page, code.code);
+    await expect(consentForm(page, other.did)).toBeVisible();
+    await finishConsent(page, other.did);
+    await assertOAuthSubjectAndWrite(page, other, {
+      text: `Another email ${runId}`,
+    });
+  } finally {
+    await context.close();
+  }
+});
+
 test("each linked account has its own button and status, and consent can return to the chooser", async ({
   browser,
 }) => {
@@ -89,13 +136,16 @@ test("each linked account has its own button and status, and consent can return 
     const page = await context.newPage();
     await reachChooser(page);
     for (const account of [first, second]) {
-      const option = page
-        .locator("div.account")
-        .filter({ has: selectionForm(page, account.did) });
-      await expect(option).toContainText(account.handle);
-      await expect(option).toContainText(`${account.did} · active`);
       await expect(
-        option.getByRole("button", { name: "Continue with this account" }),
+        page.getByText(account.handle, { exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByText(`${account.did} · active`, { exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("button", {
+          name: `Continue with this account: ${account.handle}, ${account.did}`,
+        }),
       ).toHaveCount(1);
     }
 

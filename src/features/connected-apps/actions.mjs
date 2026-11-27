@@ -7,9 +7,18 @@ import {
   forgetOAuthDevices,
   revokeAppAccess,
   revokeGrant,
+  revokeOAuthSession,
 } from "./operations.js";
 
-export function createConnectedAppsActions({ db, oauth, legacy, console }) {
+export function createConnectedAppsActions({
+  db,
+  oauth,
+  legacy,
+  console,
+  accounts,
+  accountAccess,
+  security,
+}) {
   const revokeApps = (did) => revokeAppAccess({ oauth, legacy }, did);
   const forgetDevices = (did) => forgetOAuthDevices(oauth, did);
   return {
@@ -26,14 +35,10 @@ export function createConnectedAppsActions({ db, oauth, legacy, console }) {
         );
     },
     "oauth-session-revoke": async ({ account, value }) => {
-      await db.transact(async () => {
-        const item = (await oauth.stores.listAccountTokens(account.did)).find(
-          (s) => s.id === value("sessionId"),
-        );
-        if (!item)
-          throw new HttpError(404, "NotFound", "OAuth session not found");
-        await oauth.stores.deleteToken(item.id);
-      });
+      if (
+        !(await revokeOAuthSession(db, oauth, account.did, value("sessionId")))
+      )
+        throw new HttpError(404, "NotFound", "OAuth session not found");
     },
     "legacy-session-revoke": async ({ account, value }) => {
       console.needed();
@@ -59,13 +64,34 @@ export function createConnectedAppsActions({ db, oauth, legacy, console }) {
       if (!(await forgetDevice(oauth, account.did, value("deviceId"))))
         throw new HttpError(404, "NotFound", "OAuth device not found");
     },
-    "app-password-create": async ({ req, res, account, value }) => {
+    "app-password-create": async ({
+      req,
+      res,
+      account,
+      session,
+      principal,
+      value,
+    }) => {
       console.needed();
 
-      const item = await legacy.createAppPassword(account.did, {
-        name: value("name"),
-        privileged: req.body.privileged === "true",
-      });
+      const name = value("name");
+      const privileged = req.body.privileged === "true";
+      const item = await accounts.serialized(
+        account.did,
+        () =>
+          db.transact(async () => {
+            await accountAccess.requireBoundAccount(session, account.did);
+            await security.summary(principal);
+            if (!(await security.isRecent(principal)))
+              throw new HttpError(
+                403,
+                "ReauthenticationRequired",
+                "Verify your email again before this change",
+              );
+            return legacy.createAppPassword(account.did, { name, privileged });
+          }),
+        { kind: "create-app-password", request: { name, privileged } },
+      );
       return page(
         res,
         "App password created",
