@@ -128,11 +128,20 @@ export async function malformedCars(car, record) {
   };
 }
 
+export function ownedDestination(endpoint, access) {
+  if (
+    !Array.isArray(access?.destinationUrls) ||
+    !access.destinationUrls.includes(endpoint)
+  )
+    throw new Error("Prepared destination is not an owned sandbox origin");
+  return access.destinationUrls.find((origin) => origin === endpoint);
+}
+
 // Verifies the destination email in the browser, asks for a fresh code and
 // prepares the arrival. Returns the values the page shows once.
 export async function prepareArrival(
   page,
-  { issuer, mailpitUrl, did, handle, email },
+  { issuer, mailpitUrl, did, handle, email, access },
 ) {
   const since = Date.now();
   await page.goto(`${issuer}/login`);
@@ -199,7 +208,10 @@ export async function prepareArrival(
   };
   // Booleans only: a failing assertion must never print the code.
   expect(/^[A-Za-z0-9_-]{32}$/.test(arrival.arrivalCode)).toBe(true);
-  expect(arrival.destinationEndpoint).toBeTruthy();
+  arrival.destinationEndpoint = ownedDestination(
+    arrival.destinationEndpoint,
+    access,
+  );
   // No credential or code appears in any URL.
   expect(page.url().includes(arrival.arrivalCode)).toBe(false);
   return arrival;
@@ -420,6 +432,7 @@ export function registerArrivalSetup(
     run.prepared = await aroundPrepare(page, () =>
       prepareArrival(page, {
         issuer: config.issuer,
+        access,
         mailpitUrl: access.mailpitUrl,
         did: run.source.did,
         handle: run.destinationHandle,

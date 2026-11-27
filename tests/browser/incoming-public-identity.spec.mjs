@@ -64,6 +64,7 @@ async function preparedMove(page, label) {
   const handle = `d${tag}${config.handleDomains[0]}`;
   const prepared = await prepareArrival(page, {
     issuer: config.issuer,
+    access,
     mailpitUrl: access.mailpitUrl,
     did: source.did,
     handle,

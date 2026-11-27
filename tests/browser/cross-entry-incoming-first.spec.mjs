@@ -52,6 +52,7 @@ test("pending stock incoming arrival refuses the authenticated managed console o
     () =>
       prepareArrival(page, {
         issuer: config.issuer,
+        access,
         mailpitUrl: access.mailpitUrl,
         did: source.did,
         handle,
