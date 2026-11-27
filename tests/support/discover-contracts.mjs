@@ -2,6 +2,7 @@ import { readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 
 const unitContracts = new Set([
+  "authority-restore.test.mjs",
   "external-workflow.test.mjs",
   "incoming-arrival-storage.test.mjs",
   "staged-arrival.test.mjs",
