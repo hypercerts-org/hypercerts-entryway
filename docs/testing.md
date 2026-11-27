@@ -937,3 +937,10 @@ destination must be pds1, the only origin intercepted by the barrier. After the
 managed freeze, the previously verified owner receives 403 `ArrivalProofRequired`
 on incoming preparation from the replica. The test checks that the pending managed
 owner and surrounding state remain unchanged before release, then checks the winner.
+
+Registry fixture profiles can be exercised in separate disposable projects with
+`./tests/local.sh fresh-group registry-qualification` (fresh bootstrap authority
+and stock PDS outbound checks) and `./tests/local.sh fresh-group registry-operator`
+(full serving transition before operator checks). Both use the controller-verified
+sandbox origin; neither is a staged production admission qualification. The
+bootstrap fixture remains available as `fresh-group registry-bootstrap`.

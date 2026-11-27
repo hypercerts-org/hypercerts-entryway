@@ -1,3 +1,4 @@
+import { registryRequest, validateRegistryOrigin } from "./registry-http.mjs";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -7,13 +8,14 @@ import pg from "pg";
 import { tmpdir } from "node:os";
 
 const config = JSON.parse(await readFile("/config/bootstrap.json", "utf8"));
+validateRegistryOrigin(config.issuer);
 const source = JSON.parse(await readFile("/config/outbound-pds1.json", "utf8"));
 const host = source.pds.find((item) => item.id === "pds1");
 const auth = `Basic ${Buffer.from(`admin:${config.adminPassword}`).toString("base64")}`;
 const hostId = "pds-serving";
 const hostPath = `/admin/pds-registry/hosts/${hostId}`;
 const request = async (node, path, body, authorization = auth) => {
-  const response = await fetch(new URL(path, config.issuer), {
+  const response = await registryRequest(config.issuer, path, {
     method: body ? "POST" : "GET",
     headers: {
       "x-bootstrap-node": node,
