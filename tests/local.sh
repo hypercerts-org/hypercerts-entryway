@@ -19,7 +19,7 @@ export SANDBOX_CHECKOUT="$sandbox"
 mkdir -p "$artifacts"
 # Phase identity comes from the controller, never from a command or request body.
 case "$command" in
-  fresh|fresh-group|prepare|up|controller-launch|managed-create-barrier|_incoming-late-cutover-run|contracts|database-contracts|database-dialects|registry-bootstrap|registry-operator|registry-qualification|resilience-profiles|database-profile|browser|incoming-late-cutover|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-public-failures|incoming-two-node|cross-entry-incoming-first|cross-entry-managed-first|account-lifecycle-two-node|incoming-goat-journey|incoming-moover-journey|incoming-arrival-live|migration|migration-empty|migration-resume|resilience|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|all|down|status|help) ;;
+  transfer-history|_transfer-history-run|fresh|fresh-group|prepare|up|controller-launch|managed-create-barrier|_incoming-late-cutover-run|contracts|database-contracts|database-dialects|registry-bootstrap|registry-operator|registry-qualification|resilience-profiles|database-profile|browser|incoming-late-cutover|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-public-failures|incoming-two-node|cross-entry-incoming-first|cross-entry-managed-first|account-lifecycle-two-node|incoming-goat-journey|incoming-moover-journey|incoming-arrival-live|migration|migration-empty|migration-resume|resilience|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|all|down|status|help) ;;
   *) echo 'code=UNKNOWN_PHASE'; exit 2 ;;
 esac
 printf 'phase=%s status=started\n' "$command"
@@ -77,6 +77,70 @@ browser() { compose run --rm --no-deps --volume "$sandbox/incoming-access.json:/
 external_browser() { local phase=$1; compose run --rm --no-deps -e "EXTERNAL_PHASE=$phase" browser npx --no-install playwright test --config tests/external.playwright.config.mjs 2>&1 | tee "$artifacts/external-browser-$phase.log" | python3 "$root/scripts/ci-summary.py"; }
 migration_command() { compose exec -T entryway node tests/support/external-migration.mjs "$@"; }
 case "$command" in
+  transfer-history)
+    export ENTRYWAY_TRANSFER_HISTORY=1
+    exec "$root/tests/local.sh" fresh-group _transfer-history-run
+    ;;
+  _transfer-history-run)
+    require_state
+    run="$(date +%s)-$$"
+    image=$(docker --context "$DOCKER_CONTEXT" inspect "${project}-pds1-1" --format '{{.Image}}')
+    for host in pds2 pds-history-c; do
+      [[ "$(docker --context "$DOCKER_CONTEXT" inspect "${project}-${host}-1" --format '{{.Image}}')" == "$image" ]] || { echo 'Managed PDS image mismatch' >&2; exit 1; }
+    done
+    printf 'managed-pds-image=%s hosts=3\n' "$image"
+    entry_image=$(docker --context "$DOCKER_CONTEXT" inspect "${project}-entryway-1" --format '{{.Image}}')
+    browser_image=$(docker --context "$DOCKER_CONTEXT" image inspect "$project-browser:local" --format '{{.Id}}')
+    for path in tests/browser/transfer-history.spec.mjs tests/playwright.config.mjs; do
+      expected=$(sha256sum "$root/$path" | cut -d' ' -f1)
+      actual=$(docker --context "$DOCKER_CONTEXT" run --rm --entrypoint sha256sum "$project-browser:local" "/app/$path" | cut -d' ' -f1)
+      [[ "$expected" == "$actual" ]] || { echo "Image source mismatch: $path" >&2; exit 1; }
+      printf 'source-image-sha256 path=%s sha256=%s image=%s\n' "$path" "$actual" "$browser_image"
+    done
+    for host in entryway pds1 pds2 pds-history-c; do
+      path=tests/support/configure.mjs
+      expected=$(sha256sum "$root/$path" | cut -d' ' -f1)
+      actual=$(docker --context "$DOCKER_CONTEXT" exec "${project}-${host}-1" sha256sum "/app/$path" | cut -d' ' -f1)
+      [[ "$expected" == "$actual" ]] || { echo "Container source mismatch: $host $path" >&2; exit 1; }
+      printf 'source-container-sha256 host=%s path=%s sha256=%s\n' "$host" "$path" "$actual"
+    done
+    printf 'entryway-image=%s\n' "$entry_image"
+    sha256sum "$root/tests/local.sh" "$root/tests/atmosphere/install.py"
+    compose run --rm --no-deps -e TRANSFER_HISTORY_PHASE=before -e "TRANSFER_HISTORY_RUN=$run" -e TRANSFER_HISTORY=1 browser npx --no-install playwright test --config tests/playwright.config.mjs
+    id=$(compose ps --quiet entryway)
+    [[ -n "$id" && "$id" != *$'\n'* ]] || exit 1
+    before=$(docker --context "$DOCKER_CONTEXT" inspect --format '{{.Image}} {{.State.StartedAt}}' "$id")
+    compose restart entryway
+    [[ "$(compose ps --quiet entryway)" == "$id" ]] || { echo 'code=CONTAINER_RECREATED' >&2; exit 1; }
+    after=$(docker --context "$DOCKER_CONTEXT" inspect --format '{{.Image}} {{.State.StartedAt}}' "$id")
+    [[ "${before%% *}" == "${after%% *}" && "${before#* }" != "${after#* }" ]] || { echo 'code=RESTART_NOT_OBSERVED' >&2; exit 1; }
+    for attempt in {1..60}; do
+      [[ "$(docker --context "$DOCKER_CONTEXT" inspect --format '{{.State.Health.Status}}' "$id")" == healthy ]] && break
+      sleep 2
+    done
+    [[ "$(docker --context "$DOCKER_CONTEXT" inspect --format '{{.State.Health.Status}}' "$id")" == healthy ]] || { echo 'code=RESTART_NOT_READY' >&2; exit 1; }
+    echo 'entryway-restart=same-container-same-image'
+    compose run --rm --no-deps -e TRANSFER_HISTORY_PHASE=after -e "TRANSFER_HISTORY_RUN=$run" -e TRANSFER_HISTORY=1 browser npx --no-install playwright test --config tests/playwright.config.mjs
+    compose exec -T -e "TRANSFER_HISTORY_RUN=$run" entryway node --input-type=module - <<'JS'
+import Database from 'better-sqlite3';
+import { readFileSync } from 'node:fs';
+import assert from 'node:assert/strict';
+const db = new Database('/data/account-authority.sqlite', { readonly: true, fileMustExist: true });
+const get = db.prepare('SELECT value FROM key_value_state WHERE namespace = ? AND key = ?');
+for (const shape of ['empty', 'populated']) {
+  const saved = JSON.parse(readFileSync(`/app/artifacts/transfer-history-${process.env.TRANSFER_HISTORY_RUN}-${shape}.json`, 'utf8'));
+  for (const operation of saved.operations) {
+    const row = get.get('migration:history', operation.id);
+    assert.ok(row);
+    const history = JSON.parse(row.value);
+    for (const field of ['id', 'did', 'phase', 'sourcePdsId', 'targetPdsId']) assert.equal(history[field], operation[field]);
+    assert.equal(history.phase, 'complete');
+  }
+  console.log(`transfer-history shape=${shape} persisted-history=verified`);
+}
+db.close();
+JS
+    ;;
   fresh)
     # Each group gets its own sandbox, so groups run in parallel without sharing
     # state. Steps inside a group stay sequential because later steps read state
@@ -122,7 +186,7 @@ case "$command" in
     (( $# > 0 )) || { echo 'fresh-group needs at least one step' >&2; exit 2; }
     for step in "$@"; do
       case "$step" in
-        registry-bootstrap|registry-operator|registry-qualification|browser|contracts|incoming-late-cutover|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-public-failures|incoming-two-node|cross-entry-incoming-first|cross-entry-managed-first|account-lifecycle-two-node|incoming-goat-journey|incoming-moover-journey|database-contracts|migration|migration-empty|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience) ;;
+        _transfer-history-run|registry-bootstrap|registry-operator|registry-qualification|browser|contracts|incoming-late-cutover|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-public-failures|incoming-two-node|cross-entry-incoming-first|cross-entry-managed-first|account-lifecycle-two-node|incoming-goat-journey|incoming-moover-journey|database-contracts|migration|migration-empty|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience) ;;
         *) echo "Unknown fresh-group step: $step" >&2; exit 2 ;;
       esac
     done
@@ -164,7 +228,28 @@ case "$command" in
           echo "Group exit: $result; reports: $ACCEPTANCE_REPORT_DIR"
           exit "$result"
         fi
+        if [[ "${ENTRYWAY_TRANSFER_HISTORY:-0}" == 1 ]]; then
+          tags_absent=1
+          for tag in "$SANDBOX_PROJECT:local" "$SANDBOX_PROJECT-browser:local" "$SANDBOX_PROJECT-pds-moover:local" "$SANDBOX_PROJECT-entryway-browser-client:latest" "$SANDBOX_PROJECT-entryway-oauth-web-app:latest"; do
+            if docker --context "$DOCKER_CONTEXT" image inspect "$tag" >/dev/null 2>&1; then
+              docker --context "$DOCKER_CONTEXT" image rm "$tag" || { result=1; tags_absent=0; }
+            fi
+            if docker --context "$DOCKER_CONTEXT" image inspect "$tag" >/dev/null 2>&1; then
+              echo "Image tag survived cleanup: $tag" >&2
+              result=1
+              tags_absent=0
+            else
+              printf 'image-tag-absent=%s\n' "$tag"
+            fi
+          done
+          (( tags_absent == 0 )) || echo 'transfer-history-image-tags=absent'
+          for resource in volume network; do
+            leftover=$(docker --context "$DOCKER_CONTEXT" "$resource" ls -q --filter "label=com.docker.compose.project=$SANDBOX_PROJECT") || { result=1; continue; }
+            if [[ -n "$leftover" ]]; then echo "Project $resource survived cleanup" >&2; result=1; else echo "project-$resource=absent"; fi
+          done
+        fi
         rm -rf -- "$temp"
+        if [[ -e "$temp" ]]; then echo 'Checkout survived cleanup' >&2; result=1; else echo 'disposable-checkout=absent'; fi
       fi
       echo "Group exit: $result; reports: $ACCEPTANCE_REPORT_DIR"
       exit "$result"

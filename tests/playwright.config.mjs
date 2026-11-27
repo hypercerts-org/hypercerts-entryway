@@ -62,6 +62,11 @@ if (
 )
   process.env.PLAYWRIGHT_NO_COPY_PROMPT = "1";
 const selected = [
+  [
+    process.env.TRANSFER_HISTORY === "1",
+    "transfer-history",
+    "transfer-history.spec.mjs",
+  ],
   [lateCutover, "incoming-late-cutover", "incoming-late-cutover.spec.mjs"],
   [
     failures,
@@ -105,6 +110,20 @@ const selected = [
   [publicRun, "public-browser", "public-browser.spec.mjs"],
 ].find(([active]) => active);
 const artifactPrefix = selected?.[1] ?? "browser";
+const transferPhase = process.env.TRANSFER_HISTORY_PHASE;
+if (
+  artifactPrefix === "transfer-history" &&
+  !["before", "after"].includes(transferPhase)
+)
+  throw new Error("Unknown transfer history phase");
+const artifactDir =
+  artifactPrefix === "transfer-history" ? "/app/artifacts" : "artifacts";
+const reportPrefix =
+  artifactPrefix === "transfer-history"
+    ? `${artifactPrefix}-${transferPhase}`
+    : artifactPrefix;
+if (artifactPrefix === "transfer-history")
+  process.env.PLAYWRIGHT_NO_COPY_PROMPT = "1";
 // Projects belong to the selection that won, never to another one.
 const selectedProjects = {
   "incoming-late-cutover": ["entryway", "destination"].map((submitAt) => ({
@@ -137,13 +156,13 @@ export default defineConfig({
       ? [["./support/staged-qualification-reporter.mjs"]]
       : []),
     ["list"],
-    ["json", { outputFile: `artifacts/${artifactPrefix}-results.json` }],
+    ["json", { outputFile: `${artifactDir}/${reportPrefix}-results.json` }],
     [
       "html",
-      { outputFolder: `artifacts/${artifactPrefix}-report`, open: "never" },
+      { outputFolder: `${artifactDir}/${reportPrefix}-report`, open: "never" },
     ],
   ],
-  outputDir: `artifacts/${artifactPrefix}-output`,
+  outputDir: `${artifactDir}/${reportPrefix}-output`,
   use: {
     browserName: "chromium",
     ignoreHTTPSErrors: false,

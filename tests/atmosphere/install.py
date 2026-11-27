@@ -31,6 +31,22 @@ for app in ['hypercerts-entryway','entryway-fixtures','entryway-oauth-web-app','
             service = service.replace(command_marker, image)
             service = service.replace(volumes_marker, f'    volumes:\n      - {launcher}:/app/services/pds/start-pds.mjs:ro,z\n')
             text = text[:start] + service + text[end:]
+        if app == 'hypercerts-entryway' and os.environ.get('ENTRYWAY_TRANSFER_HISTORY') == '1':
+            if suffix == '.yaml':
+                start = text.index('\n  pds2:\n') + 1
+                end = text.index('\n  test:\n', start) + 1
+                service = text[start:end].replace('pds2', 'pds-history-c').replace('cluster2-data', 'cluster-c-data')
+                text = text[:end] + service + text[end:]
+                text = text.replace('      - pds2-config:/pds2-config\n', '      - pds2-config:/pds2-config\n      - pds-history-c-config:/pds-history-c-config\n')
+                text = text.replace('      ENTRYWAY_LATE_CUTOVER: ${ENTRYWAY_LATE_CUTOVER:-0}\n', '      ENTRYWAY_LATE_CUTOVER: ${ENTRYWAY_LATE_CUTOVER:-0}\n      ENTRYWAY_TRANSFER_HISTORY: "1"\n')
+                text = text.replace('  pds2-config: {}\n', '  pds2-config: {}\n  pds-history-c-config: {}\n  cluster-c-data: {}\n')
+            else:
+                definition = json.loads(text)
+                configure = next(service for service in definition['services'] if service['service'] == 'configure')
+                configure['environment'].append({'name': 'PDS_HISTORY_C_URL', 'source': {'kind': 'route-url', 'route': 'cluster-c'}})
+                definition['services'].append({'service': 'pds-history-c', 'environment': []})
+                definition['routes'].append({'id': 'cluster-c', 'service': 'pds-history-c', 'host': 'cluster-c', 'port': 3000})
+                text = json.dumps(definition, indent=2) + '\n'
         profile_nodes = os.environ.get('ENTRYWAY_PROFILE_NODE_COUNT')
         if profile_nodes and app == 'hypercerts-entryway':
             if profile_nodes not in ['1', '2']:

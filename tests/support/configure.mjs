@@ -39,10 +39,14 @@ await mkdir(dirname(configPath), { recursive: true });
 const issuer = process.env.OAUTH_ISSUER_URL || "https://entryway.test";
 const clientUrl =
   process.env.OAUTH_CLIENT_URL || "https://client.entryway.example.com";
+const historyMode = process.env.ENTRYWAY_TRANSFER_HISTORY === "1";
 const pdsUrls = [
   process.env.PDS1_URL || "https://pds1.entryway.test",
   process.env.PDS2_URL || "https://pds2.entryway.test",
+  ...(historyMode ? [process.env.PDS_HISTORY_C_URL] : []),
 ];
+if (historyMode && (!pdsUrls[2] || new Set(pdsUrls).size !== 3))
+  throw new Error("Transfer history requires three distinct managed PDS URLs");
 const serviceDid = (url) =>
   `did:web:${new URL(url).host.replaceAll(":", "%3A")}`;
 try {
@@ -91,22 +95,26 @@ try {
     betterAuthSecret: randomBytes(32).toString("hex"),
     adminPassword: randomBytes(32).toString("hex"),
     pds: await Promise.all(
-      ["pds1", "pds2"].map(async (id, i) => {
-        const plcKey = await Secp256k1Keypair.create({ exportable: true });
-        return {
-          id,
-          ...(id === "pds1" && process.env.ENTRYWAY_LATE_CUTOVER === "1"
-            ? { stagedIncomingMigration: true }
-            : {}),
-          url: pdsUrls[i],
-          internalUrl: `http://${id}:3000`,
-          did: serviceDid(pdsUrls[i]),
-          adminPassword: randomBytes(32).toString("hex"),
-          callbackToken: randomBytes(32).toString("base64url"),
-          jwtSecret: randomBytes(32).toString("hex"),
-          plcRotationKeyHex: Buffer.from(await plcKey.export()).toString("hex"),
-        };
-      }),
+      ["pds1", "pds2", ...(historyMode ? ["pds-history-c"] : [])].map(
+        async (id, i) => {
+          const plcKey = await Secp256k1Keypair.create({ exportable: true });
+          return {
+            id,
+            ...(id === "pds1" && process.env.ENTRYWAY_LATE_CUTOVER === "1"
+              ? { stagedIncomingMigration: true }
+              : {}),
+            url: pdsUrls[i],
+            internalUrl: `http://${id}:3000`,
+            did: serviceDid(pdsUrls[i]),
+            adminPassword: randomBytes(32).toString("hex"),
+            callbackToken: randomBytes(32).toString("base64url"),
+            jwtSecret: randomBytes(32).toString("hex"),
+            plcRotationKeyHex: Buffer.from(await plcKey.export()).toString(
+              "hex",
+            ),
+          };
+        },
+      ),
     ),
   };
   await writeFile(configPath, JSON.stringify(config, null, 2) + "\n", {
