@@ -248,7 +248,9 @@ jobs:
         with:
           persist-credentials: false
       - id: inventory
-        run: echo "domains=$(node tests/support/database-domains.mjs --matrix)" >> "$GITHUB_OUTPUT"
+        run: |
+          domains=$(node tests/support/database-domains.mjs --matrix)
+          echo "domains=$domains" >> "$GITHUB_OUTPUT"
   database-shards:
     name: database (${{ matrix.domain }})
     needs: database-inventory

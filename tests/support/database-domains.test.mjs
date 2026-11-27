@@ -45,12 +45,24 @@ test("CI matrix is generated from the inventory and aggregate requires complete 
     ci,
     /domain: \$\{\{ fromJSON\(needs\.database-inventory\.outputs\.domains\) \}\}/,
   );
-  assert.match(ci, /needs: \[database-inventory, database-shards\]/);
+  const shards = ci.match(
+    /^ {2}database-shards:\n[\s\S]*?(?=^ {2}[\w-]+:)/m,
+  )?.[0];
+  const aggregate = ci.match(/^ {2}databases:\n[\s\S]*?(?=^ {2}[\w-]+:)/m)?.[0];
+  const inventory = ci.match(
+    /^ {2}database-inventory:\n[\s\S]*?(?=^ {2}[\w-]+:)/m,
+  )?.[0];
   assert.match(
-    ci,
+    inventory,
+    /domains=\$\(node tests\/support\/database-domains\.mjs --matrix\)\n\s+echo "domains=\$domains"/,
+  );
+  assert.match(shards, /fail-fast: false/);
+  assert.match(aggregate, /if: always\(\)/);
+  assert.match(aggregate, /needs: \[database-inventory, database-shards\]/);
+  assert.match(
+    aggregate,
     /test "\$INVENTORY_RESULT" = success && test "\$SHARDS_RESULT" = success/,
   );
-  assert.match(ci, /fail-fast: false/);
 });
 
 test("inventory CLI works from a checkout path containing #", () => {
@@ -66,7 +78,46 @@ test("inventory CLI works from a checkout path containing #", () => {
       ...Object.keys(databaseDomains),
       "postgresql-profile",
     ]);
-    assert.notEqual(spawnSync(process.execPath, [file, "invalid"]).status, 0);
+    for (const args of [
+      [],
+      ["--validate"],
+      ["--validate", ""],
+      ["--validate", "invalid"],
+      ["--validate", "--matrix"],
+      ["--matrix", "extra"],
+    ]) {
+      assert.notEqual(spawnSync(process.execPath, [file, ...args]).status, 0);
+    }
+    assert.equal(
+      spawnSync(process.execPath, [file, "--validate", "routes"]).status,
+      0,
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("shell rejects invalid selectors before creating a sandbox", () => {
+  const directory = mkdtempSync(join(tmpdir(), "database-selector-"));
+  try {
+    for (const domain of ["", "invalid", "--matrix"]) {
+      const sandbox = join(directory, `sandbox-${domain || "empty"}`);
+      const result = spawnSync(
+        "bash",
+        ["tests/local.sh", "fresh-group", "database-contracts"],
+        {
+          env: {
+            ...process.env,
+            DATABASE_DOMAIN: domain,
+            SANDBOX_CHECKOUT: sandbox,
+          },
+          encoding: "utf8",
+        },
+      );
+      assert.notEqual(result.status, 0);
+      assert.equal(existsSync(sandbox), false);
+      assert.doesNotMatch(result.stdout, /phase=.*status=started/);
+    }
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

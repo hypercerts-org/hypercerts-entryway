@@ -31,8 +31,12 @@ writeFileSync(
       signal: result.signal,
       command: [process.execPath, ...args],
       contracts: files,
-      independentRaceConnections:
-        exit === 0 ? (backend === "postgresql" ? 2 : 1) : null,
+      ...(domain
+        ? {}
+        : {
+            independentRaceConnections:
+              exit === 0 ? (backend === "postgresql" ? 2 : 1) : null,
+          }),
       identity,
     },
     null,

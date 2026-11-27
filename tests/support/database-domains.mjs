@@ -59,9 +59,16 @@ if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
-  if (process.argv[2] === "--matrix")
+  if (process.argv[2] === "--matrix" && process.argv.length === 3)
     console.log(
       JSON.stringify([...Object.keys(databaseDomains), "postgresql-profile"]),
     );
-  else databaseFiles(process.argv[2]);
+  else if (
+    process.argv[2] === "--validate" &&
+    process.argv.length === 4 &&
+    process.argv[3]
+  )
+    databaseFiles(process.argv[3]);
+  else
+    throw Error("Usage: database-domains.mjs --matrix | --validate <domain>");
 }

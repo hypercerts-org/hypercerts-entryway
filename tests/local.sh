@@ -7,15 +7,15 @@ project=${SANDBOX_PROJECT:-hypercerts-entryway}
 artifacts=${ACCEPTANCE_REPORT_DIR:-"$root/tests/artifacts"}
 export SANDBOX_CHECKOUT="$sandbox" SANDBOX_PROJECT="$project" ACCEPTANCE_REPORT_DIR="$artifacts"
 [[ "$project" =~ ^hypercerts-entryway(-[a-z0-9_-]+)?$ ]] || { echo "Invalid Entryway project name" >&2; exit 2; }
+command=${1:-help}
+# Reject invalid selectors before Docker or sandbox provisioning.
+if [[ ${DATABASE_DOMAIN+x} ]]; then
+  node "$root/tests/support/database-domains.mjs" --validate "$DATABASE_DOMAIN"
+fi
 mkdir -p "$sandbox"
 cd "$sandbox"
 sandbox=$PWD
 export SANDBOX_CHECKOUT="$sandbox"
-command=${1:-help}
-# Reject invalid selectors before Docker or sandbox provisioning.
-if [[ -n "${DATABASE_DOMAIN:-}" ]]; then
-  node "$root/tests/support/database-domains.mjs" "$DATABASE_DOMAIN"
-fi
 mkdir -p "$artifacts"
 # Phase identity comes from the controller, never from a command or request body.
 case "$command" in
