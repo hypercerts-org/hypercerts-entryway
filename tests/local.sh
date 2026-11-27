@@ -2,6 +2,15 @@
 # Only this project's sandbox is controlled; application execution stays in containers.
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+# This dedicated destructive scenario must not even create an inherited checkout
+# or write to an inherited report directory before allocating its own group.
+if [[ ${1:-} == incoming-before-signed-submit || ${1:-} == incoming-after-signed-publication || ${1:-} == incoming-stock || ( ${1:-} == fresh-group && ( ${2:-} == _incoming-before-signed-submit-run || ${2:-} == _incoming-after-signed-publication-run || ${2:-} == _incoming-stock-run ) ) ]]; then
+  unset SANDBOX_CHECKOUT SANDBOX_PROJECT ACCEPTANCE_REPORT_DIR KEEP_FAILED_SANDBOX INCOMING_RESTART_CUTPOINT
+fi
+# Internal execution is permitted only through the private controller manifest.
+if [[ ( ${1:-} == _incoming-before-signed-submit-run || ${1:-} == _incoming-after-signed-publication-run || ${1:-} == _incoming-stock-run ) && -z ${INCOMING_OWNER_MANIFEST:-} ]]; then
+  echo 'Missing incoming controller ownership' >&2; exit 2
+fi
 sandbox=${SANDBOX_CHECKOUT:-"$root/tests/.runtime/atmosphereinabox"}
 project=${SANDBOX_PROJECT:-hypercerts-entryway}
 artifacts=${ACCEPTANCE_REPORT_DIR:-"$root/tests/artifacts"}
@@ -12,6 +21,9 @@ command=${1:-help}
 if [[ ${DATABASE_DOMAIN+x} ]]; then
   node "$root/tests/support/database-domains.mjs" --validate "$DATABASE_DOMAIN"
 fi
+if [[ ${1:-} == _incoming-before-signed-submit-run || ${1:-} == _incoming-after-signed-publication-run || ${1:-} == _incoming-stock-run || ( ${ENTRYWAY_INCOMING_RESTART:-0} == 1 && ( ${1:-} == prepare || ${1:-} == up ) ) ]]; then
+  node "$root/tests/support/incoming-owner-guard.mjs" "$root" "${INCOMING_OWNER_MANIFEST:-}" "$project" "$sandbox" "${ENTRYWAY_DOCKER_CONTEXT:-rootless}" || exit 75
+fi
 mkdir -p "$sandbox"
 cd "$sandbox"
 sandbox=$PWD
@@ -19,7 +31,7 @@ export SANDBOX_CHECKOUT="$sandbox"
 mkdir -p "$artifacts"
 # Phase identity comes from the controller, never from a command or request body.
 case "$command" in
-  transfer-history|_transfer-history-run|fresh|fresh-group|prepare|up|controller-launch|managed-create-barrier|_incoming-late-cutover-run|contracts|database-contracts|database-dialects|registry-bootstrap|registry-operator|registry-qualification|resilience-profiles|database-profile|browser|incoming-late-cutover|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-public-failures|incoming-two-node|cross-entry-incoming-first|cross-entry-managed-first|account-lifecycle-two-node|incoming-goat-journey|incoming-moover-journey|incoming-arrival-live|migration|migration-empty|migration-resume|resilience|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|all|down|status|help) ;;
+  incoming-before-signed-submit|incoming-after-signed-publication|incoming-stock|_incoming-before-signed-submit-run|_incoming-after-signed-publication-run|_incoming-stock-run|transfer-history|_transfer-history-run|fresh|fresh-group|prepare|up|controller-launch|managed-create-barrier|_incoming-late-cutover-run|contracts|database-contracts|database-dialects|registry-bootstrap|registry-operator|registry-qualification|resilience-profiles|database-profile|browser|incoming-late-cutover|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-public-failures|incoming-two-node|cross-entry-incoming-first|cross-entry-managed-first|account-lifecycle-two-node|incoming-goat-journey|incoming-moover-journey|incoming-arrival-live|migration|migration-empty|migration-resume|resilience|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|all|down|status|help) ;;
   *) echo 'code=UNKNOWN_PHASE'; exit 2 ;;
 esac
 printf 'phase=%s status=started\n' "$command"
@@ -35,6 +47,13 @@ assert_project_empty() {
   leftover=$(docker --context "$DOCKER_CONTEXT" ps --all --quiet --filter "label=com.docker.compose.project=$1") || return 1
   [[ -z "$leftover" ]] || { echo "Containers of project $1 survived teardown" >&2; return 1; }
 }
+guard_incoming_owner() {
+  node "$run_guard_root/tests/support/incoming-owner-guard.mjs" "$run_guard_root" "$INCOMING_OWNER_MANIFEST" "$SANDBOX_PROJECT" "$SANDBOX_CHECKOUT" "$DOCKER_CONTEXT" "${1:-}" || return 75
+}
+guard_incoming_compose() {
+  node "$run_guard_root/tests/support/incoming-compose-guard.mjs" "$DOCKER_CONTEXT" "$SANDBOX_PROJECT" "$SANDBOX_CHECKOUT" "$run_guard_root" || return 75
+}
+run_guard_root="$root"
 guard_project() {
   node --input-type=module - "$sandbox/state/manifest.json" "$project" <<'JS'
 import { readFileSync } from 'node:fs'
@@ -186,7 +205,7 @@ JS
     (( $# > 0 )) || { echo 'fresh-group needs at least one step' >&2; exit 2; }
     for step in "$@"; do
       case "$step" in
-        _transfer-history-run|registry-bootstrap|registry-operator|registry-qualification|browser|contracts|incoming-late-cutover|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-public-failures|incoming-two-node|cross-entry-incoming-first|cross-entry-managed-first|account-lifecycle-two-node|incoming-goat-journey|incoming-moover-journey|database-contracts|migration|migration-empty|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience) ;;
+        _incoming-before-signed-submit-run|_incoming-after-signed-publication-run|_incoming-stock-run|_transfer-history-run|registry-bootstrap|registry-operator|registry-qualification|browser|contracts|incoming-late-cutover|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-public-failures|incoming-two-node|cross-entry-incoming-first|cross-entry-managed-first|account-lifecycle-two-node|incoming-goat-journey|incoming-moover-journey|database-contracts|migration|migration-empty|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience) ;;
         *) echo "Unknown fresh-group step: $step" >&2; exit 2 ;;
       esac
     done
@@ -194,7 +213,10 @@ JS
     # settings are exported here, before prepare and up, for every child step.
     # It runs alone: the other steps assume one Entryway container.
     for step in "$@"; do
-      if [[ "$step" == incoming-late-cutover ]]; then
+      if [[ "$step" == _incoming-stock-run ]]; then
+        (( $# == 1 )) || { echo 'incoming-stock runs in its own fresh group' >&2; exit 2; }
+      fi
+      if [[ "$step" == incoming-late-cutover || "$step" == _incoming-before-signed-submit-run || "$step" == _incoming-after-signed-publication-run ]]; then
         (( $# == 1 )) || { echo 'incoming-late-cutover runs in its own fresh group' >&2; exit 2; }
         export ENTRYWAY_LATE_CUTOVER=1
       fi
@@ -213,28 +235,82 @@ JS
       fi
     fi
     mkdir -p "$root/tests/.runtime"
-    temp=$(mktemp -d "$root/tests/.runtime/hypercerts-entryway-e2e.XXXXXX")
+    [[ ! -L "$root/tests/.runtime" && "$(realpath "$root/tests/.runtime")" == "$root/tests/.runtime" ]] || { echo "Invalid runtime directory" >&2; exit 1; }
+    incoming_owned=0
+    if [[ "$*" == _incoming-before-signed-submit-run || "$*" == _incoming-after-signed-publication-run || "$*" == _incoming-stock-run ]]; then
+      incoming_owned=1
+      export ENTRYWAY_INCOMING_RESTART=1 DATABASE_BACKEND=sqlite DEPLOYMENT_MODE=single-node
+      unset DATABASE_URL ENTRYWAY_PROFILE_NODE_COUNT
+      temp=$(mktemp -d "$root/tests/.runtime/incoming-XXXXXXXXXXXXXXXXXXXXXXXX")
+    else
+      temp=$(mktemp -d "$root/tests/.runtime/hypercerts-entryway-e2e.XXXXXX")
+    fi
     export SANDBOX_CHECKOUT="$temp/atmosphereinabox"
+    if [[ "$*" == _incoming-before-signed-submit-run || "$*" == _incoming-after-signed-publication-run || "$*" == _incoming-stock-run ]]; then
+      # Derive all destructive targets from an exclusively-created directory,
+      # not from inherited selectors. Refuse even an improbable Docker collision.
+      export SANDBOX_PROJECT="hypercerts-entryway-$(basename "$temp" | sha256sum | cut -c1-32)"
+      export ACCEPTANCE_REPORT_DIR="$root/tests/artifacts/$SANDBOX_PROJECT"
+      unset KEEP_FAILED_SANDBOX
+      for resource in container volume network; do
+        args=(); [[ "$resource" != container ]] || args+=(--all)
+        existing=$(docker --context "$DOCKER_CONTEXT" "$resource" ls "${args[@]}" -q --filter "label=com.docker.compose.project=$SANDBOX_PROJECT") || { rm -rf -- "$temp"; exit 1; }
+        [[ -z "$existing" ]] || { echo 'Fresh project already has resources' >&2; rm -rf -- "$temp"; exit 1; }
+      done
+      for tag in "$SANDBOX_PROJECT:local" "$SANDBOX_PROJECT-late-cutover-pds:local" "$SANDBOX_PROJECT-browser:local" "$SANDBOX_PROJECT-pds-moover:local" "$SANDBOX_PROJECT-entryway-browser-client:latest" "$SANDBOX_PROJECT-entryway-oauth-web-app:latest"; do
+        existing=$(docker --context "$DOCKER_CONTEXT" image ls -q --filter "reference=$tag") || { rm -rf -- "$temp"; exit 1; }
+        [[ -z "$existing" ]] || { echo 'Fresh project already has an image tag' >&2; rm -rf -- "$temp"; exit 1; }
+      done
+      mkdir -p "$ACCEPTANCE_REPORT_DIR"
+      mkdir "$SANDBOX_CHECKOUT"
+      export INCOMING_OWNER_MANIFEST="$temp/owner.json"
+      node --input-type=module - "$INCOMING_OWNER_MANIFEST" "$SANDBOX_PROJECT" "$SANDBOX_CHECKOUT" "$DOCKER_CONTEXT" <<'JS'
+import { writeFileSync } from 'node:fs'
+const [path, project, checkout, context] = process.argv.slice(2)
+writeFileSync(path, JSON.stringify({ project, checkout, context }), { mode: 0o600, flag: 'wx' })
+JS
+      tree=$(git -C "$root" write-tree)
+      mkdir "$temp/source"
+      git -C "$root" archive "$tree" | tar -x -C "$temp/source"
+      git -C "$root" ls-tree -r --name-only "$tree" -- src tests/browser/incoming-late-cutover.spec.mjs tests/browser/incoming-public-journey.spec.mjs tests/support/helpers tests/playwright.config.mjs package.json package-lock.json > "$temp/source-files"
+      printf '%s\n' "$tree" > "$ACCEPTANCE_REPORT_DIR/source-tree.txt"
+      cp "$temp/source-files" "$ACCEPTANCE_REPORT_DIR/source-files.txt"
+      export INCOMING_SOURCE_FILES="$temp/source-files"
+      run_root="$temp/source"
+      run_guard_root="$run_root"
+    else
+      run_root="$root"
+    fi
     cleanup() {
       result=$?
+      if (( incoming_owned && result == 75 )); then
+        echo "Guard rejected this run; preserved $temp without teardown" >&2
+        exit 75
+      fi
+      if (( incoming_owned )) && ! { guard_incoming_owner state && guard_incoming_compose; }; then
+        echo "Ownership not established; preserved $temp without teardown" >&2
+        exit 1
+      fi
       if (( result != 0 )) && [[ "${KEEP_FAILED_SANDBOX:-0}" == 1 ]]; then
         echo "Preserved project $SANDBOX_PROJECT at $temp" >&2
       else
         if [[ -f "$SANDBOX_CHECKOUT/compose.yaml" ]] \
-          && ! { docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" -f "$root/tests/atmosphere/stacks/incoming-source-mail.yaml" --profile '*' down --volumes --remove-orphans \
+          && ! { docker --context "$DOCKER_CONTEXT" compose --project-name "$SANDBOX_PROJECT" -f "$SANDBOX_CHECKOUT/compose.yaml" -f "$run_root/tests/atmosphere/stacks/incoming-source-mail.yaml" --profile '*' down --volumes --remove-orphans \
             && assert_project_empty "$SANDBOX_PROJECT"; }; then
           echo "Scoped cleanup failed; preserved $temp for project $SANDBOX_PROJECT" >&2
           (( result != 0 )) || result=1
           echo "Group exit: $result; reports: $ACCEPTANCE_REPORT_DIR"
           exit "$result"
         fi
-        if [[ "${ENTRYWAY_TRANSFER_HISTORY:-0}" == 1 ]]; then
+        if [[ "${ENTRYWAY_TRANSFER_HISTORY:-0}" == 1 ]] || (( incoming_owned )); then
           tags_absent=1
-          for tag in "$SANDBOX_PROJECT:local" "$SANDBOX_PROJECT-browser:local" "$SANDBOX_PROJECT-pds-moover:local" "$SANDBOX_PROJECT-entryway-browser-client:latest" "$SANDBOX_PROJECT-entryway-oauth-web-app:latest"; do
-            if docker --context "$DOCKER_CONTEXT" image inspect "$tag" >/dev/null 2>&1; then
+          for tag in "$SANDBOX_PROJECT:local" "$SANDBOX_PROJECT-late-cutover-pds:local" "$SANDBOX_PROJECT-browser:local" "$SANDBOX_PROJECT-pds-moover:local" "$SANDBOX_PROJECT-entryway-browser-client:latest" "$SANDBOX_PROJECT-entryway-oauth-web-app:latest"; do
+            existing=$(docker --context "$DOCKER_CONTEXT" image ls -q --filter "reference=$tag") || { result=1; tags_absent=0; continue; }
+            if [[ -n "$existing" ]]; then
               docker --context "$DOCKER_CONTEXT" image rm "$tag" || { result=1; tags_absent=0; }
             fi
-            if docker --context "$DOCKER_CONTEXT" image inspect "$tag" >/dev/null 2>&1; then
+            existing=$(docker --context "$DOCKER_CONTEXT" image ls -q --filter "reference=$tag") || { result=1; tags_absent=0; continue; }
+            if [[ -n "$existing" ]]; then
               echo "Image tag survived cleanup: $tag" >&2
               result=1
               tags_absent=0
@@ -242,7 +318,7 @@ JS
               printf 'image-tag-absent=%s\n' "$tag"
             fi
           done
-          (( tags_absent == 0 )) || echo 'transfer-history-image-tags=absent'
+          (( tags_absent == 0 )) || echo 'project-image-tags=absent'
           for resource in volume network; do
             leftover=$(docker --context "$DOCKER_CONTEXT" "$resource" ls -q --filter "label=com.docker.compose.project=$SANDBOX_PROJECT") || { result=1; continue; }
             if [[ -n "$leftover" ]]; then echo "Project $resource survived cleanup" >&2; result=1; else echo "project-$resource=absent"; fi
@@ -257,14 +333,18 @@ JS
     trap cleanup EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    "$root/tests/local.sh" prepare
-    "$root/tests/local.sh" up
+    "$run_root/tests/local.sh" prepare
+    if (( incoming_owned )); then
+      guard_incoming_owner state || exit 75
+      guard_incoming_compose || exit 75
+    fi
+    "$run_root/tests/local.sh" up
     for step in "$@"; do
       echo "== $step"
       if [[ "$step" == incoming-late-cutover ]]; then
         "$root/tests/local.sh" _incoming-late-cutover-run
       else
-        "$root/tests/local.sh" "$step"
+        "$run_root/tests/local.sh" "$step"
       fi
     done
     ;;
@@ -282,6 +362,10 @@ JS
     fi
     ;;
   up)
+    if [[ "${ENTRYWAY_INCOMING_RESTART:-0}" == 1 ]]; then
+      guard_incoming_owner state || exit 75
+      guard_incoming_compose || exit 75
+    fi
     require_state
     if [[ "${DATABASE_BACKEND:-sqlite}" == postgresql ]]; then
       compose up -d --wait entryway-postgres
@@ -304,6 +388,47 @@ JS
     mode=${2:-test}
     [[ $# -le 2 && ( "$mode" == test || "$mode" == cleanup ) ]] || { echo 'Usage: ./tests/local.sh controller-launch [cleanup]' >&2; exit 2; }
     "$root/tests/support/run-controller-launch.sh" "$root" "$sandbox" "$project" "$mode"
+    ;;
+  incoming-before-signed-submit)
+    export ENTRYWAY_INCOMING_RESTART=1
+    exec "$root/tests/local.sh" fresh-group _incoming-before-signed-submit-run
+    ;;
+  incoming-after-signed-publication)
+    exec "$root/tests/local.sh" fresh-group _incoming-after-signed-publication-run
+    ;;
+  incoming-stock)
+    exec "$root/tests/local.sh" fresh-group _incoming-stock-run
+    ;;
+  _incoming-stock-run)
+    guard_incoming_owner state
+    guard_incoming_compose
+    expected=$(mktemp "$sandbox/.stock-expected.XXXXXX")
+    browser_hashes=$(mktemp "$sandbox/.stock-browser.XXXXXX")
+    entryway_hashes=$(mktemp "$sandbox/.stock-entryway.XXXXXX")
+    (cd "$root" && xargs -d '\n' sha256sum < "$INCOMING_SOURCE_FILES") > "$expected"
+    docker --context "$DOCKER_CONTEXT" run --rm -i --entrypoint sh "$project-browser:local" -c 'cd /app && xargs -d "\n" sha256sum' < "$INCOMING_SOURCE_FILES" > "$browser_hashes"
+    docker --context "$DOCKER_CONTEXT" exec -i "${project}-entryway-1" sh -c 'cd /app && xargs -d "\n" sha256sum' < "$INCOMING_SOURCE_FILES" > "$entryway_hashes"
+    cmp "$expected" "$browser_hashes"
+    cmp "$expected" "$entryway_hashes"
+    pds1=$(docker --context "$DOCKER_CONTEXT" inspect "${project}-pds1-1" --format '{{.Image}}')
+    pds2=$(docker --context "$DOCKER_CONTEXT" inspect "${project}-pds2-1" --format '{{.Image}}')
+    pds3=$(docker --context "$DOCKER_CONTEXT" inspect "${project}-pds3-1" --format '{{.Image}}')
+    node --input-type=module - "$ACCEPTANCE_REPORT_DIR/stock-provenance.json" "$project" "$pds1" "$pds2" "$pds3" <<'JS'
+import { writeFileSync } from 'node:fs'
+const [path, project, pds1, pds2, pds3] = process.argv.slice(2)
+writeFileSync(path, JSON.stringify({ project, sourceParity: { browser: true, entryway: true }, runtimePdsImageIds: { pds1, pds2, pds3 } }, null, 2) + '\n')
+JS
+    rm -f "$expected" "$browser_hashes" "$entryway_hashes"
+    exec "$root/tests/local.sh" incoming-public-journey
+    ;;
+  _incoming-before-signed-submit-run|_incoming-after-signed-publication-run)
+    guard_incoming_owner state
+    guard_incoming_compose
+    require_state
+    prepare_incoming_access
+    cutpoint=before
+    [[ "$command" != _incoming-after-signed-publication-run ]] || cutpoint=after
+    bash "$root/tests/support/run-incoming-before-signed-submit.sh" "$root" "$sandbox" "$project" "$DOCKER_CONTEXT" "$cutpoint"
     ;;
   incoming-late-cutover)
     exec "$root/tests/local.sh" fresh-group incoming-late-cutover
@@ -596,7 +721,7 @@ JS
     deno task sandbox status
     ;;
   *)
-    echo 'Usage: ./tests/local.sh fresh|fresh-group <steps...>|prepare|up|controller-launch|managed-create-barrier -- <browser driver command...>|browser|incoming-late-cutover|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-public-failures|incoming-two-node|cross-entry-incoming-first|cross-entry-managed-first|account-lifecycle-two-node|incoming-goat-journey|incoming-moover-journey|contracts|database-contracts|database-profile|resilience-profiles|migration|migration-empty|migration-resume|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience|all|status|down'
+    echo 'Usage: ./tests/local.sh fresh|fresh-group <steps...>|prepare|up|controller-launch|managed-create-barrier -- <browser driver command...>|browser|incoming-late-cutover|incoming-before-signed-submit|incoming-after-signed-publication|incoming-stock|incoming-public-mechanisms|incoming-public-journey|incoming-public-shapes|incoming-public-failures|incoming-two-node|cross-entry-incoming-first|cross-entry-managed-first|account-lifecycle-two-node|incoming-goat-journey|incoming-moover-journey|contracts|database-contracts|database-profile|resilience-profiles|migration|migration-empty|migration-resume|reverify|interop-profile|interop-acceptance|plc-recovery|process-crash|managed-recovery|authority-drills|resilience|all|status|down'
     echo 'all requires a fresh project fixture; down retains state and volumes. No implicit reset.'
     ;;
 esac

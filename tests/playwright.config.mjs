@@ -117,7 +117,10 @@ if (
 )
   throw new Error("Unknown transfer history phase");
 const artifactDir =
-  artifactPrefix === "transfer-history" ? "/app/artifacts" : "artifacts";
+  artifactPrefix === "transfer-history" ||
+  artifactPrefix === "incoming-public-journey"
+    ? "/app/artifacts"
+    : "artifacts";
 const reportPrefix =
   artifactPrefix === "transfer-history"
     ? `${artifactPrefix}-${transferPhase}`
@@ -149,7 +152,11 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: 0,
-  timeout: 90_000,
+  timeout:
+    process.env.INCOMING_BEFORE_SIGNED_SUBMIT === "1" ||
+    process.env.INCOMING_AFTER_SIGNED_PUBLICATION === "1"
+      ? 420_000
+      : 90_000,
   expect: { timeout: 20_000 },
   reporter: [
     ...(process.env.STAGED_QUALIFICATION_RESULTS
