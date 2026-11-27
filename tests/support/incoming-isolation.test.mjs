@@ -283,7 +283,7 @@ exec "${realNode}" "$@"`,
   );
   script(
     "deno",
-    `echo "deno $* db=\${DATABASE_BACKEND-unset} url=\${DATABASE_URL-unset} mode=\${DEPLOYMENT_MODE-unset}" >> "$MOCK_LOG"
+    `echo "deno $* db=\${DATABASE_BACKEND-unset} url=\${DATABASE_URL-unset} mode=\${DEPLOYMENT_MODE-unset} late=\${ENTRYWAY_LATE_CUTOVER-unset} history=\${ENTRYWAY_TRANSFER_HISTORY-unset}" >> "$MOCK_LOG"
 if [[ "$*" == *'sandbox create'* ]]; then
  mkdir -p "$SANDBOX_CHECKOUT/state"; printf '{"project":"%s"}' "$SANDBOX_PROJECT" > "$SANDBOX_CHECKOUT/state/manifest.json"
  touch "$SANDBOX_CHECKOUT/compose.real"
@@ -333,6 +333,8 @@ esac`,
       DATABASE_URL: "postgresql://foreign/db",
       DEPLOYMENT_MODE: "multi-node",
       ENTRYWAY_INCOMING_RESTART: "1",
+      ENTRYWAY_LATE_CUTOVER: "1",
+      ENTRYWAY_TRANSFER_HISTORY: "1",
     },
   });
   const calls = existsSync(log) ? readFileSync(log, "utf8") : "";
@@ -448,9 +450,15 @@ test("owned launchers select SQLite and perform only owned lifecycle cleanup", (
     );
     assert.match(calls, /compose .* down --volumes/);
     assert.match(calls, /image rm hypercerts-entryway-/);
-    if (command === "incoming-stock")
+    if (command === "incoming-stock") {
+      assert.match(calls, /sandbox create[^\n]*late=unset history=unset/);
+      assert.match(calls, /sandbox up --build[^\n]*late=unset history=unset/);
       assert.match(calls, /INCOMING_PUBLIC_JOURNEY=1/);
-    else assert.match(calls, /compose .* restart entryway/);
+    } else {
+      assert.match(calls, /sandbox create[^\n]*late=1 history=1/);
+      assert.match(calls, /sandbox up --build[^\n]*late=1 history=1/);
+      assert.match(calls, /compose .* restart entryway/);
+    }
   }
 });
 

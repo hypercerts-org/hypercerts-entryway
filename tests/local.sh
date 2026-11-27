@@ -215,6 +215,7 @@ JS
     for step in "$@"; do
       if [[ "$step" == _incoming-stock-run ]]; then
         (( $# == 1 )) || { echo 'incoming-stock runs in its own fresh group' >&2; exit 2; }
+        unset ENTRYWAY_LATE_CUTOVER ENTRYWAY_TRANSFER_HISTORY
       fi
       if [[ "$step" == incoming-late-cutover || "$step" == _incoming-before-signed-submit-run || "$step" == _incoming-after-signed-publication-run ]]; then
         (( $# == 1 )) || { echo 'incoming-late-cutover runs in its own fresh group' >&2; exit 2; }

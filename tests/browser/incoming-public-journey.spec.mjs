@@ -133,6 +133,7 @@ test("the client verifies the source export before identity cutover", async () =
 test("the source signs the authority handoff and Entryway publishes only that", async () => {
   // Stock service tokens last about a minute: the creation token is minted
   // immediately before it is used, not here.
+  const sourceIdentity = await plcData(access, run.source.did);
   const since = Date.now();
   ok(
     await call(
@@ -229,9 +230,12 @@ test("the source signs the authority handoff and Entryway publishes only that", 
   expect(run.auditAfterHandoff.at(-1).cid).toBe(
     String(await cidForCbor(operation)),
   );
-  expect(
-    (await plcData(access, run.source.did)).services.atproto_pds.endpoint,
-  ).toBe(access.sourceUrl);
+  const handoffIdentity = await plcData(access, run.source.did);
+  expect(handoffIdentity.services.atproto_pds.endpoint).toBe(access.sourceUrl);
+  expect(handoffIdentity.alsoKnownAs).toEqual(sourceIdentity.alsoKnownAs);
+  expect(handoffIdentity.verificationMethods).toEqual(
+    sourceIdentity.verificationMethods,
+  );
   // createAccount publishes a second operation. Read the head before creation.
   const head = await fetch(
     new URL(`/${run.source.did}/log/last`, access.plcUrl),
