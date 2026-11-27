@@ -64,6 +64,7 @@ test("bounded health workers progress past slow and faulty neighbors and rotate 
     ]);
     assert.equal(completed.includes("host-0"), false);
     assert.ok(completed.includes("host-6"));
+    assert.equal(new Set(starts).size, starts.length);
     assert.ok(maximum <= 4);
     assert.equal(errors, 1);
   } finally {
@@ -87,7 +88,8 @@ test("shutdown stops admitting queued hosts and awaits active probes", async () 
   const blocked = new Promise((resolve) => {
     release = resolve;
   });
-  const started = [];
+  const started = [],
+    completed = [];
   const sampler = createPdsHealthSampler({
     registry: {
       listHosts: async () => hosts,
@@ -96,7 +98,10 @@ test("shutdown stops admitting queued hosts and awaits active probes", async () 
     verifier: { policyFor: () => "policy" },
     intervalMs: 1000,
     timeoutMs: 500,
-    health: { claim: async (hostId) => ({ hostId }), complete: async () => {} },
+    health: {
+      claim: async (hostId) => ({ hostId }),
+      complete: async ({ hostId }) => completed.push(hostId),
+    },
     probe: async ({ hostId }) => {
       started.push(hostId);
       await blocked;
@@ -110,8 +115,56 @@ test("shutdown stops admitting queued hosts and awaits active probes", async () 
   release();
   await running;
   assert.equal(started.length, 4);
+  assert.deepEqual(completed, started);
   await sampler();
   assert.equal(started.length, 4);
+});
+
+test("shutdown during revision reads prevents claims and queued work", async () => {
+  const hosts = Array.from({ length: 8 }, (_, index) => ({
+    hostId: `host-${index}`,
+    association: "associated",
+    activeRevision: 1,
+  }));
+  let release, allReading;
+  const blocked = new Promise((resolve) => {
+    release = resolve;
+  });
+  const readsStarted = new Promise((resolve) => {
+    allReading = resolve;
+  });
+  const reads = [],
+    claims = [],
+    probes = [],
+    completions = [];
+  const sampler = createPdsHealthSampler({
+    registry: {
+      listHosts: async () => hosts,
+      readHostRevision: async (hostId) => {
+        reads.push(hostId);
+        if (reads.length === 4) allReading();
+        await blocked;
+        return { hostId, revision: 1 };
+      },
+    },
+    verifier: { policyFor: () => "policy" },
+    intervalMs: 1000,
+    timeoutMs: 500,
+    health: {
+      claim: async (hostId) => claims.push(hostId),
+      complete: async (claim) => completions.push(claim),
+    },
+    probe: async (revision) => probes.push(revision),
+  });
+  const running = sampler();
+  await readsStarted;
+  sampler.stop();
+  release();
+  await running;
+  assert.deepEqual(reads, ["host-0", "host-1", "host-2", "host-3"]);
+  assert.deepEqual(claims, []);
+  assert.deepEqual(probes, []);
+  assert.deepEqual(completions, []);
 });
 
 test("a tick just before database due time skips and the following tick stays inside the configured budget", async () => {

@@ -57,14 +57,15 @@ export function createPdsHealthSampler({
     const ordered = [...hosts.slice(start), ...hosts.slice(0, start)];
     let next = 0;
     const worker = async () => {
-      while (!stopping && next < ordered.length) {
+      for (let index = 0; index < ordered.length; index++) {
+        if (stopping || next >= ordered.length) return;
         const host = ordered[next++];
         try {
           const revision = await registry.readHostRevision(
             host.hostId,
             host.activeRevision,
           );
-          if (stopping) continue;
+          if (stopping) return;
           if (!revision) {
             await reportRevisionConflict(host);
             continue;
