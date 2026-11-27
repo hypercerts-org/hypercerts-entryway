@@ -3,13 +3,29 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile, chmod, copyFile } from "node:fs/promises";
 import { generateKeyPairSync, createHash, randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
+import { restoreAuthorityFiles } from "./authority-restore.mjs";
 import { Secp256k1Keypair, verifySignature } from "@atproto/crypto";
 import { SignJWT, importJWK } from "jose";
 const [mode, run, stage] = process.argv.slice(2);
 assert.match(run ?? "", /^[a-z0-9-]+$/);
 const dir = `/data/verification-${run}`;
 const configPath = process.env.SERVICE_CONFIG_PATH;
-const config = JSON.parse(await readFile(configPath, "utf8"));
+async function readConfigBytes(path) {
+  try {
+    return await readFile(path, "utf8");
+  } catch {
+    throw new Error("SANDBOX_CONFIG_READ_FAILED");
+  }
+}
+async function readConfig(path) {
+  try {
+    return JSON.parse(await readConfigBytes(path));
+  } catch {
+    throw new Error("SANDBOX_CONFIG_READ_FAILED");
+  }
+}
+const config =
+  mode === "restore-key" ? undefined : await readConfig(configPath);
 const hash = (value) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const save = (name, value) =>
@@ -58,10 +74,16 @@ if (mode === "backup") {
   });
   restored.close();
   db.close();
+} else if (mode === "snapshot") {
+  for (const path of [
+    configPath,
+    "/pds1-config/config.json",
+    "/pds2-config/config.json",
+  ]) {
+    await copyFile(path, `${path}.verification-${run}`);
+    await chmod(`${path}.verification-${run}`, 0o600);
+  }
 } else if (mode === "rotate") {
-  const original = `${configPath}.verification-${run}`;
-  await copyFile(configPath, original);
-  await chmod(original, 0o600);
   const { privateKey } = generateKeyPairSync("ec", { namedCurve: "secp256k1" });
   const jwtJwk = { ...privateKey.export({ format: "jwk" }), alg: "ES256K" };
   const key = await Secp256k1Keypair.import(Buffer.from(jwtJwk.d, "base64url"));
@@ -77,16 +99,69 @@ if (mode === "backup") {
   console.log(
     "Rotated private sandbox JWT key; original retained in private config volume",
   );
+} else if (mode === "project-key") {
+  for (const id of ["pds1", "pds2"]) {
+    const path = `/${id}-config/config.json`;
+    const projection = await readConfig(path);
+    projection.jwtPublicHex = config.jwtPublicHex;
+    await writeFile(path, JSON.stringify(projection, null, 2) + "\n", {
+      mode: 0o600,
+    });
+  }
+} else if (mode === "check-projections") {
+  assert.ok(["before", "issuer-only", "fleet", "restored"].includes(stage));
+  const originalConfigBytes = await readConfigBytes(
+    `${configPath}.verification-${run}`,
+  );
+  const originalConfig = await readConfig(`${configPath}.verification-${run}`);
+  if (stage === "restored") {
+    assert.equal(
+      (await readConfigBytes(configPath)) === originalConfigBytes,
+      true,
+      "issuer config not exactly restored",
+    );
+  }
+  for (const id of ["pds1", "pds2"]) {
+    const path = `/${id}-config/config.json`;
+    const originalBytes = await readConfigBytes(`${path}.verification-${run}`);
+    const bytes = await readConfigBytes(path);
+    const original = await readConfig(`${path}.verification-${run}`);
+    const projection = await readConfig(path);
+    const matchesOriginal =
+      projection.jwtPublicHex === originalConfig.jwtPublicHex;
+    const matchesCurrent = projection.jwtPublicHex === config.jwtPublicHex;
+    console.log(
+      `projection stage=${stage} pds=${id} original=${matchesOriginal ? "match" : "mismatch"} current=${matchesCurrent ? "match" : "mismatch"}`,
+    );
+    assert.equal(matchesOriginal, stage !== "fleet");
+    assert.equal(matchesCurrent, stage !== "issuer-only");
+    projection.jwtPublicHex = original.jwtPublicHex;
+    assert.equal(
+      JSON.stringify(projection) === JSON.stringify(original),
+      true,
+      `${id} non-verifier projection changed`,
+    );
+    if (stage === "restored")
+      assert.equal(
+        bytes === originalBytes,
+        true,
+        `${id} projection not exactly restored`,
+      );
+  }
 } else if (mode === "restore-key") {
-  await copyFile(`${configPath}.verification-${run}`, configPath);
-  await chmod(configPath, 0o600);
-  console.log("Original sandbox JWT configuration restored");
+  await restoreAuthorityFiles(
+    [configPath, "/pds1-config/config.json", "/pds2-config/config.json"],
+    run,
+  );
+  console.log(
+    "Original sandbox JWT configuration and PDS projections restored",
+  );
 } else if (mode === "tokens") {
   assert.ok(["before", "issuer-only", "fleet", "restored"].includes(stage));
   const original =
     stage === "before"
       ? config
-      : JSON.parse(await readFile(`${configPath}.verification-${run}`, "utf8"));
+      : await readConfig(`${configPath}.verification-${run}`);
   const db = new Database("/entryway-data/account-authority.sqlite", {
     readonly: true,
   });
