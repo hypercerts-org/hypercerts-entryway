@@ -1,3 +1,4 @@
+import { registryRequest, validateRegistryOrigin } from "./registry-http.mjs";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -8,6 +9,7 @@ import { chromium } from "playwright";
 import { waitForMailpitCode } from "../support/helpers/mailpit.mjs";
 
 const config = JSON.parse(await readFile("/config/bootstrap.json", "utf8"));
+validateRegistryOrigin(config.issuer);
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({
   ignoreHTTPSErrors: false,
@@ -46,7 +48,7 @@ try {
   assert.ok(second);
   const authorization = `Basic ${Buffer.from(`admin:${config.adminPassword}`).toString("base64")}`;
   const admin = async (path, body) => {
-    const response = await fetch(new URL(path, config.issuer), {
+    const response = await registryRequest(config.issuer, path, {
       method: "POST",
       headers: {
         authorization,

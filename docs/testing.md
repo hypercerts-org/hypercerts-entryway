@@ -919,3 +919,10 @@ The case is opt-in because ordinary test containers do not contain a browser.
 Operators and contributors can run `SANDBOX_PROJECT=hypercerts-entryway-registry-test ./tests/local.sh registry-bootstrap` after preparing and starting a dedicated sandbox. This exercises two bootstrap nodes through the sandbox's verified TLS gateway, restores the normal ingress and PDS afterward, and uses a new disposable PostgreSQL database. Never point this test at a shared sandbox.
 
 The stock-PDS sandbox gives each PDS a separate configuration volume containing only its own runtime secrets and a distinct inbound callback token. The Entryway global administrator secret is not mounted into a PDS container. The pinned PDS constructs an Entryway admin client, but the inspected runtime does not establish an initiating admin callback; supplying a token does not demonstrate that it is sent or accepted.
+
+Registry fixture profiles can be exercised in separate disposable projects with
+`./tests/local.sh fresh-group registry-qualification` (fresh bootstrap authority
+and stock PDS outbound checks) and `./tests/local.sh fresh-group registry-operator`
+(full serving transition before operator checks). Both use the controller-verified
+sandbox origin; neither is a staged production admission qualification. The
+bootstrap fixture remains available as `fresh-group registry-bootstrap`.

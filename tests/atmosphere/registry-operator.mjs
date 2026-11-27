@@ -1,3 +1,4 @@
+import { registryRequest, validateRegistryOrigin } from "./registry-http.mjs";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -8,6 +9,7 @@ import { spawnSync } from "node:child_process";
 const config = JSON.parse(
   await readFile(process.env.SERVICE_CONFIG_PATH, "utf8"),
 );
+validateRegistryOrigin(config.issuer);
 const directory = await mkdtemp(join(tmpdir(), "entryway-registry-operator-"));
 try {
   const authFile = join(directory, "auth"),
@@ -80,7 +82,7 @@ try {
     "/AdMiN/PdS-ReGiStRy/HoStS",
   ]) {
     const malformedMarker = `not-json-${randomBytes(12).toString("hex")}`;
-    const malformed = await fetch(new URL(path, config.issuer), {
+    const malformed = await registryRequest(config.issuer, path, {
       method: "POST",
       headers: { authorization: global, "content-type": "application/json" },
       body: `{invalid-${malformedMarker}`,
@@ -93,16 +95,18 @@ try {
       message: "Invalid registry request",
     });
   }
-  const globalRecovery = await fetch(
-    new URL("/_operations/status", config.issuer),
+  const globalRecovery = await registryRequest(
+    config.issuer,
+    "/_operations/status",
     {
       method: "POST",
       headers: { authorization: global, "content-type": "application/json" },
       body: JSON.stringify({ resource: "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa" }),
     },
   );
-  const stagedRecovery = await fetch(
-    new URL("/_operations/status", config.issuer),
+  const stagedRecovery = await registryRequest(
+    config.issuer,
+    "/_operations/status",
     {
       method: "POST",
       headers: { authorization: staged, "content-type": "application/json" },
