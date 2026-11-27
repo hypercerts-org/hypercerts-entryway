@@ -1,11 +1,11 @@
 import { decodeProtectedHeader } from "jose";
-import { createHash, timingSafeEqual } from "node:crypto";
 import { verifyJwt } from "@atproto/xrpc-server";
 import { getVerificationMaterial } from "@atproto/common";
 import { getDidKeyFromMultibase } from "@atproto/identity";
 import { ScopePermissionsTransition } from "@atproto/oauth-scopes";
 import { HttpError } from "./http-error.mjs";
 import { canonicalBasic, schemeCredential } from "./authorization-scheme.js";
+import { equalSecret } from "../secret-equality.js";
 
 export const phaseOneUnsupported = [
   "com.atproto.server.createSession",
@@ -358,8 +358,7 @@ export async function createProtocolRouting({
     return req.auth;
   };
   const admin = async (req, did, global = false) => {
-    const hash = (s) => createHash("sha256").update(String(s)).digest();
-    const supplied = hash(canonicalBasic(req.headers.authorization));
+    const supplied = canonicalBasic(req.headers.authorization);
     const candidates = [
       { password: config.adminPassword },
       ...(global
@@ -367,9 +366,9 @@ export async function createProtocolRouting({
         : config.pds.map((p) => ({ password: p.adminPassword, pdsId: p.id }))),
     ];
     const matched = candidates.find((c) =>
-      timingSafeEqual(
+      equalSecret(
         supplied,
-        hash(`Basic ${Buffer.from(`admin:${c.password}`).toString("base64")}`),
+        `Basic ${Buffer.from(`admin:${c.password}`).toString("base64")}`,
       ),
     );
     if (!matched)

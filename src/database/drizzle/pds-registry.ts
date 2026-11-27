@@ -1,4 +1,5 @@
 import { and, asc, eq } from "drizzle-orm";
+import { equalSecret } from "../../secret-equality.js";
 import { assertNoAssociatedPdsAlias } from "./pds-registry-enrollment-guard.js";
 import type { DatabaseExecutor, StoredRow } from "../executor.js";
 import {
@@ -360,10 +361,7 @@ export function createPdsRegistry(
                 existingInbound,
                 pdsInboundDigest(existing.host_id, outboundPassword),
               ) ||
-              equalPdsDigest(
-                pdsInboundDigest(existing.host_id, existingOutbound),
-                pdsInboundDigest(existing.host_id, inboundToken),
-              )
+              equalSecret(existingOutbound, inboundToken)
             )
               throw new Error("PdsInboundCredentialConflict");
           }
