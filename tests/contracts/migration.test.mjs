@@ -232,6 +232,7 @@ async function fixture(
     signer: rotation,
   });
   let currentOp = genesis.op;
+  const audit = [genesis.op];
   const row = {
     did: genesis.did,
     handle: "alice.entryway.atmosbox.test",
@@ -270,9 +271,21 @@ async function fixture(
       Buffer.from(await rotation.export()).toString("hex"),
     ),
     plcClient: {
+      url: config.plcUrl,
       getLastOp: async () => currentOp,
+      getAuditableLog: async () =>
+        Promise.all(
+          audit.map(async (operation) => ({
+            did: row.did,
+            operation,
+            cid: String(await cidForCbor(operation)),
+            nullified: false,
+            createdAt: new Date().toISOString(),
+          })),
+        ),
       sendOperation: async (_did, op) => {
         currentOp = op;
+        audit.push(op);
       },
     },
   };
@@ -574,6 +587,7 @@ async function fixture(
         "Signed operation must be durable before PLC publication",
       );
       currentOp = body.plcOp;
+      audit.push(body.plcOp);
       if (state.failures.get("target-create-after-plc")) {
         state.failures.delete("target-create-after-plc");
         throw new Error(
@@ -807,9 +821,24 @@ async function fixture(
   };
   const boot = async () => {
     f.db = db;
+    const custody = createCustodyInventoryStorage(db);
+    const transfers = createActiveDidTransferStore(db);
     f.migration = await createAccountMigration({
-      custody: createCustodyInventoryStorage(db),
-      transfers: createActiveDidTransferStore(db),
+      custody: {
+        ...custody,
+        async recordObservation(observation) {
+          await custody.recordObservation(observation);
+          if (state.failures.get("custody-after-write"))
+            throw Error("custody commit fault");
+        },
+      },
+      transfers: {
+        ...transfers,
+        async release(owner) {
+          if (state.failures.get("return-release")) return false;
+          return transfers.release(owner);
+        },
+      },
       db,
       config,
       accounts,
@@ -1385,6 +1414,16 @@ for (const registryMode of [false, true])
       pdsId: "pds2",
       token: "migration-proof",
     });
+    const custody = createCustodyInventoryStorage(f.db);
+    const { readCustodyObservation } =
+      await import("../../dist/src/plc/observations.js");
+    await custody.recordObservation(
+      await readCustodyObservation(f.accounts.plcClient, f.row.did),
+    );
+    assert.equal(
+      (await custody.getByDid(f.row.did)).observation.headCid,
+      String(await cidForCbor(f.getCurrent())),
+    );
     const formerHead = f.state.source.commit;
     const { cid, bytes } = await f.addTargetBlob();
     await f.addTargetRecord();
@@ -1411,6 +1450,16 @@ for (const registryMode of [false, true])
     assert.equal(operation.retainedPublicationCid, operation.plcOpCid);
     assert.equal(String(await cidForCbor(f.getCurrent())), operation.plcOpCid);
     assert.equal(f.getCurrent().verificationMethods.atproto, f.sourceKey.did());
+    assert.equal(
+      (await custody.getByDid(f.row.did)).observation.headCid,
+      operation.plcOpCid,
+    );
+    assert.ok(
+      (await custody.getHistory(f.row.did)).some(
+        (event) =>
+          event.cid === operation.plcOpCid && event.kind === "observed",
+      ),
+    );
     assert.equal((await f.accounts.get(f.row.did)).pdsId, "pds1");
     assert.ok(f.state.source.active && !f.state.target.active);
     assert.equal(f.state.target.commit, bHead);
@@ -1453,6 +1502,67 @@ for (const registryMode of [false, true])
     );
     assert.deepEqual(await f.db.read("active_did_transfers"), []);
   });
+
+for (const fault of [
+  "audit-mismatch",
+  "custody-after-write",
+  "return-release",
+]) {
+  test(`return custody ${fault} leaves authority unchanged and retries`, async (t) => {
+    const f = await fixture(t);
+    await f.migration.importAccount(f.actor, {
+      did: f.row.did,
+      pdsId: "pds2",
+      token: "migration-proof",
+    });
+    const custody = createCustodyInventoryStorage(f.db);
+    const { readCustodyObservation } =
+      await import("../../dist/src/plc/observations.js");
+    await custody.recordObservation(
+      await readCustodyObservation(f.accounts.plcClient, f.row.did),
+    );
+    const before = await custody.getByDid(f.row.did);
+    const history = await custody.getHistory(f.row.did);
+    const audit = f.accounts.plcClient.getAuditableLog;
+    if (fault === "audit-mismatch")
+      f.accounts.plcClient.getAuditableLog = async () =>
+        (await audit()).slice(0, -1);
+    else f.state.failures.set(fault, true);
+    f.newProof("pds1");
+    await assert.rejects(
+      f.migration.importAccount(f.actor, {
+        did: f.row.did,
+        pdsId: "pds1",
+        token: "migration-proof",
+      }),
+    );
+    assert.equal((await f.accounts.get(f.row.did)).pdsId, "pds2");
+    assert.deepEqual(await custody.getByDid(f.row.did), before);
+    const after = await custody.getHistory(f.row.did);
+    assert.deepEqual(
+      after.filter((event) => event.kind === "observed"),
+      history.filter((event) => event.kind === "observed"),
+    );
+    assert.equal((await f.db.read("active_did_transfers")).length, 1);
+    assert.notEqual(
+      (await f.db.get("migration:operations", `migrate:${f.row.did}`)).phase,
+      "complete",
+    );
+    f.accounts.plcClient.getAuditableLog = audit;
+    f.state.failures.delete(fault);
+    assert.equal((await f.migration.reconcile())[0].status, "complete");
+    const operation = await f.db.get(
+      "migration:operations",
+      `migrate:${f.row.did}`,
+    );
+    assert.equal(
+      (await custody.getByDid(f.row.did)).observation.headCid,
+      operation.plcOpCid,
+    );
+    assert.equal((await f.accounts.get(f.row.did)).pdsId, "pds1");
+    assert.deepEqual(await f.db.read("active_did_transfers"), []);
+  });
+}
 
 for (const fault of ["same-count replacement", "foreign PLC"]) {
   test(`return activation requalifies ${fault} after checkpoint restart`, async (t) => {

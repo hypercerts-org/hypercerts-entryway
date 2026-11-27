@@ -5,6 +5,7 @@ import {
 } from "../../pds/repository-verification.js";
 import {
   noExternalResult,
+  requestDigest,
   signingKeyResult,
 } from "../../accounts/operation-ownership.js";
 import { randomUUID } from "node:crypto";
@@ -13,6 +14,7 @@ import * as plc from "@did-plc/lib";
 import { cidForCbor } from "@atproto/common";
 import { HttpError } from "../../http/http-error.mjs";
 import { registryPlcEndpoint } from "../../plc/policy.js";
+import { readCustodyObservation } from "../../plc/observations.js";
 import { xrpc } from "../../pds/client.mjs";
 import { readXrpcResponse } from "../../pds/xrpc-response.js";
 import { snapshotPdsRegistryVerifier } from "../../pds/registry-targets.mjs";
@@ -1826,7 +1828,74 @@ export async function createAccountMigration({
             "PLC changed before local mapping commit",
             409,
           );
+        // Audit I/O is deliberately outside the authority transaction. The
+        // signed intent and all local ownership fences are rechecked inside it.
+        const observation = operation.returnIntent
+          ? await readCustodyObservation(
+              accounts.plcClient,
+              operation.did,
+              ownership.currentClaim.operationId,
+            )
+          : null;
+        if (observation) {
+          const head = observation.entries.find(
+            (entry) =>
+              entry.cid === observation.snapshot.headCid && !entry.nullified,
+          );
+          const signed = operation.plcOp;
+          const { sig: _signature, ...facts } = signed;
+          if (
+            observation.did !== operation.did ||
+            observation.snapshot.headCid !== operation.plcOpCid ||
+            operation.retainedPublicationCid !== operation.plcOpCid ||
+            String(await cidForCbor(signed)) !== operation.plcOpCid ||
+            !head ||
+            requestDigest(head.operation) !== requestDigest(facts) ||
+            head.operation.verificationMethods?.atproto !==
+              operation.returnIntent.signingKey ||
+            head.operation.services?.atproto_pds?.endpoint !==
+              (operation.targetPlcEndpoint ??
+                operation.returnIntent.targetPdsUrl) ||
+            requestDigest(head.operation.rotationKeys) !==
+              requestDigest(signed.rotationKeys)
+          )
+            throw error(
+              "IdentityChanged",
+              "Canonical return custody differs from the signed intent",
+              409,
+            );
+        }
         await db.transact(async () => {
+          if (observation) {
+            const claim = ownership.currentClaim;
+            const saved = await db.get("migration:history", operation.id);
+            const current = await read(operation.did);
+            if (
+              !claim ||
+              claim.resource !== operation.did ||
+              claim.kind !== "managed-migration" ||
+              claim.operationId !== operation.authorityOperationId ||
+              requestDigest(saved) !== requestDigest(operation) ||
+              requestDigest(current) !== requestDigest(operation) ||
+              !(await transfers.isOwner(transferOwner(operation)))
+            )
+              throw error(
+                "OperationConflict",
+                "Return completion ownership changed",
+                409,
+              );
+            await ownership.assertActive();
+            await custody.recordObservation(observation);
+            // An exact historical retry must not silently complete against a
+            // newer retained observation (recordObservation is idempotent).
+            const inventory = await custody.getByDid(operation.did);
+            if (inventory?.observation?.headCid !== operation.plcOpCid)
+              throw error(
+                "CustodyConflict",
+                "A newer custody observation is retained",
+                409,
+              );
+          }
           await security.revokeAccount(operation.did, { credentials: true });
           const row = await accounts.get(operation.did);
           await accounts.save({

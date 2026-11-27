@@ -349,7 +349,12 @@ owned and recoverable. After verifying the staged root, retained key,
 inactive source and saved intent, it publishes the exact signed PLC operation and
 checkpoints its canonical CID before activation and guarded re-signing. A lost PLC
 response requires uncertain-write recovery and observation of the exact canonical
-head; a different head requires reconciliation. Other existing accounts are refused.
+head; a different head requires reconciliation. Before return placement commits, an
+independent validated PLC audit must match the exact saved return operation, key,
+endpoint and authority. Its custody observation, retained-source history, placement
+and matching claim release commit together. A conflicting newer observation or
+unavailable audit leaves the move pending for reconciliation; directory keys alone
+do not establish private-key custody. Other existing accounts are refused.
 Before snapshot and cutover, managed migration requires the source to be
 observed inactive. Before placement commits,
 it verifies the target's signed repository and saved records again. Blobs use the
