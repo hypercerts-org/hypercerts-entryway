@@ -1,3 +1,4 @@
+import { registryRequest, validateRegistryOrigin } from "./registry-http.mjs";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -8,6 +9,7 @@ import { spawnSync } from "node:child_process";
 const config = JSON.parse(
   await readFile(process.env.SERVICE_CONFIG_PATH, "utf8"),
 );
+validateRegistryOrigin(config.issuer);
 const alternate = JSON.parse(
   await readFile("/config/outbound-pds1.json", "utf8"),
 );
@@ -120,8 +122,9 @@ try {
     successful.outbound.last.expiresAt - successful.outbound.last.observedAt,
     600_000,
   );
-  const detailResponse = await fetch(
-    new URL(`/admin/pds-registry/hosts/${good}`, config.issuer),
+  const detailResponse = await registryRequest(
+    config.issuer,
+    `/admin/pds-registry/hosts/${good}`,
     {
       headers: {
         authorization: `Basic ${Buffer.from(`admin:${config.adminPassword}`).toString("base64")}`,
@@ -150,8 +153,9 @@ try {
   assert.equal(failed.inbound, "unproven");
   assert.notEqual(cli("check", ["--host", good, "--revision", "2"]).status, 0);
   const callbackAuth = `Basic ${Buffer.from(`admin:${stagedTokens.get(good)}`).toString("base64")}`;
-  const forbidden = await fetch(
-    new URL(`/admin/pds-registry/hosts/${good}/callback/revoke`, config.issuer),
+  const forbidden = await registryRequest(
+    config.issuer,
+    `/admin/pds-registry/hosts/${good}/callback/revoke`,
     {
       method: "POST",
       headers: {

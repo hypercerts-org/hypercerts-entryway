@@ -1,3 +1,4 @@
+import { registryRequest, validateRegistryOrigin } from "./registry-http.mjs";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { readFile, mkdtemp, writeFile, rm } from "node:fs/promises";
@@ -5,12 +6,13 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 const config = JSON.parse(await readFile("/config/bootstrap.json", "utf8"));
+validateRegistryOrigin(config.issuer);
 assert.equal(new URL(config.issuer).protocol, "https:");
 const source = JSON.parse(await readFile("/config/outbound-pds1.json", "utf8"));
 const host = source.pds.find((item) => item.id === "pds1");
 const auth = `Basic ${Buffer.from(`admin:${config.adminPassword}`).toString("base64")}`;
 const request = async (node, path, body, authenticated = true) => {
-  const response = await fetch(new URL(path, config.issuer), {
+  const response = await registryRequest(config.issuer, path, {
     method: body ? "POST" : "GET",
     headers: {
       "x-bootstrap-node": node,
@@ -173,7 +175,7 @@ try {
   );
   for (const credential of [inboundToken, host.adminPassword]) {
     for (const action of ["attest", "associate"]) {
-      const denied = await fetch(new URL(`${base}/${action}`, config.issuer), {
+      const denied = await registryRequest(config.issuer, `${base}/${action}`, {
         method: "POST",
         headers: {
           "x-bootstrap-node": "bootstrap-a",
@@ -290,8 +292,9 @@ try {
   console.log(
     "health incident: both operators received one open and one recovery notice in Mailpit",
   );
-  const callbackDenied = await fetch(
-    new URL(`${base}/callback/revoke`, config.issuer),
+  const callbackDenied = await registryRequest(
+    config.issuer,
+    `${base}/callback/revoke`,
     {
       method: "POST",
       headers: {

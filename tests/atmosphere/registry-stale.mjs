@@ -1,6 +1,8 @@
+import { registryRequest, validateRegistryOrigin } from "./registry-http.mjs";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 const config = JSON.parse(await readFile("/config/bootstrap.json", "utf8"));
+validateRegistryOrigin(config.issuer);
 const contacts = JSON.parse(
   await readFile("/config/health-contacts.json", "utf8"),
 );
@@ -16,8 +18,9 @@ const subject =
 const expected = phase === "stale" ? 1 : 2;
 let observed = false;
 while (Date.now() < deadline) {
-  const response = await fetch(
-    new URL("/admin/pds-registry/hosts/pds-monitor", config.issuer),
+  const response = await registryRequest(
+    config.issuer,
+    "/admin/pds-registry/hosts/pds-monitor",
     { headers: { authorization: auth, "x-bootstrap-node": "bootstrap-a" } },
   );
   assert.equal(response.status, 200);
