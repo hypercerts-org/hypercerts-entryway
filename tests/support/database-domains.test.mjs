@@ -5,10 +5,12 @@ import {
   readFileSync,
   mkdtempSync,
   copyFileSync,
+  mkdirSync,
+  writeFileSync,
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { databaseDomains, databaseFiles } from "./database-domains.mjs";
 
@@ -100,22 +102,49 @@ test("inventory CLI works from a checkout path containing #", () => {
 test("shell rejects invalid selectors before creating a sandbox", () => {
   const directory = mkdtempSync(join(tmpdir(), "database-selector-"));
   try {
+    const bin = join(directory, "bin");
+    const dockerCalls = join(directory, "docker-calls");
+    mkdirSync(bin);
+    writeFileSync(
+      join(bin, "docker"),
+      '#!/bin/sh\nprintf "docker called\\n" >> "$DOCKER_CALLS"\nexit 1\n',
+      { mode: 0o755 },
+    );
+    for (const command of ["git", "deno"]) {
+      writeFileSync(join(bin, command), "#!/bin/sh\nexit 1\n", {
+        mode: 0o755,
+      });
+    }
     for (const domain of ["", "invalid", "--matrix"]) {
       const sandbox = join(directory, `sandbox-${domain || "empty"}`);
+      const reports = join(directory, `reports-${domain || "empty"}`);
       const result = spawnSync(
         "bash",
         ["tests/local.sh", "fresh-group", "database-contracts"],
         {
           env: {
-            ...process.env,
+            PATH: [bin, dirname(process.execPath), "/usr/bin", "/bin"].join(
+              delimiter,
+            ),
+            HOME: directory,
             DATABASE_DOMAIN: domain,
+            SANDBOX_PROJECT: "hypercerts-entryway-selector-test",
             SANDBOX_CHECKOUT: sandbox,
+            ACCEPTANCE_REPORT_DIR: reports,
+            DOCKER_CALLS: dockerCalls,
           },
           encoding: "utf8",
         },
       );
       assert.notEqual(result.status, 0);
+      if (domain) {
+        assert.ok(result.stderr.includes(`Unknown database domain: ${domain}`));
+      } else {
+        assert.match(result.stderr, /Usage: database-domains\.mjs/);
+      }
       assert.equal(existsSync(sandbox), false);
+      assert.equal(existsSync(reports), false);
+      assert.equal(existsSync(dockerCalls), false);
       assert.doesNotMatch(result.stdout, /phase=.*status=started/);
     }
   } finally {
